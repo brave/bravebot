@@ -209,6 +209,7 @@ advertised set altogether, where the turn is not a tick, is a wider change than 
 settled here.
 
 `verified-by: bravebot_agent::skills::the_loop_skill_is_advertised_for_a_tick_and_for_nothing_else`
+`verified-by: bravebot_agent::skills::the_loop_skill_description_names_one_condition_and_ends_with_it`
 
 <a id="SKILL-14"></a>
 ### SKILL-14: an interface listing skills is shown the set a turn would advertise, read the same way

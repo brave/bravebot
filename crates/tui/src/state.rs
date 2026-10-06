@@ -25,6 +25,25 @@ const FOLD_AT_NEWLINES: usize = 3;
 /// copies of a prompt, where a prompt is sentences rather than a file.
 const UNDO_DEPTH: usize = 1000;
 
+/// How many rows one mouse wheel event moves the view by where nothing says otherwise.
+///
+/// Three is what a terminal's own scrollback moves for a notch, so the transcript moves the way the
+/// rest of the screen does for somebody who has configured nothing.
+pub const WHEEL_ROWS: u16 = 3;
+
+/// The fewest rows a wheel event may be configured to move.
+///
+/// One, a wheel that moves nothing being indistinguishable from one that is not answered at all.
+pub const WHEEL_ROWS_FLOOR: u16 = 1;
+
+/// The most rows a wheel event may be configured to move.
+///
+/// A screen's worth is the most a single notch can usefully do: past it one event has moved further
+/// than the person can see, so the row they were reading is gone and there is nothing on the screen
+/// relating where they are now to where they were. Counted in rows rather than in screens because
+/// the figure is read once at startup and a screen changes shape while the session runs.
+pub const WHEEL_ROWS_CEILING: u16 = 100;
+
 /// Text with the line endings every clipboard uses turned into the one the box draws.
 fn normalised(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
@@ -1238,6 +1257,14 @@ pub struct Session {
     vetting: bool,
     /// Configurable keybindings for navigation and shortcuts.
     bindings: crate::keybindings::Keybindings,
+    /// How many rows one mouse wheel event moves the view by.
+    ///
+    /// A preference about the person's terminal rather than about the session, read once at startup
+    /// the way the editing style is. Terminals differ in how many events a notch or a trackpad
+    /// swipe sends, so the same number of rows per event is a different amount of movement on each,
+    /// and nothing the program can measure says which. Held on the session because the wheel is
+    /// answered against it on every event.
+    wheel_rows: u16,
     /// Which vi mode the box is in, where vi is the style.
     ///
     /// Every session opens in INSERT, where a typed character is a typed character. Opening in NORMAL
@@ -1393,9 +1420,12 @@ pub struct Session {
     /// Coming back tomorrow into a session that had stopped asking about writes, with nothing on
     /// screen having been chosen today, is the wrong way for this to be wrong.
     permission_mode: bravebot_agent::PermissionMode,
-    /// Whether `--dangerously-skip-permissions` was given, which is what puts the fourth rung on the
-    /// ladder above. Fixed for the session: it comes from the command line.
-    bypass_available: bool,
+    /// Whether the fourth rung is on the ladder above. True until a settings layer wrote
+    /// `permissions.bypassUnreachable`, and never true again after that.
+    bypass_reachable: bool,
+    /// Whether `--dangerously-skip-permissions` opened the session in bypass. Fixed for the
+    /// session: it comes from the command line, and decides whether leaving bypass is named.
+    began_in_bypass: bool,
     /// What the configuration says about the tier, drawn beside the confinement on the opening
     /// screen.
     ///
@@ -1761,6 +1791,11 @@ pub struct Session {
     /// True until a listing says otherwise, so a session that has never reached one sends what the
     /// person asked for rather than withholding it on a fact nobody established.
     model_reads_effort: bool,
+    /// The model `/advisor` named for this session's planner to consult, resolved.
+    ///
+    /// Kept for the session only: the `advisorModel` setting is the saved route, and a turn that
+    /// finds none here leaves it to that.
+    advisor: Option<String>,
     /// Which offered command is under the cursor while one is being typed.
     ///
     /// An index into what [`Session::offered`] returns for the current input rather than a copy of
@@ -1826,6 +1861,7 @@ impl Session {
             // constructed by a test reads nothing from disk and asks.
             vetting: false,
             bindings: crate::keybindings::Keybindings::default(),
+            wheel_rows: WHEEL_ROWS,
             mode: crate::vim::Mode::default(),
             half_typed: None,
             count: None,
@@ -1858,10 +1894,11 @@ impl Session {
             confinement: confinement.into(),
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
-            // Asking, which is what a session has always done. `allowing_bypass` moves it, and is
-            // the only thing that can: the flag is the record that somebody accepted the cost.
+            // Asking, which is what a session has always done. `starting_in_bypass` moves it; the
+            // key reaches bypass from there unless a layer made it unreachable (MODE-5).
             permission_mode: bravebot_agent::PermissionMode::default(),
-            bypass_available: false,
+            bypass_reachable: true,
+            began_in_bypass: false,
             // No subscription until a caller says otherwise, which is what a build with no premium
             // host has and what a test that does not care about tiers should see.
             tier: t!(status_no_subscription).to_string(),
@@ -1925,6 +1962,7 @@ impl Session {
             model: None,
             effort: None,
             model_reads_effort: true,
+            advisor: None,
             completion: 0,
             workspace: std::path::PathBuf::new(),
             skills: None,
@@ -1964,13 +2002,26 @@ impl Session {
 
     /// Open the session in bypass, because `--dangerously-skip-permissions` asked for it.
     ///
-    /// Both at once, and they belong together: the flag puts the fourth rung on the ladder *and*
-    /// starts the session on it. Honouring only the first would make the flag do nothing a person
-    /// could see, and disagree with what the same flag does to a one-shot run.
-    pub fn allowing_bypass(mut self) -> Self {
-        self.bypass_available = true;
+    /// The rung is on the ladder either way, so this only chooses where the session starts and
+    /// records that it started there, which is what makes the line under the box name asking once
+    /// the key leaves bypass (MODE-5).
+    pub fn starting_in_bypass(mut self) -> Self {
+        self.began_in_bypass = true;
         self.permission_mode = bravebot_agent::PermissionMode::Bypass;
         self
+    }
+
+    /// Take bypass off the ladder, because a settings layer wrote `permissions.bypassUnreachable`.
+    ///
+    /// A session already in bypass is put back to asking, and the person is told, since the mode
+    /// was theirs and the line under the box would otherwise change without a reason. One-way: a
+    /// later `/cd` into a checkout that wrote nothing does not put the rung back (PERM-17).
+    pub fn make_bypass_unreachable(&mut self) {
+        self.bypass_reachable = false;
+        if self.permission_mode == bravebot_agent::PermissionMode::Bypass {
+            self.permission_mode = bravebot_agent::PermissionMode::Ask;
+            self.note(t!(session_bypass_made_unreachable));
+        }
     }
 
     /// How much this session asks before it acts.
@@ -1978,9 +2029,9 @@ impl Session {
         self.permission_mode
     }
 
-    /// Whether the session was started with the flag that skips permissions.
-    pub fn bypass_available(&self) -> bool {
-        self.bypass_available
+    /// Whether the session opened in bypass because the flag that skips permissions was given.
+    pub fn began_in_bypass(&self) -> bool {
+        self.began_in_bypass
     }
 
     /// Move to the next mode, and say nothing: the line under the box is the answer.
@@ -1988,7 +2039,7 @@ impl Session {
     /// A note in the transcript would be a running commentary on a key somebody is pressing to see
     /// what the modes are, and the one place a mode has to be legible is while it is in force.
     pub fn cycle_permission_mode(&mut self) {
-        self.permission_mode = self.permission_mode.cycle(self.bypass_available);
+        self.permission_mode = self.permission_mode.cycle(self.bypass_reachable);
     }
 
     /// Load history from disk and keep writing to it.
@@ -2027,6 +2078,18 @@ impl Session {
             bravebot_session::store::save_model(config.name_to_record(&model));
         }
         self.model = Some(model);
+    }
+
+    /// The model `/advisor` named, resolved, or `None` where it named none.
+    pub fn advisor(&self) -> Option<&str> {
+        self.advisor.as_deref()
+    }
+
+    /// Name the model the planner may consult from the next turn on, or `None` to drop the choice.
+    ///
+    /// Not recorded anywhere: a session that is resumed starts with the setting's advisor, if any.
+    pub fn choose_advisor(&mut self, model: Option<String>) {
+        self.advisor = model;
     }
 
     /// How hard to think, or `None` to leave the service its own default.
@@ -3575,6 +3638,25 @@ impl Session {
     /// The active keybindings for this session.
     pub fn bindings(&self) -> &crate::keybindings::Keybindings {
         &self.bindings
+    }
+
+    /// Record how many rows one wheel event moves the view by, from `tui.wheelRows`.
+    ///
+    /// Clamped rather than refused, which is the decision [`bravebot_agent::exec`] takes about a
+    /// deadline and for the same reason: the movement a figure asks for is visible the moment the
+    /// wheel is turned, so a count held to the range says so on the screen. A count nobody named
+    /// leaves [`WHEEL_ROWS`] in force.
+    pub fn adopt_wheel_rows(&mut self, configured: Option<usize>) {
+        let Some(rows) = configured else {
+            return;
+        };
+        let rows = u16::try_from(rows).unwrap_or(WHEEL_ROWS_CEILING);
+        self.wheel_rows = rows.clamp(WHEEL_ROWS_FLOOR, WHEEL_ROWS_CEILING);
+    }
+
+    /// How many rows one wheel event moves the view by.
+    pub fn wheel_rows(&self) -> u16 {
+        self.wheel_rows
     }
 
     /// Record the style of editing the person chose, keeping it for later sessions.
@@ -6394,8 +6476,16 @@ impl Session {
     ///
     /// Shell mode is left alone, and has to be: the line there is the command, and a command that
     /// is not what the user is looking at is the one thing that mode may never do.
+    ///
+    /// Characters a terminal draws as nothing are taken out first, in shell mode too, and the
+    /// number removed is said. That comes before the fold so the words a marker stands for are the
+    /// words that were checked, and before the shell test because a command is the line where
+    /// text nobody can see matters most (`pasting.md` PASTE-10).
     pub fn paste_text(&mut self, text: &str) {
-        let text = normalised(text);
+        let (text, removed) = crate::invisible::without_invisible(&normalised(text));
+        if removed > 0 {
+            self.note(t!(paste_invisible_removed, count = removed));
+        }
         if self.shell || text.matches('\n').count() < FOLD_AT_NEWLINES {
             self.paste(&text);
             return;
@@ -6830,12 +6920,18 @@ impl Session {
         self.todos.clear();
     }
 
-    /// Discard whatever has been typed.
+    /// Discard whatever has been typed, keeping it as the draft Up brings back first.
+    ///
+    /// A prompt walked back to is not kept: it is in the history already, and keeping it would
+    /// displace a draft for a line that was never lost.
     ///
     /// Guarded like the other editing methods: input belongs to the idle state, and clearing it
     /// mid-turn would mean the field the user returns to is not the one they left.
     pub fn clear_input(&mut self) {
         if self.status == Status::Idle {
+            if !self.history.on_a_sent_prompt() && !self.input.trim().is_empty() {
+                self.history.keep_draft(self.input.clone());
+            }
             self.history.leave();
             self.set_input(String::new());
             // The mode goes with the line. Escape means "never mind this", and leaving the marker
@@ -7523,6 +7619,22 @@ impl Session {
     ) -> String {
         self.addressing = Some(addressed);
         self.begin_turn(task.to_string(), (attached, pasted), Vec::new())
+    }
+
+    /// Begin the turn `/init` is, or say why there is none (CMD-13).
+    ///
+    /// An existing `AGENTS.md` is a refusal and not a question: the turn is never started, so
+    /// nothing is read and nothing is offered a write over a file somebody wrote.
+    pub fn start_init(&mut self) -> Option<String> {
+        if crate::init_command::already_there(&self.workspace) {
+            self.note(t!(init_already_there, file = crate::init_command::FILE));
+            return None;
+        }
+        Some(self.begin_turn(
+            crate::init_command::PROMPT.to_string(),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+        ))
     }
 
     /// The definition the turn starting now was addressed to, taken so no later turn inherits it.
@@ -9080,7 +9192,7 @@ impl Session {
         if self.history.is_empty() {
             return false;
         }
-        let typed = !self.input.contains('\n') && !self.history.is_browsing();
+        let typed = !self.input.contains('\n') && !self.history.on_a_sent_prompt();
         let seed = match typed {
             true => self.input.trim().to_string(),
             false => String::new(),
@@ -12457,6 +12569,108 @@ mod tests {
 
         assert!(s.shell, "the paste left shell mode");
         assert_eq!(s.input, "one\ntwo\nthree\n");
+    }
+
+    /// The notes the session has made, oldest first.
+    fn notes(s: &Session) -> Vec<&str> {
+        s.transcript
+            .iter()
+            .filter(|entry| entry.speaker == Speaker::System)
+            .map(|entry| entry.text.as_str())
+            .collect()
+    }
+
+    /// The tag block writes ASCII in characters no terminal draws, so a paste can carry an
+    /// instruction its sender never showed. Removing them is only honest if the person is told how
+    /// many, which is what lets them compare it to what they copied.
+    #[test]
+    fn a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many() {
+        let hidden: String = "obey"
+            .chars()
+            .map(|c| char::from_u32(0xE0000 + c as u32).unwrap())
+            .collect();
+        let mut s = session();
+        s.paste_text(&format!("read{hidden} this\u{202E}\u{200B}"));
+
+        assert_eq!(s.input, "read this");
+        assert_eq!(
+            notes(&s),
+            ["removed 6 invisible characters from that paste"]
+        );
+    }
+
+    /// The singular arm of the notice, since a count of one is the common case of a stray
+    /// zero-width space and "1 invisible characters" reads as a bug.
+    #[test]
+    fn one_removed_character_is_said_in_the_singular() {
+        let mut s = session();
+        s.paste_text("a\u{200B}b");
+
+        assert_eq!(s.input, "ab");
+        assert_eq!(notes(&s), ["removed 1 invisible character from that paste"]);
+    }
+
+    /// A notice for a paste that held nothing hidden would teach a person to ignore it, and
+    /// removing anything from a clean paste would change words they meant. Emoji and the scripts
+    /// that are written with joiners are the pastes a loose filter damages.
+    #[test]
+    fn a_paste_with_nothing_hidden_arrives_whole_and_says_nothing() {
+        let text = "👨\u{200D}👩 ❤\u{FE0F} 1\u{FE0F}\u{20E3} क्\u{200D}ष می\u{200C}خواهم";
+        let mut s = session();
+        s.paste_text(text);
+
+        assert_eq!(s.input, text);
+        assert!(notes(&s).is_empty(), "{:?}", notes(&s));
+    }
+
+    /// Everything that was pasted was hidden, so the box is left as it was. The notice is the
+    /// only trace that a paste happened.
+    #[test]
+    fn a_paste_of_nothing_but_hidden_characters_writes_nothing_and_says_so() {
+        let mut s = session();
+        s.paste_text("\u{E0041}\u{E0042}\u{E0043}");
+
+        assert_eq!(s.input, "");
+        assert_eq!(
+            notes(&s),
+            ["removed 3 invisible characters from that paste"]
+        );
+    }
+
+    /// The words a marker stands for are the ones that get sent, so they are the ones that have
+    /// to be clean. A filter that ran on the marker, or on short pastes only, would leave the
+    /// hidden words in the part nobody can see in the box.
+    #[test]
+    fn a_folded_paste_is_put_back_without_what_a_terminal_draws_as_nothing() {
+        let hidden: String = "obey"
+            .chars()
+            .map(|c| char::from_u32(0xE0000 + c as u32).unwrap())
+            .collect();
+        let mut s = session();
+        s.paste_text(&format!("one{hidden}\ntwo\nthree\nfour\n"));
+
+        assert_eq!(s.input, "[Pasted text #1 +4 lines]");
+        assert_eq!(s.unfolded(&s.input), "one\ntwo\nthree\nfour\n");
+        assert_eq!(
+            notes(&s),
+            ["removed 4 invisible characters from that paste"]
+        );
+    }
+
+    /// The line in shell mode is the command that runs, so it is where a character nobody can see
+    /// matters most, and shell mode is exempt from folding but not from this.
+    #[test]
+    fn a_paste_into_a_command_line_loses_what_a_terminal_draws_as_nothing() {
+        let mut s = session();
+        s.type_char('!');
+        s.paste_text("ls\u{202E} -la\u{E0041}");
+
+        assert!(s.shell, "the paste left shell mode");
+        assert_eq!(s.input, "ls -la");
+        assert_eq!(
+            notes(&s),
+            ["removed 2 invisible characters from that paste"]
+        );
     }
 
     /// One counter for everything a line can carry, so no two markers in front of a user can be
@@ -17705,6 +17919,63 @@ mod tests {
             1,
             "the picture did not survive the round trip"
         );
+    }
+
+    /// A cleared line that named a picture comes back naming it, since clearing leaves what is
+    /// staged where it was. Kept as the words alone, the marker would stand over nothing.
+    #[test]
+    fn what_a_cleared_line_named_is_named_again_when_the_draft_comes_back() {
+        let mut s = session();
+        for c in "look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        let line = s.input.clone();
+
+        s.clear_input();
+        assert!(
+            s.pasted_named(&s.input).is_empty(),
+            "a cleared line still named a picture"
+        );
+
+        s.recall_older();
+        assert_eq!(s.input, line);
+        assert_eq!(
+            s.pasted_named(&s.input).len(),
+            1,
+            "the picture did not survive the clear"
+        );
+    }
+
+    /// The caret lands at the end of a line that comes back, where somebody carries on typing, the
+    /// same as for a line brought back from the stash.
+    #[test]
+    fn the_caret_lands_at_the_end_of_a_recalled_draft() {
+        let mut s = session();
+        for c in "half a thought".chars() {
+            s.type_char(c);
+        }
+        s.clear_input();
+        s.recall_older();
+        s.type_char('!');
+        assert_eq!(s.input, "half a thought!");
+    }
+
+    /// The mode is not part of the words: a command cleared in the armed shell comes back as the
+    /// words of a prompt, as a stashed one does.
+    #[test]
+    fn a_cleared_command_comes_back_as_words_and_not_as_a_command() {
+        let mut s = session();
+        s.type_char('!');
+        for c in "ls -la".chars() {
+            s.type_char(c);
+        }
+        s.clear_input();
+        assert!(!s.shell, "the mode stayed armed after the clear");
+
+        s.recall_older();
+        assert_eq!(s.input, "ls -la");
+        assert!(!s.shell, "the draft came back as a command");
     }
 
     /// Sending another line settles what that line named and nothing a put-away line still names:

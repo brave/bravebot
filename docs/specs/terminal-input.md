@@ -91,7 +91,8 @@ the marker out worked: left drawn, it says a file is going that is not.
 ### INPUT-4: the keys that stop, and the one that also leaves
 
 Escape discards a half-typed prompt, and does nothing at all on a line with nothing on it. It
-never ends the session.
+never ends the session. What it discards is kept as a draft for Up ([INPUT-39](#INPUT-39)), as is
+the line the first Ctrl-C rung takes.
 
 **Ctrl-C stops the nearest thing there is to stop, and leaves when there is nothing left.** It is
 read against what is happening, in this order:
@@ -707,6 +708,7 @@ editor mid-turn would take the screen from the turn drawing on it.
 `verified-by: bravebot_tui::editor::quitting_without_saving_leaves_the_line_as_it_was`
 `verified-by: bravebot_tui::editor::an_editor_that_failed_does_not_produce_a_line`
 `verified-by: bravebot_tui::editor::the_newline_an_editor_leaves_at_the_end_is_dropped`
+`verified-by: bravebot_tui::editor::the_file_the_editor_opens_is_readable_by_nobody_else`
 `verified-by: bravebot_tui::editor::only_the_last_newline_goes`
 `verified-by: bravebot_tui::editor::line_endings_come_back_the_way_a_paste_does`
 `verified-by: bravebot_tui::editor::the_file_does_not_outlive_the_edit`
@@ -786,8 +788,12 @@ and the reminder goes: which line is waiting is the part only this row can say, 
 list `?` puts up as well.
 
 **Why.** A better thought arrives while a worse one is half written, most often during a turn, and
-the two ways out were sending the first or losing it. Escape is not a third: it discards, and a
-person who wanted the words back has nowhere to have got them from.
+the two ways out were sending the first or losing it. Escape and Ctrl-C are not a third: they clear
+the line, and keep it only as the draft Up returns ([INPUT-39](#INPUT-39)), which is a different
+place from this one. The stash is a line put away on purpose, kept until it is brought back and
+replaced only by another press of this key. The draft is a line cleared, replaced by the next clear
+and dropped by any send. Merging them would let a slip of Escape overwrite a line put away
+deliberately, or let Ctrl-S bring back a line it never put away.
 
 The row is the whole of what makes the key safe to press. A press that emptied the box and said
 nothing is indistinguishable from one that threw a paragraph away, and the only way to find out
@@ -1059,7 +1065,7 @@ reaches for it before reading anything.
 `verified-by: bravebot_tui::app::either_spelling_of_shift_tab_cycles_the_mode`
 `verified-by: bravebot_tui::app::the_mode_key_leaves_the_line_alone`
 `verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`
-`verified-by: bravebot_agent::permission_mode::the_key_cycles_three_modes_without_the_flag`
+`verified-by: bravebot_agent::permission_mode::the_key_cycles_three_modes_where_bypass_is_unreachable`
 `verified-by: bravebot_agent::permission_mode::a_session_started_in_bypass_can_cycle_out_of_it`
 
 
@@ -1462,6 +1468,7 @@ cannot see scroll away above it.
 `verified-by: bravebot_tui::app::the_row_keys_walk_a_paragraph`
 `verified-by: bravebot_tui::app::the_row_keys_reach_the_prompt_history_at_the_ends_of_the_input`
 `verified-by: bravebot_tui::app::a_slash_opens_the_search_over_earlier_prompts`
+`verified-by: bravebot_tui::app::the_letters_that_spell_keys_reach_the_history_and_the_search_mid_turn`
 `verified-by: bravebot_tui::app::the_letters_that_spell_keys_are_typed_in_insert_mode`
 `verified-by: bravebot_tui::app::an_operator_takes_the_row_keys_rather_than_walking_the_ladder`
 
@@ -2307,3 +2314,51 @@ mode typed is not an instruction the session keeps; both are known costs.
 `verified-by: bravebot_tui::state::the_keys_that_delete_backwards_take_back_what_was_typed_over`
 `verified-by: bravebot_tui::render::the_hint_line_says_which_vi_mode_the_box_is_in`
 `verified-by: bravebot_tui::app::the_two_paths_answer_the_same_set_of_keys`
+
+<a id="INPUT-39"></a>
+### INPUT-39: a line cleared with Escape or Ctrl-C comes back with Up
+
+A line with something in it that Escape clears in the ordinary box, or that the first Ctrl-C rung
+takes ([INPUT-4](#INPUT-4)), is kept as a draft. Up brings it back ahead of the newest sent prompt:
+the first press puts it in the box with the caret at its end and sends nothing, and further presses
+walk the sent prompts as before ([INPUT-18](#INPUT-18)). Down walks forward through it to the line
+that was being typed. This holds when no prompt has been sent yet.
+
+There is one draft. The next line cleared replaces it, and sending any prompt drops it. Bringing it
+back does not remove it, so Up finds it again until one of those happens. A blank line is not kept.
+A prompt walked back to is not kept either, since the history holds it already, and clearing it
+leaves the draft as it was.
+
+**The draft is the person's own typing, and not a sent prompt.** It is kept for the session only. It
+is not written to the stored history, is not offered by the search ([INPUT-19](#INPUT-19)), is not
+counted in the position the border of the box names ([SESSION-6](sessions.md#SESSION-6) is where
+sent prompts are kept). With it in the box, Ctrl-S puts it away like any typed line,
+where on a sent prompt it opens the search ([INPUT-31](#INPUT-31)). The words travel and the mode
+does not, as for the stash ([INPUT-17](#INPUT-17)): a command cleared in the armed shell comes back
+as words. A marker in it names what it named while that is still staged, and clearing leaves what is
+staged where it was.
+
+**Why.** Escape and Ctrl-C clear in one press, so one slip lost a paragraph with nothing to get it
+back from. Claude Code keeps a cleared draft in the history for Up, after a second Escape. The single
+press stays here, and recovery costs no press on the clear itself. Dropping the draft on a send is
+what keeps it from outliving the thought it belonged to. The stash is a separate slot because it is
+a line put away on purpose ([INPUT-17](#INPUT-17)).
+
+`verified-by: bravebot_tui::app::escape_keeps_the_cleared_line_for_up`
+`verified-by: bravebot_tui::app::ctrl_c_keeps_the_cleared_line_for_up`
+`verified-by: bravebot_tui::app::a_second_clear_replaces_the_kept_draft`
+`verified-by: bravebot_tui::app::sending_a_prompt_drops_the_kept_draft`
+`verified-by: bravebot_tui::app::clearing_a_recalled_prompt_does_not_replace_the_draft`
+`verified-by: bravebot_tui::app::clearing_an_empty_or_blank_line_keeps_no_draft`
+`verified-by: bravebot_tui::app::the_kept_draft_is_not_a_candidate_for_the_search`
+`verified-by: bravebot_tui::app::ctrl_s_on_the_recalled_draft_puts_it_away`
+`verified-by: bravebot_tui::state::what_a_cleared_line_named_is_named_again_when_the_draft_comes_back`
+`verified-by: bravebot_tui::state::the_caret_lands_at_the_end_of_a_recalled_draft`
+`verified-by: bravebot_tui::state::a_cleared_command_comes_back_as_words_and_not_as_a_command`
+`verified-by: bravebot_tui::history::up_brings_the_draft_back_before_the_newest_prompt`
+`verified-by: bravebot_tui::history::down_walks_forward_through_the_draft_to_the_typed_line`
+`verified-by: bravebot_tui::history::a_draft_is_recalled_when_nothing_has_been_sent`
+`verified-by: bravebot_tui::history::a_second_draft_replaces_the_first`
+`verified-by: bravebot_tui::history::sending_drops_the_draft`
+`verified-by: bravebot_tui::history::the_draft_is_not_a_stored_entry`
+`verified-by: bravebot_tui::history::the_draft_has_no_position_in_the_list_of_sent_prompts`

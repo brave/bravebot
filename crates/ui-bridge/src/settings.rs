@@ -58,6 +58,7 @@ fn ignored(settings: &Settings) -> Vec<Value> {
     };
     let mut ignored = named("model", settings.model_ignored().collect());
     ignored.extend(named("provider", settings.providers_ignored().collect()));
+    ignored.extend(named("advisorModel", settings.advisor_ignored().collect()));
     ignored
 }
 
@@ -192,6 +193,20 @@ mod tests {
             ignored(&settings).is_empty(),
             "the person's own file was reported"
         );
+    }
+
+    #[test]
+    fn a_project_files_advisor_is_reported_as_ignored() {
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"advisorModel":"home/advisor"}"#),
+            Some(r#"{"advisorModel":"project/advisor"}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "advisorModel", "path": project })]
+        );
+        assert_eq!(settings.advisor_model(), Some("home/advisor"));
     }
 
     fn vetting_layers(

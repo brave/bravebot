@@ -113,9 +113,11 @@ fn expand_home(named: &str, home: Option<&Path>) -> Result<Option<PathBuf>, &'st
     }
     let path = Path::new(named);
     let home = home.ok_or("`~` stands for the home directory and this user has none")?;
-    Ok(Some(
-        home.join(path.components().skip(1).collect::<PathBuf>()),
-    ))
+    let rest = path.components().skip(1).collect::<PathBuf>();
+    Ok(Some(match rest.as_os_str().is_empty() {
+        true => home.to_path_buf(),
+        false => home.join(rest),
+    }))
 }
 
 /// What a failed read says, where a missing file also says what a relative path was joined to.
@@ -483,6 +485,12 @@ pub struct Workspace {
     /// standing refusal to override, and a session whose own directory went unreachable would fail
     /// every read and write in it (TRUST-16).
     reads_stay_inside: bool,
+    /// The home directory a leading `~` stands for, read from the environment when the workspace
+    /// is built (TRUST-10).
+    ///
+    /// Held rather than read at each use, so every answer about one path (where it resolves, what
+    /// it is keyed under, what a rule and a watch are told it is) comes from one home.
+    home: Option<PathBuf>,
     /// What the files this turn has written held before it wrote to them.
     ///
     /// Behind a lock and a handle because a workspace is cloned into the turn that uses it, and a
@@ -1098,6 +1106,7 @@ impl Workspace {
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
             reads_stay_inside: false,
+            home: crate::home::profile(),
             backups: Arc::new(Mutex::new(Vec::new())),
             rewind: Arc::default(),
             checkout: None,
@@ -1508,7 +1517,30 @@ impl Workspace {
     /// lexical test that saw nothing wrong. What comes back is that destination, so a caller that
     /// needs the file rather than the name has it.
     pub(crate) fn resolve(&self, relative: &str) -> Result<PathBuf, WorkspaceError> {
-        self.resolve_with_home(relative, crate::home::profile().as_deref())
+        self.resolve_with_home(relative, self.home.as_deref())
+    }
+
+    /// `named` with a leading `~` spelled out as the home directory, and as given otherwise,
+    /// including where no home is known, which [`Workspace::resolve`] refuses.
+    ///
+    /// For a caller that hands a path to something that does not resolve it as the file tools do:
+    /// a `deny` rule is anchored at the home directory and never matches the spelling `~/x`, and
+    /// a watch is looked at later from a working directory that may have moved, where `~/x` reads
+    /// as relative and the watch is ended.
+    pub(crate) fn expanded(&self, named: &str) -> String {
+        match expand_home(named, self.home.as_deref()) {
+            Ok(Some(path)) => path.to_string_lossy().into_owned(),
+            _ => named.to_string(),
+        }
+    }
+
+    /// Stand in for the environment's home directory, so a test does not depend on whose machine
+    /// it runs on.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_home(mut self, home: Option<PathBuf>) -> Self {
+        self.home = home;
+        self
     }
 
     /// [`Workspace::resolve`] with the home directory a leading `~` stands for supplied, so the
@@ -1909,6 +1941,35 @@ impl Workspace {
         offset: usize,
         limit: usize,
     ) -> Result<Labelled<Page>, WorkspaceError> {
+        self.gated_read(policy, path, |relative, label| {
+            Ok(self.labelled_page(relative, label, offset, limit)?.0)
+        })
+    }
+
+    /// A page under the label the gates gave its path, and the page's change token as plain data.
+    ///
+    /// The token is a fact about the file's shape (READ-7), so it may be had without looking inside
+    /// the labelled page.
+    fn labelled_page(
+        &self,
+        relative: &str,
+        label: Label,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Labelled<Page>, String), WorkspaceError> {
+        let page = self.page(relative, offset, limit)?;
+        let token = page.change_token.clone();
+        Ok((Labelled::new(page, label), token))
+    }
+
+    /// The gates every read of a workspace file goes through, and then `read` with the path they
+    /// admitted and the label the policy gave it.
+    fn gated_read<S: Sink, R>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        read: impl FnOnce(&str, Label) -> Result<R, WorkspaceError>,
+    ) -> Result<R, WorkspaceError> {
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("file_read", "path", Role::Routing, path)?;
@@ -1922,7 +1983,38 @@ impl Workspace {
                 })?;
 
             let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
-            Ok(Labelled::new(self.page(&relative, offset, limit)?, label))
+            read(&relative, label)
+        })
+    }
+
+    /// [`Workspace::read_page`], answering `Unchanged` where the file is the one a window was
+    /// already shown from.
+    ///
+    /// Every gate runs exactly as it does for a read that returns lines, so a repeat is held to the
+    /// same capability, routing and path checks as the first look. Only what comes back differs.
+    /// The comparison is of the change token, which is taken from the file's metadata and so is a
+    /// fact about its shape that the driver may compare (READ-7). The bytes are not opened for it,
+    /// and nothing read decides it.
+    pub fn read_page_unless_unchanged<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        offset: usize,
+        limit: usize,
+        shown: Option<&str>,
+    ) -> Result<Reading, WorkspaceError> {
+        self.gated_read(policy, path, |relative, label| {
+            if let Some(shown) = shown {
+                let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
+                // A file that cannot be inspected falls through to the read, which says why.
+                if let Ok(metadata) = std::fs::metadata(&resolved)
+                    && change_token(&metadata) == shown
+                {
+                    return Ok(Reading::Unchanged);
+                }
+            }
+            let (page, token) = self.labelled_page(relative, label, offset, limit)?;
+            Ok(Reading::Page { page, token })
         })
     }
 
@@ -1964,8 +2056,8 @@ impl Workspace {
             path: relative.to_string(),
         })?;
 
-        let limit = limit.clamp(1, MAX_PAGE_LINES);
-        let start = offset.saturating_sub(1);
+        let (first, limit) = window_of(offset, limit);
+        let start = first - 1;
         let total = contents.lines().count();
 
         let mut lines = Vec::new();
@@ -2782,6 +2874,30 @@ fn change_token(metadata: &std::fs::Metadata) -> String {
         }
     }
     format!("{:016x}", hasher.finish())
+}
+
+/// What a read that may answer with a notice came back with.
+#[derive(Debug)]
+pub enum Reading {
+    /// The window, labelled by what the file's path is, and the file's change token as plain data.
+    ///
+    /// The token is the one inside the page, taken from metadata before the bytes were read
+    /// (READ-7). It is returned beside the page because a [`Labelled`] cannot be looked inside by
+    /// the caller, and what the caller keeps is a fact about the file's shape and no part of its
+    /// text.
+    Page { page: Labelled<Page>, token: String },
+    /// The file's change token is the one the window was last shown under, so its lines were not
+    /// read for this call.
+    Unchanged,
+}
+
+/// The first line and the line count a read of `offset` and `limit` comes to, as [`Workspace::page`]
+/// applies them.
+///
+/// Two requests that come to the same window are the same window: a limit above the cap and no limit
+/// at all return the same lines, and offset 0 starts where offset 1 does.
+pub(crate) fn window_of(offset: usize, limit: usize) -> (usize, usize) {
+    (offset.max(1), limit.clamp(1, MAX_PAGE_LINES))
 }
 
 /// A bounded window of a file's lines.
@@ -3838,6 +3954,84 @@ impl Workspace {
         Ok(Labelled::new(text, policy.label_in_force(&key)))
     }
 
+    /// Bring back the checkouts a resumed session's record kept (CHECKOUT-16), and say which of
+    /// them it could not.
+    ///
+    /// What the record says is read as a claim and not as an answer: a checkout is taken back only
+    /// where its directory is the one this session would have made for that number, under
+    /// `state`'s `checkouts/` for this working directory, is a directory and not a link, and has
+    /// the `worktrees/<id>` entry in this repository's `.git`. Removing a checkout deletes that
+    /// directory and that entry, so a record that named any other path would otherwise point the
+    /// deletion at it. The commit has to be a full object id, since it is shown to the person and
+    /// handed to the planner. The repository removing it is always this one, never one the record
+    /// names.
+    ///
+    /// The numbers it holds are not made again. The rules a checkout needs came back with the
+    /// map. A write to the working directory after the resume reads as one made since the
+    /// checkout (CHECKOUT-14): the writes before it are not known, and saying too much is the safe
+    /// way to be wrong.
+    pub fn restore_session_checkouts(&self, state: &Path, kept: &[SessionCheckout]) -> Vec<String> {
+        let directory = state.canonicalize().ok().map(|state| {
+            state
+                .join("checkouts")
+                .join(crate::home::key_for(&self.root))
+        });
+        let git_dir = self.root.join(".git");
+        let mut unplaced = Vec::new();
+        for one in kept {
+            let number = one
+                .id
+                .strip_prefix('c')
+                .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|digits| digits.parse::<u64>().ok());
+            let whole_id = matches!(one.commit.len(), 40 | 64)
+                && one.commit.bytes().all(|b| b.is_ascii_hexdigit());
+            let placed = match (&directory, number) {
+                (Some(directory), Some(_)) if whole_id => {
+                    one.path == directory.join(&one.id)
+                        && std::fs::symlink_metadata(&one.path)
+                            .is_ok_and(|found| found.file_type().is_dir())
+                        && std::fs::symlink_metadata(git_dir.join("worktrees").join(&one.id))
+                            .is_ok_and(|found| found.file_type().is_dir())
+                }
+                _ => false,
+            };
+            let mut held = self
+                .session_checkouts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if !placed || held.iter().any(|made| made.id == one.id) {
+                if !held.iter().any(|made| made.id == one.id) {
+                    unplaced.push(one.id.clone());
+                }
+                continue;
+            }
+            if let Some(number) = number {
+                self.checkout_numbers
+                    .fetch_max(number + 1, Ordering::SeqCst);
+            }
+            let record = Record {
+                worked_in: AtomicBool::new(one.worked_in),
+                written: Mutex::new(one.candidates.clone()),
+                size: Mutex::new(one.size),
+            };
+            held.push(Made {
+                id: one.id.clone(),
+                path: one.path.clone(),
+                key: self.trust_key(&one.path.to_string_lossy()),
+                commit: one.commit.clone(),
+                delegate: one.delegate,
+                git_dir: git_dir.clone(),
+                record: Arc::new(record),
+                after: 0,
+            });
+            if let Ok(mut listed) = self.checkouts.lock() {
+                listed.push(one.path.clone());
+            }
+        }
+        unplaced
+    }
+
     /// For starting over inside one process: the session beginning here has made no checkout, so
     /// the list empties for every clone. The checkouts themselves stay on disk.
     pub fn forget_session_checkouts(&self) {
@@ -4255,11 +4449,7 @@ impl Workspace {
     /// landing in no open directory keeps a root of its own rather than being read under the
     /// project's ([`bravebot_core::spelling::to_key`]).
     pub(crate) fn trust_key(&self, named: &str) -> String {
-        self.keyed(
-            named,
-            BACKSLASH_SEPARATES,
-            crate::home::profile().as_deref(),
-        )
+        self.keyed(named, BACKSLASH_SEPARATES, self.home.as_deref())
     }
 
     /// The same with the host's answer and the home a leading `~` stands for supplied, for the
@@ -4529,6 +4719,16 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::io;
+
+    /// A read that asks for more than a page and one that names no limit return the same lines, and
+    /// so are the same window: told apart, the second of two reads of one page would be sent again
+    /// for a limit the first did not spell.
+    #[test]
+    fn requests_that_come_to_the_same_lines_are_one_window() {
+        assert_eq!(window_of(1, usize::MAX), window_of(0, MAX_PAGE_LINES + 7));
+        assert_ne!(window_of(1, usize::MAX), window_of(1, 10));
+        assert_ne!(window_of(1, usize::MAX), window_of(2, usize::MAX));
+    }
 
     /// A filesystem that holds the paths it is given, on volume 1, each its own file, and answers
     /// to the other spelling of a name when `folds` says the volume does.
@@ -5187,6 +5387,30 @@ mod tests {
             home.canonicalize().expect("canonical home"),
             project.canonicalize().expect("canonical project"),
         )
+    }
+
+    /// A caller that cannot resolve a path spells it out: only a whole first segment is the home,
+    /// and with no home known the name is left as written for `resolve` to refuse.
+    #[test]
+    fn a_path_is_spelled_out_from_the_home_only_by_a_whole_leading_tilde() {
+        let (home, project) = home_and_project("tilde-spelled");
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+
+        assert_eq!(
+            workspace.expanded("~/todo.txt"),
+            home.join("todo.txt").to_string_lossy()
+        );
+        assert_eq!(workspace.expanded("~"), home.to_string_lossy());
+        for unchanged in ["~notes/x", "./~/x", "notes/~", "todo.txt"] {
+            assert_eq!(workspace.expanded(unchanged), unchanged);
+        }
+        assert_eq!(
+            workspace.with_home(None).expanded("~/todo.txt"),
+            "~/todo.txt"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }
 
     /// The planner writes `~/todo.txt` for a file in the person's home, and an opened home has to

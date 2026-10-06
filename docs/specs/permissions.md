@@ -107,6 +107,7 @@ exceptions, and a matching ask rule prompts even where a more specific allow rul
 list where the narrowest rule won could not be checked by reading it.
 
 `verified-by: bravebot_core::permissions::deny_beats_ask_and_ask_beats_allow_however_specific_the_loser`
+`verified-by: bravebot_core::permissions::deny_beats_ask_for_the_same_subject`
 
 <a id="PERM-3"></a>
 ### PERM-3: a path specifier is gitignore-shaped, and says where it starts
@@ -283,8 +284,10 @@ The file a name lands on is judged as well as the name. A call is checked agains
 the name it gave and again under the name it reaches once every symbolic link on the way is followed
 and the volume has given the stored spelling, so a link to a denied file is refused, a case variant
 of a denied directory is refused whether or not the volume's case handling could be probed, and an
-`ask` rule still asks for a write that comes through a link. The second name can add a refusal or a
-question and never removes one. On Windows a name that reads as something other than the file it
+`ask` rule still asks for a write that comes through a link. A file tool's path that starts with `~`
+is also judged under the absolute path it stands for ([READ-4](tools/read-file.md#READ-4)), since a
+rule anchored at the home directory never matches the spelling `~/x`, and that name is reachable only
+once the home is opened. The second name can add a refusal or a question and never removes one. On Windows a name that reads as something other than the file it
 spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
 the rules cannot be matched against a spelling that is not the file's.
 
@@ -335,6 +338,7 @@ writing: saying yes at startup trusts the whole tree, and a rule is how one file
 answer without declining the rest of it. It holds against a mode that answers every prompt for the
 same reason: the refusal comes before there is a prompt, so there is nothing for a mode to answer.
 
+`verified-by: bravebot_agent::tools::a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory`
 `verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
 `verified-by: bravebot_agent::cmdline::a_rule_refuses_a_line_before_its_program_is_looked_for`
 `verified-by: bravebot_agent::turn::a_denied_program_is_refused_by_the_rule_and_not_for_being_absent`
@@ -792,22 +796,23 @@ else.
 
 **Where the refusal is made.** At the entry point, where the flag is taken off the command line
 before anything dispatches on it, so a session, a resumed session, a one-shot run and a session in
-lines are refused alike ([MODE-5](permission-modes.md#MODE-5)). Refusing there is what makes the mode
-unreachable rather than merely unselected: the key on the ladder is offered only where the flag was
-given, so a flag that never got through is a ladder with no fourth rung.
+lines are refused alike ([MODE-5](permission-modes.md#MODE-5)). In a session the same key is read when
+the session starts and again when it moves to another directory, and the mode is left off the ladder
+the key walks, so the flag and the key cannot disagree about whether the mode is available. A session
+already in the mode when a layer wrote the key is put back to asking.
 
 Refused rather than downgraded to asking. A run told to stop asking and carried on with a notice is a
 run whose author believes it is unattended, and the notice is on a stream nobody is reading.
 
-**Why.** The command line asking for the mode is a real gate and it is the only one
-([MODE-5](permission-modes.md#MODE-5)): nothing a settings file said could make the mode unreachable,
-so a person who wanted that had nothing to write and an administrator had nothing to pin. What the
-mode gives up is written down under Known costs in
+**Why.** The mode is reachable by the key in every session ([MODE-5](permission-modes.md#MODE-5)),
+so a person or an administrator who wants it out of reach on a machine has nothing else to write.
+What the mode gives up is written down under Known costs in
 [permission-modes.md](permission-modes.md), and the place it is wrong is a working machine, which is
 exactly the machine somebody else may have a legitimate say in.
 
 `verified-by: bravebot_cli::main::the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable`
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
+`verified-by: bravebot_tui::app::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
 
 <a id="PERM-18"></a>
 ### PERM-18: every layer may write either, and the strictest value any layer named holds

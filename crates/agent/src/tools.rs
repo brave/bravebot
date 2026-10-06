@@ -263,6 +263,11 @@ fn table(
              Where you have taken a look and not scheduled another, say so, because no change with \
              nothing watching reads as a promise to report the next one.{watching} \
              \
+             Ask for the same window of a file again while it is as it was and the answer is a \
+             short notice carrying the same token, because the lines are already earlier in this \
+             conversation. A different window, or a file somebody has written since, comes back as \
+             lines. \
+             \
              A picture or a PDF (.png, .jpg, .gif, .webp, .pdf) comes back as a reference rather \
              than as anything you can look at, whoever vouched for the directory it is in. Give \
              that reference to spawn_processor with a question about it and the answer comes back \
@@ -1395,6 +1400,36 @@ pub fn for_planner(
     tools
 }
 
+/// Add the `advisor` tool to a planner's list, for a session that named an advisor model.
+///
+/// Built here rather than in the table because no session is offered it by default: it exists only
+/// where somebody chose a model to consult, and a description naming a tool that is not on the
+/// list sends the planner to a name that is not there.
+pub fn offer_advisor(tools: &mut Vec<Tool>) {
+    let mut advisor = Tool::function(
+        "advisor",
+        "Ask a stronger model for guidance. The advisor is given this whole conversation, \
+         exactly as you have it, and the question you write; it has no tools and cannot look \
+         at anything you have not. It returns advice as text, which is yours to weigh and act \
+         on. Use it before committing to an approach you are unsure of, when you are stuck, or \
+         before calling the work done. It costs a request to a larger model, and a turn may ask \
+         it only a few times, so put the whole question in one call rather than several.",
+        json!({
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "What you want the advisor's view on, written so that it \
+                                    can be answered from the conversation alone."
+                }
+            },
+            "required": ["question"]
+        }),
+    );
+    ask_why(&mut advisor);
+    tools.push(advisor);
+}
+
 /// Replace which names `spawn_agent` accepts, and what each is for, with the kinds this turn
 /// resolved. Nothing where the list does not offer the tool.
 fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definitions) {
@@ -1518,6 +1553,11 @@ pub struct Output {
     /// The content alone, where `text` has the driver's own notes after it, so that a glimpse of
     /// a file is of the file and counts the file's lines.
     pub glimpsed: Option<Labelled<String>>,
+    /// The window of a file this result shows, where it is a read that put lines in the result.
+    ///
+    /// Recorded by the turn loop only once the planner was shown the result (READ-8): a read that
+    /// was quarantined, refused or answered with a notice shows no window.
+    pub window: Option<crate::conversation::ReadWindow>,
     /// Whether the text is workspace content rather than the driver's own words about the call.
     pub content: bool,
     /// Whether this call left a file on disk different from how it found it.
@@ -1640,6 +1680,9 @@ pub struct Tools<'a> {
     pub skills: &'a crate::skills::Catalogue,
     /// Where quarantined content lives, by the names the planner was given for it.
     pub slots: &'a mut SlotStore,
+    /// The windows of files this conversation has shown the planner, which a repeat read is
+    /// compared against.
+    pub reads: &'a mut crate::conversation::ShownReads,
     /// The model an isolated processor runs on.
     pub chat: Chat<'a>,
     /// The turn's stop token, so a slow program does not have to be waited out.
@@ -1753,9 +1796,36 @@ pub struct Tools<'a> {
     /// instead which effects may happen with nobody to see them. The identifier is what the reading
     /// back uses to tell this session's own answers from an earlier session's.
     pub remembering: Option<&'a str>,
+    /// The advisor this turn may consult, and what it has been asked so far, or `None` where the
+    /// session named none.
+    ///
+    /// Read by dispatch as well as by the tool list, for the reason `arming` is: a call to a tool
+    /// this turn was not offered is answered the way any other unknown name is rather than
+    /// quietly working.
+    pub advising: Option<crate::advisor::Advising<'a>>,
+    /// Whether a program `run` starts is held to the profile its plan accounts for.
+    ///
+    /// `false` for a turn nobody turned it on for, which starts programs with the access the
+    /// user's own shell has. Where it is `true` the platform has to confine every step or the step
+    /// is not started; a platform with no base (Windows) starts them as it always has
+    /// ([SANDBOX-1]).
+    ///
+    /// [SANDBOX-1]: ../../../docs/specs/sandboxing.md
+    pub confine_runs: bool,
 }
 
 impl<'a> Tools<'a> {
+    /// What this call's programs are confined to, or `None` where they are not.
+    fn confinement(&self) -> Option<crate::confine::Confinement> {
+        if !self.confine_runs {
+            return None;
+        }
+        let roots = std::iter::once(self.workspace.root().to_path_buf())
+            .chain(self.workspace.added_directories().iter().cloned())
+            .collect();
+        crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)
+    }
+
     /// Where this turn's credential findings are written, and under whose name.
     ///
     /// Both halves are already here for other reasons, and putting them together in one place is
@@ -2125,6 +2195,8 @@ struct Produced {
     said: Option<Labelled<String>>,
     /// The content alone, where `text` has the driver's own notes after it.
     glimpsed: Option<Labelled<String>>,
+    /// The window of a file `text` shows, for the record of what the planner has been shown.
+    window: Option<crate::conversation::ReadWindow>,
     /// Whether `text` is workspace content rather than the driver's own words about the call.
     ///
     /// What the kernel does with a result is worth reporting only where the result is content:
@@ -2200,6 +2272,7 @@ impl Produced {
             answers_for: None,
             said: None,
             glimpsed: None,
+            window: None,
             content: false,
             usage: Usage::default(),
             inference_interval: None,
@@ -2241,6 +2314,7 @@ impl Produced {
             answers_for: None,
             said: None,
             glimpsed: None,
+            window: None,
             wakeup: None,
             watch: None,
             content: false,
@@ -2506,6 +2580,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "run" => Some("command"),
         "read_output" => Some("ref"),
         "watch_file" => Some("path"),
+        "advisor" => Some("question"),
         _ => None,
     }
 }
@@ -2842,6 +2917,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 answers_for: produced.answers_for,
                 said: produced.said,
                 glimpsed: produced.glimpsed,
+                window: produced.window,
                 content: produced.content,
                 changed_a_file: produced.changed_a_file,
                 ran_a_program: produced.ran_a_program,
@@ -2967,6 +3043,12 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             tools.armed,
             &arguments,
         ),
+        // Offered to the planner of a session that named an advisor, and to nothing else: a
+        // delegate's task came from a planner, and a call from one is answered as an unknown name
+        // is. Refused here as well as absent from the list.
+        "advisor" if !tools.delegated && tools.advising.is_some() => {
+            advise(policy, tools, &arguments)
+        }
         other => match &server_tool {
             Some((offer, alias, tool)) => {
                 let egress = tools.chat.egress;
@@ -3011,6 +3093,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         answers_for: produced.answers_for,
         said: produced.said,
         glimpsed: produced.glimpsed,
+        window: produced.window,
         content: produced.content,
         changed_a_file: produced.changed_a_file,
         ran_a_program: produced.ran_a_program,
@@ -3634,8 +3717,46 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         });
     }
 
-    let page = match workspace.read_page(policy, &path, offset, limit) {
-        Ok(page) => page,
+    // The planner already holds this window if an earlier answer put it there and the file has not
+    // been written since (READ-8). Looked up by the path as the trust map keys it and the window as
+    // the read applies it, so a spelling or a limit that comes to the same lines is the same read.
+    let (first_line, line_limit) = crate::workspace::window_of(offset, limit);
+    let earlier = tools
+        .reads
+        .token_of(&keyed, first_line, line_limit)
+        .map(str::to_string);
+    let shown_token;
+    let page = match workspace.read_page_unless_unchanged(
+        policy,
+        &path,
+        offset,
+        limit,
+        earlier.as_deref(),
+    ) {
+        Ok(crate::workspace::Reading::Page { page, token }) => {
+            shown_token = token;
+            page
+        }
+        Ok(crate::workspace::Reading::Unchanged) => {
+            // Both halves are the driver's own words: the token is metadata of the file and the
+            // window is what the planner asked for. Nothing the file holds is in either.
+            let token = earlier.unwrap_or_default();
+            let asked = match arguments.get("limit").and_then(Value::as_u64) {
+                Some(limit) => format!("from line {first_line}, at most {limit} lines"),
+                None => format!("from line {first_line}"),
+            };
+            return priced(Produced {
+                origin: shown_path.clone(),
+                ..confirmed(
+                    format!(
+                        "{shown_path} ({asked}) has not changed since it was shown to you earlier \
+                         in this conversation, so its lines are not sent again: they are in that \
+                         earlier result.\n\n(change token {token})"
+                    ),
+                    format!("unchanged since it was shown, not sent again ({token})"),
+                )
+            });
+        }
         Err(e) => {
             return priced(Produced::problem(format!(
                 "error: {}",
@@ -3709,6 +3830,12 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     let glimpsed = policy.render_in_place("read_file", &page, |p| p.lines.join("\n"));
     priced(Produced {
         glimpsed: Some(glimpsed),
+        window: Some(crate::conversation::ReadWindow {
+            file: keyed,
+            offset: first_line,
+            limit: line_limit,
+            token: shown_token,
+        }),
         ..Produced::new(rendered, shown_path, exposed_note(note, &found)).of_content()
     })
 }
@@ -3940,6 +4067,13 @@ fn refuse_denied_path<S: Sink>(
         Purpose::Effect => policy.before_write(name),
     };
     ask(policy, path).map_err(|_| denied_by_rule(path))?;
+    // Spelled out as well, because a rule anchored at the home directory never matches `~/x`, and
+    // the landing below exists only once the home is opened, so until then the refusal would offer
+    // opening it for a file a rule refuses once it is.
+    let expanded = workspace.expanded(path);
+    if expanded != path {
+        ask(policy, &expanded).map_err(|_| denied_by_rule(path))?;
+    }
     match workspace.landing(path) {
         Some(landed) => ask(policy, &landed).map_err(|_| denied_by_rule(path)),
         None => Ok(()),
@@ -5455,7 +5589,9 @@ fn watch_file<S: Sink>(
     if let Err(denial) = policy.promote_confined_read("watch_file", "path", &found.path) {
         return Produced::problem(format!("refused: {denial}"));
     }
-    let path = found.released;
+    // The absolute path a `~` stands for: the session looks again from a working directory that
+    // may have moved, where `~/x` reads as a relative path and would end the watch.
+    let path = workspace.expanded(&found.released);
 
     // A directory is refused at the surface rather than watched and reported on. What changed
     // inside one is a file name the filesystem produced, and putting that in a fire's prompt is
@@ -6812,6 +6948,8 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // grant is a sentence somebody answered and a use is a thing that happened.
     let spends = bravebot_core::ambient::spent_by(&plan);
 
+    let confinement = tools.confinement();
+
     if in_the_background {
         // What has to be refused is what start_steps cannot honour, and it honours no route at
         // all, including `2>&1`, which names nothing for anybody to endorse.
@@ -6826,7 +6964,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         tools
             .workspace
             .mark_rewind_gap(crate::rewind::CoverageGap::Command);
-        return match crate::exec::start_steps(steps, &plan.directory, tools.workspace.scratch()) {
+        return match crate::exec::start_steps(
+            steps,
+            &plan.directory,
+            tools.workspace.scratch(),
+            confinement.as_ref(),
+        ) {
             Ok(running) => {
                 // Spent at the moment the programs start, which for a background line is here:
                 // it outlives this call, and nothing later in the turn knows what it reached.
@@ -6903,6 +7046,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             &handoff,
             limit,
             tools.workspace.scratch(),
+            confinement.as_ref(),
         ) {
             Ok(crate::exec::Waited::Moved(moved)) => {
                 // Everything the background branch above does once its line has started, at the
@@ -6946,6 +7090,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             limit,
             tools.workspace.scratch(),
             supplied.as_ref().map(|(bytes, _)| bytes.as_str()),
+            confinement.as_ref(),
             &mut |path| {
                 let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
                 if effects.contains_key(&key) {
@@ -7165,6 +7310,23 @@ fn runs_git(step: &bravebot_core::command::Step) -> bool {
     step.resolved.file_stem().is_some_and(|stem| stem == "git")
 }
 
+/// What every fetch asks for, in the order it prefers.
+///
+/// A fixed string in this program's own source. The planner's `url` argument takes no part in it,
+/// no reply can change it, and every hop of every fetch sends the same bytes, so nothing a server
+/// writes decides what the next request asks for.
+///
+/// Markdown first because the body is read by a processor and nothing else: the same page as
+/// Markdown is a fraction of the tokens its HTML is, and a server that can serve both otherwise
+/// serves HTML.
+///
+/// Nothing else is ranked. `*/*` carries one weight below Markdown, so a server holding no
+/// Markdown answers with whatever it would have answered before this header existed. Naming
+/// `text/html` above `*/*` would rank the rest, and an endpoint that negotiates would then read
+/// this as a request for its HTML page where it used to answer with the compact JSON a processor
+/// reads for fewer tokens.
+const FETCH_ACCEPT: &str = "text/markdown, */*;q=0.9";
+
 fn fetch_url<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -7231,7 +7393,10 @@ fn fetch_url<S: Sink, C: Confirmer>(
         policy.record_ambient(&[spent]);
     }
 
-    let request = bravebot_net::Request::get(&url);
+    // The header is this program's own, fixed at compile time: a preference for the cheapest form
+    // of the page a processor will read. Nothing of the planner's or of a server's reaches it, and
+    // every hop of the chain re-sends it, because the egress crate re-sends the whole request.
+    let request = bravebot_net::Request::get(&url).header("accept", FETCH_ACCEPT);
     let fetched = tools
         .chat
         .egress
@@ -7558,6 +7723,86 @@ fn unreadable_reads(arguments: &Value) -> &'static str {
         _ => {
             "error: 'reads' is required and must be an array of reference names, e.g. \
              \"reads\": [\"ref:0\"]"
+        }
+    }
+}
+
+/// Put the planner's question to the advisor and bring back what it said.
+///
+/// The answer comes back as the result of the call, labelled from the context the advisor was
+/// shown, so the kernel decides in the turn whether the planner reads it or is given a reference.
+/// Every failure is the driver's own words: what a backend says about a failed request can carry
+/// a credential, and the planner is told the category only (TOOL-4).
+fn advise<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    arguments: &Value,
+) -> Produced {
+    let Some(question) = named_argument(arguments, "question") else {
+        return Produced::problem("error: 'question' is required and must be a string");
+    };
+    let Some(advising) = tools.advising.as_mut() else {
+        return Produced::problem("error: no such tool 'advisor'");
+    };
+    if *advising.asked >= crate::advisor::CALLS_PER_TURN {
+        return Produced::problem(format!(
+            "refused: the advisor has been asked {} times this turn, which is as often as a turn \
+             may. Decide from the advice you already have.",
+            crate::advisor::CALLS_PER_TURN
+        ));
+    }
+    let question = match policy.before_advice(&question) {
+        Ok(question) => question,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+
+    // Counted before the call, so one that fails or is cancelled still counts: a planner that
+    // keeps asking a model that keeps failing is the loop the bound is for.
+    *advising.asked += 1;
+    let call = *advising.asked;
+    let model = advising.model;
+
+    let asked_at = std::time::Instant::now();
+    let answer =
+        crate::advisor::consult(policy, &mut tools.chat, model, advising.context, &question);
+    let waited = Some(crate::timing::Interval::since(asked_at));
+    match answer {
+        Ok(advice) => {
+            policy.record_advice(model, call, advice.usage.total(), question.chars().count());
+            Produced::new(
+                advice.answer,
+                format!("the advisor {model}"),
+                format!("the advisor {model} answered"),
+            )
+            .costing(advice.usage)
+            .waiting(waited)
+            .of_content()
+        }
+        Err(crate::advisor::AdviceError::Chat(error)) => {
+            let cancelled = error.is_cancelled();
+            let diagnosis = error.diagnosis();
+            let reason = if cancelled {
+                "cancelled"
+            } else {
+                diagnosis.category.name()
+            };
+            let mut produced = Produced::problem(format!("error: advisor request {reason}"))
+                .costing(error.completed_usage().unwrap_or_default())
+                .waiting(waited);
+            if cancelled {
+                produced.cancelled = Some(crate::outcome::Cancellation {
+                    attempts: diagnosis.attempts,
+                });
+            }
+            produced
+        }
+        Err(crate::advisor::AdviceError::Refused) => Produced::problem(
+            "refused: the settings on this machine do not allow the advisor model. Carry on \
+             without it.",
+        )
+        .waiting(waited),
+        Err(crate::advisor::AdviceError::Denied(error)) => {
+            Produced::problem(format!("error: {error}")).waiting(waited)
         }
     }
 }
@@ -9162,7 +9407,7 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let mut running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let mut running = crate::exec::start_steps(steps, &root, None, None).unwrap();
             let until = Instant::now() + Duration::from_secs(5);
             while !running.ended() {
                 assert!(Instant::now() < until, "job did not end");
@@ -9214,7 +9459,7 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
             let (_, stop) = jobs.keep(
                 running,
                 plan.display(),
@@ -9288,7 +9533,7 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
             let (name, stop) = jobs.keep(
                 running,
                 plan.display(),
@@ -9561,6 +9806,8 @@ mod tests {
                 Deadlines::BUILT_IN,
             ));
         }
+
+        offer_advisor(&mut offered);
 
         for tool in offered {
             let name = &tool.function.name;
@@ -12107,6 +12354,76 @@ mod tests {
             }
         }
 
+        /// The advisor is withheld from a delegate and from a session that named none, and refused at
+        /// dispatch as well as left off the list, for the reason `schedule_next` is. The last case is
+        /// the control: a planner with an advisor whose turn has used its questions is refused for
+        /// that reason, so an implementation that refused every call would not pass.
+        #[test]
+        fn a_call_to_an_advisor_nobody_was_offered_is_answered_as_an_unknown_name() {
+            let scratch = super::arguments::Scratch::new("advisor-dispatch");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            for (advised, delegated, asked, expected) in [
+                (false, false, 0, "error: no such tool 'advisor'"),
+                (true, true, 0, "error: no such tool 'advisor'"),
+                (
+                    true,
+                    false,
+                    crate::advisor::CALLS_PER_TURN,
+                    "refused: the advisor has been asked",
+                ),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "choose a file");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let call: ToolCall = serde_json::from_value(json!({
+                    "id": "1",
+                    "function": {
+                        "name": "advisor",
+                        "arguments": r#"{"question": "which file?", "why": "unsure"}"#,
+                    }
+                }))
+                .expect("a call");
+
+                // Leaked because the harness lends `Tools` to the closure for a lifetime of its own,
+                // which nothing borrowed from this test can outlive.
+                let context: &'static [bravebot_aichat::protocol::Message] =
+                    Box::leak(Box::new([bravebot_aichat::protocol::Message::user(
+                        "the task",
+                    )]));
+                let counted: &'static mut usize = Box::leak(Box::new(asked));
+                let output = super::arguments::with_tools(&workspace, |tools| {
+                    tools.delegated = delegated;
+                    tools.advising = advised.then_some(crate::advisor::Advising {
+                        model: "advisor-model",
+                        context,
+                        asked: counted,
+                    });
+                    dispatch(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::Unattended,
+                        &mut crate::report::IgnoreReports,
+                        &call,
+                    )
+                });
+                let told = {
+                    let proof = policy.authorise_display_release("test inspects the tool result");
+                    output.text.clone().declassify(&proof)
+                };
+                assert!(
+                    told.starts_with(expected),
+                    "advised {advised}, delegated {delegated}: {told}"
+                );
+            }
+        }
+
         /// The planner has to be told the wait it is getting, not the wait it asked for, or its
         /// next answer describes a schedule that is not happening.
         #[test]
@@ -12122,6 +12439,15 @@ mod tests {
                     "asked for {asked}: {}",
                     produced.note
                 );
+                for scheduling in [Scheduling::PacingALoop, Scheduling::ArrangingALook] {
+                    let produced =
+                        scheduled(scheduling, json!({"delay_seconds": asked, "noop": false}));
+                    let told = released(&produced.text);
+                    assert!(
+                        told.contains(&format!("again in {held} seconds")),
+                        "{scheduling:?}, asked for {asked}: {told}"
+                    );
+                }
             }
         }
 
@@ -12599,6 +12925,41 @@ mod tests {
             assert_eq!(produced.watch.as_deref(), Some("a.txt"));
             assert_eq!(count, 1);
             assert!(told.starts_with("watching: a.txt"), "{told}");
+        }
+
+        /// A watch is looked at again from wherever the session is by then. Armed on `~/todo.txt`
+        /// it would read as a relative path and end at the first `/cd`, though it names the same
+        /// file as before, so it is armed on the path the `~` stands for.
+        #[test]
+        fn a_file_named_from_the_home_directory_is_armed_on_the_path_it_stands_for() {
+            let scratch = Scratch::new("home-file");
+            let home = scratch.path.join("home");
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(home.join("todo.txt"), "milk\n").unwrap();
+            let home = home.canonicalize().unwrap();
+            let mut workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_home(Some(home.clone()));
+            workspace
+                .add_directory(home.to_str().expect("utf-8"))
+                .expect("home opened");
+
+            let mut count = 0;
+            let (produced, _) = armed(
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path": "~/todo.txt"}),
+            );
+
+            let expected = home.join("todo.txt").to_string_lossy().into_owned();
+            assert_eq!(produced.watch.as_deref(), Some(expected.as_str()));
+            assert!(
+                crate::watch::names_the_same_file(&expected, &project, &home),
+                "the watch would end when the working directory moved"
+            );
         }
 
         /// A session does one thing at a time that happens without anybody typing, and the
@@ -13392,6 +13753,51 @@ mod tests {
         use bravebot_core::event::{Event, RecordingSink};
         use bravebot_core::policy::{ReleasePlan, Routing};
 
+        /// A rule in the settings file is anchored at the home directory, so it never matches the
+        /// spelling `~/secret.txt`. Until the home is opened there is no landing to ask about
+        /// either, and the refusal would offer `/add-dir` for a file the rule refuses once it is.
+        #[test]
+        fn a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory() {
+            let scratch = Scratch::new("deny-home-file");
+            let home = scratch.path.join("home");
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(home.join("secret.txt"), "hunter2\n").unwrap();
+            let home = home.canonicalize().unwrap();
+            let workspace = Workspace::new(&project)
+                .expect("workspace")
+                .with_home(Some(home.clone()));
+
+            let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+                &["Read(~/secret.txt)".to_string()],
+                &[],
+                &[],
+                &bravebot_core::permissions::Anchors {
+                    home: home.to_str().map(str::to_string),
+                    ..bravebot_core::permissions::Anchors::none()
+                },
+            );
+            assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read a file");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_permissions(permissions);
+
+            let refusal =
+                refuse_denied_path(&mut policy, &workspace, Purpose::Read, "~/secret.txt")
+                    .expect_err("the rule covers the file");
+            assert_eq!(refusal, denied_by_rule("~/secret.txt"));
+        }
+
         /// What the planner was told, the trail's confinement refusals, and whether the turn
         /// would end as clean, for one call to `run`.
         fn run_once(name: &str, arguments: &Value) -> (String, Vec<String>, bool) {
@@ -13571,6 +13977,7 @@ mod tests {
             let egress = bravebot_net::Egress::new();
             let skills = crate::skills::Catalogue::default();
             let mut slots = SlotStore::new();
+            let mut reads = crate::conversation::ShownReads::default();
             let cancel = bravebot_core::cancel::Cancel::new();
             let mut armed = 0usize;
             let mut jobs = Jobs::default();
@@ -13581,6 +13988,7 @@ mod tests {
                 deadlines: Deadlines::BUILT_IN,
                 skills: &skills,
                 slots: &mut slots,
+                reads: &mut reads,
                 chat: Chat {
                     config: &config,
                     egress: &egress,
@@ -13604,8 +14012,49 @@ mod tests {
                 permission_mode: crate::PermissionMode::default(),
                 auto_vetting: false,
                 run_directory: &mut run_directory,
+                confine_runs: false,
                 remembering: None,
+                advising: None,
             })
+        }
+
+        /// The regression it rejects: a turn that asks for confined runs building its confinement
+        /// from something other than the directories its workspace was opened on, or building none.
+        #[cfg(unix)]
+        #[test]
+        fn a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not()
+        {
+            let scratch = Scratch::new("confine-roots");
+            let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+            let beside = Scratch::new("confine-added");
+            let added = beside.path.clone();
+            workspace
+                .add_directory(&added.to_string_lossy())
+                .expect("added");
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            };
+
+            let (off, on) = with_tools(&workspace, |tools| {
+                let off = tools.confinement().is_some();
+                tools.confine_runs = true;
+                (off, tools.confinement())
+            });
+
+            assert!(!off);
+            let on = on.expect("a platform with a base");
+            let policy = on.policy(&step, workspace.root(), &[]);
+            for root in [workspace.root(), added.canonicalize().unwrap().as_path()] {
+                assert!(
+                    policy.writable.iter().any(|row| row.path == root),
+                    "{root:?} is not written in {policy:?}"
+                );
+            }
         }
 
         pub(super) fn told(

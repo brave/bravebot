@@ -1,0 +1,32 @@
+name: Request reviewer
+
+# Asks netzenbot-reviewer, the account the scheduled review-prs job reviews as, to review every
+# pull request. The account has triage access, so CODEOWNERS cannot name it (an owner without write
+# access is ignored), and a requested review that no rule requires blocks nothing.
+#
+# pull_request_target rather than pull_request because most pull requests come from a fork, and a
+# fork's token cannot write. That trigger runs the workflow on the base branch with a write token,
+# so this job checks nothing out and runs nothing the pull request supplies: the only input is the
+# number, which reaches the script as an environment variable.
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  request:
+    name: Request netzenbot-reviewer
+    # A pull request cannot ask its own author for a review.
+    if: github.event.pull_request.user.login != 'netzenbot-reviewer'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request the review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api --method POST "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" \
+            -f 'reviewers[]=netzenbot-reviewer'

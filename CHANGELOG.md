@@ -1,12 +1,86 @@
+## [0.14.0](https://github.com/brave/bravebot/releases/tag/v0.14.0)
+
+ - Added MCP servers to the desktop app, with a Connectors page in Settings for GitHub, Gmail, Google Calendar, Brave Search and your own servers. Every question a server raises (use it, list its tools, call a tool, follow a move) is asked in the window.
+ - Added a home folder to each desktop bot, where its conversations with no project run and its notes are kept, with one set of notes per folder it works in.
+ - Added `/branch [name]`, which copies the running session and moves onto the copy, and says how to resume the original. ([#1511](https://github.com/brave/bravebot/issues/1511))
+ - Added `apply_checkout` and `/checkouts apply <n>`, which bring the files a delegate wrote in a kept checkout back to the working directory, one question each. The question says when the working directory's file was written since the checkout was made. ([#1050](https://github.com/brave/bravebot/issues/1050))
+ - Added an info panel beside the transcript on a terminal 100 columns wide or more, toggled with `ctrl-x` or `/panel`. It shows the session, goal, links, context, started servers and plan, and is kept open or closed for the next session. ([#1220](https://github.com/brave/bravebot/issues/1220))
+ - Added `/jobs`, which lists the background jobs of the turn, and `/jobs stop <name>`, which stops one. ([#1127](https://github.com/brave/bravebot/issues/1127))
+ - Added `/copy [n]`, which puts the latest reply, or the one n back, on the clipboard exactly as the transcript holds it. ([#1327](https://github.com/brave/bravebot/issues/1327))
+ - Added an optional `[focus]` to `/compact`, which tells the summariser what the summary must keep. ([#1325](https://github.com/brave/bravebot/issues/1325))
+ - Added `/add-dir close <path>`, which closes one opened directory and takes back the trust it was given, without clearing the conversation. ([#1526](https://github.com/brave/bravebot/issues/1526))
+ - Added `/issue <url>` and `/pr <url>`, which set the issue and pull request a session is for. A resume or `--fork` keeps them. ([#1267](https://github.com/brave/bravebot/issues/1267))
+ - Added `bravebot completion <shell>`, which prints a bash, zsh or fish completion script. ([#1506](https://github.com/brave/bravebot/issues/1506))
+ - Added `/caffeinate`, which keeps the computer from sleeping while a turn runs or a loop has a tick to come. It is off until you use it. ([#1513](https://github.com/brave/bravebot/issues/1513))
+ - Added `/init`, which has the planner draft an `AGENTS.md` for a project that has none, from the project's files where you vouched for them and from your answers where you did not. It leaves an existing file alone. ([#1539](https://github.com/brave/bravebot/issues/1539))
+ - Added `ctrl-y`, which puts back what `ctrl-u`, `ctrl-k`, `ctrl-w` or `alt-d` deleted. ([#1439](https://github.com/brave/bravebot/issues/1439))
+ - Added `updateCheck: false` and `BRAVEBOT_UPDATE_CHECK=0`, which turn off the update check at startup. ([#1487](https://github.com/brave/bravebot/issues/1487))
+ - Added the session's name to the terminal's title, so several open sessions can be told apart. A `terminalTitle` setting of `false` turns it off. ([#1220](https://github.com/brave/bravebot/issues/1220))
+ - Added to `/checkouts` each kept checkout's size on disk and whether its commit is pushed. ([#1235](https://github.com/brave/bravebot/issues/1235))
+ - Added a `context` count to `search`, which returns the lines around each match so it reads without a second call. ([#1468](https://github.com/brave/bravebot/issues/1468))
+ - Added `stop` to `schedule_next`, so a self-paced loop that has finished ends without one more tick. ([#1467](https://github.com/brave/bravebot/issues/1467))
+ - Added `mcp_servers` to `spawn_agent`, which lists the MCP servers a worker keeps, so a worker sent to fix a bug need not hold your mail. ([#1236](https://github.com/brave/bravebot/issues/1236))
+ - Added `ls`, `cat`, `sort`, `uniq`, `diff`, `stat` and `du` to the programs a line may run unasked when it only reads paths you vouched for. A call that writes (`sort -o`, `uniq IN OUT`) or follows a link (`ls -L`, `diff -r`) still asks. ([#1466](https://github.com/brave/bravebot/issues/1466))
+ - Added deleting an archived conversation from the desktop app. Archiving or deleting a bot or conversation now asks first.
+ - Added to the desktop app's permissions list when each remembered answer was given.
+ - Added the program a bare command name resolves to in the question `bravebot mcp add`, `approve` and `enable` ask, so you see which one a yes would start.
+ - Added to the audit trail how each delegate ended and why, each checkout made and removed, the permission mode a turn began in, and who answered each approval. ([#1358](https://github.com/brave/bravebot/issues/1358))
+ - Changed the desktop app's sessions to Chats, with a search box and filter in the sidebar, a project and branch on each row, and a Settings view with General and Agent pages that replaces the Agent settings dialog and the appearance picker. Plan first now sits in the Agent menu beside the model picker.
+ - Changed a desktop bot to be defined by a file in `~/.bravebot/agents/`, and every turn of its conversations to be addressed to it. A bot made earlier gets one on its first turn, and its old notes are treated as untrusted.
+ - Changed the desktop app to open a session only in a folder you picked or that it already lists. ([#1195](https://github.com/brave/bravebot/issues/1195))
+ - Changed `/status`, `/rename`, `/forget-trust` and a named `/theme` or `/effort` to run as soon as they are typed during a turn. ([#1128](https://github.com/brave/bravebot/issues/1128))
+ - Changed the working indicator to say "Stopping" from the press of Ctrl-C or Escape, with how many delegates it still waits on. ([#1298](https://github.com/brave/bravebot/issues/1298))
+ - Changed a `/x` Read or Edit rule to start at the directory of the settings file that wrote it, and `./x` to start at the workspace.
+ - Changed a read outside the workspace to be refused with what you can do: `/add-dir` the directory, or drop the file on the window. ([#1237](https://github.com/brave/bravebot/issues/1237))
+ - Changed a turn that tried to leave the workspace to end as refused, with exit status 4, and to leave a refusal in the trail. ([#1266](https://github.com/brave/bravebot/issues/1266))
+ - Changed `/add-dir` to say up front that no delegate gets a checkout while the directory is open, and `/cd` to refuse while a checkout is kept. ([#1525](https://github.com/brave/bravebot/issues/1525), [#1297](https://github.com/brave/bravebot/issues/1297))
+ - Changed the planner and delegates in checkouts to be told the checkouts share their branches, tags and stash, so a fetch is made once and nobody runs `git stash`. ([#1234](https://github.com/brave/bravebot/issues/1234))
+ - Changed `/clear` to say when it ends a goal or a loop. ([#1162](https://github.com/brave/bravebot/issues/1162), [#1166](https://github.com/brave/bravebot/issues/1166))
+ - Changed a session in lines to remember your answers for the session and ask only the questions not yet settled.
+ - Changed the row for a read released by auto-vetting to say so: "read without asking: a check found nothing". ([#1141](https://github.com/brave/bravebot/issues/1141))
+ - Changed every refusal of a stored subscription batch to name the fix: `bravebot auth login leo` again, or `bravebot auth logout leo`. ([#1172](https://github.com/brave/bravebot/issues/1172))
+ - Fixed a redirection writing to a file a project-relative deny rule names, such as `Edit(.env)`. ([#1169](https://github.com/brave/bravebot/issues/1169))
+ - Fixed a deny rule not covering a repository reached through a symbolic link, a rule written with a full path not holding in a delegate's checkout, and two spellings of a path that differ only in case deciding differently. ([#1187](https://github.com/brave/bravebot/issues/1187), [#1151](https://github.com/brave/bravebot/issues/1151), [#1194](https://github.com/brave/bravebot/issues/1194))
+ - Fixed `/dev//null` and `/dev/./null` being treated as the discard device, which skipped the write checks.
+ - Fixed a sandbox write row such as `/..` counting as confining, a Windows confinement profile being reused by a later run, and created Windows write paths taking their parent's access list.
+ - Fixed a redirected MCP server being followed without a question when only the port changed, such as `http://` to `https://` on the same host. ([#1167](https://github.com/brave/bravebot/issues/1167))
+ - Fixed names out of an untrusted tree reaching the model as trusted text: the error of a failed listing or search, a directory a listing could not open, a language server's locations and a skipped skill folder. ([#1190](https://github.com/brave/bravebot/issues/1190), [#1186](https://github.com/brave/bravebot/issues/1186), [#1178](https://github.com/brave/bravebot/issues/1178))
+ - Fixed a vetting reply cut off in the middle of an object being read as "safe" when an earlier complete object said so. ([#1196](https://github.com/brave/bravebot/issues/1196))
+ - Fixed a reference to a picture or PDF that nothing had read yet being refused by `vet_content` as a binary file. ([#1191](https://github.com/brave/bravebot/issues/1191))
+ - Fixed a delegate, an addressed definition or a skill starting on a model the managed layer denies. ([#1150](https://github.com/brave/bravebot/issues/1150))
+ - Fixed `~/file` in a file tool path being read as a directory named `~`, and a watch or deny rule written with `~` not matching the home directory. ([#1524](https://github.com/brave/bravebot/issues/1524))
+ - Fixed the Leo Premium credential files: a failed write left a temporary file holding tokens, and the claim file took the process's umask instead of mode 0600.
+ - Fixed a failed write of a spent Leo Premium credential being written over a batch imported for another environment. ([#1171](https://github.com/brave/bravebot/issues/1171))
+ - Fixed a checkout a program was started in being removed as untouched when its run was refused or failed, and a refused delegate using up a place under the limit of 32. ([#1153](https://github.com/brave/bravebot/issues/1153), [#1189](https://github.com/brave/bravebot/issues/1189))
+ - Fixed a delegate in a checkout having no git read, being offered `lsp` it could not use, and a definition naming `lsp` without `run` being given a language server. ([#1152](https://github.com/brave/bravebot/issues/1152), [#1160](https://github.com/brave/bravebot/issues/1160))
+ - Fixed an addressed definition's skills not being offered to the turn it addresses. ([#1143](https://github.com/brave/bravebot/issues/1143))
+ - Fixed a search from the workspace root reporting every match twice when a worktree lies under `.claude/worktrees`, and a search blaming a deny rule for a glob that selected nothing. ([#1527](https://github.com/brave/bravebot/issues/1527), [#1188](https://github.com/brave/bravebot/issues/1188))
+ - Fixed a command that needs no question being drawn as a bare "Run" with nothing to say which. ([#1219](https://github.com/brave/bravebot/issues/1219))
+ - Fixed the usage of a failed one-shot report or an interrupted plan run being lost.
+ - Fixed the default model being sent a reasoning effort its row does not name when no model had been picked, and a model that advertises no window keeping the previous model's budget. ([#1147](https://github.com/brave/bravebot/issues/1147), [#1157](https://github.com/brave/bravebot/issues/1157))
+ - Fixed a `--settings` file that is also the home, project or local file being read before a later layer instead of last. ([#1148](https://github.com/brave/bravebot/issues/1148))
+ - Fixed a refused or substituted turn and `doctor` printing no `BB` identifier on stderr, and a failed one-shot run printing no trail under `--trace`. ([#1156](https://github.com/brave/bravebot/issues/1156), [#1193](https://github.com/brave/bravebot/issues/1193))
+ - Fixed `-e TOKEN -e TOKEN` being accepted by `bravebot mcp add` when the same name given with a value is refused.
+ - Fixed the desktop app being unable to open a session when there is no state directory. ([#1177](https://github.com/brave/bravebot/issues/1177))
+ - Fixed the desktop app taking 37 seconds to show a list of 1,000 sessions. It now draws 100 at a time, with a Show more row. ([#1249](https://github.com/brave/bravebot/issues/1249))
+ - Fixed a terminal session continued in the desktop app losing its turn history, and a failed or stopped desktop turn showing no reason when reopened in the terminal. ([#1176](https://github.com/brave/bravebot/issues/1176))
+ - Fixed a desktop run line starting with `~` being refused on a machine that has a home, and the models of an AWS provider entry being listed under a name no backend routes. ([#1149](https://github.com/brave/bravebot/issues/1149))
+ - Fixed the Stop key taking one press per delegate when several were waiting on a question. ([#1296](https://github.com/brave/bravebot/issues/1296))
+ - Fixed leaving from a typed line taking three presses of Ctrl-C instead of two, and Ctrl-Alt-C and Ctrl-Alt-D acting as Ctrl-C and Ctrl-D. ([#1179](https://github.com/brave/bravebot/issues/1179))
+ - Fixed the scroller not closing under a running shell command, and a chord it does not name scrolling or searching as the plain letter would.
+ - Fixed vi mode taking a digit after `g?`, `gq`, `gw` or `g@` as the stretch's key instead of a count, and a half-typed instruction surviving the key that stops a goal check.
+ - Fixed a line put away with `ctrl-s` or restored after a stopped turn coming back with attachment markers that name nothing. ([#1181](https://github.com/brave/bravebot/issues/1181))
+ - Fixed a file dropped onto a shell line being written as `[Image #1]` instead of its path.
+ - Fixed a resumed session losing its model after its first save, and a resumed reply showing the reasoning the live session kept off the screen. ([#1175](https://github.com/brave/bravebot/issues/1175), [#1182](https://github.com/brave/bravebot/issues/1182))
+
 ## [0.13.0](https://github.com/brave/bravebot/releases/tag/v0.13.0)
 
- - Added an optional `[focus]` to `/compact`, which tells the summariser what the summary must keep. ([#1325](https://github.com/brave/bravebot/issues/1325))
  - Added `bravebot auth login`, which lists the ways to sign in (Leo Premium, an AWS account for Bedrock, an import from another tool) and runs the one you pick. `bravebot auth login <way>` runs it without asking, and `bravebot auth logout leo` forgets the import. ([#1105](https://github.com/brave/bravebot/issues/1105))
  - Added `bravebot auth login gateway [id]`, which keeps an OpenAI-compatible gateway's key in a file only your account can read, so it need not sit in a shell profile. `bravebot auth logout gateway [id]` forgets it. ([#1105](https://github.com/brave/bravebot/issues/1105))
  - Added a record of the Bedrock opt-in: once `bravebot auth login bedrock` signs in, it sets `BRAVEBOT_USE_BEDROCK` in `~/.bravebot/settings.json`, so you no longer export it in every shell. `bravebot doctor` now says whether each AWS account is signed in. ([#1105](https://github.com/brave/bravebot/issues/1105))
  - Added Google Vertex AI with an API key, through a `provider.google-vertex` entry or `GOOGLE_API_KEY` with `GOOGLE_CLOUD_PROJECT`. Where the entry names no models, `/model` and `bravebot doctor` offer four Gemini models. ([#1091](https://github.com/brave/bravebot/issues/1091), [#1104](https://github.com/brave/bravebot/issues/1104))
  - Added `isolation: checkout` to `spawn_agent` and to delegate definitions, which gives a delegate a checkout of HEAD of its own so two workers stop editing the same tree. A checkout with something done in it is kept, and the report names the paths written there. ([#1050](https://github.com/brave/bravebot/issues/1050))
- - Added `/checkouts`, which lists the kept checkouts with the paths written in each, `/checkouts apply <n>`, which brings back the files written in one, one question each, and `/checkouts remove <n>`, which removes one. `/status` lists them too. ([#1050](https://github.com/brave/bravebot/issues/1050))
+ - Added `/checkouts`, which lists the kept checkouts with the paths written in each, and `/checkouts remove <n>`, which removes one. `/status` lists them too. ([#1050](https://github.com/brave/bravebot/issues/1050))
  - Added `ctrl-b`, which moves a running command to the background so the turn carries on. The model is told the job's name, and the key can be changed under `keybindings.background`. ([#1113](https://github.com/brave/bravebot/issues/1113), [#1124](https://github.com/brave/bravebot/issues/1124))
  - Added background jobs to the hint line, Ctrl-L and `/status`, so a job started with `ctrl-b` or by the model stays visible and is reported when it ends or is stopped with the turn. ([#1127](https://github.com/brave/bravebot/issues/1127))
  - Added a Brave extension, loaded unpacked from `extension/`, that lets a session list open tabs, read a page or a frame you name, and search history and bookmarks through `bravebot-browser`. Every tool except a platform check starts off until you turn it on in the extension's options.

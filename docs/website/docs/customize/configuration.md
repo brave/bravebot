@@ -407,7 +407,7 @@ one thing leaves everything else in force:
 | `env`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model` | your own file and the file `--settings` names. A project or local file naming either is ignored and reported |
+| `provider`, `model`, `advisorModel` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
 | anything else | the closest file that set it wins |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
@@ -442,6 +442,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | Key | What it holds |
 |---|---|
 | `model` | the model to request when nobody has chosen one ([below](#model)) |
+| `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
 | `env` | variables, in Claude Code's own shape |
@@ -454,6 +455,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
+| `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
 | `vetting` | whether quarantined content is checked without asking you ([below](#vetting)) |
 
@@ -492,8 +494,8 @@ others in force, so a mistake in a checkout cannot decide that your own file no 
 
 :::caution
 **A `.bravebot/settings.json` arrives with a checkout.** A repository you have just cloned cannot name
-the host every request goes to, the model, or the environment variables read as a gateway's
-credential: a `provider` block or a `model` key in a project or local file is ignored, and `bravebot
+the host every request goes to, the model, the advisor model, or the environment variables read as a
+gateway's credential: a `provider` block, or a `model` or `advisorModel` key, in a project or local file is ignored, and `bravebot
 doctor` names each file whose block or key was dropped. It can still set the other keys here, so read
 a project's settings file before working in it; `doctor` names the files in force. It cannot grant a
 capability either. The names that would (`permissions.allow`, and `permissions.additionalDirectories`)
@@ -519,7 +521,8 @@ than ones a file opens.
 [`vetting`](#vetting) decides whether you are asked something at all, which is why it is read from
 your home file alone and never from a checkout's. [`provider`](#reaching-an-openai-compatible-gateway)
 and [`model`](#model) are too, since they decide which host receives your conversation and which
-variables are sent to it as a credential.
+variables are sent to it as a credential, and so is [`advisorModel`](#advisormodel), which decides
+which model is sent the whole conversation.
 :::
 
 ### `model`
@@ -552,6 +555,27 @@ named for that tier, and otherwise that tier's name on the Brave roster. A tier 
 written, because a service has never heard of it. Any other name is used exactly as you wrote it.
 Bedrock refuses a model it does not recognise, and the aichat endpoint silently resets one to
 `automatic-bravebot`, which is the key appearing to work while changing nothing.
+
+### `advisorModel`
+
+```json
+{ "advisorModel": "opus" }
+```
+
+The model the planner may consult through the [`advisor`](../reference/tools.md#advisor) tool. With
+the key set, every session that has a planner is offered the tool. Without it, and without
+[`--advisor`](../reference/cli.md#--advisor-name), there is none. `--advisor` wins over the key for
+the run it is given to. A delegate is never offered the tool, and a `--mode manifest` run has no
+planner to offer it to.
+
+**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** The advisor is sent the whole conversation, so a `.bravebot/settings.json` or
+`.bravebot/settings.local.json` that names one is ignored and reported by `bravebot doctor`, as a
+`model` is.
+
+The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier. A model that
+your administrator refuses, or that nothing is configured to serve, is not caught when the session
+starts: the call that would have asked it is answered with a failure the planner carries on from.
 
 ### `effort`
 
@@ -609,6 +633,29 @@ The terminal's title names the session, as `bravebot · dependency audit`
 terminal or multiplexer that manages titles itself. Only the boolean `false` turns it off: `"false"`
 in quotes, or any other value, leaves it on. An incognito session leaves the title alone whatever this
 says.
+
+### `tui.wheelRows`
+
+```json
+{ "tui": { "wheelRows": 5 } }
+```
+
+How many rows of the transcript one mouse wheel notch scrolls, in the session view and in
+[the scroller](../using/transcript.md) alike. Without this key it is 3, which is what a terminal's
+own scrollback moves.
+
+Terminals disagree about how many events a notch sends, and a trackpad swipe sends a stream of them,
+so the same figure crawls on one and jumps a screen on another. Raise it where the transcript barely
+moves, lower it where one swipe overshoots what you were reading.
+
+Whole numbers from 1 to 100. A larger figure is held to 100 rather than refused, and a zero, a
+fraction, a negative or a word leaves the built-in 3 in force. The value is read when the session
+opens, so editing it describes your next session.
+
+Unlike `model` and `provider`, this key is read from every settings file, so a checkout's
+`.bravebot/settings.json` can name it. It moves a view on your own screen and decides nothing about
+where a request goes or what is read, which is why it is not one of the keys held to your home
+directory.
 
 ### `updateCheck`
 
@@ -855,7 +902,7 @@ gate asks what it asked before, and nothing is refused for being unmentioned.
 | Key | What `true` does |
 |---|---|
 | `readsStayInWorkspace` | the file tools refuse every path outside the working directory, in every mode. No directory opens beside the workspace, whatever a rule, a mode, or an answer you give during the session would otherwise open: `/add-dir` and `--add-dir` are refused, and a name in `additionalDirectories` is refused rather than put to you. `/cd` may move further into the tree and not back out |
-| `bypassUnreachable` | the mode that asks about nothing is out of reach, and `--dangerously-skip-permissions` is refused with the key and the file named rather than ignored |
+| `bypassUnreachable` | the mode that asks about nothing is off the Shift-Tab ladder, and `--dangerously-skip-permissions` is refused with the key and the file named rather than ignored |
 
 Both are **off until a file turns one on**, exactly as [`vetting`](#vetting) is: a file naming neither
 behaves exactly as one did before the keys existed. `true` is the restrictive answer, and anything that

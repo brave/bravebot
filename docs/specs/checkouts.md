@@ -44,8 +44,11 @@ planner typed and counts the writes made through a reference ([CHECKOUT-13](#CHE
 [CHECKOUT-18](#CHECKOUT-18)), `/status` lists each checkout the session has
 ([CHECKOUT-21](#CHECKOUT-21)), and `/checkouts` lists the ones kept and removes one
 ([CHECKOUT-15](#CHECKOUT-15)). `apply_checkout` brings the files a delegate wrote back, one at a
-time ([CHECKOUT-14](#CHECKOUT-14)). `/checkouts apply` and keeping checkouts across a resume are
-not built.
+time ([CHECKOUT-14](#CHECKOUT-14)), and `/checkouts apply` is the same operation typed by a
+person. A resume brings the kept checkouts back ([CHECKOUT-16](#CHECKOUT-16)); the opening sweep is
+not built. [background-sessions.md](background-sessions.md) proposes that a session started in the
+background be given a checkout the same way, for the session and not for a delegate
+([BG-14](background-sessions.md#BG-14)); nothing builds that either.
 
 **A checkout is not a sandbox.** It moves where a delegate's file tools reach and where its
 programs start. A program it runs is as unconfined as any other ([sandboxing.md](sandboxing.md)),
@@ -302,8 +305,8 @@ opens. What a program in a checkout later commits is in the repository the two s
 [CHECKOUT-12](#CHECKOUT-12) labels it.
 
 Built. The writing returns the paths it left out, and the delegate is told them
-([CHECKOUT-7](#CHECKOUT-7)). The session numbers its checkouts from 1. A resume does not keep the
-numbers, since no session record holds a checkout yet ([CHECKOUT-15](#CHECKOUT-15)).
+([CHECKOUT-7](#CHECKOUT-7)). The session numbers its checkouts from 1. A resume numbers the next one after the
+highest it brings back ([CHECKOUT-16](#CHECKOUT-16)).
 
 `verified-by: bravebot_agent::git::a_checkout_writes_heads_tree_as_a_detached_linked_worktree`
 `verified-by: bravebot_agent::git::git_reads_the_checkout_as_a_clean_detached_worktree`
@@ -690,7 +693,8 @@ the driver reads none of it, and the planner is told none of it.
 
 Half built. A checkout the delegate given it and the delegates that one started did nothing in is
 removed as the delegate ends, with its `worktrees/<id>/` entry and its rules. Any other is kept,
-the planner is told where, and `/status` lists it ([CHECKOUT-21](#CHECKOUT-21)).
+the planner is told where, `/status` lists it ([CHECKOUT-21](#CHECKOUT-21)), and the session
+record holds it, which the terminal's resume reads ([CHECKOUT-16](#CHECKOUT-16)).
 
 `/checkouts` lists each one kept with the paths the planner typed for its writes and the number of
 writes made through a reference ([CHECKOUT-13](#CHECKOUT-13)), and says its status was not read.
@@ -777,12 +781,30 @@ take a checkout that session is still making, or made since it last wrote its re
 leftover.
 
 Partly built. `/cd` is refused while the session lists a checkout, and the refusal names each one
-by its number and says to remove it with `/checkouts remove`. The resume, the fork rule, the lock
-and the opening sweep are not built: no session record holds a checkout
-([CHECKOUT-15](#CHECKOUT-15)), `scratch.rs`'s lock covers the session's own directory alone, and
-nothing removes an unlisted directory under `checkouts/`.
+by its number and says to remove it with `/checkouts remove`. The session record holds each kept
+checkout ([SESSION-3](sessions.md#SESSION-3)), a resume in the terminal takes them back, and a fork
+drops them and the rules copied for them, keeping a rule that distrusts a path.
+
+A record is read as a claim. A checkout comes back only where its directory is the one the session
+would have made for that number, under this working directory's key in the state directory, is a
+directory and not a link, and has its `worktrees/<id>` entry in this repository's `.git`, and where
+its commit is a full object id and its delegate's number is one. The repository that removes it is
+always this one, never one the record names. A checkout that does not qualify is left on disk, out
+of the list, named in a note, and written into the record again with every save, so a state
+directory out of reach for one session does not erase it for the next. The numbers a resume brings back are not made again. A write to
+the working directory after the resume reads as one made since the checkout
+([CHECKOUT-14](#CHECKOUT-14)), since the writes before it are not known, and saying too much is the
+safe way to be wrong.
+
+The lock and the opening sweep are not built: `scratch.rs`'s lock covers the session's own
+directory alone, and nothing removes an unlisted directory under `checkouts/`. The desktop writes
+no checkouts into its record and resumes none, which is the issue's last stage.
 
 `verified-by: bravebot_agent::workspace::a_move_is_refused_while_the_session_keeps_a_checkout_and_names_it`
+`verified-by: bravebot_agent::workspace::a_workspace_taking_the_records_checkouts_back_lists_them_with_their_candidates`
+`verified-by: bravebot_agent::workspace::a_checkout_the_record_names_anywhere_but_where_one_was_made_is_not_taken_back`
+`verified-by: bravebot_tui::sessions::a_record_keeps_the_checkouts_a_resume_reads_back_and_a_fork_does_not_carry`
+`verified-by: bravebot_tui::sessions::a_checkout_that_is_not_where_the_record_put_it_is_named_on_resume`
 
 <a id="CHECKOUT-17"></a>
 ### CHECKOUT-17: a rewind leaves a checkout as it is, and says so

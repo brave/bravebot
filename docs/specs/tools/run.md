@@ -448,13 +448,14 @@ does not appear, so it has to be readable back.
 
 It never decides what may run. A command nobody vouched for still runs after a prompt, nothing is
 refused for being absent, and the set is empty at the start of every session. Programs are not
-enumerated and not confined: they run with the access the user's shell would give them, because
-`git push` needs `~/.ssh` and the set of programs someone might ask for cannot be listed in
-advance.
+enumerated: the set of programs someone might ask for cannot be listed in advance. On Linux and
+macOS each runs confined to what its plan accounts for ([SANDBOX-17](#SANDBOX-17)), with the
+credential a `git push` needs lent by the operation it names ([SANDBOX-16](#SANDBOX-16)); on Windows
+it runs with the access the user's shell would give it.
 
 Do not add an allowlist and treat it as the safety property. What holds is the label on the
 output, not a belief about the binary. The audited table in [command-line.md](command-line.md) is
-not one: a program absent from it is neither refused nor confined, only asked about, and what the
+not one: a program absent from it is not refused, only asked about, and what the
 table establishes is what an output may be labelled rather than what may run.
 
 `verified-by: bravebot_core::policy::a_command_nobody_vouched_for_is_put_to_a_person`
@@ -519,7 +520,8 @@ list it, and a list of names can only ever take something away. That list is rea
 process starts, so editing it applies to the next session rather than to a run already in flight.
 
 **Not a confinement mechanism, and it must not be read as one.** A program that reaches the network
-is unconfined and unpoliced, so it can send anything it can read: a file, the workspace, a credential
+is unpoliced, so it can send anything it can read, which on Linux and macOS is what its profile
+reaches ([SANDBOX-18](#SANDBOX-18)) and on Windows is everything the account can: a file, the workspace, a credential
 of the user's own. Those requests are the program's own and do not pass the gate in
 [network-egress.md](../network-egress.md), which governs what this process sends rather than what a
 program it started sends. What closes here is the narrow part of the gap, the credentials a person

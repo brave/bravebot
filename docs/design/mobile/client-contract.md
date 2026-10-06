@@ -1,6 +1,6 @@
 # Client interface and prototype contract
 
-Status: proposed, not implemented. Operation names are provisional. This document defines behavior and capability limits; stage 1 supplies exact schemas and fixtures. See the [architecture](architecture.md) for ownership and permission rules.
+Status: the first Rust session-view block is implemented. The TypeScript client and later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-rust-block).
 
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
@@ -35,6 +35,32 @@ Rust also supplies reusable approval field descriptions and presentation-only la
 Remote-only clients need no local Rust agent or Rust state engine: the host supplies the same view that the embedded binding returns in-process. This avoids adding WebAssembly or a second native Rust runtime merely to share the reducer. Full snapshots on every event are unnecessary; stage 4a tests bounded row updates and snapshot replacement under load.
 
 Stage 1 covers supported stdio behavior and one unsupported-operation case. Add listener allowlist scenarios with stage 3b. Give the package one build/type/test command and wire it into the relevant CI and local checks when the package is added.
+
+## Implemented Rust block
+
+`agent.info` and `agent.ready` advertise `capabilities.sessionView` version 1. A client checks
+availability, creates a fresh session, and calls `session.view.start` with that version before
+its first turn. It receives an initial event and ordered typed updates. Existing callers remain
+on their legacy protocol unless they opt in. The [RPC contract](../../../ui/docs/phase-0-rpc-protocol.md#shared-session-view-version-1)
+and [normative spec](../../specs/session-view.md) give the exact shapes and limits.
+
+`view.rs` beside the bridge owns row IDs, sequence numbers, status and pending approval metadata.
+It copies labelled payloads whole. Accepted prompts reuse `wire::submitted` and saved-history tag
+rules. Answers reuse `Running` and `BridgeConfirmer`; no second approval reducer exists. There is
+no content-reading display transform or new crate. Rendering helpers and native marking checks
+remain for the first rendering caller, as Q2 records.
+
+The process tests in `crates/ui-bridge/tests/fetch.rs` exercise accepted/rejected sends, approval,
+denial, cancellation, two interleaved sessions, labels and planner exclusion. The existing process
+suite covers malformed input, EOF and refusal. View unit tests cover unsupported approval kinds,
+opaque replacement payloads and failure status; an emitter barrier test covers completion order.
+These tests do not establish TypeScript adapter behavior or native rendering.
+
+This block supplies no client package, saved-history import, late subscription, reconnect,
+controller state, send deduplication, persistent listener, networking or embedded bindings.
+Session identity lasts for the connection. Closing detaches the view without claiming worker
+termination or save success. Legacy reply targets are unchanged; stage 3a still supplies stronger
+stale-action protection. Stages 1–2a remain incomplete until the thin client and its tests ship.
 
 ## Common interface
 

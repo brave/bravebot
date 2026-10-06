@@ -1,6 +1,6 @@
 # Bravebot mobile: executive summary
 
-Status: proposed design. The existing Android prototype is described below; this plan's new work is not yet implemented.
+Status: the first Rust session-view block is implemented. The TypeScript client and later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-rust-block).
 
 ## Two modes in one app
 

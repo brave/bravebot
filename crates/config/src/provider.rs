@@ -700,6 +700,48 @@ mod tests {
         }
     }
 
+    /// The compiled list is exactly the four ids the `global` endpoint answered, and a preview is
+    /// not among them. Compared with literals rather than with the constant, which would pass
+    /// whatever the constant held.
+    #[test]
+    fn the_compiled_vertex_list_is_the_four_answered_ids_and_no_preview() {
+        let all = vertex(&format!(r#"{{"project": "{PLACEHOLDER_PROJECT}"}}"#));
+        let roster = all[0].compiled_roster().expect("offered");
+        assert_eq!(
+            roster,
+            [
+                "google/gemini-3.1-flash-lite",
+                "google/gemini-2.5-pro",
+                "google/gemini-2.5-flash",
+                "google/gemini-2.5-flash-lite",
+            ]
+        );
+        assert!(
+            roster.iter().all(|id| !id.contains("preview")),
+            "a preview model was compiled in: {roster:?}"
+        );
+    }
+
+    /// Every character Google allows is accepted, so a check tightened past the clause does not
+    /// quietly configure nothing for a real project.
+    #[test]
+    fn a_project_and_location_holding_only_allowed_characters_are_accepted() {
+        let options =
+            serde_json::json!({"project": "a_b.c:d-9", "location": "us-central1"}).to_string();
+        let all = vertex(&options);
+        assert_eq!(all.len(), 1, "an allowed project or location was refused");
+        assert_eq!(
+            all[0].base_url,
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/a_b.c:d-9/locations/us-central1/endpoints/openapi"
+        );
+        let digit_first = serde_json::json!({"project": "9project"}).to_string();
+        assert_eq!(
+            vertex(&digit_first).len(),
+            1,
+            "a project starting with a digit was refused"
+        );
+    }
+
     #[test]
     fn a_stated_endpoint_beats_the_google_vertex_host() {
         let all = vertex(&format!(

@@ -23,9 +23,9 @@ growing further. It keeps growing while a turn runs.
 | Ctrl-G | compose in `$VISUAL` or `$EDITOR` and take back what you saved |
 | Ctrl-V | paste what is on the clipboard, a picture included |
 | Ctrl-S | put the line away, bring back the one you put away, or search this workspace |
-| Escape | discard a half-typed prompt, or stop a running turn (with vi editing, from NORMAL mode) |
+| Escape | discard a half-typed prompt, keeping it for Up, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |
-| Up / Down | walk back through prompts you have sent |
+| Up / Down | walk back through prompts you have sent, starting with a line you cleared |
 | Ctrl-R | search every prompt you have sent |
 | Tab | complete a slash command or an `@path` |
 | Ctrl-U, Ctrl-K, Ctrl-W, Alt-D | delete to the line start, to the line end, the word before, the word after; the text is kept |
@@ -192,10 +192,10 @@ session opens and cannot change while it runs. It is stated once at startup, and
 ## Choosing how much the session asks
 
 **Shift-Tab** cycles the session through asking about everything, accepting edits, plan mode, and
-(only where the command line asked for it) bypassing every check. It types nothing, is read before
-Tab so it never completes a half-typed line, and works while a turn runs. A turn in flight keeps the
-mode it began with, so what you press describes the next one. Both spellings of the chord are
-answered, since which one arrives is the terminal's choice rather than yours.
+bypassing every check. It types nothing, is read before Tab so it never completes a half-typed line,
+and works while a turn runs. A turn in flight keeps the mode it began with, so what you press
+describes the next one. Both spellings of the chord are answered, since which one arrives is the
+terminal's choice rather than yours.
 
 The mode leads the row beneath the box and is the only part of it drawn in a colour. Asking about
 everything takes no room at all: what is drawn is a mode somebody chose. When the terminal is too
@@ -359,6 +359,15 @@ them.
 With nothing waiting the key is unchanged: it walks the history, and scrolls once there is nothing
 left to walk. Inside a paragraph it moves between rows first, and reaches the queue from the top
 row the same way it reaches the history there.
+
+## Getting back a line you cleared
+
+Escape, and the first Ctrl-C when there is a line in the box, clear it in one press. The line is kept
+as a draft, and **Up** puts it in the box ahead of the newest prompt you sent. Nothing is sent, and
+**Down** goes forward to what you were typing. There is one draft: clearing another line replaces it,
+and sending any prompt drops it. It lasts for the session only, is not written to the prompt history
+and does not appear in the Ctrl-R search. A line put away with Ctrl-S is a separate slot, which a
+clear does not touch.
 
 ## Searching the prompts you have sent
 

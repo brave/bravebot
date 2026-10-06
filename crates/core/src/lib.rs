@@ -34,6 +34,7 @@ pub mod programs;
 pub mod pure;
 pub mod reference;
 pub mod remembered;
+pub mod safe;
 pub mod slot;
 pub mod spelling;
 pub mod todo;

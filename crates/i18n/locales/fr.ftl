@@ -105,6 +105,8 @@ cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en qu
 cli-option-trace = Afficher le journal d'audit
 cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
+cli-option-safe =
+    Ne charger ni hooks, ni skills, ni définitions, ni serveurs MCP, ni AGENTS.md. La connexion, le modèle et les permissions s'appliquent toujours
 cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
@@ -344,6 +346,9 @@ doctor-settings-provider-ignored =
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-model-ignored =
     model dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-advisor-ignored =
+    advisorModel dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-narrowing-ignored =
     { $key } dans { $path } n'est pas un booléen, il est donc lu comme absent et ne refuse rien
@@ -826,6 +831,8 @@ servers-answer-once = Oui
 servers-answer-project = Oui, et utiliser tous les futurs serveurs MCP de ce projet
 servers-answer-no = Non, continuer sans ce serveur
 servers-answer = [1/2/3]
+safe-mode-started =
+    Mode sans échec : les hooks, les skills, les définitions, les serveurs MCP et AGENTS.md n'ont pas été chargés. La connexion, le modèle et les permissions sont inchangés
 servers-for-this-session-only =
     { $alias } n'est utilisé que dans cette session : une session incognito n'enregistre aucune réponse
 servers-not-kept = { $alias } est utilisé, et son approbation n'a pas été enregistrée : { $reason }
@@ -835,6 +842,9 @@ servers-no-confinement-here =
     { $alias } n'a pas été démarré : cette plateforme n'a pas encore de confinement pour un serveur MCP local
 servers-no-home =
     { $alias } n'a pas été démarré : aucun répertoire à lui n'a pu être créé dans { $path } : { $reason }
+servers-paths-left-out =
+    { $alias } a été démarré sans certains chemins qui lui étaient accordés, le confinement ici ne
+    nommant aucun chemin absent du disque : { $paths }
 servers-no-handshake = { $alias } a été démarré et n'a pas terminé sa poignée de main : { $reason }
 servers-too-slow = { $alias } n'a pas terminé sa poignée de main en { $seconds } secondes
 
@@ -1523,6 +1533,11 @@ turn-cancelled = tour { $turn } annulé
 ## Reprendre une session qui tournait ailleurs, ou sur autre chose
 
 session-reopen-failed = impossible de rouvrir { $directory } : { $problem }
+session-checkout-not-restored =
+    { $count ->
+        [one] le checkout { $ids } était gardé par cette session mais n'est plus où il a été créé, il n'est donc pas listé
+       *[other] les checkouts { $ids } étaient gardés par cette session mais ne sont plus où ils ont été créés, ils ne sont donc pas listés
+    }
 session-branch-moved =
     cette session tournait sur { $was } ; cette copie de travail est sur { $now }
 session-branch-gone =
@@ -1623,6 +1638,7 @@ command-cost = Montrer ce que chaque tour de cette session a dépensé
 command-model = Choisir avec quel modèle réfléchir
 command-theme = Choisir quel thème habille l'interface
 command-effort = Choisir l'effort de réflexion avant de répondre
+command-advisor = Nommer le modèle que le planificateur peut consulter, dire lequel, ou abandonner le choix
 command-config = Choisir le mode d'édition de la zone de saisie
 command-add-dir = Ouvrir un autre répertoire et l'approuver pour cette session, ou en fermer un
 command-cd = Travailler désormais dans un autre répertoire, et l'approuver pour cette session
@@ -1729,6 +1745,8 @@ session-directory-withdrawn = { $directory } fermé, et n'est plus approuvé ; r
 session-directory-not-closed = impossible de fermer { $directory } : { $problem }
 session-cd-needs-a-path = /cd demande un répertoire, comme /cd ~/projets/autre
 session-directory-changed = travail désormais dans { $directory }, et approuvé pour cette session
+# Le mode où se trouvait la personne, retiré par une couche de réglages du répertoire où elle est allée.
+session-bypass-made-unreachable = permissions.bypassUnreachable est défini ici : le contournement est désactivé et la session demande de nouveau
 # Dit une fois par répertoire qui était ouvert et ne l'est plus, pour que personne ne l'apprenne
 # en se voyant refuser un fichier lisible une minute plus tôt.
 session-directory-closed = { $directory } fermé ; rouvrez-le avec /add-dir { $directory }
@@ -1761,6 +1779,13 @@ session-effort-set = réflexion à { $effort }
 session-effort-unset = réflexion laissée au service
 session-no-such-effort = aucun niveau d'effort nommé { $effort } ; essayez /effort pour la liste
 session-effort-not-read = ce modèle ne lit aucun niveau d'effort ; les requêtes n'en portent pas
+session-advisor-set = le planificateur peut consulter { $model } dès le prochain tour, ce qui dépense les jetons de ce modèle
+session-advisor-in-force = le planificateur peut consulter { $model }
+session-advisor-none = aucun conseiller ; essayez /advisor suivi d'un nom de modèle
+session-advisor-dropped = conseiller abandonné
+session-advisor-dropped-setting-remains = conseiller abandonné ; le réglage advisorModel nomme encore { $model }
+session-advisor-nothing-serves = rien n'est configuré pour répondre à { $model } ; il ne peut donc pas conseiller
+session-advisor-needs-sign-in = { $model } exige d'abord une connexion ; il ne peut donc pas conseiller
 session-trusting = { $directory } approuvé
 session-trusting-as-left = { $directory } approuvé (comme cette session l'avait laissé)
 session-trusting-unasked =
@@ -2029,6 +2054,10 @@ leave-not-pressed =
 paste-folded = { $lines ->
     [one] [Texte collé #{ $number } +{ $lines } ligne]
    *[other] [Texte collé #{ $number } +{ $lines } lignes]
+    }
+paste-invisible-removed = { $count ->
+    [one] { $count } caractère invisible a été retiré de ce texte collé
+   *[other] { $count } caractères invisibles ont été retirés de ce texte collé
     }
 megabytes = { $size } Mo
 

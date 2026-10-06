@@ -6,6 +6,7 @@ governs:
   - crates/tui/src/clipboard.rs
   - crates/tui/src/state.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/invisible.rs
 guards:
   - symbol: Policy::admit_pasted_image
 documented-by: docs/website/docs/using/context.md
@@ -230,6 +231,51 @@ own input.
 `verified-by: bravebot_tui::sessions::a_pasted_picture_is_kept_with_the_session_and_comes_back_on_a_resume`
 `verified-by: bravebot_tui::state::a_resumed_prompt_that_carried_a_picture_shows_its_words_and_not_the_bytes`
 
+<a id="PASTE-10"></a>
+### PASTE-10: characters a terminal draws as nothing are removed from a paste, and counted
+
+Pasted text loses the tag block, bidirectional controls, zero-width spaces and word joiners, the
+soft hyphen and the supplementary variation selectors, wherever they stand. The zero-width joiner
+and non-joiner stay where a script or an emoji needs them, after a non-ASCII character that is not
+whitespace, and one emoji or text selector stays after an emoji or before a keycap mark. The flags of
+England, Scotland and Wales, which are tag characters behind a black flag, stay, and no other tags do. The notice
+`removed 3 invisible characters from that paste` follows the paste and gives the count. A paste
+that held none says nothing. It applies to a paste in shell mode, to one that folds, and to one
+that arrives while a turn runs, since all of them come through the same function.
+
+**Why.** A paste lands in the person's own message with no label, so the words in it are taken as
+theirs. Text copied from a page can hold an instruction written in characters nothing draws, and
+the person would send it without having read it. Removing what cannot be seen makes the message
+what the box shows, and the count lets them compare it to what they copied. This is a character
+map. It reads no meaning from the text, decides nothing about any effect, and its count goes only to
+the person's screen.
+
+**Why the joiners and selectors are not all kept.** Zero-width bits between two letters of ASCII,
+and a run of selectors behind one symbol, are how a message is hidden in text that looks plain.
+Persian, Indic and emoji text needs only the first of each, after a character that is not ASCII.
+
+`verified-by: bravebot_tui::invisible::a_message_written_in_tag_characters_is_removed_and_counted`
+`verified-by: bravebot_tui::invisible::bidirectional_controls_and_zero_width_characters_are_removed`
+`verified-by: bravebot_tui::invisible::a_paste_with_nothing_hidden_is_returned_as_it_came`
+`verified-by: bravebot_tui::invisible::the_joiners_persian_and_indic_scripts_are_written_with_are_kept`
+`verified-by: bravebot_tui::invisible::joiners_between_ascii_letters_are_removed`
+`verified-by: bravebot_tui::invisible::a_run_of_joiners_after_a_letter_keeps_only_the_first`
+`verified-by: bravebot_tui::invisible::emoji_sequences_are_kept_whole`
+`verified-by: bravebot_tui::invisible::the_flags_of_england_scotland_and_wales_are_kept_whole`
+`verified-by: bravebot_tui::invisible::tags_behind_a_black_flag_that_are_not_one_of_the_three_flags_are_removed`
+`verified-by: bravebot_tui::invisible::a_run_of_selectors_after_an_emoji_keeps_only_the_first`
+`verified-by: bravebot_tui::invisible::a_selector_that_follows_nothing_it_modifies_is_removed`
+`verified-by: bravebot_tui::invisible::a_selector_after_a_digit_is_kept_only_for_a_keycap`
+`verified-by: bravebot_tui::state::a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many`
+`verified-by: bravebot_tui::state::one_removed_character_is_said_in_the_singular`
+`verified-by: bravebot_tui::state::a_paste_with_nothing_hidden_arrives_whole_and_says_nothing`
+`verified-by: bravebot_tui::state::a_paste_of_nothing_but_hidden_characters_writes_nothing_and_says_so`
+`verified-by: bravebot_tui::state::a_folded_paste_is_put_back_without_what_a_terminal_draws_as_nothing`
+`verified-by: bravebot_tui::state::a_paste_into_a_command_line_loses_what_a_terminal_draws_as_nothing`
+`verified-by: bravebot_tui::app::a_paste_loses_what_a_terminal_draws_as_nothing_at_rest_and_while_a_turn_runs`
+`verified-by: bravebot_tui::app::text_read_off_the_clipboard_loses_what_a_terminal_draws_as_nothing`
+`verified-by: bravebot_tui::app::a_pasted_prompt_waits_in_the_box_without_what_a_terminal_draws_as_nothing`
+
 ## Known costs
 
 - **A pasted picture lands on disk.** It is written into the session record so a resume can restore
@@ -240,3 +286,24 @@ own input.
   the user had typed them.** Nothing inspects the pixels and nothing could. What justifies it is
   that the user chose what to copy, can see on their own screen what they pasted, and is the party
   this serves. It is the cost shell mode carries, reached by another route.
+
+- **Only a paste is cleaned.** Text typed at the keyboard, a path a dropped file names
+  ([dropping.md](dropping.md)), and a prompt given with `-p` or in the desktop application's
+  message box are not run through the filter, so a character nobody can see can still reach a
+  message by those routes.
+
+- **A listed character is removed even when it was meant.** A soft hyphen or a word joiner in text
+  a person copied from a typeset page goes too. The notice says how many, and the words read the
+  same.
+
+- **A hidden message can use a character this list does not name.** The list is the characters
+  that draw as nothing in a terminal; a visible lookalike is not one.
+
+- **Text that is arranged by a removed control reads in another order.** Left-to-right and
+  right-to-left marks, embeddings and isolates are removed, so Hebrew or Arabic text mixed with Latin
+  names or digits can be drawn in a different order than it was copied. The characters are the same
+  and are sent in the order they were pasted, and the notice says controls were removed.
+
+- **A variation selector on an ideograph or a math symbol is removed.** A Japanese name written
+  with an ideographic variation sequence is pasted in its default glyph. A selector behind an
+  ideograph is also how a byte is hidden behind it, which is why it is not kept.

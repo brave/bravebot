@@ -37,6 +37,7 @@ string in `bravebot-agent` that reaches the screen is a message, and a string in
 that reaches a request is not.
 
 `verified-by: bravebot_agent::audience::what_the_planner_reads_is_not_taken_from_a_catalog`
+`verified-by: bravebot_agent::audience::a_lookup_is_recognised_however_it_is_written`
 
 <a id="LOCALE-2"></a>
 ### LOCALE-2: a message is chosen by a name written in the source, never by a value

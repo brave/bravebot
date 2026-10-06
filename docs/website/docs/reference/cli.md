@@ -60,6 +60,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--plain` | a session in lines, taking nothing from the terminal ([below](#--plain)) |
 | `--mode <turn\|manifest>` | how a one-shot is run; `turn` (the default) decides step by step, `manifest` plans the whole run first ([below](#--mode-turnmanifest)) |
 | `--model <name>` | the model this run asks for; outranks every other way one is named ([below](#--model-name)) |
+| `--advisor <name>` | a model the planner may put a question to, through the `advisor` tool ([below](#--advisor-name)) |
 | `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
@@ -68,6 +69,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
+| `--safe` | load none of your hooks, skills, definitions, MCP server requests or `AGENTS.md`, and say so once; sign-in, model and permissions still apply |
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
 | `-h`, `--help` | show the help |
@@ -75,8 +77,8 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 
 `-p` may lead, as it does for other agents: `bravebot -p "task"`.
 
-Four flags are taken out of the line before anything dispatches on it, so each may go anywhere and
-each combines with every way of starting, one another included: `--incognito`,
+Five flags are taken out of the line before anything dispatches on it, so each may go anywhere and
+each combines with every way of starting, one another included: `--incognito`, `--safe`,
 `--dangerously-skip-permissions`, `--settings` and `--vet`. `--agent` is taken out there too, and
 combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
 `--fork` or `--mode manifest`.
@@ -85,6 +87,12 @@ way of starting except `--mode manifest`.
 
 `--incognito` writes nothing under `~/.bravebot`. See
 [an incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
+
+`--safe` is for finding out whether your own configuration is why a session misbehaves. The run
+reads none of your hooks, skills, delegate definitions, `mcp.request` entries or `AGENTS.md` files,
+whether they are under `~/.bravebot` or in the project, and says once what it skipped. The built-in
+skills and delegate kinds, `--append-system-prompt` and `--settings` are unaffected, and so are
+sign-in, the model, permission rules and trust. `--bg` refuses it.
 
 `--dangerously-skip-permissions` is the only way to reach the mode that answers every permission
 question, including the ones that decide trust, and the only way a run nobody is watching may write.
@@ -139,6 +147,23 @@ also **exits non-zero**, which is the part a script is certain to read. A run th
 takes whatever was recorded or configured and does not fail over it. Two cases are neither reported
 nor failed: an entry that resolves per request, such as `automatic-bravebot`, and a backend asked by
 an opaque handle, which never reports back the name it was given.
+
+## `--advisor <name>`
+
+```sh
+bravebot --advisor opus "plan the migration, then carry it out"
+```
+
+Names a second model the planner may consult during the run. The planner is then offered an
+[`advisor`](tools.md#advisor) tool, which sends the conversation so far and a question the planner
+wrote to that model and returns its reply. Without the flag the model is the one the
+[`advisorModel`](../customize/configuration.md#advisormodel) setting names, and with neither there is
+no such tool. The flag wins over the setting. The name is read as `--model` reads it, so `opus`,
+`sonnet` and `haiku` name a tier.
+
+`--advisor` with no name, a blank one, a model this machine's managed settings refuse, a model
+nothing is configured to serve, or `--mode manifest` is refused and the run stops before it starts.
+A turn may ask its advisor at most three times. The advisor's tokens are added to the run's total.
 
 ## `--effort <level>`
 

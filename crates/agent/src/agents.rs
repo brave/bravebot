@@ -436,6 +436,11 @@ pub fn discover<S: Sink>(
     let mut definitions = Definitions::default();
     let mut notices = Vec::new();
 
+    // Only the three kinds the program wrote remain: every other definition is a file somebody wrote.
+    if bravebot_core::safe::engaged() {
+        return (definitions, notices);
+    }
+
     if let Some(home) = home {
         discover_home(policy, &home.join(AGENTS), &mut definitions, &mut notices);
     }

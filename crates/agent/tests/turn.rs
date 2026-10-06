@@ -6710,6 +6710,190 @@ fn a_read_of_an_empty_file_still_carries_a_token() {
     );
 }
 
+/// The 16 hex characters after each "change token " in a request body.
+fn tokens_in(body: &str) -> Vec<String> {
+    body.match_indices("change token ")
+        .map(|(at, found)| body[at + found.len()..].chars().take(16).collect())
+        .collect()
+}
+
+/// Reading a file again with nothing written to it used to send every line a second time, and a
+/// planner that checks a file after each step does it on every round for the rest of the session.
+///
+/// Asserts on the request the third round is built from, because that is what the planner holds:
+/// the lines once, then a notice carrying the same token, which is what a question about whether the
+/// file changed is answered from.
+#[test]
+fn a_repeat_read_of_an_untouched_file_is_answered_with_a_notice() {
+    let scratch = Scratch::new("read-repeat-notice");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\nbeta\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt twice"),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+
+    assert_eq!(
+        third.matches("alpha").count(),
+        1,
+        "the lines were sent twice for a file nobody wrote: {third}"
+    );
+    assert!(
+        third.contains("has not changed since it was shown to you"),
+        "the repeat was not answered with a notice: {third}"
+    );
+    let tokens = tokens_in(&third);
+    assert_eq!(tokens.len(), 2, "both answers carry a token: {third}");
+    assert_eq!(
+        tokens[0], tokens[1],
+        "the notice names a different token from the read it stands for"
+    );
+}
+
+/// The notice stands for lines the planner holds, so a write must end it: a planner told a file
+/// is unchanged after somebody wrote it would answer from text that is no longer there.
+#[test]
+fn a_file_written_since_it_was_shown_is_sent_again() {
+    let scratch = Scratch::new("read-repeat-written");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "alpha\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let look = |conversation: &mut bravebot_agent::Conversation| {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        take_a_turn(
+            &config,
+            &workspace,
+            conversation,
+            trusting_the_workspace(),
+            Task::new("read a.txt"),
+        )
+        .expect("turn runs");
+        let _first = received.recv().expect("first request");
+        received.recv().expect("second request")
+    };
+
+    let shown = look(&mut conversation);
+    assert!(shown.contains("alpha"), "the first read showed no lines");
+
+    let repeated = look(&mut conversation);
+    assert!(
+        repeated.contains("has not changed since it was shown to you"),
+        "a repeat across turns was not answered with a notice: {repeated}"
+    );
+
+    std::fs::write(&path, "alpha\nbeta\n").unwrap();
+    let rewritten = look(&mut conversation);
+    assert!(
+        rewritten.contains("beta"),
+        "a written file was answered with a notice: {rewritten}"
+    );
+    let tokens = tokens_in(&rewritten);
+    assert_ne!(
+        tokens.first(),
+        tokens.last(),
+        "the new read carries the old token: {rewritten}"
+    );
+}
+
+/// The notice is for the same window. A different slice of the file is lines nobody has been
+/// shown, whatever the token says about the file as a whole.
+#[test]
+fn a_different_window_of_the_same_file_is_not_answered_with_a_notice() {
+    let scratch = Scratch::new("read-repeat-window");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\nbeta\ngamma\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt","limit":1}"#),
+        tool_request_2("read_file", r#"{"path":"a.txt","offset":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt in parts"),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains("beta") && third.contains("gamma"),
+        "the second window was not sent: {third}"
+    );
+    assert!(
+        !third.contains("has not changed since it was shown to you"),
+        "a different window was answered with a notice: {third}"
+    );
+}
+
+/// A read whose lines the planner was never shown is not a read it holds. Asking twice for a file
+/// it may not see gets a reference twice, and never a notice about lines that do not exist.
+#[test]
+fn a_repeat_read_of_a_file_the_planner_may_not_see_is_not_a_notice() {
+    let scratch = Scratch::new("read-repeat-quarantined");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        Task::new("read a.txt twice"),
+    )
+    .expect("turn runs");
+
+    // The last request is the final round's. A check the quarantine runs is also a request, so the
+    // third is not always it.
+    let third = received.try_iter().last().expect("a final request");
+    assert!(
+        !third.contains("has not changed since it was shown to you"),
+        "a notice stood for lines the planner never saw: {third}"
+    );
+    assert_eq!(
+        third
+            .matches("Quarantined: you will not be shown what this file holds")
+            .count(),
+        2,
+        "each read should have been answered with a reference: {third}"
+    );
+}
+
 /// The model must be told the file is binary, not handed a decoding error it cannot act on.
 #[test]
 fn a_binary_read_tells_the_model_it_is_binary() {
@@ -9853,8 +10037,8 @@ fn a_command_the_planner_read_is_glimpsed_from_its_end() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat build.log"}"#),
-        tool_request("run", r#"{"command":"cat other.log"}"#),
+        tool_request("run", r#"{"command":"sed -n p build.log"}"#),
+        tool_request("run", r#"{"command":"sed -n p other.log"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -9872,8 +10056,8 @@ fn a_command_the_planner_read_is_glimpsed_from_its_end() {
         &mut RecordingSink::new(),
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            "cat",
-            &["build.log"],
+            "sed",
+            &["-n", "p", "build.log"],
             &scratch.path,
         )]),
         None,
@@ -14068,14 +14252,14 @@ fn a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching() {
         &scratch,
         &home.path,
         Some("the-first-session"),
-        r#"{"command":"cat notes.txt"}"#,
+        r#"{"command":"sed -n p notes.txt"}"#,
         &mut writing,
     )
     .expect("the turn runs");
 
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat notes.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p notes.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -14582,7 +14766,7 @@ fn what_a_program_printed_does_not_reach_the_planner() {
     std::fs::write(scratch.path.join("secret.txt"), "SENTINEL-XYZZY\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat secret.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p secret.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -14704,7 +14888,7 @@ fn a_quarantined_reference_is_fed_to_a_program_the_planner_may_not_read() {
     std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\ngamma\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p page.txt"}"#),
         tool_request(
             "run",
             r#"{"command":"sed -n 2p > filtered.txt","stdin_ref":"ref:1"}"#,
@@ -14768,7 +14952,7 @@ fn a_private_reference_fed_to_a_vouched_line_is_still_put_to_a_person() {
     std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\ngamma\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p page.txt"}"#),
         tool_request("run", r#"{"command":"sed -n 2p","stdin_ref":"ref:1"}"#),
         reply_with("done"),
     ]);
@@ -14820,7 +15004,7 @@ fn a_background_line_cannot_be_fed_a_reference() {
     std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p page.txt"}"#),
         tool_request(
             "run",
             r#"{"command":"sed -n 2p","stdin_ref":"ref:1","background":true}"#,
@@ -14871,7 +15055,7 @@ fn a_line_naming_a_file_for_standard_input_cannot_also_name_a_reference() {
     std::fs::write(scratch.path.join("other.txt"), "one\ntwo\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p page.txt"}"#),
         tool_request(
             "run",
             r#"{"command":"sed -n 2p < other.txt","stdin_ref":"ref:1"}"#,
@@ -14983,7 +15167,7 @@ fn a_quarantined_run_says_what_would_make_it_visible() {
     std::fs::write(scratch.path.join("notes.txt"), "some lines\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat notes.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p notes.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -15169,7 +15353,7 @@ fn a_tilde_in_a_command_line_stands_for_the_home_directory_and_not_the_state_dir
     a_run_turn_from_a_home(
         &scratch,
         &home.path,
-        r#"{"command":"cat ~/notes.txt"}"#,
+        r#"{"command":"sed -n p ~/notes.txt"}"#,
         &mut confirmer,
     )
     .expect("the turn completes");
@@ -15179,7 +15363,11 @@ fn a_tilde_in_a_command_line_stands_for_the_home_directory_and_not_the_state_dir
     let steps = request.plan.steps();
     assert_eq!(
         steps[0].args,
-        [home.path.join("notes.txt").display().to_string()],
+        [
+            "-n".to_string(),
+            "p".to_string(),
+            home.path.join("notes.txt").display().to_string()
+        ],
         "the `~` did not stand for the home directory"
     );
     assert!(
@@ -15272,7 +15460,7 @@ fn a_vouched_commands_output_reaches_the_planner() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat secret.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p secret.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -15291,8 +15479,8 @@ fn a_vouched_commands_output_reaches_the_planner() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            "cat",
-            &["secret.txt"],
+            "sed",
+            &["-n", "p", "secret.txt"],
             &scratch.path,
         )]),
         None,
@@ -15368,7 +15556,7 @@ fn the_planner_is_told_how_a_run_it_may_not_read_ended() {
     // Something printed, to stderr, so there is output to be kept from the planner: one that prints
     // nothing is told as exactly that (RUN-24).
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat missing.txt"}"#),
+        tool_request("run", r#"{"command":"sh -c 'echo failed >&2; exit 1'"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -15529,7 +15717,7 @@ fn a_look_at_a_job_that_printed_nothing_new_says_so_and_hands_back_no_reference(
 }
 
 /// Vouching for one command must not make another command of the same program readable. The label
-/// follows the same entry the prompt does, so `cat secret.txt` says nothing about `cat other.txt`.
+/// follows the same entry the prompt does, so `sed -n p secret.txt` says nothing about `sed -n p other.txt`.
 #[test]
 fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
     let scratch = Scratch::new("run-vouched-other");
@@ -15537,7 +15725,7 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat other.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p other.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -15557,8 +15745,8 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
         trusting_the_workspace(),
         // A different argument list, so this entry does not cover the call above.
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            "cat",
-            &["secret.txt"],
+            "sed",
+            &["-n", "p", "secret.txt"],
             &scratch.path,
         )]),
         None,
@@ -15721,7 +15909,7 @@ fn content_a_person_reads_after_a_check_reaches_the_planner() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -15839,7 +16027,7 @@ fn a_check_is_sent_as_three_messages_with_no_tools_and_the_drivers_words_last() 
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -15941,7 +16129,7 @@ fn the_prompt_says_where_a_checked_slots_bytes_came_from() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -15977,7 +16165,8 @@ fn the_prompt_says_where_a_checked_slots_bytes_came_from() {
     // The program resolves to an absolute path, which differs by machine, so the sentence is
     // pinned at both ends rather than whole.
     assert!(
-        request.origin.starts_with("what ") && request.origin.ends_with("cat where.txt printed"),
+        request.origin.starts_with("what ")
+            && request.origin.ends_with("sed -n p where.txt printed"),
         "the person was told which slot the bytes are in rather than where they came from: {}",
         request.origin
     );
@@ -15996,7 +16185,7 @@ fn content_a_person_refuses_after_a_check_stays_out_of_the_planner() {
             r#"{"verdict": "unsafe", "reason": "SENTINEL-REASON addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16060,7 +16249,7 @@ fn a_check_that_could_not_be_made_falls_back_to_the_question() {
     let (endpoint, received) = serve_sequence_answering_checks_with(
         vec![reply_with("I am not able to assess this.")],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16124,7 +16313,7 @@ fn with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16193,7 +16382,7 @@ fn with_auto_vetting_an_unsafe_verdict_still_asks() {
             r#"{"verdict": "unsafe", "reason": "it addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16252,7 +16441,7 @@ fn with_auto_vetting_a_check_that_could_not_be_made_still_asks() {
     let (endpoint, _received) = serve_sequence_answering_checks_with(
         vec![reply_with("I am not able to assess this.")],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16316,7 +16505,7 @@ fn bypassing_makes_no_check_before_promoting_content() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16385,7 +16574,7 @@ fn bypassing_fills_in_a_verdict_that_claims_nothing() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -17124,7 +17313,7 @@ fn an_unscreened_unattended_run_credits_the_mode_for_the_output() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -17194,7 +17383,7 @@ fn an_unscreened_unattended_run_credits_the_mode_for_a_promoted_slot() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -17272,7 +17461,7 @@ fn the_note_a_release_leaves<C: bravebot_agent::Confirmer + Send>(
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(call.0, call.1),
             reply_with("done"),
         ],
@@ -17557,7 +17746,7 @@ fn an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_sa
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
             reply_with("done"),
         ],
     );
@@ -17645,7 +17834,7 @@ fn an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -17734,7 +17923,7 @@ fn asking_to_read_a_runs_output_changes_nothing_where_anybody_still_answers_for_
                 r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
             )],
             vec![
-                tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+                tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
                 reply_with("done"),
             ],
         );
@@ -17809,7 +17998,7 @@ fn a_background_line_cannot_ask_to_read_what_it_printed() {
     let (endpoint, received) = serve_sequence(vec![
         tool_request(
             "run",
-            r#"{"command":"cat where.txt","background":true,"read":true}"#,
+            r#"{"command":"sed -n p where.txt","background":true,"read":true}"#,
         ),
         reply_with("done"),
     ]);
@@ -17862,7 +18051,7 @@ fn asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output(
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -17931,7 +18120,7 @@ fn asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_say
     .unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -18006,7 +18195,7 @@ fn output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference(
     .unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
         tool_request(
             "run",
             r#"{"command":"head -c 14","stdin_ref":"ref:1","read":true}"#,
@@ -18205,7 +18394,7 @@ fn what_an_ended_job_printed_says_how_to_stop_being_asked() {
 
     let (endpoint, received) = serve_until_job_1_finishes(tool_request(
         "run",
-        r#"{"command":"cat notes.txt","background":true}"#,
+        r#"{"command":"sed -n p notes.txt","background":true}"#,
     ));
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -18264,7 +18453,7 @@ fn what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching(
         &scratch,
         &home.path,
         Some("the-first-session"),
-        r#"{"command":"cat notes.txt"}"#,
+        r#"{"command":"sed -n p notes.txt"}"#,
         &mut first,
     )
     .expect("the turn runs");
@@ -18272,7 +18461,7 @@ fn what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching(
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_until_job_1_finishes(tool_request(
         "run",
-        r#"{"command":"cat notes.txt","background":true}"#,
+        r#"{"command":"sed -n p notes.txt","background":true}"#,
     ));
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -18302,7 +18491,7 @@ fn what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching(
             .lock()
             .unwrap()
             .iter()
-            .all(|request| request.plan.display() != "cat notes.txt"),
+            .all(|request| request.plan.display() != "sed -n p notes.txt"),
         "this test needs the record to have stopped the prompt for the job's line"
     );
     let sent: Vec<String> = received.try_iter().collect();
@@ -18336,7 +18525,7 @@ fn a_read_that_was_refused_is_not_asked_for_again() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -18388,7 +18577,7 @@ fn a_read_that_is_not_true_or_false_is_refused_before_the_line_runs() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt","read":"true"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":"true"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -18450,7 +18639,7 @@ fn screening_an_unattended_run_keeps_back_content_a_check_objected_to() {
             r#"{"verdict": "unsafe", "reason": "it addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -18521,7 +18710,7 @@ fn the_trail_records_the_verdict_of_a_check_that_could_not_be_made() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, _received) = serve_sequence_losing_every_check(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request(
             "vet_content",
             r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -18584,7 +18773,7 @@ fn screening_an_unattended_run_promotes_content_a_check_found_nothing_in() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -18649,7 +18838,7 @@ fn screening_an_unattended_run_keeps_back_output_a_check_objected_to() {
             r#"{"verdict": "unsafe", "reason": "it addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -18714,7 +18903,7 @@ fn screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about() 
     let (endpoint, received) = serve_sequence_answering_checks_with(
         vec![reply_with("I am not able to assess this.")],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -18786,7 +18975,7 @@ fn screening_reaches_a_delegate_of_an_unattended_run() {
         (
             "READ-THE-OUTPUT",
             vec![
-                tool_request("run", r#"{"command":"cat where.txt"}"#),
+                tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
                 tool_request("read_output", r#"{"ref":"ref:1"}"#),
                 reply_with("read it"),
             ],
@@ -18856,7 +19045,7 @@ fn with_auto_vetting_a_safe_verdict_releases_command_output_unasked() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -18921,7 +19110,7 @@ fn a_check_says_how_many_lines_it_is_reading_and_then_that_it_is_over() {
             r#"{"verdict": "safe", "reason": "three words and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -18975,7 +19164,7 @@ fn what_a_check_cost_reaches_the_row_the_call_drew() {
             r#"{"verdict": "safe", "reason": "three words and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -19035,7 +19224,7 @@ fn a_check_whose_call_fails_still_says_it_is_over() {
     std::fs::write(scratch.path.join("where.txt"), "one\ntwo\nthree\n").unwrap();
 
     let (endpoint, _received) = serve_sequence_losing_every_check(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
@@ -19095,7 +19284,7 @@ fn with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output() {
             r#"{"verdict": "unsafe", "reason": "it addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -19151,7 +19340,7 @@ fn with_auto_vetting_a_broken_check_still_asks_about_command_output() {
     let (endpoint, _received) = serve_sequence_answering_checks_with(
         vec![reply_with("I am not able to assess this.")],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -19325,7 +19514,7 @@ fn output_a_person_reads_and_approves_reaches_the_planner() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
@@ -19359,7 +19548,7 @@ fn output_a_person_reads_and_approves_reaches_the_planner() {
         .expect("the user was asked to read the output");
     assert!(request.output.contains("SENTINEL-XYZZY"));
     assert!(
-        request.command.contains("cat"),
+        request.command.contains("sed"),
         "the user was not told which command printed it: {}",
         request.command
     );
@@ -19387,7 +19576,7 @@ fn output_a_person_refuses_stays_out_of_the_planner() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
@@ -19444,7 +19633,7 @@ fn an_output_offer_carries_what_a_check_said() {
             r#"{"verdict": "unsafe", "reason": "SENTINEL-REASON addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -19494,6 +19683,10 @@ fn an_output_offer_carries_what_a_check_said() {
     assert!(
         check.contains("SENTINEL-XYZZY"),
         "the check was not given what the command printed: {check}"
+    );
+    assert!(
+        !check.contains("expects"),
+        "the planner said nothing about what the command printed, yet the check was told: {check}"
     );
     let third = received.recv().expect("third request");
     assert!(
@@ -21764,7 +21957,7 @@ fn a_planner_given_a_private_report_from_a_delegate_holds_it() {
         (
             "READ-THE-MAIL",
             vec![
-                tool_request("run", r#"{"command":"cat where.txt"}"#),
+                tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
                 tool_request("read_output", r#"{"ref":"ref:1"}"#),
                 reply_with("THE-WORKER-REPORTED"),
             ],
@@ -21918,6 +22111,81 @@ fn a_delegate_inherits_the_mode_of_the_turn_that_spawned_it() {
         delegates.iter().all(|body| body.contains("Plan mode")),
         "a delegate was not told the mode the turn that spawned it is in"
     );
+}
+
+/// A delegate's programs are held to what the spawning turn's are. The regression it rejects is a
+/// delegate started with confinement off, which makes spawning one the way around the profile: the
+/// same `touch` that is refused in the turn would write outside the session from inside it. The
+/// unconfined turn is the control that the file is writable at all.
+#[test]
+fn a_delegate_of_a_confining_turn_cannot_write_outside_the_session() {
+    if bravebot_sandbox::base::Prelude::current().is_none()
+        || !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    for (confining, written) in [(false, true), (true, false)] {
+        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("delegate-confined-{confining}"));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("session")).unwrap();
+        std::fs::create_dir_all(top.join("beside")).unwrap();
+        let session = top.join("session").canonicalize().unwrap();
+        let planted = top
+            .join("beside")
+            .canonicalize()
+            .unwrap()
+            .join("planted.txt");
+        let workspace = Workspace::new(&session).expect("workspace");
+
+        let (endpoint, _received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-WRITE-IT",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"PLANT-THE-FILE"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "PLANT-THE-FILE",
+                vec![
+                    tool_request(
+                        "run",
+                        &format!(r#"{{"command":"touch {}"}}"#, planted.display()),
+                    ),
+                    reply_with("tried"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("HAVE-A-DELEGATE-WRITE-IT")
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+                .with_confined_runs(confining),
+            &mut bravebot_agent::confirm::ApproveRuns,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        assert_eq!(
+            planted.exists(),
+            written,
+            "confining: {confining}, and the delegate's program {} outside the session",
+            if written { "did not write" } else { "wrote" }
+        );
+        let _ = std::fs::remove_dir_all(&top);
+    }
 }
 
 /// Everything a delegate read and ran ends with it, so its report is the only thing that says
@@ -24002,6 +24270,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
         None,
         None,
         bravebot_agent::exec::Deadlines::BUILT_IN,
+        false,
         None,
         &bravebot_core::cancel::Cancel::new(),
         &mut bravebot_agent::confirm::ApproveWrites,
@@ -24416,7 +24685,7 @@ fn a_delegate_resolves_a_tilde_against_the_home_its_parent_did() {
         (
             "CHECK-THE-NOTES",
             vec![
-                tool_request("run", r#"{"command":"cat ~/notes.txt"}"#),
+                tool_request("run", r#"{"command":"sed -n p ~/notes.txt"}"#),
                 reply_with("asked about it"),
             ],
         ),
@@ -24448,7 +24717,11 @@ fn a_delegate_resolves_a_tilde_against_the_home_its_parent_did() {
         .expect("the delegate's line was refused before anybody was asked about it");
     assert_eq!(
         request.plan.steps()[0].args,
-        [home.path.join("notes.txt").display().to_string()],
+        [
+            "-n".to_string(),
+            "p".to_string(),
+            home.path.join("notes.txt").display().to_string()
+        ],
         "a delegate resolved the `~` somewhere its parent would not have"
     );
 }
@@ -25256,7 +25529,7 @@ fn a_command_vouched_for_in_the_working_directory_is_asked_about_again_in_a_chec
     let home = Scratch::new("checkout-vouched-run-home");
     repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let line = tool_request("run", r#"{"command":"cat README"}"#);
+    let line = tool_request("run", r#"{"command":"sed -n p README"}"#);
     let (endpoint, _received) = serve_by_marker(vec![
         (
             "RUN-HERE-TWICE-THEN-APART",
@@ -25291,7 +25564,7 @@ fn a_command_vouched_for_in_the_working_directory_is_asked_about_again_in_a_chec
     .expect("turn runs");
 
     let seen = confirmer.seen.lock().unwrap();
-    // The second `cat README` in the working directory was not put to the person, which is what
+    // The second `sed -n p README` in the working directory was not put to the person, which is what
     // shows the first was vouched for, and the one in the checkout was.
     let directories: Vec<&std::path::Path> = seen
         .iter()
@@ -27422,7 +27695,7 @@ fn what_a_command_printed_reaches_the_person_watching() {
     std::fs::write(scratch.path.join("secret.txt"), "SENTINEL-XYZZY\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat secret.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p secret.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -27452,7 +27725,7 @@ fn what_a_command_printed_reaches_the_person_watching() {
         .first()
         .expect("what the command printed reached nobody");
     assert!(
-        printed.command.ends_with("cat secret.txt"),
+        printed.command.ends_with("sed -n p secret.txt"),
         "the row does not say which command printed it: {}",
         printed.command
     );
@@ -27482,9 +27755,15 @@ fn what_is_reported_about_a_line_says_which_directory_it_ran_in() {
 
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat note.txt","directory":"sub"}"#),
+        tool_request(
+            "run",
+            r#"{"command":"sed -n p note.txt","directory":"sub"}"#,
+        ),
         // Naming the root again, since the first call is where the second would otherwise run.
-        tool_request("run", r#"{"command":"cat sub/note.txt","directory":"."}"#),
+        tool_request(
+            "run",
+            r#"{"command":"sed -n p sub/note.txt","directory":"."}"#,
+        ),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -27541,7 +27820,7 @@ fn the_middle_of_a_capped_output_stays_reachable() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat build.log"}"#),
+        tool_request("run", r#"{"command":"sed -n p build.log"}"#),
         // Following the reference into a file, which is one of the two things a planner holding
         // one can do with it. The second reference of the turn: the planner's own reply took the
         // first.
@@ -27619,7 +27898,7 @@ fn output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked() {
     let cap = 4096;
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat build.log"}"#),
+        tool_request("run", r#"{"command":"sed -n p build.log"}"#),
         tool_request(
             "read_output",
             &format!(r#"{{"ref":"ref:1","offset":{start}}}"#),
@@ -27731,7 +28010,7 @@ fn an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request("read_output", r#"{"ref":"ref:1","offset":0}"#),
         reply_with("done"),
     ]);
@@ -27775,7 +28054,10 @@ fn an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked() {
 }
 
 /// A page server, for the fetch tests. Answers each request with the next reply it was given and
-/// reports the request lines it was sent, so a test can tell what actually went out.
+/// reports the request heads it was sent, so a test can tell what actually went out.
+///
+/// The head is the request line and every header, joined by newlines, because what a fetch asks
+/// for is in both halves of it.
 ///
 /// Keeps listening past the end of its replies for the reason the chat server does: a fetch that is
 /// retried should meet the page again rather than a closed port.
@@ -27804,6 +28086,7 @@ fn serve_pages(replies: Vec<String>) -> (String, MockRequests) {
                 if header == "\r\n" || header == "\n" {
                     break;
                 }
+                request.push_str(&header);
             }
             let _ = sender.send(request.clone());
 
@@ -27842,6 +28125,14 @@ fn serve_pages(replies: Vec<String>) -> (String, MockRequests) {
 fn page(body: &str) -> String {
     format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// A page the server states a content type for, so a test can serve the same bytes as two types.
+fn page_of_type(content_type: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
 }
@@ -28173,6 +28464,173 @@ fn a_fetched_page_can_be_processed_and_written_without_being_read() {
         clean.iter().any(|body| body.contains("fetch_url")),
         "no planner request was seen, so this proves nothing"
     );
+}
+
+/// The header value every fetch must carry, with its trailing line break, lower-cased for a
+/// comparison against a request head.
+///
+/// The wildcard is assembled rather than written out. `agents/skills/check-spec` reads a raw
+/// string's glob as opening a block comment and the wildcard's closing pair as ending one, and
+/// this file holds raw strings with glob rules in them, so either written literally here moves
+/// which lines the guarded-symbol counts in `docs/specs/labels.md` are measured over, in a file
+/// whose counts have nothing to do with a fetch.
+fn expected_accept() -> String {
+    format!("accept: text/markdown, {}/{};q=0.9\r\n", "*", "*")
+}
+
+/// FETCH-7. Every fetch asks for Markdown first, with a fixed header this program's own source
+/// holds. A server that can answer with Markdown otherwise answers with HTML, and the whole HTML
+/// body, up to the cap, is what a processor then pays tokens to read.
+///
+/// The header is read off the wire rather than out of the request this process built, because what
+/// the tool asked for is only what actually went out.
+#[test]
+fn a_fetch_asks_for_markdown_ahead_of_html() {
+    let scratch = Scratch::new("fetch-accept");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, requests) = serve_pages(vec![page("the docs")]);
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/docs"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the docs page"),
+        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let head = requests
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the request went out");
+    // The whole value: ranking Markdown below the wildcard, or ranking a second type alongside
+    // it, asks a server for something else.
+    assert!(
+        head.to_lowercase().contains(&expected_accept()),
+        "the fetch did not ask for Markdown ahead of HTML: {head:?}"
+    );
+}
+
+/// The same header on the hop past a redirect. A same-host redirect is the ordinary approved case
+/// (FETCH-4), so a header carried only on the first request would be absent from most of the
+/// requests that actually fetch a page.
+#[test]
+fn a_redirected_fetch_still_asks_for_markdown_ahead_of_html() {
+    let scratch = Scratch::new("fetch-accept-redirect");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, requests) = serve_pages(vec![moved_to("/moved"), page("the docs")]);
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/start"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the start page"),
+        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let first = requests
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the first request went out");
+    let second = requests
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the hop past the redirect went out");
+    assert!(
+        first.contains("/start") && second.contains("/moved"),
+        "the redirect was not followed: {first:?}, then {second:?}"
+    );
+    let expected = expected_accept();
+    assert!(
+        second.to_lowercase().contains(&expected),
+        "the hop past the redirect asked for something else: {second:?}"
+    );
+}
+
+/// The header changes nothing about the label. A Markdown body is content nobody vouched for,
+/// exactly as an HTML one is, and the label comes from `Capability::WebFetch` before the request
+/// goes out, so what a server answers with cannot raise it (FETCH-1).
+///
+/// Both types in one test, because the claim is that they are labelled the same: a test over
+/// Markdown alone would pass over an implementation that trusted it and left HTML untrusted.
+#[test]
+fn a_markdown_body_is_labelled_exactly_as_an_html_body_is() {
+    for content_type in ["text/markdown", "text/html"] {
+        let scratch = Scratch::new("fetch-markdown-label");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (site, _requests) =
+            serve_pages(vec![page_of_type(content_type, "SENTINEL-TYPED-BYTES")]);
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/docs"}}"#)),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"page.out","contents_ref":"ref:1"}"#,
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let outcome = turn::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("read the docs page"),
+            &mut ApprovesFetchesAndWrites::default(),
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+
+        // Untrusted and public, which is the label the transport gate names as the body arrives.
+        assert!(
+            sink.events().iter().any(|event| matches!(
+                event,
+                Event::GatePassed { gate: "transport", detail }
+                    if detail.contains("fetch_url") && detail.contains("(U,pub)")
+            )),
+            "{content_type}: the body did not arrive untrusted and public: {:?}",
+            sink.events()
+        );
+        // The planner was handed a reference and never the bytes, whichever type it was.
+        let _first = received.recv().expect("first request");
+        let second = received.recv().expect("second request");
+        assert!(
+            !second.contains("SENTINEL-TYPED-BYTES"),
+            "{content_type}: the body reached the planner's context: {second}"
+        );
+        // And the file it was written to is no longer trusted, which is what the untrusted half
+        // of the label costs a write.
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("page.out")).unwrap(),
+            "SENTINEL-TYPED-BYTES",
+            "{content_type}: the body never reached the file"
+        );
+        assert!(
+            !outcome.trust.is_trusted("page.out"),
+            "{content_type}: a file holding a fetched body reads back trusted"
+        );
+    }
 }
 
 /// A page that is not valid UTF-8 is still the page that was asked for. Nothing reads it, so a
@@ -28963,7 +29421,7 @@ fn only_a_line_a_job_can_hold_is_offered_to_be_moved() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p page.txt"}"#),
         tool_request("run", r#"{"command":"sed -n 2p","stdin_ref":"ref:1"}"#),
         tool_request("run", r#"{"command":"echo a && echo b"}"#),
         tool_request("run", r#"{"command":"ls 2>&1"}"#),
@@ -34237,7 +34695,7 @@ mod usage {
             r#"{"kind":"checker","task":"CHILD-TASK"}"#,
         ));
         let (parent, child) = parent_and_child(&run);
-        child.answer(&tool_request("run", r#"{"command":"cat vet.txt"}"#));
+        child.answer(&tool_request("run", r#"{"command":"sed -n p vet.txt"}"#));
         run.request()
             .answer(&tool_request("read_output", r#"{"ref":"ref:1"}"#));
         let vetting = run.request();
@@ -37306,7 +37764,7 @@ fn the_lines_an_output_prompt_states_are_counted_inside_the_kernel() {
     std::fs::write(scratch.path.join("where.txt"), "first\nsecond\nthird\n").unwrap();
 
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
@@ -37373,7 +37831,7 @@ fn the_lines_a_vetting_prompt_states_are_counted_inside_the_kernel() {
             r#"{"verdict": "safe", "reason": "three paths"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the paths the file records"}"#,
@@ -40187,4 +40645,327 @@ fn a_delegate_reads_the_appended_words_and_not_the_replaced_opening() {
             "the delegate was given the parent's replaced opening: {request}"
         );
     }
+}
+
+/// What the advisor tests all do: run a turn whose session names `advisor`, and give back the
+/// requests the endpoint saw, the sink, and the outcome.
+fn consulting(
+    name: &str,
+    advisor: Option<&str>,
+    replies: Vec<String>,
+) -> (
+    Vec<serde_json::Value>,
+    RecordingSink,
+    Result<bravebot_agent::turn::Outcome, bravebot_agent::turn::TurnError>,
+) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let task = Task::new("choose the first file to read").with_advisor(advisor.map(str::to_string));
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    );
+    let requests = every_request(&received)
+        .iter()
+        .map(|body| serde_json::from_str(body).expect("a request"))
+        .collect();
+    (requests, sink, outcome)
+}
+
+fn the_tools_in(request: &serde_json::Value) -> Vec<String> {
+    request["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+const AN_ADVISOR_CALL: &str =
+    r#"{"question":"which file should I read first?","why":"unsure where to start"}"#;
+
+/// ADVISOR-1: the tool exists only where the session named a model to consult.
+#[test]
+fn the_advisor_tool_is_offered_only_when_a_model_is_named() {
+    let (named, _, outcome) = consulting(
+        "advisor-offered",
+        Some("advisor-model"),
+        vec![reply_with("done")],
+    );
+    outcome.expect("turn runs");
+    assert!(the_tools_in(&named[0]).contains(&"advisor".to_string()));
+
+    let (unnamed, _, outcome) = consulting("advisor-not-offered", None, vec![reply_with("done")]);
+    outcome.expect("turn runs");
+    assert!(
+        !the_tools_in(&unnamed[0]).contains(&"advisor".to_string()),
+        "a session with no advisor was offered the tool"
+    );
+}
+
+/// ADVISOR-1: a call to a tool the session was not offered is an unknown name, not a working one.
+#[test]
+fn a_session_without_an_advisor_cannot_call_one() {
+    let (requests, _, outcome) = consulting(
+        "advisor-uncalled",
+        None,
+        vec![tool_request("advisor", AN_ADVISOR_CALL), reply_with("done")],
+    );
+    outcome.expect("turn runs");
+    assert_eq!(requests.len(), 2, "no request went to any advisor");
+    assert!(
+        !requests[1].to_string().contains("ADVICE-ALPHA"),
+        "a call to an advisor nobody named produced advice"
+    );
+}
+
+/// ADVISOR-8: a session whose settings name an advisor and whose command line names none is
+/// offered the tool, and the model the settings name is the one asked.
+#[test]
+fn an_advisor_the_settings_name_is_offered_and_asked_without_the_flag() {
+    let scratch = Scratch::new("advisor-from-settings");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        reply_with("ADVICE-SETTINGS"),
+        reply_with("done"),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.advisor_model = Some("settings-advisor".into());
+    turn::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read"),
+        &mut bravebot_agent::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    let requests: Vec<serde_json::Value> = every_request(&received)
+        .iter()
+        .map(|body| serde_json::from_str(body).expect("a request"))
+        .collect();
+    assert_eq!(requests.len(), 3, "planner, advisor, planner");
+    assert!(
+        the_tools_in(&requests[0]).contains(&"advisor".to_string()),
+        "the planner was not offered the advisor"
+    );
+    assert_eq!(requests[1]["model"], "settings-advisor");
+}
+
+/// ADVISOR-2 and ADVISOR-3: the advisor is sent the planner's own context and the question, to the
+/// model named for it, with no tools; what it says is the result of the call.
+#[test]
+fn the_advisor_is_asked_with_the_planners_context_and_no_tools() {
+    let (requests, _, outcome) = consulting(
+        "advisor-asked",
+        Some("advisor-model"),
+        vec![
+            tool_request("advisor", AN_ADVISOR_CALL),
+            reply_with("ADVICE-ALPHA: read main.rs"),
+            reply_with("done"),
+        ],
+    );
+    outcome.expect("turn runs");
+    assert_eq!(requests.len(), 3, "planner, advisor, planner");
+
+    let asked = &requests[1];
+    assert_eq!(asked["model"], "advisor-model");
+    assert!(
+        asked.get("tools").is_none_or(|tools| tools.is_null()),
+        "the advisor was offered tools: {}",
+        asked["tools"]
+    );
+    let sent = asked.to_string();
+    assert!(
+        sent.contains("choose the first file to read"),
+        "the task was not in its context"
+    );
+    assert!(
+        sent.contains("which file should I read first?"),
+        "the question was not asked"
+    );
+
+    assert_eq!(
+        requests[2]["model"], requests[0]["model"],
+        "the planner kept its own model"
+    );
+    assert!(
+        requests[2]
+            .to_string()
+            .contains("ADVICE-ALPHA: read main.rs"),
+        "the advice did not reach the planner"
+    );
+}
+
+/// ADVISOR-4: what the advisor cost is part of what the turn cost, and the trail says which model
+/// was asked.
+#[test]
+fn an_advisor_call_is_counted_and_recorded() {
+    let (_, sink, outcome) = consulting(
+        "advisor-counted",
+        Some("advisor-model"),
+        vec![
+            tool_request_with_usage("advisor", AN_ADVISOR_CALL, 10, 1),
+            reply_with_usage("advice", 200, 30),
+            reply_with_usage("done", 50, 5),
+        ],
+    );
+    let outcome = outcome.expect("turn runs");
+    assert_eq!(
+        outcome.tokens,
+        11 + 230 + 55,
+        "the advisor's tokens were left out"
+    );
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "advice", detail }
+                if detail.contains("advisor-model") && detail.contains("230 tokens")
+        )),
+        "the call left no record: {:?}",
+        sink.events()
+    );
+}
+
+/// ADVISOR-5: a turn may ask only so often, and a refused call costs no request.
+#[test]
+fn a_turn_may_ask_its_advisor_only_three_times() {
+    let (requests, _, outcome) = consulting(
+        "advisor-limit",
+        Some("advisor-model"),
+        vec![
+            tool_request("advisor", AN_ADVISOR_CALL),
+            reply_with("ADVICE-1"),
+            tool_request("advisor", AN_ADVISOR_CALL),
+            reply_with("ADVICE-2"),
+            tool_request("advisor", AN_ADVISOR_CALL),
+            reply_with("ADVICE-3"),
+            tool_request("advisor", AN_ADVISOR_CALL),
+            reply_with("done"),
+        ],
+    );
+    outcome.expect("turn runs");
+    let to_the_advisor = requests
+        .iter()
+        .filter(|request| request["model"] == "advisor-model")
+        .count();
+    assert_eq!(to_the_advisor, 3, "the fourth question was sent");
+    assert!(
+        requests
+            .last()
+            .unwrap()
+            .to_string()
+            .contains("as often as a turn may"),
+        "the planner was not told why the fourth was refused"
+    );
+}
+
+/// ADVISOR-6: a call that fails is reported as a category, never in the backend's words.
+#[test]
+fn a_failed_advisor_call_tells_the_planner_only_the_category() {
+    let scratch = Scratch::new("advisor-fails");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_script(vec![
+        Served::Reply(tool_request("advisor", AN_ADVISOR_CALL)),
+        Served::Status(401),
+        Served::Reply(reply_with("done")),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("a failed consultation does not fail the turn");
+    let last = every_request(&received).pop().expect("a last request");
+    assert!(last.contains("error: advisor request"), "got: {last}");
+    assert!(
+        !last.contains("401"),
+        "the planner was told more than the category: {last}"
+    );
+}
+
+/// ADVISOR-7: a model the machine-level settings refuse is not asked, whichever route named it.
+#[test]
+fn an_advisor_model_the_machine_refuses_is_not_asked() {
+    let scratch = Scratch::new("advisor-refused");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let managed = scratch.path.join("managed.json");
+    std::fs::write(&managed, r#"{"models": {"deny": ["advisor-model"]}}"#).unwrap();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        reply_with("done"),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.models = bravebot_config::Managed::at(&managed).models().clone();
+    turn::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+        &mut bravebot_agent::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    let requests = every_request(&received);
+    assert_eq!(requests.len(), 2, "a request went to a refused model");
+    assert!(
+        requests[1].contains("do not allow the advisor model"),
+        "got: {}",
+        requests[1]
+    );
+}
+
+/// ADVISOR-4: once the planner's context has met content nobody vouched for, the advisor's reply is
+/// labelled by that context and the planner is given a reference rather than the text.
+#[test]
+fn an_advisor_that_was_shown_untrusted_content_is_quarantined() {
+    let scratch = Scratch::new("advisor-quarantined");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        reply_with("ADVICE-QUARANTINED"),
+        reply_with("done"),
+    ]);
+    let mut snapshot = bravebot_agent::Conversation::new().snapshot();
+    snapshot.context = "untrusted".to_string();
+    let mut conversation = bravebot_agent::Conversation::restored(snapshot);
+    take_a_turn(
+        &config_for(&endpoint),
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+    )
+    .expect("turn runs");
+    let requests = every_request(&received);
+    assert!(
+        requests.iter().any(|body| body.contains("advisor-model")),
+        "the advisor was never asked"
+    );
+    let last = requests.last().expect("a last request");
+    assert!(
+        !last.contains("ADVICE-QUARANTINED"),
+        "the planner was handed advice given over untrusted content: {last}"
+    );
 }

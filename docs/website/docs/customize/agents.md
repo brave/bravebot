@@ -26,7 +26,9 @@ addressed to that definition, as if you had typed `/agent <name>` for it. The bo
 definition's own, `.bravebot/memory/<name>.md` in the bot's folder. If the file is removed or no
 longer loads, the bot runs nothing and says which definition it could not find. Editing the file by
 hand is how you narrow the bot's tools. Bots made before definitions existed keep working as they
-did until they are given one.
+did until they are opened. Opening one gives it a definition, and when its first turn ends the app
+asks it to carry what still holds of its old notes, `.bravebot-ui/bots/<slug>.md`, into its new
+memory. Those notes count as untrusted, so you are asked before the bot reads them.
 
 ```markdown
 ---

@@ -36,6 +36,11 @@ cli-usage-auth-login = Sign in to a model service, listing every way when none i
 cli-usage-auth-logout = Forget an imported Leo Premium subscription or a stored gateway key
 cli-usage-mcp = Declare, list and approve MCP servers
 cli-usage-completion = Print a shell completion script
+cli-usage-sessions = List the sessions that keep running after the terminal closes
+cli-usage-sessions-stop = Stop one of them
+cli-usage-bg = Start a session that keeps running after the terminal closes
+cli-usage-attach = Join a background session's terminal
+cli-usage-reply = Send a prompt to an idle background session
 
 cli-keys-heading = Interactive keys:
 cli-key-send = Send
@@ -74,6 +79,10 @@ cli-plain-trusting-kept =
     trusting { $directory } (you said to remember it { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming it from { $path })
 
+# Said when a background session is started again and its earlier conversation was read back from
+# its record (BG-1).
+cli-plain-resumed = Continuing this session's earlier conversation ({ $count }).
+
 ## How much a session asks before it acts, drawn under the input box
 #
 # The markers are Claude Code's, and deliberately: somebody who has used one of these knows what
@@ -96,11 +105,14 @@ cli-option-append-system-prompt =
     Add this text to the planner's standing instructions for every turn, after AGENTS.md
 cli-option-mode = turn (default) decides step by step; manifest plans the whole run first
 cli-option-model = The model this run asks for, in place of the remembered or configured one
+cli-option-advisor = A model the agent may put a question to, offered to it as the advisor tool
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
 cli-option-print = Non-interactive. Reads piped stdin as quarantined context
 cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
+cli-option-safe =
+    Load none of your own hooks, skills, definitions, MCP servers or AGENTS.md. Sign-in, model and permissions still apply
 cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
@@ -159,6 +171,8 @@ cli-bypass-unreachable =
     that mode unreachable here. Remove it there, or run without the flag.
 cli-mode-needs-a-name = --mode requires one of { $names }
 cli-model-needs-a-name = --model requires the name of a model
+cli-advisor-needs-a-name = --advisor requires the name of a model
+cli-advisor-not-with-a-manifest = --advisor cannot be used with --mode manifest, which runs its plan without a planner to ask
 cli-effort-needs-a-level = --effort requires one of { $levels }
 cli-unexpected-argument = unexpected argument: { $argument }
 cli-task-required = a task is required
@@ -410,6 +424,8 @@ doctor-settings-provider-ignored =
     provider in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-model-ignored =
     model in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-advisor-ignored =
+    advisorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 # A key that only ever refuses, spelled as something other than a boolean. It is read as absence, so
 # the session is as permissive as one that named nothing, and nothing else would say so.
 doctor-settings-narrowing-ignored =
@@ -968,6 +984,8 @@ servers-answer-once = Yes
 servers-answer-project = Yes, and use all future MCP servers in this project
 servers-answer-no = No, continue without this server
 servers-answer = [1/2/3]
+safe-mode-started =
+    Safe mode: hooks, skills, definitions, MCP servers and AGENTS.md were not loaded. Sign-in, the model and permissions are as usual
 servers-for-this-session-only =
     { $alias } is used in this session only: an incognito session records no answer
 servers-not-kept = { $alias } is used, and its approval was not recorded: { $reason }
@@ -977,6 +995,9 @@ servers-no-confinement-here =
     { $alias } was not started: this platform has no confinement for a local MCP server yet
 servers-no-home =
     { $alias } was not started: a directory of its own could not be made in { $path }: { $reason }
+servers-paths-left-out =
+    { $alias } was started without paths it was granted, since confinement here names no path that
+    is not on disk: { $paths }
 servers-no-handshake = { $alias } was started and did not complete its handshake: { $reason }
 servers-too-slow = { $alias } did not complete its handshake within { $seconds } seconds
 
@@ -1755,6 +1776,11 @@ turn-cancelled = turn { $turn } cancelled
 ## Picking up a session that ran somewhere, or on something, else
 
 session-reopen-failed = could not reopen { $directory }: { $problem }
+session-checkout-not-restored =
+    { $count ->
+        [one] checkout { $ids } was kept by this session but is not where it was made, so it is not listed
+       *[other] checkouts { $ids } were kept by this session but are not where they were made, so they are not listed
+    }
 session-branch-moved = this session ran on { $was }; this checkout is on { $now }
 session-branch-gone = this session ran on { $was }; this checkout is not on a branch
 session-branch-new = this session ran on no branch; this checkout is on { $now }
@@ -1957,10 +1983,12 @@ command-cost = Show what each turn of this session has spent
 command-model = Choose which model to think with
 command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering
+command-advisor = Name the model the planner may consult, say which it may, or drop the choice
 command-config = Choose how the input box edits text
 command-add-dir = Open another directory and trust it for this session, or close one
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
+command-branch = Copy this session and carry on in the copy, keeping the original to return to
 command-issue = Say which issue this session is for, show it, or clear it
 command-pr = Say which pull request this session is for, show it, or clear it
 command-compact = Summarise the conversation so far, keeping the recent part
@@ -1976,6 +2004,7 @@ command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-checkouts = List kept checkouts, bring their files back, or remove one
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name
+command-init = Have the planner draft an AGENTS.md for this project
 command-export = Export the session transcript to a markdown file
 command-copy = Put the last reply on the clipboard, or the one that many replies back
 command-undo = Rewind one turn and put back the files it wrote
@@ -2013,6 +2042,20 @@ session-pull-request-refused =
     /pr takes one http or https link on one line, in ASCII with no spaces, as in
     /pr https://github.com/brave/bravebot/pull/1. Nothing was set
 session-cleared = cleared: a new session, with the previous one still resumable
+# Left in the transcript by /branch, which has moved the session onto a copy of itself.
+session-branched =
+    branched: this session is now a copy, { $title }. The original is as it was. To return to it,
+    run `bravebot --resume { $id }` in { $directory }
+# Left in the transcript when /branch is typed before the session has a record to copy.
+session-branch-nothing-written = nothing to branch yet: the session has no record until its first turn ends
+# Left in the transcript when /branch is typed where session records are not written.
+session-branch-unwritable = /branch needs a session record to copy, and this session does not write one
+# Left in the transcript when /branch is typed in a session that cannot be forked.
+session-branch-refused = this session cannot be branched
+session-branch-keeps-checkouts = { $count ->
+    [one] the session keeps checkout { $ids }, which a copy would not carry, so remove it with /checkouts remove before /branch
+   *[other] the session keeps checkouts { $ids }, which a copy would not carry, so remove them with /checkouts remove before /branch
+    }
 session-rewound = rewound the session to before turn { $turn }
 session-rewound-partly =
     rewound the session to before turn { $turn }, but these files still hold what was
@@ -2058,6 +2101,8 @@ session-directory-withdrawn = closed { $directory }, and no longer trusting it; 
 session-directory-not-closed = could not close { $directory }: { $problem }
 session-cd-needs-a-path = /cd needs a directory, as in /cd ~/projects/other
 session-directory-changed = now working in { $directory }, and trusting it for this session
+# The mode the person was in, taken away by a settings layer of the directory they moved into.
+session-bypass-made-unreachable = permissions.bypassUnreachable is set here, so bypassing is off and the session is asking again
 # Said once per directory that was open and is not any more, so nobody discovers it by being
 # refused a file they could read a minute ago.
 session-directory-closed = closed { $directory }; open it again with /add-dir { $directory }
@@ -2108,6 +2153,13 @@ session-effort-set = thinking at { $effort }
 session-effort-unset = thinking as the service decides
 session-no-such-effort = no effort level named { $effort }; try /effort for the list
 session-effort-not-read = this model reads no effort level, so requests carry none
+session-advisor-set = the planner may consult { $model } from the next turn, which spends that model's tokens
+session-advisor-in-force = the planner may consult { $model }
+session-advisor-none = no advisor; try /advisor followed by a model name
+session-advisor-dropped = advisor dropped
+session-advisor-dropped-setting-remains = advisor dropped; the advisorModel setting still names { $model }
+session-advisor-nothing-serves = nothing is configured to answer { $model }, so it cannot advise
+session-advisor-needs-sign-in = { $model } needs a sign-in first, so it cannot advise
 session-trusting = trusting { $directory }
 session-trusting-as-left = trusting { $directory } (as this session left it)
 # Said where the question was never put, because the mode in force answers it. Naming the flag is
@@ -2412,6 +2464,10 @@ paste-folded = { $lines ->
     [one] [Pasted text #{ $number } +{ $lines } line]
    *[other] [Pasted text #{ $number } +{ $lines } lines]
     }
+paste-invisible-removed = { $count ->
+    [one] removed { $count } invisible character from that paste
+   *[other] removed { $count } invisible characters from that paste
+    }
 kilobytes = { $size } KB
 megabytes = { $size } MB
 gigabytes = { $size } GB
@@ -2450,6 +2506,9 @@ manifest-began = planning the whole task first; the session waits here until the
 manifest-ended-unexpectedly = the run ended unexpectedly
 manifest-failed = the run stopped: { $problem }
 manifest-recorded = recorded as { $id }; read it again with bravebot --resume { $id }
+
+# What /init says when the project already has the file it would write.
+init-already-there = { $file } already exists here, so /init leaves it alone
 
 # What the session says about a definition a person addressed with /agent. Every name here is one
 # the session resolved from a source somebody vouched for, so it may be printed; it is never offered
@@ -2519,6 +2578,7 @@ verb-job-output = Job
 verb-spawn-agent = Delegate
 verb-schedule-next = Schedule
 verb-watch-file = Watch
+verb-advisor = Advise
 verb-mcp-call = MCP
 verb-unknown = Tool
 
@@ -2635,3 +2695,51 @@ doctor-direnv-ok = available on PATH
 doctor-direnv-missing = not found on PATH; see https://direnv.net/ or run `brew install direnv`
 
 status-undecided = not decided
+
+sessions-usage = sessions takes --json, or stop and a session's id
+sessions-none = No background sessions.
+sessions-no-home = There is no state directory to find background sessions in.
+sessions-missing = No background session { $id }.
+sessions-ambiguous = More than one background session begins with { $id }.
+sessions-stopped = Stopped { $name }.
+sessions-not-running = { $name } was not running.
+sessions-stop-failed = Could not record the stop: { $problem }
+sessions-state-working = working
+sessions-state-idle = idle
+sessions-state-stopped = stopped
+sessions-state-interrupted = interrupted
+sessions-state-needs-input = needs input ({ $kind })
+sessions-state-needs-input-unnamed = needs input
+sessions-held-write = write
+sessions-held-run = run
+sessions-held-read = read
+sessions-held-fetch = fetch
+sessions-held-server = server
+sessions-held-vouch = vouch
+sessions-held-tools = tools
+sessions-held-move = move
+sessions-held-manifest = manifest
+sessions-held-question = question
+bg-needs-a-prompt = --bg takes the prompt to start with
+bg-needs-a-terminal = --bg starts a session from a terminal, and this is not one
+bg-takes-nothing-else = --bg takes a prompt and no other option, and { $flag } cannot reach the session it starts
+bg-bypass-refused = --dangerously-skip-permissions is refused for a background session, because nobody is there to notice what it does
+bg-not-started = The background session did not start.
+bg-started = Started { $id }. Join it with: bravebot attach { $id }
+bg-spawn-failed = Could not start the background session: { $problem }
+bg-unsupported = Background sessions are not available on this platform.
+attach-usage = attach takes a session's id
+attach-needs-a-terminal = attach answers a session's prompts from the lines typed, and this is not a terminal
+reply-usage = reply takes a session's id and the prompt to send
+attach-not-running = { $name } is not running.
+attach-unreachable = Could not reach { $name }: { $problem }
+attach-taken = A terminal is attached to { $name } already.
+attach-joined = Attached to { $name }. Ctrl-C leaves it running.
+attach-line-not-sent = Not sent: the session is not waiting for a line.
+attach-left = The session ended.
+reply-sent = Sent to { $name }.
+reply-working = { $name } is working and takes no prompt now. Reply when it is idle.
+reply-needs-input = { $name } is waiting on a question. Answer it with: bravebot attach { $id }
+reply-not-sent = { $name } did not take the prompt.
+bg-restart-needs-a-terminal = { $name } is stopped, and only a terminal can start it again.
+resume-held-by-background = { $name } is held by a running background session. Join it with: bravebot attach { $id }

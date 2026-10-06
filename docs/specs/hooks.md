@@ -158,6 +158,7 @@ is a wider claim than that. A hook that needs to know which tool ran declares on
 
 `verified-by: bravebot_agent::hooks::a_hook_is_told_the_moment_and_nothing_else`
 `verified-by: bravebot_agent::hooks::the_line_a_hook_is_told_is_built_from_the_moment_alone`
+`verified-by: bravebot_agent::hooks::a_hook_is_given_no_environment_of_its_own`
 
 <a id="HOOK-6"></a>
 ### HOOK-6: a hook decides nothing

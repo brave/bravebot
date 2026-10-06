@@ -264,6 +264,7 @@ the wrong thing to search for.
 | `-p`, `--print` | non-interactive; reads piped stdin as quarantined context |
 | `--trace` | print the audit trail to stderr |
 | `--model <name>` | the model this run asks for |
+| `--advisor <name>` | a model the planner may put a question to |
 | `--json` | one result object on stdout, in the reply's place |
 | `--settings <path>` | read a settings file above the ones found, for this run |
 | `--mode manifest` | plan the whole run first, then walk the plan |

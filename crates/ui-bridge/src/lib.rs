@@ -32,6 +32,7 @@ pub mod running;
 pub mod settings;
 pub mod store;
 pub mod turn;
+pub mod view;
 pub mod wire;
 
 /// Which build of the agent this bridge is linked against.

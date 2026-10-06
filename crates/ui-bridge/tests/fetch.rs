@@ -466,3 +466,250 @@ fn a_yes_to_another_kind_of_question_does_not_send_a_fetch() {
         "closing the session sent a fetch nobody approved"
     );
 }
+
+/// An active worker holds session state; starting a view must refuse without waiting for it.
+#[test]
+fn a_session_view_cannot_start_during_a_turn() {
+    let mut asked = a_turn_that_asks_to_fetch("bridge-view-running");
+    let refused = asked.front.answered(
+        "session.view.start",
+        json!({"session": asked.session, "version": 1}),
+    );
+    assert_eq!(refused["error"]["code"], "bad_request");
+    asked.reply("fetch.reply", "reject");
+    asked.finish();
+}
+
+/// Fresh-only views cannot omit an existing transcript, including resumed and forked records.
+#[test]
+fn a_session_view_cannot_start_after_completion_resume_or_fork() {
+    let mut asked = a_turn_that_asks_to_fetch("bridge-view-history");
+    asked.reply("fetch.reply", "reject");
+    let done = asked.front.until(|m| m["event"] == "turn.done");
+    // This operation reaps the completed worker, so the history guard must refuse the view.
+    let watches = asked
+        .front
+        .call("watches.list", json!({"session": asked.session}));
+    assert_eq!(watches["busy"], false);
+    let refused = asked.front.answered(
+        "session.view.start",
+        json!({"session": asked.session, "version": 1}),
+    );
+    assert_eq!(
+        refused["error"]["code"], "bad_request",
+        "completed: {refused}"
+    );
+    let fork = asked.front.call(
+        "session.fork",
+        json!({
+            "session": asked.session, "prompt": 0, "text": "read the docs page"
+        }),
+    );
+    let refused = asked.front.answered(
+        "session.view.start",
+        json!({"session": fork["session"], "version": 1}),
+    );
+    assert_eq!(refused["error"]["code"], "bad_request", "fork: {refused}");
+    asked
+        .front
+        .call("session.close", json!({"session": asked.session}));
+    let resumed = asked.front.call(
+        "session.open",
+        json!({
+            "directory": asked._scratch.project(), "id": done["data"]["id"]
+        }),
+    );
+    let refused = asked.front.answered(
+        "session.view.start",
+        json!({"session": resumed["session"], "version": 1}),
+    );
+    assert_eq!(refused["error"]["code"], "bad_request", "resume: {refused}");
+}
+
+/// A negotiated view carries authoritative state through the same process as legacy events.
+#[test]
+fn the_session_view_orders_prompts_approvals_and_labelled_results() {
+    let scratch = Scratch::new("bridge-fetch-view");
+    let (site, requests) = a_website();
+    let (endpoint, rounds) = a_planner_fetching(&format!("{site}/docs"));
+    let mut front = FrontEnd::serving(&scratch.home(), &endpoint);
+    let ready = front.until(|m| m["event"] == "agent.ready");
+    assert_eq!(
+        ready["data"]["capabilities"]["sessionView"],
+        bravebot_ui_bridge::view::capability()
+    );
+    let info = front.call("agent.info", json!({}));
+    assert_eq!(info["capabilities"]["sessionView"]["version"], 1);
+    let opened = front.call("session.new", json!({"directory": scratch.project()}));
+    let session = opened["session"].clone();
+    let bad = front.answered(
+        "session.view.start",
+        json!({"session": session, "version": 2}),
+    );
+    assert_eq!(bad["error"]["code"], "bad_request");
+    front.call(
+        "session.view.start",
+        json!({"session": session, "version": 1}),
+    );
+    let initial = front.until(|m| m["event"] == "session.view.initial");
+    assert_eq!(initial["data"]["sequence"], 0);
+    assert_eq!(initial["data"]["status"], "awaiting_trust");
+    assert_eq!(initial["data"]["rows"], json!([]));
+    front.call("trust.reply", json!({"session": session, "trusted": true}));
+    front.call(
+        "turn.send",
+        json!({"session": session, "prompt": "read the docs page"}),
+    );
+    let question = front.until(|m| m["event"] == "fetch.request");
+    let busy = front.answered(
+        "turn.send",
+        json!({"session": session, "prompt": "must not appear"}),
+    );
+    assert_eq!(busy["error"]["code"], "turn_in_flight");
+    front.call(
+        "fetch.reply",
+        json!({"session": session,
+        "request": question["data"]["request"], "decision": "approve"}),
+    );
+    let mut sequence = 0;
+    let mut rows = std::collections::BTreeMap::new();
+    let mut saw_waiting = false;
+    let mut saw_resolution = false;
+    loop {
+        let update = front.until(|m| m["event"] == "session.view.update");
+        let data = &update["data"];
+        let _: bravebot_ui_bridge::view::Update = serde_json::from_value(data.clone()).unwrap();
+        sequence += 1;
+        assert_eq!(data["sequence"], sequence);
+        assert_eq!(update["session"], session);
+        if data["status"] == "waiting" {
+            saw_waiting = true;
+            assert_eq!(data["pending"]["kind"], "fetch");
+            assert_eq!(data["pending"]["data"], question["data"]);
+            assert_eq!(data["turn"], 1);
+        }
+        if saw_waiting && data["status"] == "running" && data["pending"].is_null() {
+            saw_resolution = true;
+        }
+        for row in data["rows"].as_array().unwrap() {
+            if row["kind"] == "quarantined" {
+                assert!(saw_resolution);
+            }
+            rows.insert(row["id"].as_u64().unwrap(), row.clone());
+        }
+        if data["status"] == "completed" {
+            assert!(data["pending"].is_null());
+            break;
+        }
+    }
+    assert!(saw_waiting);
+    let rows: Vec<_> = rows.values().collect();
+    assert_eq!(rows[0]["kind"], "prompt");
+    assert_eq!(rows[0]["data"]["text"], "read the docs page");
+    assert_eq!(rows.iter().filter(|r| r["kind"] == "prompt").count(), 1);
+    let approval = rows.iter().find(|r| r["kind"] == "approval").unwrap();
+    assert_eq!(approval["resolved"], true);
+    assert!(
+        requests
+            .recv_timeout(PATIENCE)
+            .unwrap()
+            .starts_with("GET /docs ")
+    );
+    let captured: Vec<_> = rounds.try_iter().collect();
+    assert_eq!(captured.len(), 2);
+    assert!(captured.iter().all(|r| !r.contains(SENTINEL)));
+    let shown = rows
+        .iter()
+        .find(|r| r["kind"] == "quarantined")
+        .expect("released page row");
+    assert!(shown["data"].to_string().contains(SENTINEL));
+    let legacy = front.until(|m| m["event"] == "quarantined");
+    assert_eq!(shown["data"], legacy["data"]);
+    assert_eq!(shown["data"]["label"], "(U,pub)");
+}
+
+/// Denial and cancellation end pending approvals without granting the requested effect.
+#[test]
+fn session_views_keep_two_sessions_and_terminal_outcomes_separate() {
+    let scratch = Scratch::new("bridge-view-two-sessions");
+    let (site, requests) = a_website();
+    let (endpoint, _) = a_planner_fetching(&format!("{site}/docs"));
+    let mut front = FrontEnd::serving(&scratch.home(), &endpoint);
+    let mut sessions = Vec::new();
+    for _ in 0..2 {
+        let session =
+            front.call("session.new", json!({"directory": scratch.project()}))["session"].clone();
+        front.call(
+            "session.view.start",
+            json!({"session": session, "version": 1}),
+        );
+        let duplicate = front.answered(
+            "session.view.start",
+            json!({"session": session, "version": 1}),
+        );
+        assert_eq!(duplicate["error"]["code"], "bad_request");
+        let manifest = front.answered("manifest.run", json!({"session": session}));
+        assert_eq!(manifest["error"]["code"], "bad_request");
+        front.call("trust.reply", json!({"session": session, "trusted": false}));
+        front.call(
+            "turn.send",
+            json!({"session": session, "prompt": "read page"}),
+        );
+        sessions.push(session);
+    }
+    let questions: Vec<_> = sessions
+        .iter()
+        .map(|session| front.until(|m| m["event"] == "fetch.request" && m["session"] == *session))
+        .collect();
+    let wrong = front.answered(
+        "confirm.reply",
+        json!({"session": sessions[0],
+        "request": questions[0]["data"]["request"], "decision": "approve"}),
+    );
+    assert_eq!(wrong["error"]["code"], "no_such_request");
+    front.call("turn.cancel", json!({"session": sessions[0]}));
+    front.call(
+        "fetch.reply",
+        json!({"session": sessions[1],
+        "request": questions[1]["data"]["request"], "decision": "reject"}),
+    );
+    for (session, status) in sessions.iter().zip(["cancelled", "completed"]) {
+        let mut sequence = 0;
+        loop {
+            let update =
+                front.until(|m| m["event"] == "session.view.update" && m["session"] == *session);
+            sequence += 1;
+            assert_eq!(update["data"]["sequence"], sequence);
+            if update["data"]["status"] == status {
+                assert!(update["data"]["pending"].is_null());
+                break;
+            }
+        }
+    }
+    assert!(requests.recv_timeout(QUIET).is_err());
+    front.call("session.close", json!({"session": sessions[0]}));
+    let detached =
+        front.until(|m| m["event"] == "session.view.update" && m["session"] == sessions[0]);
+    assert_eq!(detached["data"]["status"], "detached");
+    // Closing the first view does not remove the second session's stream.
+    front.call(
+        "turn.send",
+        json!({"session": sessions[1], "prompt": "again"}),
+    );
+    let next = front.until(|m| m["event"] == "session.view.update" && m["session"] == sessions[1]);
+    assert_eq!(next["data"]["status"], "running");
+    assert_eq!(next["data"]["turn"], 2);
+}
+
+/// Older clients never opt in, so their event stream retains its shape.
+#[test]
+fn a_legacy_session_emits_no_view_events() {
+    let mut asked = a_turn_that_asks_to_fetch("bridge-view-legacy");
+    asked.reply("fetch.reply", "reject");
+    asked.finish();
+    assert!(asked.front.held.borrow().iter().all(|m| {
+        !m["event"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("session.view."))
+    }));
+}

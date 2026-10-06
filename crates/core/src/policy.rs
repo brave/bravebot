@@ -2902,6 +2902,48 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
     }
 
+    /// Take the question the planner put to its advisor, to be sent with the context it was
+    /// written in.
+    ///
+    /// The advisor is given the planner's own request and nothing else, so what reaches it is
+    /// what the planner already holds. The question is the planner's words, read here for the
+    /// reason a processor's instruction is: the call changes nothing outside the answer that
+    /// comes back, and what it can reach was fixed by the session's configuration rather than
+    /// by the value. It must be public, so a question cannot carry private content the
+    /// planner's context does not already hold.
+    pub fn before_advice(&mut self, question: &Labelled<String>) -> Gated<String> {
+        let label = question.label();
+        if !label.is_public() {
+            return Err(self.deny(
+                "advice",
+                Principle::Confinement,
+                format!(
+                    "the question for the advisor is {label} and private content must not become \
+                     one; say what to ask rather than pasting what was read"
+                ),
+            ));
+        }
+        let proof = Declassification::authorise("the question the planner put to its advisor");
+        Ok(question.clone().declassify(&proof))
+    }
+
+    /// Record one call to the advisor: which model answered, what it cost, and how long the
+    /// question was.
+    ///
+    /// `model` is the one the session asked for, from its configuration or its command line, and
+    /// not the one the server reports. `call` counts this turn's calls from one, so a reader of
+    /// the trail sees where the per-turn limit was reached. The length of the question and none
+    /// of its words, so the trail carries no more content than it did.
+    pub fn record_advice(&mut self, model: &str, call: usize, cost: u64, question: usize) {
+        self.allow(
+            "advice",
+            format!(
+                "call {call} to the advisor {model}: a question of {question} character(s), \
+                 costing {cost} tokens"
+            ),
+        );
+    }
+
     /// Fix what one processor may do, before it exists.
     ///
     /// A processor is the only reader quarantined content ever gets, so what it is allowed to
@@ -6784,6 +6826,55 @@ mod tests {
         assert!(!policy.finish(), "the refusal was not recorded");
     }
 
+    /// The advisor is sent the planner's question as a request body, so a question carrying private
+    /// content would be that content leaving. Nothing upstream labels one so; this refuses it.
+    #[test]
+    fn a_private_question_is_not_put_to_the_advisor() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        let private = Labelled::new("the user's key".to_string(), Label::untrusted_private());
+        let denial = policy
+            .before_advice(&private)
+            .expect_err("a private question must not reach the advisor");
+        assert_eq!(denial.principle, Principle::Confinement);
+        assert!(
+            denial
+                .message
+                .contains("say what to ask rather than pasting what was read"),
+            "the planner was not told what to do instead: {denial}"
+        );
+
+        let public = Labelled::new("which file first?".to_string(), Label::untrusted_public());
+        assert_eq!(
+            policy
+                .before_advice(&public)
+                .expect("a public question passes"),
+            "which file first?"
+        );
+    }
+
+    /// A consultation is a request to a second model, so it is in the trail with the model and what
+    /// it cost.
+    #[test]
+    fn a_consultation_is_recorded_with_its_model_and_cost() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        policy.record_advice("advisor-model", 2, 230, 24);
+        drop(policy);
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "advice", detail }
+                    if detail.contains("call 2")
+                        && detail.contains("advisor-model")
+                        && detail.contains("230 tokens")
+            )),
+            "{:?}",
+            sink.events()
+        );
+    }
+
     /// A private argument is the user's data in a field the driver reads back out. Nothing
     /// upstream should have put it there, so this refuses rather than laundering it into a
     /// string the driver then acts on.
@@ -7277,6 +7368,41 @@ five
             _ => false,
         });
         assert!(released, "the release was not recorded in the trail");
+    }
+
+    /// A line wider than the box is several rows, so the width cap is what keeps four lines of
+    /// remark from becoming a screenful above the diff. The cut is in characters, not bytes, so a
+    /// remark in another script is not split inside one.
+    #[test]
+    fn a_remark_line_wider_than_the_box_is_cut_where_it_is_released() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        slots
+            .writer_for(SlotId::new("ref:1"), Label::untrusted_private())
+            .unwrap()
+            .write("the document")
+            .unwrap();
+
+        let said = Labelled::new(
+            format!("{}\nshort\n{}", "a".repeat(100), "é".repeat(10)),
+            Label::untrusted_private(),
+        );
+        policy.came_with_a_remark(&SlotId::new("ref:1"), &said, &mut slots);
+
+        let (preview, lines, _) = policy
+            .remark_for_review(&SlotId::new("ref:1"), &slots, 4, 10)
+            .expect("the claim made about the document");
+        assert_eq!(
+            preview,
+            vec![
+                format!("{}…", "a".repeat(10)),
+                "short".to_string(),
+                "é".repeat(10)
+            ],
+            "a line over the width is cut and marked, one at the width is kept whole"
+        );
+        assert_eq!(lines, 3);
     }
 
     /// Nothing said about a document is nothing to draw beside it, rather than whatever was said
@@ -8334,6 +8460,52 @@ five
             !policy.plan_needs_approval(&beside_it),
             "a walk that never enters the untrusted directory asked anyway"
         );
+    }
+
+    /// A reading pipeline built from the programs the audit added runs unasked over a vouched
+    /// tree, and a step that names an output file or a link-following option makes the line ask.
+    #[test]
+    fn a_pipeline_of_sort_uniq_cat_and_ls_over_vouched_paths_does_not_ask() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &["src/vendor"]);
+
+        let reading = plan_of(vec![
+            step_named("grep", &["-rh", "TODO", "src/handlers"]),
+            step_named("sort", &["-u"]),
+            step_named("uniq", &["-c"]),
+        ]);
+        assert!(
+            !policy.plan_needs_approval(&reading),
+            "a sort and uniq pipeline over a vouched tree asked"
+        );
+        for line in [
+            vec![step_named("cat", &["-n", "README.md"])],
+            vec![step_named("ls", &["-la", "src/handlers"])],
+            vec![step_named("du", &["-sh", "docs"])],
+            vec![step_named("stat", &["-c", "%s", "Cargo.toml"])],
+            vec![step_named("diff", &["-u", "a.txt", "b.txt"])],
+        ] {
+            assert!(
+                !policy.plan_needs_approval(&plan_of(line.clone())),
+                "{:?} asked",
+                line[0].args
+            );
+        }
+
+        for line in [
+            vec![step_named("sort", &["-o", "out.txt", "in.txt"])],
+            vec![step_named("uniq", &["in.txt", "out.txt"])],
+            vec![step_named("ls", &["-L", "src/handlers"])],
+            vec![step_named("diff", &["-r", "a", "b"])],
+            vec![step_named("cat", &["src/vendor/lib.js"])],
+        ] {
+            assert!(
+                policy.plan_needs_approval(&plan_of(line.clone())),
+                "{} {:?} ran unasked",
+                line[0].program,
+                line[0].args
+            );
+        }
     }
 
     /// One step nothing can account for is a transformation the proof does not cover, and its

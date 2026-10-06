@@ -38,6 +38,8 @@ import {
   saveBotModel,
   saveForm,
   migrateBot,
+  owesCarryOver,
+  carryOverPrompt,
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
@@ -87,6 +89,15 @@ const runningHandles = new Set<string>()
  * and a consolidation left running when the process died is not one this process can finish.
  */
 const consolidating = new Set<string>()
+
+/**
+ * The handles whose bot was given a definition by the turn in flight, and so is owed a turn asking
+ * it to carry its old notes over once that turn ends (MEMORY-11).
+ *
+ * Not written down, for the reason `consolidating` is not. A handle lost with the process leaves
+ * the old notes where they were, still recorded as untrusted, and the person can ask for them.
+ */
+const owedCarryOver = new Set<string>()
 
 /** Why a bot's turn could not be sent, in the shape `bravebot:request` already answers with. */
 interface BotFailure {
@@ -185,12 +196,14 @@ async function sendBotTurn(
   // A bot made before definitions is given one first, and its old memory is recorded as untrusted
   // (MEMORY-11). Nothing is sent until that has happened, so a briefing never names the old path
   // of a bot whose notes are not yet recorded.
+  const owes = owesCarryOver(held, folder)
   try {
     held = await migrateBot(held, (method, params) => bridge!.request(method, params))
   } catch (error) {
     return { error: { code: 'no_definition', message: `${held.name} could not be given a definition: ${String(error)}` } }
   }
   botHandles.set(session, held.slug)
+  if (owes) owedCarryOver.add(session)
 
   // `recall` is left off entirely in the ordinary case rather than sent as `true`. The agent
   // defaults it that way, and a parameter that only ever appears when it is doing something is a
@@ -262,7 +275,11 @@ function ended(session: string, slug: string | null, delivered: boolean): void {
   tell('bravebot:bots:consolidated', { session, slug, delivered })
 }
 
-async function consolidate(session: string, slug: string): Promise<void> {
+async function consolidate(
+  session: string,
+  slug: string,
+  compose: (held: Bot) => string = (held) => consolidationPrompt(held, AFTER_COMPACTION),
+): Promise<void> {
   const held = bot(slug)
   if (!held) return
   // Set before the send rather than after it, because the answer can arrive before an `await`
@@ -272,7 +289,7 @@ async function consolidate(session: string, slug: string): Promise<void> {
   const answer = await sendBotTurn(
     session,
     held,
-    consolidationPrompt(held, AFTER_COMPACTION),
+    compose(held),
     true,
     false,
     // Nobody typed this, so it is not something anybody should find by pressing up — in this
@@ -370,6 +387,13 @@ function createWindow(): void {
           message.data.consolidating = true
           after = () => void consolidate(handle, slug)
         }
+        // The turn that gave the bot its definition has ended, so the old notes can be asked about
+        // without a person's own line being in flight. Behind a compaction's consolidation, which
+        // is owed first, and so sent after whichever turn next ends without one.
+        else if (owedCarryOver.delete(handle)) {
+          message.data.consolidating = true
+          after = () => void consolidate(handle, slug, carryOverPrompt)
+        }
       }
     }
     // A turn this app sent can fail like any other, and a flag left set would mean the next
@@ -412,6 +436,7 @@ function createWindow(): void {
     bridge = null
     runningHandles.clear()
     botHandles.clear()
+    owedCarryOver.clear()
     window = null
   })
 
@@ -621,6 +646,7 @@ app.whenReady().then(() => {
           botHandles.delete(closing)
           // A session being released takes any turn of its with it, this app's own included.
           consolidating.delete(closing)
+          owedCarryOver.delete(closing)
         }
       }
       return { ok }

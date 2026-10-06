@@ -1797,6 +1797,58 @@ fn a_written_file_carries_a_different_change_token() {
     );
 }
 
+/// Set a file's modification time to `seconds` after the epoch, leaving its bytes alone.
+fn stamp(path: &std::path::Path, seconds: u64) {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("open to stamp");
+    file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+        .expect("set the modification time");
+}
+
+/// A rewrite that keeps the size is the case the size alone cannot see, and a filesystem with
+/// coarse timestamps makes it the common one. The token has to move on the modification time by
+/// itself.
+#[test]
+fn a_change_token_moves_with_the_modification_time_when_the_size_does_not() {
+    let scratch = Scratch::new("token-mtime");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "one\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let before = workspace.page("a.txt", 1, usize::MAX).expect("first read");
+
+    stamp(&path, 1_700_000_100);
+    let after = workspace.page("a.txt", 1, usize::MAX).expect("second read");
+
+    assert_ne!(
+        before.change_token, after.change_token,
+        "a file the clock says was written kept its token because its bytes and size did not move"
+    );
+}
+
+/// Shape rather than content: nothing derived from the bytes goes into the token, so two files of
+/// one size and one modification time carry the same token whatever they say.
+#[test]
+fn a_change_token_is_the_same_for_different_bytes_of_the_same_size_and_time() {
+    let scratch = Scratch::new("token-shape");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "one\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let before = workspace.page("a.txt", 1, usize::MAX).expect("first read");
+
+    std::fs::write(&path, "two\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    let after = workspace.page("a.txt", 1, usize::MAX).expect("second read");
+
+    assert_eq!(
+        before.change_token, after.change_token,
+        "the token followed the bytes of the file"
+    );
+}
+
 /// The planner has no clock: it is given today's date and told not to ask a program for the time,
 /// so a token it could read a time out of is an invitation to date a sample it cannot date. Hex of
 /// a fixed width, and nothing a modification time can be recovered from.
@@ -8237,4 +8289,107 @@ fn a_command_gap_in_a_checkout_is_also_a_checkout_gap_in_the_sessions_coverage()
 
     made.mark_rewind_gap(CoverageGap::Command);
     assert_eq!(coverage.gaps(), [CoverageGap::Checkout].into());
+}
+
+/// CHECKOUT-16. A workspace opened in the same directory takes back the checkouts a record
+/// listed, with what the driver recorded in them, and the next one made is numbered after them.
+///
+/// The failure this rejects is a resume that lists nothing, or lists the checkouts without the
+/// paths the delegate wrote, which leaves a kept checkout with nothing to bring back.
+#[test]
+fn a_workspace_taking_the_records_checkouts_back_lists_them_with_their_candidates() {
+    use bravebot_core::delegate::DelegateId;
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-resumed", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    made.checkout().unwrap().record_typed("src/new.rs");
+    workspace
+        .checkout_for(&policy, &state.path, DelegateId::nth(2).child(1).unwrap())
+        .expect("a second checkout");
+    let recorded = workspace.session_checkouts();
+    assert_eq!(recorded.len(), 2);
+    assert!(recorded[0].candidates.named.contains("src/new.rs"));
+
+    let resumed = Workspace::new(&scratch.path).expect("workspace");
+    assert_eq!(resumed.session_checkouts(), []);
+    let unplaced = resumed.restore_session_checkouts(&state.path, &recorded);
+
+    assert_eq!(unplaced, Vec::<String>::new());
+    let listed = resumed.session_checkouts();
+    assert_eq!(listed.len(), 2);
+    for (was, now) in recorded.iter().zip(&listed) {
+        assert_eq!(
+            (&was.id, &was.path, &was.commit, was.delegate),
+            (&now.id, &now.path, &now.commit, now.delegate)
+        );
+        assert_eq!(was.candidates, now.candidates);
+    }
+    let third = resumed
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout after the resume");
+    assert_eq!(third.checkout().unwrap().id(), "c3");
+}
+
+/// CHECKOUT-16. A record is a claim: a checkout it names at any other path, under a number that
+/// is not its directory's, without its entry in the repository, at a commit that is not an object
+/// id, or as a link, is not taken back, and is named.
+///
+/// The failure this rejects is a resume that trusts the path in the record, which would give
+/// `/checkouts remove` a path to delete that no session made.
+#[test]
+fn a_checkout_the_record_names_anywhere_but_where_one_was_made_is_not_taken_back() {
+    use bravebot_agent::workspace::SessionCheckout;
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-claimed", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let good = workspace.session_checkouts().remove(0);
+    let elsewhere = Scratch::new("checkout-claimed-elsewhere");
+    let link = good.path.with_file_name("c9");
+    // The link has its entry in the repository, so the one thing wrong with it is being a link.
+    std::fs::create_dir_all(scratch.path.join(".git/worktrees/c9")).unwrap();
+    // This one is a real directory in the right place, and has no entry in the repository.
+    let unentered = good.path.with_file_name("c8");
+    std::fs::create_dir_all(&unentered).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&elsewhere.path, &link).unwrap();
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(&link).unwrap();
+    let with = |change: &dyn Fn(&mut SessionCheckout)| {
+        let mut one = good.clone();
+        change(&mut one);
+        one
+    };
+    let claims = [
+        with(&|one| one.path = elsewhere.path.clone()),
+        with(&|one| one.id = "c2".into()),
+        with(&|one| one.id = "x1".into()),
+        with(&|one| one.commit = "../../etc".into()),
+        {
+            let mut one = good.clone();
+            one.id = "c9".into();
+            one.path = link;
+            one
+        },
+        {
+            let mut one = good.clone();
+            one.id = "c8".into();
+            one.path = unentered;
+            one
+        },
+    ];
+
+    let resumed = Workspace::new(&scratch.path).expect("workspace");
+    let unplaced = resumed.restore_session_checkouts(&state.path, &claims);
+
+    assert_eq!(unplaced, ["c1", "c2", "x1", "c1", "c9", "c8"]);
+    assert_eq!(resumed.session_checkouts(), []);
+    assert!(elsewhere.path.exists(), "a path in a record was reached");
 }

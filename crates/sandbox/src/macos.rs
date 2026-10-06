@@ -118,7 +118,7 @@ impl SeatbeltSandbox {
         // A repository's configuration and hooks are commands git runs, unconfined, the next time
         // anybody runs git there. Seatbelt lets the last matching rule decide, so this follows the
         // rows it narrows.
-        if !policy.writable.is_empty() {
+        if !policy.writable.is_empty() && !policy.git_directories_writable {
             out.push_str(GIT_DIRECTORY_WRITE);
         }
 
@@ -245,6 +245,31 @@ impl Sandbox for SeatbeltSandbox {
         streams: Streams,
         environment: Environment,
     ) -> Result<ConfinedChild, SandboxError> {
+        let wrapped = Self::wrapping(program, args, policy, &environment)?;
+        crate::process::start(wrapped, streams, &environment)
+    }
+
+    fn command(
+        &self,
+        program: &str,
+        args: &[String],
+        policy: &SandboxPolicy,
+        environment: &Environment,
+    ) -> Result<Command, SandboxError> {
+        let mut wrapped = Self::wrapping(program, args, policy, environment)?;
+        crate::process::apply_environment(&mut wrapped, environment);
+        Ok(wrapped)
+    }
+}
+
+impl SeatbeltSandbox {
+    /// `program` behind `sandbox-exec` with the profile for `policy`, or a refusal of the policy.
+    fn wrapping(
+        program: &str,
+        args: &[String],
+        policy: &SandboxPolicy,
+        environment: &Environment,
+    ) -> Result<Command, SandboxError> {
         if !policy.is_meaningful() {
             return Err(SandboxError::PolicyTooPermissive);
         }
@@ -254,14 +279,14 @@ impl Sandbox for SeatbeltSandbox {
         wrapped.args(confined_argv(
             program,
             args,
-            &environment,
+            environment,
             &std::env::vars_os().collect::<Vec<_>>(),
         )?);
         if let Some(directory) = &policy.starting_in {
             wrapped.current_dir(directory);
         }
 
-        crate::process::start(wrapped, streams, &environment)
+        Ok(wrapped)
     }
 }
 
@@ -438,6 +463,26 @@ mod argument_tests {
             )
             .expect("no wrapper reads this path, so nothing misreads it"),
             vec![OsString::from(path)]
+        );
+    }
+
+    /// A backslash in a path is escaped as well as a quote. Left alone, the backslash would
+    /// combine with the escape written for a quote after it, the pair would read as an escaped
+    /// backslash, and the quote would end the literal and let the rest of the path be read as
+    /// profile directives.
+    #[test]
+    fn a_backslash_in_a_path_cannot_cancel_the_escape_of_the_quote_after_it() {
+        assert_eq!(quote(r#"/tmp/x\"#), r#""/tmp/x\\""#);
+        assert_eq!(
+            quote(r#"/tmp/x\") (allow network-outbound) (""#),
+            r#""/tmp/x\\\") (allow network-outbound) (\"""#
+        );
+
+        let policy = SandboxPolicy::strict().allow_read(r#"/tmp/x\") (allow network-outbound) ("#);
+        let profile = SeatbeltSandbox::profile(&policy);
+        assert!(
+            profile.contains(r#"(subpath "/tmp/x\\\") (allow network-outbound) (")"#),
+            "the path did not stay one literal: {profile}"
         );
     }
 }
@@ -1192,6 +1237,130 @@ int main(void) {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A caller running a program a person asked to run against a repository may lift the
+    /// withholding, and the lifting reaches the `.git` and nothing else: the control that gives
+    /// the refusal above its meaning, since a profile dropping every write refusal passes the
+    /// writes below just as readily.
+    #[test]
+    fn a_policy_allowing_git_directory_writes_reaches_a_git_directory() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-git-directory-allowed");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).expect("the scratch directory is creatable");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_write(&dir)
+            .allow_git_directory_writes();
+        let target = dir.join(".git").join("config");
+        let status = sandbox
+            .spawn(
+                "/usr/bin/touch",
+                &[target.display().to_string()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait");
+
+        assert!(status.success(), "a write under .git was refused");
+        assert!(target.exists(), "the write created nothing");
+        let outside = dir.parent().expect("a parent").join("bravebot-not-granted");
+        let refused = sandbox
+            .spawn(
+                "/usr/bin/touch",
+                &[outside.display().to_string()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait");
+        assert_eq!(refused.code(), Some(TOUCH_FAILED));
+        assert!(!outside.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The profile carries the `.git` refusal exactly when a write is granted and the policy has
+    /// not lifted it, so neither a read-only policy gains a stray rule nor a lifted one keeps it.
+    #[test]
+    fn the_git_refusal_is_in_the_profile_only_for_a_policy_that_writes_and_has_not_lifted_it() {
+        let writes = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_write("/work");
+        assert!(SeatbeltSandbox::profile(&writes).contains(GIT_DIRECTORY_WRITE));
+        assert!(
+            !SeatbeltSandbox::profile(&writes.clone().allow_git_directory_writes())
+                .contains(GIT_DIRECTORY_WRITE)
+        );
+        assert!(
+            !SeatbeltSandbox::profile(&SandboxPolicy::strict().allow_read("/usr"))
+                .contains(GIT_DIRECTORY_WRITE)
+        );
+    }
+
+    /// A command handed back for the caller to spawn is confined by the time it runs: the caller
+    /// wires its own streams, as a pipeline must, and the profile and the environment it was given
+    /// are still what the process gets. A `command` that handed back the bare program passes the
+    /// granted half and fails the refused one.
+    #[test]
+    fn a_command_handed_back_is_confined_when_the_caller_spawns_it() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let granted = crate::testutil::scratch_dir("bravebot-sandbox-command-granted");
+        let withheld = crate::testutil::scratch_dir("bravebot-sandbox-command-withheld");
+        for dir in [&granted, &withheld] {
+            let _ = std::fs::remove_dir_all(dir);
+            std::fs::create_dir_all(dir).expect("the scratch directory is creatable");
+        }
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_write(&granted);
+        let environment = Environment::Only(crate::Variables::new().with("PATH", "/usr/bin:/bin"));
+        let touch = |target: &Path| {
+            sandbox
+                .command(
+                    "/usr/bin/touch",
+                    &[target.display().to_string()],
+                    &policy,
+                    &environment,
+                )
+                .expect("a command")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("spawned")
+                .code()
+        };
+
+        assert_eq!(touch(&granted.join("written")), Some(0));
+        assert!(granted.join("written").exists());
+        assert_eq!(touch(&withheld.join("written")), Some(TOUCH_FAILED));
+        assert!(!withheld.join("written").exists());
+
+        let printed = sandbox
+            .command("/usr/bin/env", &[], &policy, &environment)
+            .expect("a command")
+            .output()
+            .expect("spawned");
+        assert_eq!(
+            String::from_utf8_lossy(&printed.stdout).trim(),
+            "PATH=/usr/bin:/bin"
+        );
+
+        for dir in [&granted, &withheld] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
     /// What a program may be trusted with in the environment is the caller's decision and
     /// not a backend's: a credential lives in a variable rather than in a file, so no
     /// grant over paths either withholds one or hands one over, and the agent socket a
@@ -1392,5 +1561,344 @@ int main(void) {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cat or ls reporting that what it was asked for could not be read.
+    const READ_FAILED: i32 = 1;
+
+    /// A scratch directory holding a home and a temporary directory, with the two returned as
+    /// their links are followed, since that is the path Seatbelt matches a grant against. They are
+    /// apart because the base grants its temporary directory whole, and a home inside it would
+    /// have every file in it reached through that row.
+    fn a_home_and_a_temporary_directory(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let scratch = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let temporary = scratch.join("tmp");
+        std::fs::create_dir_all(&home).expect("the scratch home is creatable");
+        std::fs::create_dir_all(&temporary).expect("the scratch directory is creatable");
+        let home = home.canonicalize().expect("the scratch home is there");
+        let temporary = temporary
+            .canonicalize()
+            .expect("the scratch directory is there");
+        (scratch, home, temporary)
+    }
+
+    /// What a stage run for the account whose home is `home` is handed: that home, as a session's
+    /// stage has the home its policy was built for, and a search path the base reaches.
+    fn a_stage_for(home: &Path) -> crate::process::Variables {
+        crate::process::Variables::new()
+            .with("HOME", home)
+            .with("PATH", "/usr/bin:/bin")
+    }
+
+    /// The code `program` exits with under `policy` holding `environment` and nothing else, which
+    /// is `None` for a process a signal ended.
+    fn exit_code_under(
+        policy: &SandboxPolicy,
+        environment: crate::process::Variables,
+        program: &str,
+        arguments: &[&str],
+    ) -> Option<i32> {
+        exit_code_under_with(policy, environment, program, arguments, nothing_attached())
+    }
+
+    /// [`exit_code_under`] with the streams the caller chose, for a test whose failure needs what
+    /// the program said.
+    fn exit_code_under_with(
+        policy: &SandboxPolicy,
+        environment: crate::process::Variables,
+        program: &str,
+        arguments: &[&str],
+        streams: crate::process::Streams,
+    ) -> Option<i32> {
+        let arguments: Vec<String> = arguments.iter().map(|a| a.to_string()).collect();
+        SeatbeltSandbox::new()
+            .expect("sandbox-exec is present on macOS")
+            .spawn(
+                program,
+                &arguments,
+                policy,
+                streams,
+                Environment::Only(environment),
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait")
+            .code()
+    }
+
+    /// The TLS library this platform ships aborts every program linked against it that cannot
+    /// read its configuration file, before the program's own code runs. A base without the row is
+    /// `curl`, `openssl` and rustup's `cargo` refused on every machine, as a program that failed.
+    #[test]
+    fn a_program_linked_against_the_platforms_tls_library_starts_under_the_base() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-base-starts-tls");
+        let policy = crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home));
+
+        for (program, argument) in [
+            ("/usr/bin/openssl", "version"),
+            ("/usr/bin/curl", "--version"),
+        ] {
+            assert_eq!(
+                exit_code_under(&policy, a_stage_for(&home), program, &[argument]),
+                Some(0),
+                "{program} did not start under the base"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `git` and `make` in `/usr/bin` are shims that run the real program out of the active
+    /// developer directory. A base without it is every git stage refused before git runs. The
+    /// suite was linked by `cc`, which is the same kind of shim, so a machine running this test
+    /// has a developer directory, and it is the one `xcode-select` names, as a session's is.
+    ///
+    /// The temporary directory and `HOME` are this process's, as a session's are: the shims keep
+    /// a lookup cache, keyed on the home, and a lookup that misses it runs `xcodebuild`, which
+    /// refuses on a machine whose Xcode licence has not been accepted since its last update,
+    /// confined or not. The cache is a file this test names inside the temporary directory. git is pointed at an empty configuration
+    /// of the account's, so that what starts or does not is the shim and the machine's own
+    /// configuration rather than this account's settings.
+    #[test]
+    fn a_developer_tool_the_platform_ships_as_a_shim_starts_under_the_base() {
+        // Nothing is created here but the repository below, which is removed: the path becomes
+        // the base's temporary row, and the shims keep their lookup cache in it.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let temporary = std::env::temp_dir()
+            .canonicalize()
+            .expect("the temporary directory is there");
+        let selected = Command::new("/usr/bin/xcode-select")
+            .arg("-p")
+            .output()
+            .expect("xcode-select is on every macOS");
+        let developer_directory = PathBuf::from(String::from_utf8_lossy(&selected.stdout).trim())
+            .canonicalize()
+            .expect("the selected developer directory is there");
+        // The repository is initialised under the temporary directory, which a write row would
+        // keep git from doing while a `.git` is withheld from it.
+        let policy = crate::base::base(
+            crate::base::Prelude::MacOs,
+            &temporary,
+            Some(&developer_directory),
+            None,
+        )
+        .allow_git_directory_writes();
+        let home = std::env::var_os("HOME").expect("cargo runs a test with a HOME");
+        let repository = temporary.join(format!(
+            "bravebot-sandbox-a-shim-repository-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&repository);
+        let repository = repository
+            .to_str()
+            .expect("the temporary directory is UTF-8");
+
+        // The shims keep what a lookup found in a database, and a lookup that misses it runs
+        // `xcodebuild`, which a confined process cannot start. The database is named here, inside
+        // the temporary directory the base writes, and looked up unconfined first, so that the
+        // confined runs below read what is already there whatever this machine's own database
+        // holds or where it keeps it.
+        let database = temporary.join(format!(
+            "bravebot-sandbox-a-shim-lookups-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&database);
+        for tool in ["git", "make"] {
+            let _ = Command::new("/usr/bin/xcrun")
+                .args(["--find", tool])
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", "/usr/bin:/bin")
+                .env("xcrun_db", &database)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        for program in ["/usr/bin/git", "/usr/bin/make"] {
+            assert!(
+                Command::new(program)
+                    .arg("--version")
+                    .env_clear()
+                    .env("HOME", &home)
+                    .env("PATH", "/usr/bin:/bin")
+                    .env("xcrun_db", &database)
+                    .stdout(std::process::Stdio::null())
+                    .status()
+                    .expect("the shim is on every macOS")
+                    .success(),
+                "{program} does not start here unconfined either"
+            );
+        }
+        for (program, arguments) in [
+            ("/usr/bin/git", vec!["--version"]),
+            ("/usr/bin/make", vec!["--version"]),
+            ("/usr/bin/git", vec!["init", "-q", repository]),
+            ("/usr/bin/git", vec!["-C", repository, "status", "--short"]),
+        ] {
+            let environment = crate::process::Variables::new()
+                .with("HOME", &home)
+                .with("PATH", "/usr/bin:/bin")
+                .with("xcrun_db", &database)
+                .with("GIT_CONFIG_GLOBAL", "/dev/null");
+            let streams = crate::process::Streams {
+                stdin: crate::process::Stream::Null,
+                stdout: crate::process::Stream::Null,
+                stderr: crate::process::Stream::Inherited,
+            };
+            assert_eq!(
+                exit_code_under_with(&policy, environment, program, &arguments, streams),
+                Some(0),
+                "{program} {arguments:?} did not start under the base"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(repository);
+        let _ = std::fs::remove_file(&database);
+    }
+
+    /// The cargo list as the kernel holds it: the registry is written, the configuration cargo
+    /// fails without is read, and the token beside both, the install, and the configuration
+    /// itself are out of reach for writing or reading as the list says.
+    #[test]
+    fn a_cargo_stage_writes_its_registry_and_reaches_neither_its_token_nor_its_install() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-a-cargo-stage");
+        let cargo = home.join(".cargo");
+        std::fs::create_dir_all(cargo.join("registry").join("index"))
+            .expect("the scratch registry is creatable");
+        std::fs::create_dir_all(cargo.join("bin")).expect("the scratch install is creatable");
+        std::fs::write(cargo.join("config.toml"), "[net]\n").expect("the scratch home is writable");
+        std::fs::write(cargo.join("credentials.toml"), "token = \"a token\"\n")
+            .expect("the scratch home is writable");
+        std::fs::write(cargo.join("bin").join("cargo"), "").expect("the scratch home is writable");
+        let policy = crate::toolchain::Toolchain::Cargo.grant(
+            crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
+            crate::base::Prelude::MacOs,
+            &home,
+        );
+        let at = |path: PathBuf| path.display().to_string();
+        let code = |program: &str, path: PathBuf| {
+            exit_code_under(&policy, a_stage_for(&home), program, &[&at(path)])
+        };
+
+        assert_eq!(
+            code("/bin/cat", cargo.join("config.toml")),
+            Some(0),
+            "the configuration cargo fails without was not read"
+        );
+        assert_eq!(
+            code(
+                "/usr/bin/touch",
+                cargo.join("registry").join("index").join("an-entry")
+            ),
+            Some(0),
+            "the registry was not written"
+        );
+        assert_eq!(
+            code("/bin/cat", cargo.join("credentials.toml")),
+            Some(READ_FAILED),
+            "the token beside the registry was read"
+        );
+        for not_written in [
+            cargo.join("config.toml"),
+            cargo.join("credentials.toml"),
+            cargo.join("bin").join("cargo"),
+        ] {
+            assert_eq!(
+                code("/usr/bin/touch", not_written.clone()),
+                Some(TOUCH_FAILED),
+                "{} was written",
+                not_written.display()
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The remote scope as the kernel holds it: what ssh reads to verify a host and offer a key
+    /// is read, a host it has verified is added, to a `known_hosts` there or to one made in a
+    /// `~/.ssh` that has none, and the private key beside them is not read,
+    /// nor the directory holding it listed, nor a file written there that ssh or sshd later reads.
+    #[test]
+    fn a_remote_stage_reads_what_ssh_reads_and_never_a_private_key() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-a-remote-stage");
+        let ssh = home.join(".ssh");
+        std::fs::create_dir_all(&ssh).expect("the scratch home is creatable");
+        std::fs::write(ssh.join("config"), "Host *\n").expect("the scratch home is writable");
+        std::fs::write(ssh.join("known_hosts"), "github.com ssh-ed25519 AAAA\n")
+            .expect("the scratch home is writable");
+        std::fs::write(ssh.join("id_ed25519"), "a private key")
+            .expect("the scratch home is writable");
+        std::fs::write(ssh.join("id_ed25519.pub"), "ssh-ed25519 AAAA")
+            .expect("the scratch home is writable");
+        let policy = crate::scope::Scope::Remote.grant(
+            crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
+            &home,
+        );
+        let at = |path: PathBuf| path.display().to_string();
+        let code = |program: &str, path: PathBuf| {
+            exit_code_under(&policy, a_stage_for(&home), program, &[&at(path)])
+        };
+
+        for read in ["config", "known_hosts", "id_ed25519.pub"] {
+            assert_eq!(
+                code("/bin/cat", ssh.join(read)),
+                Some(0),
+                "{read} was not read"
+            );
+        }
+        assert_eq!(
+            exit_code_under(
+                &policy,
+                a_stage_for(&home),
+                "/bin/sh",
+                &[
+                    "-c",
+                    r#"printf 'a-host ssh-ed25519 AAAA\n' >> "$1""#,
+                    "sh",
+                    &at(ssh.join("known_hosts")),
+                ],
+            ),
+            Some(0),
+            "a verified host could not be added"
+        );
+        assert!(
+            std::fs::read_to_string(ssh.join("known_hosts"))
+                .expect("the scratch file is readable")
+                .contains("a-host"),
+            "the added host is not in the file"
+        );
+        assert_eq!(
+            code("/bin/cat", ssh.join("id_ed25519")),
+            Some(READ_FAILED),
+            "the private key was read"
+        );
+        assert_eq!(
+            code("/bin/ls", ssh.clone()),
+            Some(READ_FAILED),
+            "the directory holding the private key was listed"
+        );
+        for not_written in ["config", "authorized_keys"] {
+            assert_eq!(
+                code("/usr/bin/touch", ssh.join(not_written)),
+                Some(TOUCH_FAILED),
+                "{not_written} was written"
+            );
+        }
+        assert!(!ssh.join("authorized_keys").exists());
+
+        std::fs::remove_file(ssh.join("known_hosts")).expect("the scratch file is removable");
+        assert_eq!(
+            code("/usr/bin/touch", ssh.join("known_hosts")),
+            Some(0),
+            "an account with no known_hosts could not have one made"
+        );
+        assert!(ssh.join("known_hosts").is_file());
+
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 }

@@ -126,6 +126,7 @@ impl Bridge {
             "session.list" => self.list(request),
             "session.open" => self.open_session(request),
             "session.new" => self.new_session(request),
+            "session.view.start" => self.start_view(request),
             "session.fork" => self.fork_session(request),
             "session.delete" => self.delete_session(request),
             "session.close" => self.close_session(request),
@@ -208,6 +209,7 @@ impl Bridge {
     /// it.
     fn info(&self) -> Value {
         json!({
+            "capabilities": { "sessionView": crate::view::capability() },
             "build": crate::agent_build(),
             "version": env!("CARGO_PKG_VERSION"),
             "defaultModel": crate::settings::config(None, self.settings.as_deref()).ok().map(|config| config.default_model),
@@ -426,6 +428,29 @@ impl Bridge {
             ),
             "autoVetting": auto_vetting,
         })
+    }
+
+    fn start_view(&mut self, request: &Request) -> Result<Value, Failure> {
+        if request.number("version")? != 1 {
+            return Err(Failure::bad_request("unsupported session view version"));
+        }
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if open.running.is_some() {
+            return Err(Failure::bad_request("start the view before the first turn"));
+        }
+        let state = open
+            .state
+            .lock()
+            .map_err(|_| Failure::bad_request("session unavailable"))?;
+        if state.handle.is_some() || state.turns != 0 {
+            return Err(Failure::bad_request("the view requires a fresh session"));
+        }
+        self.emitter.start_view(&handle, open.answered_trust)?;
+        Ok(json!({"version": 1}))
     }
 
     fn new_session(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -721,6 +746,8 @@ impl Bridge {
             .remove(&handle)
             .ok_or_else(Failure::no_such_session)?;
 
+        self.emitter.detach_view(&handle);
+
         // Stop the work, then refuse whatever it was waiting on. Both, and in that order:
         // cancelling alone would leave a write blocked on an answer that is never coming,
         // and refusing alone would let the turn carry on past it.
@@ -902,6 +929,11 @@ impl Bridge {
 
         let worker_model = model.clone();
 
+        self.emitter.view_started(
+            &handle,
+            turn_number as u64,
+            wire::submitted(&prompt, composed.as_ref()),
+        );
         self.emitter.send(Event::new(
             "turn.started",
             &handle,
@@ -953,6 +985,11 @@ impl Bridge {
     ///
     /// `turn.cancel` stops a run, and the reply methods answer its questions, as for a turn.
     fn start_manifest(&mut self, request: &Request) -> Result<Value, Failure> {
+        if self.emitter.has_view(&request.string("session")?) {
+            return Err(Failure::bad_request(
+                "session view version 1 does not support manifest runs",
+            ));
+        }
         let handle = request.string("session")?;
         let task = request.string("task")?;
         if task.trim().is_empty() {
@@ -1177,7 +1214,7 @@ impl Bridge {
             ));
         };
 
-        if running.answer(id, reply) {
+        if running.answer_with(id, reply, || self.emitter.view_answered(&handle, id)) {
             Ok(json!({}))
         } else {
             // Unknown, or already used. An approval is single-use and bound to the one
@@ -1236,6 +1273,7 @@ impl Bridge {
             }
         }
         open.answered_trust = true;
+        self.emitter.view_trusted(&handle);
         // The question is answered, so what it offered is spent.
         let keeping = open.keeping.take();
         let kept = match keeping {
@@ -1746,6 +1784,7 @@ fn work(work: Work) {
         .with_attribution(attribution)
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
+        .with_confined_runs(true)
         .with_auto_vetting(auto_vetting)
         // The rules the session opened under, and not the files as they are now (PERM-12).
         .with_permissions(state.rules.permissions.clone())
@@ -1950,8 +1989,7 @@ fn work(work: Work) {
         watches.turn_ended(std::time::Instant::now());
     }
     drop(state);
-    finished.store(true, std::sync::atomic::Ordering::Release);
-    emitter.send(event);
+    emitter.finish(event, &finished);
 }
 
 /// Start the MCP servers `requested` names, putting the questions about them to the window.
@@ -2123,6 +2161,9 @@ fn save(
             // manifest so the picker can mark a run that may be read and not continued, and
             // marking one of ours would be a claim about a session nobody can resume.
             manifest: None,
+            // The desktop lists, resumes and applies no checkout yet, so it holds none itself;
+            // the ones a resumed record carries are written back by `Handle` (CHECKOUT-16).
+            checkouts: &[],
         },
     );
     handle.append_audit(turn, trail.events());

@@ -1104,3 +1104,49 @@ what fails when they differ. Session ids are not completed.
 `verified-by: bravebot_cli::running::the_bash_script_completes_commands_subcommands_and_flags_by_position`
 `verified-by: bravebot_cli::main::a_definition_is_refused_where_nothing_would_work_under_it`
 `verified-by: bravebot_cli::main::the_system_prompt_flags_are_refused_where_nothing_would_use_them`
+
+<a id="CLI-21"></a>
+### CLI-21: `--advisor <name>` offers the planner a second model to consult
+
+`--advisor <name>` names the model the `advisor` tool asks for one run, in the words `--model`
+takes, tier words included. Without it the planner is offered the model the `advisorModel` setting
+names, if any ([ADVISOR-8](tools/advisor.md#ADVISOR-8)), and otherwise no such tool. The flag
+outranks the setting. The flag is refused
+before the run starts when it has no name after it, when the name is blank, when the machine-level
+settings refuse the model, when nothing is configured to serve it, and with `--mode manifest`,
+which has no planner to ask. What the tool then does is [tools/advisor.md](tools/advisor.md).
+
+**Why.** A blank name is refused for the reason a blank `--model` is: a script that computed an
+empty variable asked for an advisor, and running without one would not say so. The refusal for a
+model the machine refuses is made before the first round so that a run never starts with an advisor
+its first question could not reach.
+
+`verified-by: bravebot_cli::main::an_advisor_flag_names_the_model_the_planner_may_consult`
+`verified-by: bravebot_cli::main::a_blank_advisor_is_refused_rather_than_read_as_no_choice`
+`verified-by: bravebot_cli::main::an_advisor_the_managed_settings_refuse_is_refused_before_the_run`
+`verified-by: bravebot_cli::running::an_advisor_nothing_serves_is_refused_before_the_run`
+`verified-by: bravebot_cli::running::an_advisor_is_refused_with_a_manifest_run`
+
+<a id="CLI-22"></a>
+### CLI-22: `--safe` starts a run that loads none of a person's own customizations
+
+`--safe` starts a session, a resumed session, a session in lines or a one-shot run that does not read
+the person's hooks, skills, delegate definitions, MCP server requests or `AGENTS.md`, in the
+person's own directory or in the project. The program's own skills and delegate kinds stay. What
+the command line itself names stays too: the model, `--system-prompt`, `--append-system-prompt` and
+`--settings`. Sign-in, the model, permission rules, the trust map and credential protection apply
+as they do without the flag, so the flag only removes. Once, before the first turn, it says what was
+not loaded.
+
+It is taken out of the line wherever it stands, as `--incognito` is, and is not read as part of a
+task. It is refused with `--bg`, which starts the session in another process that would not carry it.
+
+**Why.** When a session misbehaves, the first question is whether the person's own configuration is
+the cause, and the answer should not take editing five files and putting them back. A mode that
+loaded fewer things but also loosened a rule would be a second way to widen a session, so none of
+what it leaves out is permission: nothing is added to what the planner may do.
+
+`verified-by: bravebot_cli::running::a_safe_run_loads_none_of_the_customizations_a_plain_one_loads`
+`verified-by: bravebot_cli::running::a_run_without_the_safe_flag_says_nothing_of_safe_mode`
+`verified-by: bravebot_cli::running::a_safe_session_sends_no_agents_file_from_its_checkout_a_plain_one_sends`
+`verified-by: bravebot_cli::main::the_safe_flag_is_taken_out_wherever_it_appears`
