@@ -4,7 +4,8 @@
 //! sessions, newest first, because the one being looked for is nearly always the last one.
 //!
 //! Typing filters rather than jumping, since a title is remembered as a few words out of the
-//! middle of it rather than as the way it starts. Escape leaves without resuming anything, which
+//! middle of it rather than as the way it starts. The branch and the issue and pull request the
+//! person linked are searched as well. Escape leaves without resuming anything, which
 //! starts an ordinary session: nothing here can strand a user who opened it by mistake.
 
 use crate::input;
@@ -50,12 +51,43 @@ impl Picker {
     /// The sessions matching what has been typed, in order.
     ///
     /// Matched without regard to case and anywhere in the title, because a session is remembered
-    /// by a word out of the middle of what was asked.
+    /// by a word out of the middle of what was asked, and anywhere in the branch or in either
+    /// link, because it is just as often remembered by where its work went.
+    ///
+    /// Where the typed text is the whole of some session's link, a link matches only by being that
+    /// text. A pasted pull request address then finds the session that was given it, rather than
+    /// that one and every session whose pull request number merely starts with the same digits.
+    /// The title and the branch still match by what they contain.
     pub fn matching(&self) -> Vec<&Summary> {
         let needle = self.search.to_lowercase();
+        let links = |session: &'_ Summary| {
+            [session.issue.as_deref(), session.pull_request.as_deref()]
+                .into_iter()
+                .flatten()
+                .map(str::to_lowercase)
+                .collect::<Vec<_>>()
+        };
+        let pasted = !needle.is_empty()
+            && self
+                .sessions
+                .iter()
+                .any(|session| links(session).contains(&needle));
         self.sessions
             .iter()
-            .filter(|session| session.title.to_lowercase().contains(&needle))
+            .filter(|session| {
+                let words = [Some(session.title.as_str()), session.branch.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|field| field.to_lowercase().contains(&needle));
+                let linked = links(session).iter().any(|link| {
+                    if pasted {
+                        *link == needle
+                    } else {
+                        link.contains(&needle)
+                    }
+                });
+                words || linked
+            })
             .collect()
     }
 
@@ -353,6 +385,8 @@ mod tests {
             id: id.to_string(),
             title: title.to_string(),
             branch: Some("main".to_string()),
+            issue: None,
+            pull_request: None,
             updated,
             bytes: 1024,
             manifest: false,
@@ -364,6 +398,8 @@ mod tests {
             id: id.to_string(),
             title: title.to_string(),
             branch: Some("main".to_string()),
+            issue: None,
+            pull_request: None,
             updated,
             bytes: 1024,
             manifest: true,
@@ -379,6 +415,102 @@ mod tests {
             ],
             "/work/bravebot",
         )
+    }
+
+    fn linked(id: &str, branch: &str, issue: Option<&str>, pull_request: Option<&str>) -> Summary {
+        Summary {
+            branch: Some(branch.to_string()),
+            issue: issue.map(str::to_string),
+            pull_request: pull_request.map(str::to_string),
+            ..summary(id, "a title that names none of them", 100)
+        }
+    }
+
+    fn typed(picker: &mut Picker, text: &str) {
+        for c in text.chars() {
+            handle_key(picker, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+    }
+
+    fn ids(picker: &Picker) -> Vec<&str> {
+        picker.matching().iter().map(|s| s.id.as_str()).collect()
+    }
+
+    fn linked_picker() -> Picker {
+        Picker::new(
+            vec![
+                linked(
+                    "a",
+                    "fix-resume-search",
+                    Some("https://github.com/brave/bravebot/issues/1429"),
+                    Some("https://github.com/brave/bravebot/pull/1270"),
+                ),
+                linked(
+                    "b",
+                    "Add-Compaction-Notes",
+                    None,
+                    Some("https://github.com/brave/bravebot/pull/12700"),
+                ),
+                linked("c", "main", None, None),
+            ],
+            "/work/bravebot",
+        )
+    }
+
+    /// Someone who remembers where the work went rather than what was asked first.
+    #[test]
+    fn typing_part_of_a_branch_finds_the_session_that_ran_on_it() {
+        let mut picker = linked_picker();
+        typed(&mut picker, "compaction-NOTES");
+        assert_eq!(ids(&picker), ["b"]);
+    }
+
+    #[test]
+    fn typing_part_of_an_issue_link_finds_the_session_given_it() {
+        let mut picker = linked_picker();
+        typed(&mut picker, "issues/1429");
+        assert_eq!(ids(&picker), ["a"]);
+    }
+
+    /// A pasted address is the whole of one link and the start of another, and only the session
+    /// that holds it is wanted.
+    #[test]
+    fn a_pasted_pull_request_link_leaves_only_the_session_that_holds_it() {
+        let mut picker = linked_picker();
+        typed(&mut picker, "https://github.com/brave/bravebot/pull/1270");
+        assert_eq!(ids(&picker), ["a"]);
+    }
+
+    /// A session may have been started by pasting the address into its first prompt, and it is
+    /// still one the person is looking for.
+    #[test]
+    fn a_pasted_link_keeps_a_session_whose_title_holds_it() {
+        let mut picker = linked_picker();
+        picker.sessions.push(Summary {
+            title: "review https://github.com/brave/bravebot/pull/1270 for races".to_string(),
+            ..linked("d", "main", None, None)
+        });
+        typed(&mut picker, "https://github.com/brave/bravebot/pull/1270");
+        assert_eq!(ids(&picker), ["a", "d"]);
+    }
+
+    /// Part of an address is not the whole of one, so it still narrows by what it contains.
+    #[test]
+    fn part_of_a_pull_request_link_keeps_every_session_it_is_part_of() {
+        let mut picker = linked_picker();
+        typed(&mut picker, "pull/1270");
+        assert_eq!(ids(&picker), ["a", "b"]);
+    }
+
+    /// A record from before the links were kept has none, and the empty search lists everything.
+    #[test]
+    fn a_session_without_links_is_listed_and_found_by_its_title() {
+        let mut picker = linked_picker();
+        assert_eq!(ids(&picker), ["a", "b", "c"]);
+        typed(&mut picker, "names none");
+        assert_eq!(ids(&picker), ["a", "b", "c"]);
+        typed(&mut picker, "xyz");
+        assert!(ids(&picker).is_empty());
     }
 
     #[test]
