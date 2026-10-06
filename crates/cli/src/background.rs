@@ -186,9 +186,7 @@ pub(crate) fn host(_id: &str) -> ExitCode {
 
 /// Whether a background session is running under `id`, the id of a session record (BG-9).
 pub(crate) fn is_running(id: &str) -> bool {
-    Roster::readable()
-        .and_then(|roster| roster.get(id))
-        .is_some_and(|seen| seen.live)
+    bravebot_session::jobs::is_running(id)
 }
 
 /// The refusal for `--resume` and `--continue` naming a record a running background session holds,

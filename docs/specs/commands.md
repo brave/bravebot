@@ -601,6 +601,37 @@ offering a write over a file somebody wrote, and keeps the check from depending 
 `verified-by: bravebot_tui::init_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
 `verified-by: bravebot_agent::turn::a_file_the_planner_may_not_see_is_reserved_rather_than_opened`
 
+## Picking up another session
+
+<a id="CMD-14"></a>
+### CMD-14: `/resume` leaves for another recorded session, restored as `--resume` restores it
+
+`/resume` with no argument draws the list `--resume` draws ([SESSION-8](sessions.md#SESSION-8)),
+leaving out the session being run, and `/resume <id>` names a record of this directory. Either way
+the running session ends and the next begins from the record chosen through the path a start with
+`--resume` takes, so its transcript, spend, trust map, programs and rules are the record's own and
+nothing the session left granted reaches it: the directories opened and the checkouts kept are
+closed, and a loop, a goal and the watches end ([SESSION-31](sessions.md#SESSION-31)). The session
+left is written as its last turn left it and stays resumable. Servers started for the process are
+not restarted.
+
+Only the id is read from the line, and it is checked for the shape of a session's name before it
+reaches a path, so one that climbs out of the sessions directory reads nothing. The line is never a
+prompt, and none of it is sent. Escape or Ctrl-C in the list stays in the session. The command is
+refused, with a line that does not repeat the id typed, for an id that names no record, for the
+session already open, for a manifest run ([SESSION-10](sessions.md#SESSION-10)), and for a record
+a running background session holds ([BG-9](background-sessions.md#BG-9)), and it says so where this
+directory holds no other session. Typed during a turn it waits for the turn to end (CMD-8).
+
+**Why.** The picker, the restoration and the refusals already exist for the flag, and a second
+route into them would restore a different set. Choosing a record reads none of its content to
+decide, so the command only says which one the person meant.
+
+`verified-by: bravebot_tui::app::the_resume_command_carries_its_id_and_is_never_a_prompt`
+`verified-by: bravebot_tui::app::the_resume_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::sessions::resume_by_id_reads_the_record_named_and_refuses_what_it_cannot_continue`
+`verified-by: bravebot_tui::sessions::resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory`
+
 ## Known costs
 
 - **The list is one row per command and per skill, and a screen with no room for it loses the

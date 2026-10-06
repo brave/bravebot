@@ -35,6 +35,7 @@ use ratatui::crossterm::terminal::{
     supports_keyboard_enhancement,
 };
 use std::io::{self, Write};
+use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -129,6 +130,9 @@ const CLEAR_COMMAND: &str = "/clear";
 
 /// The line that copies this session and moves onto the copy, taking its name as an option.
 const BRANCH_COMMAND: &str = "/branch";
+
+/// The line that picks up another session of this directory, by id or from the picker (CMD-14).
+const RESUME_COMMAND: &str = "/resume";
 
 /// The line that renames this session, taking the new name as its argument.
 const RENAME_COMMAND: &str = "/rename";
@@ -253,7 +257,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 32] {
+pub fn commands() -> [Command; 33] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -337,6 +341,12 @@ pub fn commands() -> [Command; 32] {
             name: BRANCH_COMMAND,
             argument: "[<name>]",
             description: t!(command_branch),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: RESUME_COMMAND,
+            argument: "[<id>]",
+            description: t!(command_resume),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -637,6 +647,9 @@ pub enum Action {
     /// Copy this session and carry on in the copy, named as given or marked as a fork. Needs the
     /// conversation and the session record, which the loop owns.
     Branch(String),
+    /// Leave this session for another of this directory's: the id typed, or empty for the picker.
+    /// Needs the terminal, the record store and the loop's state, which the loop owns.
+    Resume(String),
     /// Show, set or clear one of the session's links. Needs the session record, which the loop
     /// owns, and carries the argument unparsed, since what it says back goes in the transcript.
     Link(bravebot_session::sessions::Link, String),
@@ -1839,6 +1852,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(name) = argument_to(line, BRANCH_COMMAND) {
         return Action::Branch(name.to_string());
     }
+    // Only names which record to pick up: nothing typed here is sent, and the record is read and
+    // restored by the path `--resume` takes (CMD-14).
+    if let Some(id) = argument_to(line, RESUME_COMMAND) {
+        return Action::Resume(id.to_string());
+    }
     if let Some(argument) = argument_to(line, ISSUE_COMMAND) {
         return Action::Link(
             bravebot_session::sessions::Link::Issue,
@@ -2800,12 +2818,20 @@ pub enum Ended {
     Refused(String),
 }
 
+/// What `/resume` leaves for the loop's caller to start the next session with.
+struct Switch {
+    /// The record the person chose.
+    record: Box<bravebot_session::sessions::Record>,
+    /// The workspace as the session left it, so a session that moved with `/cd` resumes from there.
+    workspace: Workspace,
+}
+
 /// Run the interface until the user leaves.
 pub fn run(
     config: &mut Config,
     workspace: &Workspace,
     confinement: String,
-    servers: crate::state::Servers,
+    mut servers: crate::state::Servers,
     start: Start,
     skip_permissions: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
@@ -2855,16 +2881,35 @@ pub fn run(
         // still arrives here, loading its empty conversation as a turn would continue a run
         // that cannot be continued.
         Some(Start::Resuming(record)) if record.manifest.is_some() => Ok(Ended::Left(None)),
-        Some(start) => event_loop(
-            &mut terminal,
-            config,
-            workspace,
-            confinement,
-            servers,
-            start,
-            skip_permissions,
-            prompts,
-        ),
+        Some(start) => {
+            // A `/resume` ends the loop with the record it chose, and the next one begins from it
+            // exactly as a session started with `--resume` does, so what comes back is what that
+            // flag restores and nothing a second path decided. The servers outlive the switch:
+            // they were started for this process, not for one conversation.
+            let mut workspace = workspace.clone();
+            let mut start = start;
+            loop {
+                let mut switch = None;
+                let ended = event_loop(
+                    &mut terminal,
+                    config,
+                    &workspace,
+                    confinement.clone(),
+                    &mut servers,
+                    start,
+                    skip_permissions,
+                    prompts.clone(),
+                    &mut switch,
+                );
+                match (ended, switch) {
+                    (Ok(_), Some(next)) => {
+                        workspace = next.workspace;
+                        start = Start::Resuming(next.record);
+                    }
+                    (ended, _) => break ended,
+                }
+            }
+        }
         // Leaving at the picker resumed nothing and started nothing, so there is nothing to say
         // about picking anything up.
         None => Ok(Ended::Left(None)),
@@ -3335,10 +3380,11 @@ fn event_loop(
     config: &mut Config,
     workspace: &Workspace,
     confinement: String,
-    mut mcp_servers: crate::state::Servers,
+    servers: &mut crate::state::Servers,
     start: Start,
     skip_permissions: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
+    switch: &mut Option<Switch>,
 ) -> io::Result<Ended> {
     // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
     // the turns after it must see one. The primary root never changes, so nothing keyed on it
@@ -3360,6 +3406,7 @@ fn event_loop(
     // The saved pick where a checkout's settings do not outrank it (BACKEND-11), before the window
     // below is asked for, which is the window of whichever model this settles on.
     session.adopt_model(&settings, config);
+    let mut mcp_servers = std::mem::take(servers);
     let absent = std::mem::take(&mut mcp_servers.notes);
     session.servers = mcp_servers;
     // Windows reports modifiers on every key without being asked, and crossterm says it cannot be
@@ -3919,6 +3966,27 @@ fn event_loop(
                 ) {
                     scratch = opened_scratch(&mut session, &mut workspace);
                 }
+            }
+            Action::Resume(typed) => {
+                if let Some(record) = record_to_resume(
+                    terminal,
+                    &mut session,
+                    workspace.root(),
+                    stored.id(),
+                    &typed,
+                ) {
+                    // What was opened here is this session's, and the record chosen restores its
+                    // own, as a start with `--resume` does.
+                    workspace.close_added_directories();
+                    workspace.forget_session_checkouts();
+                    *servers = std::mem::take(&mut session.servers);
+                    *switch = Some(Switch {
+                        record,
+                        workspace: workspace.clone(),
+                    });
+                    return Ok(left_behind(&stored));
+                }
+                needs_draw = true;
             }
             Action::Link(kind, argument) => {
                 link_session(&mut session, &mut stored, kind, &argument)
@@ -5312,6 +5380,44 @@ fn rename_session(
         session.note(t!(session_renamed, title = stored.title()));
     } else {
         session.note(t!(session_rename_needs_something));
+    }
+}
+
+/// The record `/resume` is to carry on from, or `None` after saying why there is none.
+///
+/// An id is read as `--resume` reads one, and a manifest run or a record a running background
+/// session holds is refused as it refuses them. With no id the picker is drawn over the session,
+/// without the session itself in it, and leaving it keeps the session as it was.
+fn record_to_resume(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    root: &Path,
+    current: &str,
+    typed: &str,
+) -> Option<Box<bravebot_session::sessions::Record>> {
+    let refusal = if typed.is_empty() {
+        let others = bravebot_session::sessions::list(root)
+            .iter()
+            .any(|listed| listed.id != current);
+        if !others {
+            session.note(t!(session_resume_nothing_else));
+            return None;
+        }
+        let chosen = crate::resume::choose_other(terminal, root, current);
+        match chosen {
+            crate::resume::Choice::Resume(record) => crate::resume::continuable(record),
+            // Leaving the picker, by Escape or by Ctrl-C, stays where the person is.
+            crate::resume::Choice::Fresh | crate::resume::Choice::Quit => return None,
+        }
+    } else {
+        crate::resume::named(root, current, typed)
+    };
+    match refusal {
+        Ok(record) => Some(record),
+        Err(refused) => {
+            session.note(refused.note());
+            None
+        }
     }
 }
 
@@ -22095,6 +22201,47 @@ mod tests {
         }
         handle_key_while_working(&mut session, key(KeyCode::Enter));
         assert_eq!(waiting_prompts(&session), vec!["/branch"]);
+    }
+
+    /// CMD-14: `/resume` alone asks for the picker and `/resume <id>` names a record, and neither is
+    /// sent as a prompt. A longer word and a sentence that mentions the command stay prompts (CMD-2).
+    #[test]
+    fn the_resume_command_carries_its_id_and_is_never_a_prompt() {
+        for (line, id) in [("/resume", ""), ("/resume 3f2a-b1", "3f2a-b1")] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Resume(id.to_string())
+            );
+        }
+        for line in ["what does /resume do", "/resumed"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert!(
+                matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Submit(_)
+                ),
+                "{line:?} was taken for the command"
+            );
+        }
+    }
+
+    /// CMD-8: `/resume` typed during a turn waits for it, since the turn is still to write the
+    /// record the session is left as.
+    #[test]
+    fn the_resume_command_waits_for_the_turn_in_flight() {
+        let mut session = a_turn_running_on("first");
+        for c in "/resume".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_eq!(waiting_prompts(&session), vec!["/resume"]);
     }
 
     /// A session one finished turn in, with a goal and a loop running and a record written, the
