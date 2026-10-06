@@ -2126,6 +2126,215 @@ mod tests {
             "the settled question was put again: {later}"
         );
     }
+
+    /// A watcher that keeps what each read was for, so a test can read it back.
+    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<Waiting>>>);
+
+    impl Watcher for Recorded {
+        fn waiting(&mut self, on: Waiting) {
+            self.0.lock().expect("the record").push(on);
+        }
+
+        fn received(&mut self, _on: Waiting, _line: Option<&str>) {}
+    }
+
+    /// BG-7: every question a session puts reaches its watcher as the kind it is, which is the
+    /// word the roster stores and the list shows. A method that never said its kind would be
+    /// listed as a plain question, and one that said another's would be listed as that.
+    #[test]
+    fn each_question_tells_the_watcher_its_kind() {
+        let pipeline =
+            bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+                "rm",
+                vec!["-rf".to_string()],
+            )]);
+        let verdict = Verdict::Safe;
+        let asked = |put: &mut dyn FnMut(&mut Prompting<_, Vec<u8>>)| {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut asking = Prompting::watched(
+                std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
+                Vec::new(),
+                Box::new(Recorded(seen.clone())),
+            );
+            put(&mut asking);
+            std::mem::take(&mut *seen.lock().expect("the record"))
+        };
+        let held = |held| vec![Waiting::Answer(held)];
+
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_write(&WriteRequest {
+                    written_since_checkout: false,
+                    path: "notes.md".to_string(),
+                    contents: "new".to_string(),
+                    existing: None,
+                    diff: bravebot_agent::diff::Diff::compute("", "new"),
+                    intent: bravebot_agent::confirm::Intent::Create,
+                    untrusted: false,
+                    remark: None,
+                    credentials: Vec::new(),
+                    may_always: false,
+                    record: None,
+                });
+            }),
+            held(Held::Write)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_run(&RunRequest::from_pipeline(
+                    &pipeline,
+                    &["/usr/bin/rm".to_string()],
+                    "/work",
+                ));
+            }),
+            held(Held::Run)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_read_output(&OutputRequest {
+                    command: "ls".to_string(),
+                    output: "a".to_string(),
+                    lines: 1,
+                    reference: "ref:1".to_string(),
+                    verdict,
+                    reason: None,
+                });
+            }),
+            held(Held::Read)
+        );
+        for picture in [
+            None,
+            Some(bravebot_agent::confirm::PictureShown {
+                path: "a.png".into(),
+                media: "image/png".to_string(),
+                bytes: 3,
+            }),
+        ] {
+            assert_eq!(
+                asked(&mut |asking| {
+                    asking.confirm_vetted_read(&bravebot_agent::confirm::VetRequest {
+                        origin: "a.md".to_string(),
+                        expects: "notes".to_string(),
+                        content: "a".to_string(),
+                        lines: 1,
+                        verdict,
+                        reason: None,
+                        picture: picture.clone(),
+                    });
+                }),
+                held(Held::Read),
+                "{picture:?}"
+            );
+        }
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_fetch(&FetchRequest {
+                    url: "https://example.com/a".to_string(),
+                    host: "example.com".to_string(),
+                });
+            }),
+            held(Held::Fetch)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_server(&ServerRequest {
+                    language: "rust",
+                    program: "rust-analyzer".to_string(),
+                    workspace: "/work".to_string(),
+                    runs_build_tooling: false,
+                });
+            }),
+            held(Held::Server)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_vouch(&VouchRequest {
+                    path: "scripts/a.sh".to_string(),
+                    preview: "echo".to_string(),
+                    truncated: false,
+                    verdict,
+                    reason: None,
+                });
+            }),
+            held(Held::Vouch)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_exposing_read(&ExposureRequest {
+                    path: ".env".to_string(),
+                    credentials: vec!["a token".to_string()],
+                });
+            }),
+            held(Held::Read)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_tool_list(&ToolListRequest {
+                    alias: "weather".to_string(),
+                    tools: Vec::new(),
+                    refused: 0,
+                    changed: false,
+                    verdict,
+                    reason: None,
+                });
+            }),
+            held(Held::Tools)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_mcp_call(&McpCallRequest {
+                    alias: "weather".to_string(),
+                    tool: "forecast".to_string(),
+                    arguments: Vec::new(),
+                    description: None,
+                    may_stand: false,
+                });
+            }),
+            held(Held::Tools)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_move(&MoveRequest {
+                    alias: "news".to_string(),
+                    declared: "https://news.example/mcp".to_string(),
+                    destination: "https://elsewhere.example/mcp".to_string(),
+                    authority: "elsewhere.example:443".to_string(),
+                    may_record: false,
+                });
+            }),
+            held(Held::Move)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.confirm_manifest(&ManifestRequest {
+                    task: "tidy".to_string(),
+                    steps: vec!["read".to_string()],
+                });
+            }),
+            held(Held::Manifest)
+        );
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.ask_user(&Asking {
+                    prompts: vec![bravebot_core::ask::Prompt {
+                        header: "Scope".to_string(),
+                        question: "Which one?".to_string(),
+                        rows: Vec::new(),
+                        multiple: false,
+                        key: "which".to_string(),
+                    }],
+                });
+            }),
+            held(Held::Question)
+        );
+        // A read nobody said the kind of is a question of the plainest kind, never a prompt.
+        assert_eq!(
+            asked(&mut |asking| {
+                asking.answer("Name?");
+            }),
+            held(Held::Question)
+        );
+    }
 }
 
 #[cfg(test)]

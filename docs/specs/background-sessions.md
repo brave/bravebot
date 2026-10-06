@@ -203,10 +203,7 @@ be asked later, and declining on the person's behalf while they are away would c
 expect to find waiting. Answering would make the absent person's answer a guess made in their name.
 Holding the prompt is the only choice that does neither.
 
-`verified-by: bravebot_cli::host::a_reply_does_not_answer_a_held_prompt`
-`verified-by: bravebot_cli::host::the_first_prompt_does_not_answer_a_question`
-`verified-by: bravebot_cli::host::the_entry_follows_what_the_session_waits_for`
-`verified-by: bravebot_cli::running::a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle`
+`verified-by: none`
 
 <a id="BG-8"></a>
 ### BG-8: the mode is fixed for the process, bypass is refused, and a rule that allows does not answer
@@ -239,21 +236,19 @@ warned about for.
 <a id="BG-9"></a>
 ### BG-9: attaching draws the session as a foreground one, and detaching leaves it running
 
-`bravebot attach <id>` connects the terminal to the running process of that session. It draws what
-the session in lines wrote, from the start of its output, which holds the held prompt if there is
-one, and each line typed is offered to the session, so every prompt it puts is answered by the
-person there. A line typed while the session is not waiting for one is refused and not kept for the
-next prompt. A session that is `stopped` or `interrupted` has no process, and `attach` says so.
+`bravebot attach <id>` connects the terminal to the running process of that session. It draws the
+transcript, the held prompt if there is one, and the input box as a foreground session does, and
+every prompt it puts is answered by the person there. A session that is `stopped` or `interrupted`
+is started again in the mode every session opens in and attached to.
 
 One terminal is attached at a time. A second `attach` is refused and names the session. Closing the
-terminal, losing its connection or ending its input ends the attachment and nothing else: a turn
-that is running keeps running, and a held prompt stays held.
+terminal, losing its connection or typing `/detach` ends the attachment and nothing
+else: a turn that is running keeps running, and a held prompt stays held.
 
 The channel between the terminal and the process is local to the machine. It is restricted to the
-person's account and carries the lines the session in lines draws, which mark quarantined bytes as
-they do in a foreground session in lines, and no label of its own. The terminal draws them with
-control characters pictured. The attached terminal is handed what a foreground terminal would be
-handed, and nothing the session holds beyond that.
+person's account and carries content with the label it was released under, so the terminal marks
+quarantined bytes as it would in a foreground session. The attached terminal is handed what a
+foreground terminal would be handed, and nothing the session holds beyond that.
 
 A record a running background session holds is not resumed or continued by another process.
 `--resume` and `--continue` name the session and say to attach. `--fork` copies the record as it
@@ -269,11 +264,12 @@ conversation.
 ### BG-10: a reply is the next prompt and answers nothing that was asked
 
 `bravebot reply <id> "text"` sends the text as the session's next prompt. The text is the person's
-own typed line and it starts a turn as a typed prompt does.
+own typed line and it starts a turn as a typed prompt does. A session that is `stopped` is started
+again first ([BG-8](#BG-8)).
 
 A reply is refused while the session is `working` or `needs input`, and says to wait, or to attach.
-It is refused when the session has no process, and says so; starting one again is
-[BG-12](#BG-12) and [BG-13](#BG-13). It does not read standard input: a prompt that arrived on a pipe is untrusted
+It is refused for `interrupted` only after saying that the interrupted turn is not repeated
+([BG-12](#BG-12)). It does not read standard input: a prompt that arrived on a pipe is untrusted
 input and is not a line a person typed.
 
 A reply never answers a held prompt, including a question the planner asked.
@@ -281,12 +277,7 @@ A reply never answers a held prompt, including a question the planner asked.
 **Why.** An answer is to something put in front of the person who gives it. A reply is typed without
 the prompt on screen, so it could be taken for an answer to a write or a run it never showed.
 
-`verified-by: bravebot_cli::host::nothing_is_taken_while_the_session_is_working`
-`verified-by: bravebot_cli::host::a_reply_is_taken_once_and_type_ahead_is_dropped`
-`verified-by: bravebot_cli::host::a_reply_does_not_answer_a_held_prompt`
-`verified-by: bravebot_cli::running::attach_and_reply_refuse_a_session_that_is_not_running`
-`verified-by: bravebot_cli::running::a_reply_does_not_read_standard_input`
-`verified-by: bravebot_cli::running::a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle`
+`verified-by: none`
 
 <a id="BG-11"></a>
 ### BG-11: a person can stop a session, and there is one supervisor per account

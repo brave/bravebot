@@ -6067,7 +6067,13 @@ struct ShortHome(PathBuf);
 #[cfg(unix)]
 impl ShortHome {
     fn new() -> Self {
-        let path = PathBuf::from(format!("/tmp/bbbg-{}", std::process::id()));
+        // One per test: they run side by side in this process.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = PathBuf::from(format!(
+            "/tmp/bbbg-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create the home");
         Self(path)
@@ -6258,4 +6264,192 @@ fn a_reply_does_not_read_standard_input() {
         "{}",
         said(&output).1
     );
+}
+
+/// A host for a session at `gateway`, with `extra` merged into the user settings, started with a
+/// first prompt in a directory of its own. Returns the process and its socket.
+#[cfg(unix)]
+fn a_started_host(
+    home: &ShortHome,
+    gateway: &Gateway,
+    extra: &str,
+) -> (std::process::Child, PathBuf) {
+    let state = home.0.join(".bravebot");
+    let job = state.join(format!("jobs/{SESSION_ID}"));
+    std::fs::create_dir_all(&job).expect("the entry's directory");
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(gateway)).expect("settings");
+    let extra: serde_json::Value = serde_json::from_str(extra).expect("the extra settings");
+    for (key, value) in extra.as_object().expect("an object") {
+        settings[key] = value.clone();
+    }
+    std::fs::write(state.join("settings.json"), settings.to_string()).expect("settings");
+    std::fs::write(job.join("first-prompt"), "fix the build").expect("the first prompt");
+    let work = home.0.join("work");
+    std::fs::create_dir_all(&work).expect("a directory to work in");
+    let host = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args(["__bg-host", SESSION_ID])
+        .current_dir(&work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the host starts");
+    let socket = job.join("attach.sock");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while !socket.exists() {
+        assert!(std::time::Instant::now() < until, "the host never listened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    (host, socket)
+}
+
+/// What a terminal attached to `socket` has been shown so far, read until it contains `wanted`.
+#[cfg(unix)]
+fn shown_until(seen: &mut BufReader<std::os::unix::net::UnixStream>, wanted: &str) -> String {
+    let mut transcript = String::new();
+    let mut chunk = [0u8; 1024];
+    while !transcript.contains(wanted) {
+        let read = match seen.read(&mut chunk) {
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            other => other.expect("the session spoke"),
+        };
+        assert!(
+            read > 0,
+            "the session ended before {wanted:?}: {transcript}"
+        );
+        transcript.push_str(&String::from_utf8_lossy(&chunk[..read]));
+    }
+    transcript
+}
+
+/// A streamed reply that calls `write_file` for `out.txt`, so the session has a write to approve.
+#[cfg(unix)]
+fn writing_out_txt() -> String {
+    let frame = serde_json::json!({"model":"reasons-only","choices":[{
+        "index":0,"delta":{"role":"assistant","tool_calls":[{
+            "index":0,"id":"call-1","type":"function","function":{
+                "name":"write_file","arguments":"{\"path\":\"out.txt\",\"contents\":\"hi\"}"}}]},
+        "finish_reason":"tool_calls"}]});
+    let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+    format!(
+        "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// BG-7, BG-8: a rule in the user's settings that allows a write does not answer for a person who
+/// is not there. The session still holds the write and reports that it needs input, and the file
+/// is not written.
+///
+/// A property of the process: the rule is read from the file, the choice between the foreground
+/// and the unattended reading is made where the session is built, and only the state a reply
+/// sees and the file's absence say which was chosen.
+#[cfg(unix)]
+#[test]
+fn an_allow_rule_does_not_answer_a_write_a_background_session_holds() {
+    use std::os::unix::net::UnixStream;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| writing_out_txt());
+    let home = ShortHome::new();
+    let (mut host, socket) = a_started_host(
+        &home,
+        &gateway,
+        r#"{"permissions": {"allow": ["Edit(out.txt)"]}}"#,
+    );
+
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "attach").expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    shown_until(&mut seen, "trust this directory?");
+    writeln!(terminal, "n").expect("answer the question");
+
+    // The write is put to the person, with the allow rule in the file.
+    let transcript = shown_until(&mut seen, "out.txt");
+    assert!(transcript.contains("out.txt"), "{transcript}");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut stream = UnixStream::connect(&socket).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .expect("timeout");
+        write!(stream, "reply\nyes\n").expect("write");
+        let mut answer = String::new();
+        BufReader::new(stream)
+            .read_line(&mut answer)
+            .expect("an answer");
+        if answer.trim() == "needs-input" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the session never reported needing input: {answer}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !home.0.join("work/out.txt").exists(),
+        "the allow rule answered for a person who was not there"
+    );
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = host.wait();
+}
+
+/// BG-7: a server the user has not approved is not started by a background session and not asked
+/// about either. The session says it was not started and why, and goes on to its first prompt.
+///
+/// A property of the process: the declaration is read from the user's settings, the asking mode is
+/// chosen where the session is built, and the words say which was chosen. A session built with
+/// the foreground's choice would hold a question about the server instead of finishing the turn.
+#[cfg(unix)]
+#[test]
+fn a_server_nobody_approved_is_not_started_by_a_background_session() {
+    use std::os::unix::net::UnixStream;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let started = home.0.join("server-started");
+    // Declared where only the person can write one, and requested by name in the settings, but
+    // approved nowhere.
+    std::fs::create_dir_all(home.0.join(".bravebot")).expect("the state directory");
+    std::fs::write(
+        home.0.join(".bravebot/mcp.json"),
+        serde_json::json!({"servers": {"weather": {
+            "transport": "stdio",
+            "argv": ["/bin/sh", "-c", format!("touch {}", started.display())],
+            "variables": ["PATH"],
+        }}})
+        .to_string(),
+    )
+    .expect("the declaration");
+    let (mut host, socket) =
+        a_started_host(&home, &gateway, r#"{"mcp": {"request": ["weather"]}}"#);
+
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "attach").expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    shown_until(&mut seen, "trust this directory?");
+    writeln!(terminal, "n").expect("answer the question");
+
+    let transcript = shown_until(&mut seen, "all done");
+    assert!(
+        transcript.contains("weather was not started: a one-shot run asks nobody"),
+        "{transcript}"
+    );
+    assert!(!started.exists(), "the server was started unapproved");
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = host.wait();
 }
