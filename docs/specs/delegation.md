@@ -895,8 +895,8 @@ Where the delegate acted on it, the driver says so in its own words before the r
 record still comes home ([DELEGATE-11](#DELEGATE-11)), and nothing is decided from the report's
 bytes. The press is a person's input and is neither read from nor written into any content.
 
-**Why.** Ctrl-C ends the turn and every delegate in it, so the only answer to one delegate going
-the wrong way threw away the work of the ones going the right way. The stop is a bound on the same
+**Why.** Ctrl-C ends the turn and every delegate in it, so without a stop of its own one delegate
+going the wrong way costs the work of the ones going the right way. The stop is a bound on the same
 futility as the round limit and takes the same way out, which keeps what the delegate found.
 
 `verified-by: bravebot_core::cancel::asking_one_delegate_to_stop_reaches_no_other`
