@@ -855,7 +855,7 @@ gate asks what it asked before, and nothing is refused for being unmentioned.
 | Key | What `true` does |
 |---|---|
 | `readsStayInWorkspace` | the file tools refuse every path outside the working directory, in every mode. No directory opens beside the workspace, whatever a rule, a mode, or an answer you give during the session would otherwise open: `/add-dir` and `--add-dir` are refused, and a name in `additionalDirectories` is refused rather than put to you. `/cd` may move further into the tree and not back out |
-| `bypassUnreachable` | the mode that asks about nothing is out of reach, and `--dangerously-skip-permissions` is refused with the key and the file named rather than ignored |
+| `bypassUnreachable` | the mode that asks about nothing is off the Shift-Tab ladder, and `--dangerously-skip-permissions` is refused with the key and the file named rather than ignored |
 
 Both are **off until a file turns one on**, exactly as [`vetting`](#vetting) is: a file naming neither
 behaves exactly as one did before the keys existed. `true` is the restrictive answer, and anything that

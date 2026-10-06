@@ -284,7 +284,8 @@ the question withdrawn from under you.
 
 **A session started with `--dangerously-skip-permissions` says so when it stops bypassing.** The line
 under the input box and `/status` name asking there, where a session started without the flag draws
-nothing for it. Nothing is printed in the transcript when you press the key.
+nothing for it, including one that reached bypassing with the key. Nothing is printed in the
+transcript when you press the key.
 
 **Accepting edits stops at writes on purpose.** A write lands in a tree you can read afterwards and
 `git diff` shows you all of it; a program runs with everything your own shell has, leaves no diff,
@@ -336,10 +337,14 @@ have got without it. The command line and Shift-Tab are what choose a mode.
 bravebot --dangerously-skip-permissions
 ```
 
-The flag is the only way to reach that mode: without it the key walks the other three however many
-times you press it. It may go anywhere in the command line and composes with `-p`, `--resume`,
-`--continue`, `--mode` and `--incognito` alike. A one-shot run has no key to press, so the flag
-is the whole of what can say.
+The flag opens the session in that mode. Without it a session opens asking, and Shift-Tab reaches the
+mode on the third press, after plan mode. Nothing is asked when it gets there: the line under the
+input box names it in colour, and one more press is back to asking. A settings file that sets
+`permissions.bypassUnreachable` takes the mode off the key and refuses the flag.
+
+The flag may go anywhere in the command line and composes with `-p`, `--resume`, `--continue`,
+`--mode` and `--incognito` alike. A one-shot run has no key to press, so the flag is the whole of
+what can say.
 
 It answers the two questions that decide trust as well as the others, and those are the ones that
 cost the most. Vouching is what decides whether a file's contents are shown to the planner or held

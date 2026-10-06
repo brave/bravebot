@@ -2082,6 +2082,8 @@ session-directory-withdrawn = closed { $directory }, and no longer trusting it; 
 session-directory-not-closed = could not close { $directory }: { $problem }
 session-cd-needs-a-path = /cd needs a directory, as in /cd ~/projects/other
 session-directory-changed = now working in { $directory }, and trusting it for this session
+# The mode the person was in, taken away by a settings layer of the directory they moved into.
+session-bypass-made-unreachable = permissions.bypassUnreachable is set here, so bypassing is off and the session is asking again
 # Said once per directory that was open and is not any more, so nobody discovers it by being
 # refused a file they could read a minute ago.
 session-directory-closed = closed { $directory }; open it again with /add-dir { $directory }

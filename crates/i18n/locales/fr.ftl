@@ -1735,6 +1735,8 @@ session-directory-withdrawn = { $directory } fermé, et n'est plus approuvé ; r
 session-directory-not-closed = impossible de fermer { $directory } : { $problem }
 session-cd-needs-a-path = /cd demande un répertoire, comme /cd ~/projets/autre
 session-directory-changed = travail désormais dans { $directory }, et approuvé pour cette session
+# Le mode où se trouvait la personne, retiré par une couche de réglages du répertoire où elle est allée.
+session-bypass-made-unreachable = permissions.bypassUnreachable est défini ici : le contournement est désactivé et la session demande de nouveau
 # Dit une fois par répertoire qui était ouvert et ne l'est plus, pour que personne ne l'apprenne
 # en se voyant refuser un fichier lisible une minute plus tôt.
 session-directory-closed = { $directory } fermé ; rouvrez-le avec /add-dir { $directory }

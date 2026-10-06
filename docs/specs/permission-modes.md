@@ -12,7 +12,8 @@ guards:
   - symbol: Confining
   - symbol: PermissionMode
   - symbol: Task::with_permission_mode
-  - symbol: Session::allowing_bypass
+  - symbol: Session::starting_in_bypass
+  - symbol: Session::make_bypass_unreachable
   - symbol: Session::cycle_permission_mode
 documented-by: docs/website/docs/security/permissions.md
 ---
@@ -230,47 +231,55 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 ## Choosing one
 
 <a id="MODE-5"></a>
-### MODE-5: bypassing is reachable only where the command line asked for it, and only where no layer made it unreachable
+### MODE-5: bypassing is one rung of the ladder the key walks, and a flag opens the session on it, unless a layer made it unreachable
 
-`--dangerously-skip-permissions` does two things and they are inseparable: it opens the session in
-that mode, and it puts that mode on the ladder the key walks. Without it the mode cannot be reached
-however many times the key is pressed.
+The key walks asking, accepting edits, planning and bypassing, in that order, and back to asking,
+in every session. `--dangerously-skip-permissions` does not put the mode on the ladder; it opens the
+session in it. Without the flag a session opens asking and reaches bypass by pressing the key three
+times. Nothing is asked when it gets there: the line under the input box draws the mode in colour
+([INPUT-13](terminal-input.md#INPUT-13)), and that is the only notice.
 
-The flag is taken out of the arguments before anything dispatches on them, so it composes with a
+The flag is taken out of the arguments before anything dispatches on it, so it composes with a
 bare invocation, `-p`, `--resume`, `--continue`, `--mode` and `--incognito` alike, and repeating it
 asks for the same thing once. A one-shot run has no key to press, so the flag is the whole of what
 can say.
 
 **Unless a layer made the mode unreachable.** Where a settings layer in force wrote
-`permissions.bypassUnreachable` ([PERM-17](permissions.md#PERM-17)), the flag does neither of those
-two things and is **refused**: the run stops before it dispatches, and what it says names
-`permissions.bypassUnreachable` and the file that asked for it, so that a flag which is documented and
-works elsewhere is not left looking like a fault in the program. Nothing is downgraded to asking,
-because a run told to stop asking and carried on with a notice is a run whose author believes it is
-unattended. The mode is then unreachable rather than merely unselected: the fourth rung exists only
-where the flag got through, so the key cannot reach it either.
+`permissions.bypassUnreachable` ([PERM-17](permissions.md#PERM-17)), the mode is not on the ladder and
+the key cannot reach it however many times it is pressed. The flag is **refused**: the run stops
+before it dispatches, and what it says names `permissions.bypassUnreachable` and the file that asked
+for it, so that a flag which is documented and works elsewhere is not left looking like a fault in the
+program. Nothing is downgraded to asking, because a run told to stop asking and carried on with a
+notice is a run whose author believes it is unattended.
+
+The layers are read again where the session moves to another directory with `/cd` or reads its rules
+again with `/clear`. If one of them now wrote the key, the mode comes off the ladder and a session in
+it goes back to asking, with a line in the transcript saying why. The ladder does not regain the mode
+when a later directory wrote nothing: a restriction a session could lift by moving is not one.
 
 Where the flag was given, moving the key off bypass does not leave the screen blank. The line under
 the input box and `/status` name asking, which they do for no session started without the flag: there
 asking is what has always happened, and here it is the answer to whether the session stopped skipping
-permissions. Leaving the mode prints nothing in the transcript.
+permissions. A session that reached bypass with the key draws nothing when it leaves, as it drew
+nothing before it entered. Leaving the mode prints nothing in the transcript.
 
-**Why.** A mode that answers every question has to be asked for where the asking is recorded, which
-is the command line somebody typed. Honouring only the second half would leave the flag doing
-nothing a person could see, and disagreeing with what the same flag does to a one-shot run.
+**Why.** The key is pressed by a person looking at the line that draws the mode, so it is as much a
+choice as the flag is. Gating the key behind the flag would make a person who decides mid-session to
+stop being asked restart the session.
 
-The flag being the only gate is what the second half is for. It records that somebody accepted what
-the mode costs, and a record is not a bound: nothing a person or an administrator could write made the
-mode unreachable on a machine where it is the wrong mode, which is every machine but a sandbox. A key
-that can only refuse is the other half of that, and refusing the flag rather than ignoring it is what
-keeps the two halves from disagreeing.
+What holds against that choice is `permissions.bypassUnreachable`, which any layer may write
+and an administrator may pin ([PERM-18](permissions.md#PERM-18)). It is checked where the flag is
+read and where the key is read, so the two cannot disagree about whether the mode is available.
 
-`verified-by: bravebot_agent::permission_mode::bypass_is_only_reachable_where_the_flag_was_given`
+`verified-by: bravebot_agent::permission_mode::bypass_is_reachable_unless_a_layer_made_it_unreachable`
 `verified-by: bravebot_cli::main::the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable`
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
-`verified-by: bravebot_tui::app::the_key_cannot_reach_bypass_without_the_flag`
+`verified-by: bravebot_tui::app::the_key_reaches_bypass_without_the_flag`
+`verified-by: bravebot_tui::app::the_key_cannot_reach_bypass_where_a_layer_made_it_unreachable`
+`verified-by: bravebot_tui::app::a_session_in_bypass_is_put_back_to_asking_when_a_layer_takes_bypass_away`
+`verified-by: bravebot_tui::app::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
 `verified-by: bravebot_tui::app::the_flag_opens_the_session_in_bypass_and_can_be_cycled_out_of`
-`verified-by: bravebot_tui::status::named_mode_names_asking_where_bypass_was_available`
+`verified-by: bravebot_tui::status::named_mode_names_asking_where_the_session_began_in_bypass`
 `verified-by: bravebot_tui::render::the_hint_line_names_asking_after_a_session_leaves_bypass`
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_the_ordinary_mode`
 `verified-by: bravebot_cli::main::permissions_are_enforced_unless_the_flag_is_given`
@@ -358,6 +367,10 @@ wrong direction for this to be wrong in.
 
 ## Known costs
 
+- **Bypassing is one key press past planning.** The ladder ends there, so a person leaving plan mode
+  with the key passes through it, and a press that is one too many lands in the mode that asks about
+  nothing. The line under the box names it in colour, and the next press returns to asking. A machine
+  that should not allow this says so with `permissions.bypassUnreachable` (MODE-5).
 - **Accepting edits accepts a write to any path the workspace reaches.** The mode answers the write
   prompt, and the prompt is the only thing that would have shown the person the path. A rule in the
   settings file is what narrows it, and a `deny` rule still holds (MODE-6); the mode itself does not
