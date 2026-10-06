@@ -140,6 +140,7 @@ const READ_KEYS: &[&str] = &[
     "run",
     "search",
     "terminalTitle",
+    "tui",
     "updateCheck",
     VETTING_BLOCK,
 ];
@@ -328,6 +329,13 @@ pub struct Settings {
     run_output: Option<usize>,
     /// What `run.defaultSeconds` and `run.maxSeconds` said, where they said anything.
     run_deadlines: RunDeadlines,
+    /// What `tui.wheelRows` said, if it said a whole positive count.
+    ///
+    /// `None` is the built-in count, which belongs to the interface that moves the view for the
+    /// reason [`SearchCaps`] gives about its own caps: answering with the number here would make
+    /// this crate the second place it is written down. The bound a configured count is held to is
+    /// the interface's too, since what a sane number of rows is depends on the screen.
+    wheel_rows: Option<usize>,
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
@@ -777,6 +785,7 @@ impl Settings {
             search: search_caps(root),
             run_output: run_output_cap(root),
             run_deadlines: run_deadlines(root),
+            wheel_rows: wheel_rows(root),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -1020,6 +1029,16 @@ impl Settings {
         self.run_deadlines
     }
 
+    /// How many rows the settings in force move the view by for one wheel event.
+    ///
+    /// `None` where nobody named one, for the reason [`Settings::run_output_cap`] answers `None`:
+    /// the built-in count belongs to the interface that moves the view, and answering with it here
+    /// would put a second copy of it in this crate. A count outside the range that interface holds
+    /// one to is still answered with here, the bound being the interface's to apply.
+    pub fn wheel_rows(&self) -> Option<usize> {
+        self.wheel_rows
+    }
+
     /// Whether anything was set at all.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
@@ -1041,6 +1060,7 @@ impl Settings {
             && self.search.is_empty()
             && self.run_output.is_none()
             && self.run_deadlines.is_empty()
+            && self.wheel_rows.is_none()
             && self.providers.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
@@ -1162,6 +1182,7 @@ impl Settings {
                     .is_some()
                     .then_some("run.maxSeconds"),
             )
+            .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
             .chain(self.env.keys().map(String::as_str))
     }
 
@@ -1882,6 +1903,26 @@ fn run_deadlines(root: &serde_json::Map<String, serde_json::Value>) -> RunDeadli
         default: seconds("defaultSeconds"),
         ceiling: seconds("maxSeconds"),
     }
+}
+
+/// The `tui.wheelRows` figure: how many rows one mouse wheel event moves the view.
+///
+/// Read the way a search cap is, and absent on the same terms: zero is a wheel that moves nothing,
+/// which is the one value that makes the wheel look broken, and a value that is not a whole count
+/// is absence too, so a half-typed file leaves the built-in count in force rather than stopping a
+/// session.
+///
+/// The count is handed on as the file wrote it. What a sane number of rows is belongs to the
+/// interface that moves the view, so the bound is applied there rather than here, which keeps the
+/// range written down once.
+fn wheel_rows(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize> {
+    let serde_json::Value::Object(tui) = root.get("tui")? else {
+        return None;
+    };
+    tui.get("wheelRows")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|rows| *rows > 0)
+        .and_then(|rows| usize::try_from(rows).ok())
 }
 
 /// The directory a settings file sits in, spelled for a rule that is anchored there.
@@ -2663,6 +2704,65 @@ mod tests {
             zeroed.run_output_cap(),
             None,
             "a project file that set the cap to zero was handed the home layer's figure"
+        );
+    }
+
+    /// SCROLL-3: terminals differ in how many events a notch sends, so the figure has to reach the
+    /// interface that moves the view. Read as a whole positive count, absent on the terms every
+    /// other number here is absent on: a zero or a word leaves the built-in count in force rather
+    /// than answering the wheel with nothing.
+    #[test]
+    fn a_settings_file_names_how_far_the_wheel_moves_the_view() {
+        let settings = Settings::parse(r#"{"tui": {"wheelRows": 5}}"#);
+        assert_eq!(settings.wheel_rows(), Some(5));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["tui.wheelRows"]);
+
+        for text in [
+            r#"{"tui": {"wheelRows": 0}}"#,
+            r#"{"tui": {"wheelRows": -1}}"#,
+            r#"{"tui": {"wheelRows": 1.5}}"#,
+            r#"{"tui": {"wheelRows": "5"}}"#,
+            r#"{"tui": {"wheelRows": null}}"#,
+            r#"{"tui": {}}"#,
+            r#"{"tui": 5}"#,
+            r#"{"wheelRows": 5}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).wheel_rows(),
+                None,
+                "{text:?} named a distance"
+            );
+        }
+
+        // A figure past what the interface holds one to still reaches it, the bound being the
+        // interface's to apply: dropping it here would be a second place the range is written down.
+        assert_eq!(
+            Settings::parse(r#"{"tui": {"wheelRows": 100000}}"#).wheel_rows(),
+            Some(100_000)
+        );
+
+        // One number rather than a list, so the nearest layer that named one wins.
+        let layered = Layers::new("wheel-rows-layers")
+            .global(r#"{"tui": {"wheelRows": 5}}"#)
+            .project(r#"{"tui": {"wheelRows": 8}}"#)
+            .read();
+        assert_eq!(layered.wheel_rows(), Some(8));
+
+        let only_global = Layers::new("wheel-rows-global")
+            .global(r#"{"tui": {"wheelRows": 5}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .read();
+        assert_eq!(
+            only_global.wheel_rows(),
+            Some(5),
+            "a project file that said nothing about the wheel dropped the figure"
+        );
+        assert_eq!(
+            only_global.unread_keys().count(),
+            0,
+            "the block was reported as a key nothing reads"
         );
     }
 

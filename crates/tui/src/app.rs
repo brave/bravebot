@@ -2628,23 +2628,24 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
     match mouse.kind {
         // While the scroller is open the wheel is one of its keys, so it stops at the first row
         // and the last the way every other movement in that mode does. It takes no count, so it
-        // drops one, as any other key would.
+        // drops one, as any other key would. How far it goes is what `tui.wheelRows` named, which
+        // is the same distance it moves at rest.
         MouseEventKind::ScrollUp if session.scrolling() => {
             session.take_the_scroller_count();
-            session.scroller_back(3);
+            session.scroller_back(session.wheel_rows());
             Action::Redraw
         }
         MouseEventKind::ScrollDown if session.scrolling() => {
             session.take_the_scroller_count();
-            session.scroller_on(3);
+            session.scroller_on(session.wheel_rows());
             Action::Redraw
         }
         MouseEventKind::ScrollUp => {
-            session.scroll_up(3);
+            session.scroll_up(session.wheel_rows());
             Action::Redraw
         }
         MouseEventKind::ScrollDown => {
-            session.scroll_down(3);
+            session.scroll_down(session.wheel_rows());
             Action::Redraw
         }
         MouseEventKind::Down(MouseButton::Left) => {
@@ -3508,6 +3509,10 @@ fn event_loop(
     // line's switch is read here and nowhere else in the interface.
     session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
     session.adopt_keybindings(settings.keybindings());
+    // And how far the wheel moves the view, for the reason the chords are read here: a figure read
+    // once at startup describes the session, and a terminal's own idea of a notch does not change
+    // under it.
+    session.adopt_wheel_rows(settings.wheel_rows());
     session.adopt_panel();
     session.adopt_caffeinate();
     crate::title::adopt(
@@ -10899,6 +10904,122 @@ mod tests {
                 handle_mouse(&mut session, drag(MouseEventKind::ScrollUp, 0, 0));
             }
             assert_eq!(session.top_row(), 0, "the wheel counted past the first row");
+        }
+
+        /// SCROLL-3: how far one wheel event goes is what `tui.wheelRows` named, at rest and in
+        /// the scroller alike. A build that read the key and went on moving three rows would pass
+        /// every other test here, the key having no other effect to observe.
+        #[test]
+        fn the_wheel_moves_the_configured_number_of_rows() {
+            let mut at_rest = reading();
+            at_rest.adopt_wheel_rows(Some(5));
+            handle_mouse(&mut at_rest, drag(MouseEventKind::ScrollUp, 0, 0));
+            assert_eq!(at_rest.scroll, 5, "the wheel moved its own number of rows");
+            handle_mouse(&mut at_rest, drag(MouseEventKind::ScrollDown, 0, 0));
+            assert_eq!(
+                at_rest.scroll, 0,
+                "the wheel back moved a different distance"
+            );
+
+            let mut session = opened();
+            session.adopt_wheel_rows(Some(5));
+            handle_mouse(&mut session, drag(MouseEventKind::ScrollUp, 0, 0));
+            assert_eq!(session.scroll, 5, "the scroller's wheel moved three rows");
+            handle_mouse(&mut session, drag(MouseEventKind::ScrollDown, 0, 0));
+            assert_eq!(session.scroll, 0);
+        }
+
+        /// SCROLL-3: the distance nobody configured is the one a terminal's own scrollback moves,
+        /// so a session that read no settings file moves as it always did.
+        #[test]
+        fn the_wheel_moves_three_rows_where_nothing_names_a_number() {
+            let mut session = opened();
+            assert_eq!(session.wheel_rows(), 3);
+            handle_mouse(&mut session, drag(MouseEventKind::ScrollUp, 0, 0));
+            assert_eq!(session.scroll, 3);
+
+            // Absence leaves the count alone rather than resetting it, which is what a layer
+            // naming nothing has to do to the one below it.
+            session.adopt_wheel_rows(Some(5));
+            session.adopt_wheel_rows(None);
+            assert_eq!(session.wheel_rows(), 5, "absence overwrote a named count");
+        }
+
+        /// SCROLL-3: a count outside the range is held to it rather than refused, so the wheel
+        /// still moves. A build that took the figure as written would move a hundred thousand rows
+        /// for one notch, and one that dropped it to zero would answer the wheel with nothing.
+        #[test]
+        fn a_wheel_count_outside_the_range_is_held_to_it() {
+            for named in [1u16, 50] {
+                let mut session = opened();
+                session.adopt_wheel_rows(Some(named as usize));
+                assert_eq!(
+                    session.wheel_rows(),
+                    named,
+                    "{named} rows inside the range was changed"
+                );
+                session.scroller_to_last_row();
+                handle_mouse(&mut session, drag(MouseEventKind::ScrollUp, 0, 0));
+                assert_eq!(
+                    session.scroll, named,
+                    "{named} rows moved a different distance"
+                );
+            }
+
+            // The ceiling itself is inside the range, so it is kept as written.
+            let mut at_the_ceiling = opened();
+            at_the_ceiling.adopt_wheel_rows(Some(crate::state::WHEEL_ROWS_CEILING as usize));
+            assert_eq!(
+                at_the_ceiling.wheel_rows(),
+                crate::state::WHEEL_ROWS_CEILING
+            );
+
+            for named in [101usize, 100_000, usize::MAX] {
+                let mut session = opened();
+                session.adopt_wheel_rows(Some(named));
+                assert_eq!(
+                    session.wheel_rows(),
+                    crate::state::WHEEL_ROWS_CEILING,
+                    "{named} rows was not held to the ceiling"
+                );
+            }
+
+            // A wheel that moves nothing is indistinguishable from one that is not answered, so
+            // the floor is a row rather than the figure the file named.
+            let mut floored = opened();
+            floored.adopt_wheel_rows(Some(0));
+            assert_eq!(floored.wheel_rows(), crate::state::WHEEL_ROWS_FLOOR);
+        }
+
+        /// SCROLL-3: the two promises the wheel keeps whatever distance it is given. A build that
+        /// added the configured count without the bound would scroll past the first row, and one
+        /// that stopped taking the count would let a `3` left over move the event after it.
+        #[test]
+        fn a_configured_wheel_still_stops_at_the_ends_and_still_drops_a_count() {
+            let mut session = opened();
+            session.adopt_wheel_rows(Some(5));
+            for _ in 0..40 {
+                handle_mouse(&mut session, drag(MouseEventKind::ScrollUp, 0, 0));
+            }
+            assert_eq!(session.top_row(), 0, "the wheel counted past the first row");
+            for _ in 0..40 {
+                handle_mouse(&mut session, drag(MouseEventKind::ScrollDown, 0, 0));
+            }
+            assert_eq!(session.scroll, 0, "the wheel counted past the last row");
+
+            for wheel in [MouseEventKind::ScrollUp, MouseEventKind::ScrollDown] {
+                let mut session = opened();
+                session.adopt_wheel_rows(Some(5));
+                handle_key(&mut session, key(KeyCode::Char('3')));
+                handle_mouse(&mut session, drag(wheel, 0, 0));
+                session.scroller_to_last_row();
+                session.scroller_back(20);
+                handle_key(&mut session, key(KeyCode::Char('k')));
+                assert_eq!(
+                    session.scroll, 21,
+                    "the count before the wheel {wheel:?} moved the k after it"
+                );
+            }
         }
 
         /// The keys go into the needle while one is being typed, because that is what typing

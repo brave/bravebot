@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/render.rs
   - crates/tui/src/state.rs
   - crates/tui/src/editor.rs
+  - crates/config/src/settings.rs
 documented-by: docs/website/docs/using/transcript.md
 ---
 
@@ -100,12 +101,38 @@ the person opened with a key and closes with any of four.
 | Space or `f` / `b`, Ctrl-F / Ctrl-B | a whole screen on / back |
 | `g` / `G`, `<` / `>`, Home / End | the first row / the last |
 | `{` / `}` | the prompt before this one / the prompt after |
-| the wheel | what it does at rest, stopping at the ends as everything here does |
+| the wheel | the configured number of rows, stopping at the ends as everything here does |
 
 Ctrl-N is a line on, and `n` alone is the next match (SCROLL-4).
 
 Each end is a stop rather than a count that keeps going: neither direction moves past the first row
 or the last, so a held key comes to rest somewhere the next press can move away from.
+
+One wheel event moves the number of rows `tui.wheelRows` names, and three where no settings file
+names one. The same distance at rest and in the scroller, the wheel being one of the keys here: a
+transcript that moved by one figure and a scroller by another would be two movements under one
+gesture.
+
+The count is read once when the session opens, from the settings files as any other key of its kind
+is read: the home layer, a checkout's `.bravebot/settings.json` and `settings.local.json`, and a
+file the command line named, the later overriding the earlier. A checkout therefore names it, which
+is the layering every key that configures how the interface behaves gets, and the cost of it is the
+one written down under Known costs in [backends.md](backends.md). It is not one of the four names
+read from the home layer alone, because it decides no effect: the figure moves a view on this
+person's screen and reaches nothing else, so a checkout naming it changes what a gesture feels like
+and nothing about where a request goes or what is read. Nothing a response carries reaches it at
+all.
+
+A figure from one row to a hundred is taken as it stands, and a larger one is held to a hundred
+rather than refused, since the movement a figure asks for is on the screen the moment the wheel is
+turned and a figure past a screen's worth would move further in one event than the person can
+follow. Anything that is not a whole number above zero is read as absence rather than as a figure to
+bring into range, so a zero, a fraction, a negative or a word leaves the built-in three in force.
+That is the only thing a settings file can say below the range: the floor of one row is the bound
+the screen's own layer holds a figure to, and no file reaches it.
+
+Both promises above hold whatever the figure is: the wheel stops at the first row and the last, and
+it takes no count, so a count waiting for its key goes with the event rather than multiplying it.
 
 `{` and `}` land on the row a turn begins at, which is a prompt the person typed. Where they land
 is settled by what the person wrote and by nothing read out of the workspace.
@@ -124,6 +151,10 @@ abandons it and does nothing else.
 already and neither group should have to learn the other's. A key that does nothing on arrival
 reads as a broken feature, and the cost of answering both is a row in this table.
 
+Terminals differ in how many events a notch or a trackpad swipe sends, so a fixed number of rows per
+event is a different amount of movement on each: on one the transcript crawls and on another it
+jumps a screen. Nothing the program can measure says which, so the figure is the person's to name.
+
 A count is how both dialects say how far, so a `5j` that moves one line is a key that did not
 listen. The box's reader is the one used, cap and all, so a count means one thing in both modes,
 and a thousand is further than anybody counts lines: `G` and `gg` reach the rest, and a thousand
@@ -139,6 +170,11 @@ that the Known costs below do not already admit.
 `verified-by: bravebot_tui::app::the_view_stops_at_the_first_row_rather_than_scrolling_past_it`
 `verified-by: bravebot_tui::app::the_view_stops_at_the_last_row_rather_than_scrolling_past_it`
 `verified-by: bravebot_tui::app::the_wheel_scrolls_the_scroller_as_it_scrolls_the_transcript`
+`verified-by: bravebot_tui::app::the_wheel_moves_the_configured_number_of_rows`
+`verified-by: bravebot_tui::app::the_wheel_moves_three_rows_where_nothing_names_a_number`
+`verified-by: bravebot_tui::app::a_wheel_count_outside_the_range_is_held_to_it`
+`verified-by: bravebot_tui::app::a_configured_wheel_still_stops_at_the_ends_and_still_drops_a_count`
+`verified-by: bravebot_config::settings::a_settings_file_names_how_far_the_wheel_moves_the_view`
 `verified-by: bravebot_tui::app::a_count_moves_the_view_that_many_times_as_far`
 `verified-by: bravebot_tui::app::a_count_stops_at_the_ends_of_the_transcript`
 `verified-by: bravebot_tui::app::a_count_on_the_prompt_keys_walks_that_many_prompts_and_stops_at_the_ends`
