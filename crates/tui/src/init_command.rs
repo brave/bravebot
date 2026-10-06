@@ -56,6 +56,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// Writing through a link with no target would create a file somewhere the person did not
+    /// choose, so the link counts as an `AGENTS.md` that is already there.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_with_no_target_is_there() {
+        let scratch = crate::testutil::scratch_dir("init-command-dangling");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::os::unix::fs::symlink(scratch.join("missing"), scratch.join(FILE)).unwrap();
+        assert!(!scratch.join(FILE).exists());
+        assert!(already_there(&scratch));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     #[test]
     fn the_prompt_names_no_path_for_the_person_to_vouch_for() {
         assert!(!PROMPT.contains('@'));

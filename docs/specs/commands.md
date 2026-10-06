@@ -597,6 +597,7 @@ offering a write over a file somebody wrote, and keeps the check from depending 
 `verified-by: bravebot_tui::app::the_init_command_starts_a_turn_with_the_drivers_own_prompt`
 `verified-by: bravebot_tui::app::the_init_command_starts_no_turn_where_agents_md_exists`
 `verified-by: bravebot_tui::init_command::a_file_of_the_name_is_there_whatever_it_holds`
+`verified-by: bravebot_tui::init_command::a_link_with_no_target_is_there`
 `verified-by: bravebot_tui::init_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
 `verified-by: bravebot_agent::turn::a_file_the_planner_may_not_see_is_reserved_rather_than_opened`
 
