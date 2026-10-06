@@ -128,7 +128,11 @@ pub fn compose_in<S: Sink>(
         .push_str(github_cli_guidance(github_cli));
 
     let mut standing = String::new();
-    if let Some(home) = home
+    // Neither file is read in a safe session. What the command line named is the person's words for
+    // this run and stays.
+    let safe = bravebot_core::safe::engaged();
+    if !safe
+        && let Some(home) = home
         && let Some(text) = read_home_agents(policy, home)
     {
         standing.push_str(&format!(
@@ -136,7 +140,11 @@ pub fn compose_in<S: Sink>(
             text.trim()
         ));
     }
-    match read_workspace_agents(policy, sources, &mut preamble.notices) {
+    let workspace_agents = match safe {
+        true => Ok(None),
+        false => read_workspace_agents(policy, sources, &mut preamble.notices),
+    };
+    match workspace_agents {
         Ok(Some(found)) => {
             standing.push_str(&format!(
                 "From {}:\n\n{}\n\n",

@@ -1126,3 +1126,27 @@ its first question could not reach.
 `verified-by: bravebot_cli::main::an_advisor_the_managed_settings_refuse_is_refused_before_the_run`
 `verified-by: bravebot_cli::running::an_advisor_nothing_serves_is_refused_before_the_run`
 `verified-by: bravebot_cli::running::an_advisor_is_refused_with_a_manifest_run`
+
+<a id="CLI-22"></a>
+### CLI-22: `--safe` starts a run that loads none of a person's own customizations
+
+`--safe` starts a session, a resumed session, a session in lines or a one-shot run that does not read
+the person's hooks, skills, delegate definitions, MCP server requests or `AGENTS.md`, in the
+person's own directory or in the project. The program's own skills and delegate kinds stay. What
+the command line itself names stays too: the model, `--system-prompt`, `--append-system-prompt` and
+`--settings`. Sign-in, the model, permission rules, the trust map and credential protection apply
+as they do without the flag, so the flag only removes. Once, before the first turn, it says what was
+not loaded.
+
+It is taken out of the line wherever it stands, as `--incognito` is, and is not read as part of a
+task. It is refused with `--bg`, which starts the session in another process that would not carry it.
+
+**Why.** When a session misbehaves, the first question is whether the person's own configuration is
+the cause, and the answer should not take editing five files and putting them back. A mode that
+loaded fewer things but also loosened a rule would be a second way to widen a session, so none of
+what it leaves out is permission: nothing is added to what the planner may do.
+
+`verified-by: bravebot_cli::running::a_safe_run_loads_none_of_the_customizations_a_plain_one_loads`
+`verified-by: bravebot_cli::running::a_run_without_the_safe_flag_says_nothing_of_safe_mode`
+`verified-by: bravebot_cli::running::a_safe_session_sends_no_agents_file_from_its_checkout_a_plain_one_sends`
+`verified-by: bravebot_cli::main::the_safe_flag_is_taken_out_wherever_it_appears`

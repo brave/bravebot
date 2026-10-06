@@ -6823,3 +6823,211 @@ fn a_server_approved_at_the_held_question_is_started() {
     let _ = bravebot(&held.home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
     let _ = held.host.wait();
 }
+
+/// What `--safe` has to leave out, written under a home: a skill, a definition, a standing
+/// instruction, a hook and a declared server, each carrying a word nothing else in a request says.
+///
+/// The hook writes a file, which is the only way a fired hook is visible from outside the process.
+#[cfg(unix)]
+fn a_home_full_of_customizations(name: &str, gateway: &Gateway) -> Scratch {
+    let scratch = Scratch::new(name);
+    let fired = scratch.path.join("hook-fired");
+    let settings =
+        settings_for(gateway).replacen('{', r#"{"mcp": {"request": ["zebra-server"]},"#, 1);
+    scratch
+        .with_settings(&settings)
+        .with_hooks(&format!(
+            r#"{{"hooks": [{{"on": "turn-started", "run": ["/bin/sh", "-c", "echo fired > {}"]}}]}}"#,
+            fired.display()
+        ))
+        .with_file(
+            ".bravebot/skills/zebra-skill/SKILL.md",
+            "---\nname: zebra-skill\ndescription: zebra-skill-words\n---\nDo the zebra thing.\n",
+        )
+        .with_file(
+            ".bravebot/agents/zebra-definition.md",
+            "---\nname: zebra-definition\ndescription: zebra-definition-words\nkind: reader\n---\nRead like a zebra.\n",
+        )
+        .with_file(".bravebot/AGENTS.md", "zebra-instruction-words\n")
+}
+
+/// `--safe` starts a run that reads none of a person's own hooks, skills, definitions, declared
+/// servers or `AGENTS.md`, and the same home without it reads all five.
+///
+/// Both runs are in one test so that the second is what makes the first mean something: a fixture
+/// whose files were never going to be read would pass the safe half against a flag that did
+/// nothing. Each is observed where a person would see it, the request on the wire for the three
+/// that reach the planner, a file the hook writes, and the notes the run prints for the server.
+/// Sign-in and the model are the ones the settings file named, which is how the request arrives at
+/// the gateway at all.
+#[cfg(unix)]
+#[test]
+fn a_safe_run_loads_none_of_the_customizations_a_plain_one_loads() {
+    let ordinary = {
+        let gateway = a_gateway_listing(r#"["tools"]"#);
+        let scratch = a_home_full_of_customizations("cli-running-safe-control", &gateway);
+        let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+        let asked = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        (
+            asked,
+            said(&output).1,
+            scratch.path.join("hook-fired").exists(),
+        )
+    };
+    let (asked, stderr, fired) = ordinary;
+    for word in [
+        "zebra-skill-words",
+        "zebra-definition-words",
+        "zebra-instruction-words",
+    ] {
+        assert!(
+            asked.contains(word),
+            "the control run never loaded {word}, so the safe run proves nothing: {asked}"
+        );
+    }
+    assert!(fired, "the control run never fired its hook: {stderr}");
+    assert!(
+        stderr.contains("zebra-server"),
+        "the control run never reached for its server: {stderr}"
+    );
+
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = a_home_full_of_customizations("cli-running-safe", &gateway);
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--safe", "-p", "say something"],
+    );
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("a safe run still reaches the model the settings named");
+    let stderr = said(&output).1;
+    for word in [
+        "zebra-skill-words",
+        "zebra-definition-words",
+        "zebra-instruction-words",
+    ] {
+        assert!(
+            !asked.contains(word),
+            "a safe run sent {word} to the planner: {asked}"
+        );
+    }
+    assert!(
+        !scratch.path.join("hook-fired").exists(),
+        "a safe run fired a hook: {stderr}"
+    );
+    assert!(
+        !stderr.contains("zebra-server"),
+        "a safe run reached for a declared server: {stderr}"
+    );
+    assert!(
+        stderr.contains("Safe mode"),
+        "a safe run did not say what it skipped: {stderr}"
+    );
+}
+
+/// `--safe` belongs to every way of starting and is not the model's to read as a prompt: it is taken
+/// out of the line wherever it stands, and a run without it says nothing about safe mode.
+#[cfg(unix)]
+#[test]
+fn a_run_without_the_safe_flag_says_nothing_of_safe_mode() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = Scratch::new("cli-running-not-safe").with_settings(&settings_for(&gateway));
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+    let stderr = said(&output).1;
+    assert!(!stderr.contains("Safe mode"), "{stderr}");
+
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = Scratch::new("cli-running-safe-last").with_settings(&settings_for(&gateway));
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["-p", "say something", "--safe"],
+    );
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        !asked.contains("--safe"),
+        "the flag was sent to the planner as part of the task: {asked}"
+    );
+    assert!(said(&output).1.contains("Safe mode"));
+
+    // A background session starts in another process, which would not carry the flag, so it is
+    // refused rather than started without it.
+    let refused = bravebot(&scratch.path, AT_A_GATEWAY, &["--bg", "--safe", "a task"]);
+    assert!(!refused.status.success());
+    assert!(said(&refused).1.contains("--safe"), "{:?}", said(&refused));
+}
+
+/// A session in lines started in `cwd` with `flag` among its arguments, which answers the trust
+/// question yes and sends one prompt.
+///
+/// A one-shot run never vouches for its checkout, so a checkout's own `AGENTS.md` is only read by a
+/// session that asked. `script(1)` supplies the terminal such a session refuses to run without, in
+/// util-linux's argument form.
+#[cfg(target_os = "linux")]
+fn a_session_in_lines_that_trusts_its_checkout(home: &Path, cwd: &Path, flag: &str) -> Output {
+    let mut session = Command::new("/usr/bin/script")
+        .env_clear()
+        .env("HOME", home)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .envs(AT_A_GATEWAY.iter().copied())
+        .current_dir(cwd)
+        .args([
+            "-qec",
+            &format!("{} --plain {flag}", env!("CARGO_BIN_EXE_bravebot")),
+            "/dev/null",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("a terminal for a session in lines");
+    session
+        .stdin
+        .take()
+        .expect("the session's input")
+        .write_all(b"y\nsay something\n")
+        .expect("write the script");
+    session.wait_with_output().expect("the session ends")
+}
+
+/// `--safe` leaves out the `AGENTS.md` a checkout holds as well as the one in the home, and the
+/// same checkout without it sends that file to the planner.
+///
+/// Both sessions trust the checkout, since a file from one nobody vouched for is left out either
+/// way, and the first is what shows the second's fixture was going to be read. `script(1)` is
+/// util-linux's, so this runs on Linux.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_safe_session_sends_no_agents_file_from_its_checkout_a_plain_one_sends() {
+    for (name, flag, sent) in [
+        ("cli-running-safe-checkout-control", "", true),
+        ("cli-running-safe-checkout", "--safe", false),
+    ] {
+        let gateway = a_gateway_listing(r#"["tools"]"#);
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let cwd = scratch.path.join("checkout");
+        std::fs::create_dir_all(&cwd).expect("create the checkout");
+        std::fs::write(cwd.join("AGENTS.md"), "zebra-project-words\n").expect("write AGENTS.md");
+
+        let output = a_session_in_lines_that_trusts_its_checkout(&scratch.path, &cwd, flag);
+
+        let asked = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("the session reached the gateway: {:?}", said(&output)));
+        assert_eq!(
+            asked.contains("zebra-project-words"),
+            sent,
+            "{flag:?}: the checkout's AGENTS.md was {}sent: {asked}",
+            if sent { "not " } else { "" }
+        );
+    }
+}

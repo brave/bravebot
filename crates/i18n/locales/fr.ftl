@@ -105,6 +105,8 @@ cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en qu
 cli-option-trace = Afficher le journal d'audit
 cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
+cli-option-safe =
+    Ne charger ni hooks, ni skills, ni définitions, ni serveurs MCP, ni AGENTS.md. La connexion, le modèle et les permissions s'appliquent toujours
 cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
@@ -827,6 +829,8 @@ servers-answer-once = Oui
 servers-answer-project = Oui, et utiliser tous les futurs serveurs MCP de ce projet
 servers-answer-no = Non, continuer sans ce serveur
 servers-answer = [1/2/3]
+safe-mode-started =
+    Mode sans échec : les hooks, les skills, les définitions, les serveurs MCP et AGENTS.md n'ont pas été chargés. La connexion, le modèle et les permissions sont inchangés
 servers-for-this-session-only =
     { $alias } n'est utilisé que dans cette session : une session incognito n'enregistre aucune réponse
 servers-not-kept = { $alias } est utilisé, et son approbation n'a pas été enregistrée : { $reason }
