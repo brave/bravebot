@@ -6751,6 +6751,24 @@ mod tests {
             .expect("made")
         }
 
+        /// Sweep until `id` is taken. A program another test starts holds the descriptors open at
+        /// the moment it forks, which keeps a dropped checkout's lock until it execs.
+        #[cfg(unix)]
+        fn sweep_taking(
+            repo: &Repo,
+            at: &Path,
+            listed: &dyn Fn(&str) -> bool,
+            id: &str,
+        ) -> Vec<String> {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut taken = Vec::new();
+            while !taken.iter().any(|t| t == id) && std::time::Instant::now() < deadline {
+                taken.extend(crate::git::checkout::sweep(&repo.git, at, listed));
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            taken
+        }
+
         /// CHECKOUT-16: what no record lists and no running session holds is taken, with its
         /// entry; a listed one, one a session holds, and one that is not a plain checkout name are
         /// not, and neither is anything where `.git` is a link.
@@ -6772,7 +6790,7 @@ mod tests {
             std::fs::create_dir_all(&outside).expect("outside");
             std::os::unix::fs::symlink(&outside, at.join("c5")).expect("link");
 
-            let taken = sweep(&repo.git, &at, &|id| id == "c2");
+            let taken = sweep_taking(&repo, &at, &|id| id == "c2", "c1");
             assert_eq!(taken, ["c1"]);
             assert!(!at.join("c1").exists());
             assert!(!repo.git.join("worktrees/c1").exists());
@@ -6789,7 +6807,7 @@ mod tests {
             assert!(std::fs::symlink_metadata(at.join("c5")).is_ok());
 
             drop(held);
-            assert_eq!(sweep(&repo.git, &at, &|id| id == "c2"), ["c3"]);
+            assert_eq!(sweep_taking(&repo, &at, &|id| id == "c2", "c3"), ["c3"]);
 
             let moved = repo.root.join("elsewhere.git");
             std::fs::rename(&repo.git, &moved).expect("moved");
