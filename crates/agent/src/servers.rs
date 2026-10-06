@@ -128,16 +128,20 @@ pub fn for_this_session<A: Asker + ?Sized>(
     asker: &mut A,
     diagnostics: Stream,
 ) -> Reached {
-    let requested: Vec<(PathBuf, String)> = settings
-        .mcp_requested()
-        .map(|(file, alias)| (file.to_path_buf(), alias.to_string()))
-        .collect();
+    // No declaration is read in a safe session, so nothing is asked about and nothing starts.
+    let requested: Vec<(PathBuf, String)> = match bravebot_core::safe::engaged() {
+        true => Vec::new(),
+        false => settings
+            .mcp_requested()
+            .map(|(file, alias)| (file.to_path_buf(), alias.to_string()))
+            .collect(),
+    };
     let project = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let home = Home {
         directory: crate::home::directory(),
         writable: crate::home::writable().is_some(),
     };
-    reach(
+    let mut reached = reach(
         &requested,
         &project,
         &home,
@@ -145,7 +149,13 @@ pub fn for_this_session<A: Asker + ?Sized>(
         asking,
         asker,
         diagnostics,
-    )
+    );
+    // Said here because every way of starting assembles its servers through this function and puts
+    // these notes in front of the person once, before the first turn.
+    if bravebot_core::safe::engaged() {
+        reached.notes.insert(0, t!(safe_mode_started).to_string());
+    }
+    reached
 }
 
 /// Whoever is at this process's terminal: both ends, for the reason `bravebot mcp` asks for both. A

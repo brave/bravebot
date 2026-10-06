@@ -2878,7 +2878,12 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // Read once, here, rather than at each moment. What the file says is a property of the machine
     // and not of a round, and a turn whose hooks changed halfway through would be the harder thing
     // to explain to whoever edited it mid-session.
-    let hooks = bravebot_config::hooks::Hooks::load(task.home.as_deref());
+    //
+    // Not read at all in a safe session, which is what leaves no hook to fire.
+    let hooks = match bravebot_core::safe::engaged() {
+        true => bravebot_config::hooks::Hooks::default(),
+        false => bravebot_config::hooks::Hooks::load(task.home.as_deref()),
+    };
 
     // The turn moments belong to the turn a person asked for. A delegate is a run inside this one,
     // started by a call the person did not make, so firing "the turn began" for each of them would
