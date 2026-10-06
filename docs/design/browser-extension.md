@@ -35,10 +35,15 @@ entire browsing history by meaning.
 ## Architecture
 
 ```
-BraveBot ──MCP tool call──▶ MCP server ◀──socket──▶ native host ◀──▶ extension
-                                                      (relay)    native
-                                                               messaging
+BraveBot ──MCP──▶ bravebot-browser mcp ◀──socket──▶ bravebot-browser ◀──▶ extension
+                  (MCP server, started              (native host,     native
+                   by BraveBot, confined)            started by       messaging
+                                                     Brave, relay)
 ```
+
+The MCP server and the native host are one program, `bravebot-browser`,
+run as two processes. The first argument picks the role: `mcp` when
+BraveBot starts it, the extension's origin when Brave does.
 
 - **MCP server:** declares the tools and forwards each call.
 - **Native host:** a thin relay started by the browser. It forwards
