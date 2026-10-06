@@ -6174,7 +6174,10 @@ fn a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle() {
     let read_until = |seen: &mut BufReader<UnixStream>, transcript: &mut String, wanted: &str| {
         let mut chunk = [0u8; 1024];
         while !transcript.contains(wanted) {
-            let read = seen.read(&mut chunk).expect("the session spoke");
+            let read = match seen.read(&mut chunk) {
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                other => other.expect("the session spoke"),
+            };
             assert!(
                 read > 0,
                 "the session ended before {wanted:?}: {transcript}"

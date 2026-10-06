@@ -240,6 +240,7 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
     let mut chunk = [0u8; 4096];
     loop {
         match from.read(&mut chunk) {
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
             Ok(0) | Err(_) => break,
             Ok(read) => {
                 pending.extend_from_slice(&chunk[..read]);
