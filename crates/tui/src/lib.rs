@@ -31,6 +31,7 @@ pub mod history_search;
 pub mod indicator;
 pub mod init_command;
 pub mod input;
+pub mod invisible;
 pub mod jobs_command;
 pub mod keybindings;
 pub mod logo;

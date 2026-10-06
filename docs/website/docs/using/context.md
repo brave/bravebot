@@ -66,6 +66,19 @@ is never folded, and a paste ending in a newline does not send.
 can put back. A prompt that comes back for editing after a stop does come back behind its marker,
 since that is where a stack trace is worth folding away.
 
+**Characters nothing draws are removed.** Text copied from a page can carry an instruction written in
+characters a terminal shows as nothing, and a paste goes into your message as your own words. So
+Brave Bot takes those out of a paste, including one into a command line, and says how many:
+
+```
+removed 6 invisible characters from that paste
+```
+
+Compare the count with what you copied. Letters, emoji and the spellings that need a zero-width
+joiner, such as Persian and Hindi, are left as they were, and a paste that held none of them says
+nothing. Only a paste is cleaned: text you type, a path in a dropped file's name and a prompt given
+with `-p` are not.
+
 ### Pictures
 
 Ctrl-V also pastes a picture: a screenshot, or an image copied from a browser. Command-V does not:
@@ -173,7 +186,7 @@ instead. See [Non-interactive use](headless.md).
 |---|---|---|
 | `@path`, `--file` | trusted | inside the workspace |
 | a dropped file | trusted | anywhere on disk, for that file |
-| a pasted picture or text | trusted, as your own message | none |
+| a pasted picture or text | trusted, as your own message, after invisible characters are removed from the text | none |
 | `!` shell mode output | trusted, private | your shell's own access |
 | a pipe into `-p` | **untrusted**, private | none |
 | a file read in a trusted directory | trusted | the workspace |

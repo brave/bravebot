@@ -11778,6 +11778,45 @@ mod tests {
         assert_eq!(session.input(), "[Pasted text #1 +4 lines]");
     }
 
+    /// A turn in flight is when a paste arrives with the least attention paid to it, and the
+    /// working path is a separate function from the one at rest, so each is held to the filter.
+    #[test]
+    fn a_paste_loses_what_a_terminal_draws_as_nothing_at_rest_and_while_a_turn_runs() {
+        let mut at_rest = Session::new("none");
+        handle_paste(&mut at_rest, "hi\u{E0041}\u{200B}");
+        assert_eq!(at_rest.input(), "hi");
+
+        let mut working = Session::new("none");
+        handle_paste_while_working(&mut working, "hi\u{E0041}\u{200B}");
+        assert_eq!(working.input(), "hi");
+
+        for session in [&at_rest, &working] {
+            let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+            assert_eq!(said, ["removed 2 invisible characters from that paste"]);
+        }
+    }
+
+    /// Text off the clipboard with Ctrl-V is a paste like any other, and arrives by its own route.
+    #[test]
+    fn text_read_off_the_clipboard_loses_what_a_terminal_draws_as_nothing() {
+        let mut session = Session::new("none");
+        take_from_clipboard(
+            &mut session,
+            crate::clipboard::Pasted::Text("hi\u{202E}".to_string()),
+        );
+
+        assert_eq!(session.input(), "hi");
+    }
+
+    /// What waits in the box is what is sent, so the words in it are the ones with nothing hidden.
+    #[test]
+    fn a_pasted_prompt_waits_in_the_box_without_what_a_terminal_draws_as_nothing() {
+        let mut session = Session::new("none");
+        handle_paste(&mut session, "write me a game\u{E0041}\u{E0042}");
+
+        assert_eq!(session.unfolded(session.input()), "write me a game");
+    }
+
     /// The question goes to a planner, and the marker stands for words only the session holding it
     /// can put back. Sent as it stands, the aside asks about a placeholder.
     #[test]

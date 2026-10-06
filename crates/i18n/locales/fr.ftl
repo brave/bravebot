@@ -2053,6 +2053,10 @@ paste-folded = { $lines ->
     [one] [Texte collé #{ $number } +{ $lines } ligne]
    *[other] [Texte collé #{ $number } +{ $lines } lignes]
     }
+paste-invisible-removed = { $count ->
+    [one] { $count } caractère invisible a été retiré de ce texte collé
+   *[other] { $count } caractères invisibles ont été retirés de ce texte collé
+    }
 megabytes = { $size } Mo
 
 
