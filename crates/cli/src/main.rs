@@ -203,8 +203,8 @@ fn main() -> ExitCode {
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
         // would otherwise be caught below as unknown options.
         Some(
-            "-p" | "--print" | "--mode" | "--model" | "--effort" | "--file" | "--add-dir"
-            | "--trace" | "--json",
+            "-p" | "--print" | "--mode" | "--model" | "--advisor" | "--effort" | "--file"
+            | "--add-dir" | "--trace" | "--json",
         ) => run_task(&args, skip_permissions, agent, prompts),
         Some("doctor") => doctor(),
         Some("auth") => auth::command(&args[1..]),
@@ -504,6 +504,7 @@ fn print_help() {
         ),
         ("--mode <mode>", t!(cli_option_mode)),
         ("--model <name>", t!(cli_option_model)),
+        ("--advisor <name>", t!(cli_option_advisor)),
         ("--effort <level>", t!(cli_option_effort)),
         ("-p, --print", t!(cli_option_print)),
         ("--trace", t!(cli_option_trace)),
@@ -633,6 +634,8 @@ struct Invocation {
     /// The model the command line named. `None` leaves the configured one in force rather than
     /// standing for a model of its own.
     model: Option<String>,
+    /// The model the command line named as the planner's advisor. `None` offers no advisor tool.
+    advisor: Option<String>,
     /// The level the command line named, which outranks the saved pick and every settings file for
     /// this run alone. `None` leaves those to answer.
     effort: Option<bravebot_session::store::Effort>,
@@ -651,6 +654,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut files = Vec::new();
     let mut mode = Mode::default();
     let mut model = None;
+    let mut advisor = None;
     let mut effort = None;
     let mut directories = Vec::new();
     let mut trace = false;
@@ -680,6 +684,15 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                     index += 2;
                 }
                 _ => return Err(t!(cli_model_needs_a_name).to_string()),
+            },
+            // Refused when blank for the reason `--model` is: a script that computed an empty
+            // variable asked for an advisor and would otherwise run without one, untold.
+            "--advisor" => match args.get(index + 1).map(|name| name.trim()) {
+                Some(name) if !name.is_empty() => {
+                    advisor = Some(name.to_string());
+                    index += 2;
+                }
+                _ => return Err(t!(cli_advisor_needs_a_name).to_string()),
             },
             // Refused unless it is a level, for the reason a blank `--model` is, and for a stronger
             // one: a model name the service does not know is substituted and reported, where a word
@@ -741,6 +754,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         files,
         mode,
         model,
+        advisor,
         effort,
         directories,
         trace,
@@ -767,6 +781,7 @@ fn run_task(
         files,
         mode,
         model,
+        advisor,
         effort,
         directories,
         trace,
@@ -799,6 +814,15 @@ fn run_task(
             as_json,
             Ending::Argument,
             t!(cli_agent_not_with_a_manifest),
+        );
+    }
+    // A manifest run's steps are run from the plan, not chosen by a planner that could ask, so an
+    // advisor would be named and never consulted.
+    if advisor.is_some() && mode == Mode::Manifest {
+        return stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_advisor_not_with_a_manifest),
         );
     }
     // Neither reaches the planner of a manifest run, which is given no standing instructions from
@@ -841,6 +865,14 @@ fn run_task(
     {
         return stopped_before_the_turn(as_json, Ending::Configuration, how);
     }
+
+    // Resolved like `--model`, and refused like it where the machine-level layer refuses the
+    // name, so a run never starts with an advisor its first question could not reach (BACKEND-48).
+    let advisor = match advisor.map(|name| resolve_advisor(&config, &name)) {
+        Some(Ok(advisor)) => Some(advisor),
+        Some(Err(how)) => return stopped_before_the_turn(as_json, Ending::Configuration, how),
+        None => None,
+    };
 
     let settings = bravebot_config::Settings::load();
 
@@ -960,6 +992,7 @@ fn run_task(
         .with_profile(bravebot_agent::home::profile())
         .with_cache(bravebot_agent::home::cache())
         .with_model(model_asked_for(named, pick.into_model()))
+        .with_advisor(advisor)
         // The flag, then the settings layers and the saved pick ranked as BACKEND-43 ranks them.
         // The layers are the only route a machine where nobody ever opens the interface has to a
         // level that outlives one run.
@@ -1533,6 +1566,15 @@ fn nothing_serves(config: &Config, model: &str) -> Option<String> {
             Some(managed_refusal(model, &file, why))
         }
         bravebot_agent::backend::Serving::Configured => None,
+    }
+}
+
+/// The model `--advisor` names, resolved like `--model`, or what to say where nothing could ask it.
+fn resolve_advisor(config: &Config, name: &str) -> Result<String, String> {
+    let advisor = config.model_named(name);
+    match nothing_serves(config, &advisor) {
+        Some(how) => Err(how),
+        None => Ok(advisor),
     }
 }
 
@@ -5784,6 +5826,69 @@ mod tests {
             let err = parse_invocation(&typed).expect_err("must refuse");
             assert!(err.contains("--model"), "{typed:?}: {err}");
         }
+    }
+
+    /// The advisor is named on the command line, separately from the model, and a run that did not
+    /// name one has none.
+    #[test]
+    fn an_advisor_flag_names_the_model_the_planner_may_consult() {
+        let invocation =
+            parse_invocation(&args(&["--advisor", "big-model", "do a thing"])).expect("parses");
+        assert_eq!(invocation.advisor.as_deref(), Some("big-model"));
+        assert_eq!(
+            invocation.model, None,
+            "the advisor replaced the run's model"
+        );
+        assert_eq!(invocation.prompt, "do a thing");
+
+        let invocation = parse_invocation(&args(&["do a thing"])).expect("parses");
+        assert_eq!(invocation.advisor, None);
+    }
+
+    /// A script that computed an empty variable asked for an advisor, and running without one would
+    /// not say so.
+    #[test]
+    fn a_blank_advisor_is_refused_rather_than_read_as_no_choice() {
+        for typed in [
+            args(&["--advisor"]),
+            args(&["--advisor", "", "do a thing"]),
+            args(&["--advisor", "   ", "do a thing"]),
+        ] {
+            let err = parse_invocation(&typed).expect_err("must refuse");
+            assert!(err.contains("--advisor"), "{typed:?}: {err}");
+        }
+    }
+
+    /// CLI-21. A machine whose managed settings refuse a model does not request it for an advisor
+    /// either, and the run stops before the first round naming the file that refused it, rather than
+    /// starting with an advisor whose first question could not be sent.
+    ///
+    /// Not a binary run, because the managed file is read from a fixed system path that a test
+    /// cannot point elsewhere. The configuration is built from a managed file the test writes.
+    #[test]
+    fn an_advisor_the_managed_settings_refuse_is_refused_before_the_run() {
+        let scratch = Scratch::new("cli-advisor-managed");
+        let (managed, file) = pinned(&scratch, r#"{"models": {"deny": ["stub/advisor-model"]}}"#);
+        let settings = layers(
+            &scratch,
+            Some(
+                r#"{"provider": {"stub": {"options": {"baseURL": "http://127.0.0.1:1/v1"},
+                    "models": {"planner": {}, "advisor-model": {}}}}}"#,
+            ),
+            None,
+        );
+        let config = Config::from_env_and_settings(&settings, &managed).expect("a configuration");
+
+        let how = resolve_advisor(&config, "stub/advisor-model").expect_err("must be refused");
+        assert!(
+            how.contains("stub/advisor-model") && how.contains(&file.display().to_string()),
+            "the refusal named neither the model nor the file that refused it: {how}"
+        );
+        assert_eq!(
+            resolve_advisor(&config, "stub/planner").as_deref(),
+            Ok("stub/planner"),
+            "a model the file does not name was refused"
+        );
     }
 
     /// The level a run asks for, in any case, and nothing where the flag was not given, which

@@ -20,6 +20,9 @@ fr:checkouts-size
 fr:checkouts-size-partial
 fr:checkouts-size-unmeasured
 fr:checkouts-unpushed
+fr:cli-advisor-needs-a-name
+fr:cli-advisor-not-with-a-manifest
+fr:cli-option-advisor
 fr:command-branch
 fr:command-caffeinate
 fr:gigabytes
@@ -29,3 +32,4 @@ fr:session-branch-nothing-written
 fr:session-branch-refused
 fr:session-branch-unwritable
 fr:session-branched
+fr:verb-advisor
