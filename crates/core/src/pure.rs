@@ -28,8 +28,9 @@
 //! languages, which is the same trap as parsing a shell string: a parser racing an interpreter it
 //! does not control. Neither is eligible, and neither ever becomes eligible.
 //!
-//! `sort` and `uniq` are ordinary filters excluded for a smaller reason: both take an output file
-//! (`sort -o`, and `uniq`'s second positional).
+//! `sort` and `uniq` are ordinary filters with an output file (`sort -o`, and `uniq`'s second
+//! operand). They are in the table because the allowlist refuses those shapes: `sort` lists no
+//! option that writes or runs a program, and `uniq` admits one operand, so a second is refused.
 //!
 //! # What a proof establishes
 //!
@@ -133,6 +134,18 @@ pub struct Filter {
     /// False for a program that reads no file, where a `-` past its instruction is an operand it
     /// has no reading for.
     pub dash_is_stdin: bool,
+    /// Whether a call must name at least one path operand.
+    ///
+    /// True where the program given no path reads something the answer cannot name: `ls` and `du`
+    /// report on the working directory, and BSD `stat` on its standard input, so a call without a
+    /// path proves nothing.
+    pub needs_path: bool,
+    /// The most operands past [`Filter::operands`] a call may carry, counting a `-`.
+    ///
+    /// `uniq INPUT OUTPUT` writes its second operand, so the entry admits one. `diff` compares two.
+    /// A `-` counts here although [`Filter::dash_is_stdin`] keeps it out of the answer, because
+    /// `uniq - out` has an output operand in the position a path would have been left out of.
+    pub most_paths: Option<usize>,
 }
 
 /// One option a program in the table may be called with.
@@ -213,6 +226,8 @@ pub const FILTERS: &[Filter] = &[
         operands: 0,
         reads_files: true,
         dash_is_stdin: false,
+        needs_path: false,
+        most_paths: None,
     },
     Filter {
         program: "head",
@@ -232,6 +247,8 @@ pub const FILTERS: &[Filter] = &[
         operands: 0,
         reads_files: true,
         dash_is_stdin: false,
+        needs_path: false,
+        most_paths: None,
     },
     Filter {
         program: "tail",
@@ -253,6 +270,8 @@ pub const FILTERS: &[Filter] = &[
         operands: 0,
         reads_files: true,
         dash_is_stdin: false,
+        needs_path: false,
+        most_paths: None,
     },
     Filter {
         program: "cut",
@@ -276,6 +295,8 @@ pub const FILTERS: &[Filter] = &[
         operands: 0,
         reads_files: true,
         dash_is_stdin: true,
+        needs_path: false,
+        most_paths: None,
     },
     // SET1 and SET2 are character sets, not files. tr reads only stdin.
     Filter {
@@ -297,6 +318,8 @@ pub const FILTERS: &[Filter] = &[
         operands: 2,
         reads_files: false,
         dash_is_stdin: false,
+        needs_path: false,
+        most_paths: None,
     },
     // The first operand is the pattern; anything after it is a path.
     Filter {
@@ -395,6 +418,8 @@ pub const FILTERS: &[Filter] = &[
         operands: 1,
         reads_files: true,
         dash_is_stdin: true,
+        needs_path: false,
+        most_paths: None,
     },
     // Operates on the string it is given rather than on a file of that name.
     Filter {
@@ -405,6 +430,8 @@ pub const FILTERS: &[Filter] = &[
         operands: 2,
         reads_files: false,
         dash_is_stdin: false,
+        needs_path: false,
+        most_paths: None,
     },
     Filter {
         program: "dirname",
@@ -414,6 +441,8 @@ pub const FILTERS: &[Filter] = &[
         operands: 1,
         reads_files: false,
         dash_is_stdin: false,
+        needs_path: false,
+        most_paths: None,
     },
     // Takes no input at all: it reports the working directory, which the user established, so it
     // reads neither a path nor stdin.
@@ -425,6 +454,241 @@ pub const FILTERS: &[Filter] = &[
         operands: 0,
         reads_files: false,
         dash_is_stdin: false,
+        needs_path: false,
+        most_paths: None,
+    },
+    // Reads each named path's directory entries and metadata, never a file's contents. With no path
+    // it lists the working directory, which the answer cannot name. -L and -H follow links to a
+    // target the answer does not name, and the options that take a value (--hide, -I, -w, -T) or
+    // differ between GNU and BSD (-G, --color, -D) are left out.
+    Filter {
+        program: "ls",
+        flags: &[
+            plain("-1"),
+            plain("-a"),
+            plain("-A"),
+            plain("-d"),
+            plain("-F"),
+            plain("-h"),
+            plain("-i"),
+            plain("-l"),
+            plain("-n"),
+            plain("-p"),
+            plain("-r"),
+            plain("-S"),
+            plain("-t"),
+            plain("--all"),
+            plain("--almost-all"),
+            plain("--directory"),
+            plain("--reverse"),
+            Flag {
+                spelling: "-R",
+                effect: Effect::Recursive,
+            },
+            Flag {
+                spelling: "--recursive",
+                effect: Effect::Recursive,
+            },
+        ],
+        excluded: &[
+            "-L",
+            "-H",
+            "--dereference",
+            "--dereference-command-line",
+            "--color",
+        ],
+        numeric: false,
+        operands: 0,
+        reads_files: true,
+        dash_is_stdin: false,
+        needs_path: true,
+        most_paths: None,
+    },
+    Filter {
+        program: "cat",
+        flags: &[
+            plain("-b"),
+            plain("-e"),
+            plain("-n"),
+            plain("-s"),
+            plain("-t"),
+            plain("-u"),
+            plain("-v"),
+            plain("--number"),
+            plain("--number-nonblank"),
+            plain("--squeeze-blank"),
+        ],
+        excluded: &[],
+        numeric: false,
+        operands: 0,
+        reads_files: true,
+        dash_is_stdin: true,
+        needs_path: false,
+        most_paths: None,
+    },
+    // Without -o, --output, --compress-program, -T, --temporary-directory, --files0-from or
+    // --random-source, which write a file, run a program, or name a file of names. -S is left out
+    // because the two implementations read its unit suffixes differently. The scratch files sort
+    // spills to under TMPDIR hold bytes it was given and are named by the program, never by the call.
+    Filter {
+        program: "sort",
+        flags: &[
+            plain("-b"),
+            plain("-c"),
+            plain("-C"),
+            plain("-d"),
+            plain("-f"),
+            plain("-g"),
+            plain("-h"),
+            plain("-i"),
+            plain("-M"),
+            plain("-m"),
+            plain("-n"),
+            plain("-r"),
+            plain("-s"),
+            plain("-u"),
+            plain("-V"),
+            plain("-z"),
+            takes("-k"),
+            takes("-t"),
+            plain("--ignore-leading-blanks"),
+            plain("--ignore-case"),
+            plain("--numeric-sort"),
+            plain("--reverse"),
+            plain("--stable"),
+            plain("--unique"),
+            takes("--key"),
+            takes("--field-separator"),
+        ],
+        excluded: &[
+            "-o",
+            "--output",
+            "--compress-program",
+            "-T",
+            "--temporary-directory",
+            "--files0-from",
+            "--random-source",
+            "-S",
+            "--buffer-size",
+        ],
+        numeric: false,
+        operands: 0,
+        reads_files: true,
+        dash_is_stdin: true,
+        needs_path: false,
+        most_paths: None,
+    },
+    // The second operand of `uniq INPUT OUTPUT` is a file it writes, so at most one operand is
+    // admitted. -D, -w and -z exist under one implementation only and are left out.
+    Filter {
+        program: "uniq",
+        flags: &[
+            plain("-c"),
+            plain("-d"),
+            plain("-i"),
+            plain("-u"),
+            takes("-f"),
+            takes("-s"),
+        ],
+        excluded: &[],
+        numeric: false,
+        operands: 0,
+        reads_files: true,
+        dash_is_stdin: true,
+        needs_path: false,
+        most_paths: Some(1),
+    },
+    // Two paths compared, never a tree: GNU `-r` follows a link to a directory, -l pipes through
+    // `pr`, and -X and --from-file name files of names. Both operands are read, so both are in the
+    // answer. A directory operand compares the file of the same name inside it, which is a file
+    // beneath a path the answer already names.
+    Filter {
+        program: "diff",
+        flags: &[
+            plain("-a"),
+            plain("-b"),
+            plain("-B"),
+            plain("-c"),
+            plain("-i"),
+            plain("-p"),
+            plain("-q"),
+            plain("-s"),
+            plain("-u"),
+            plain("-w"),
+            takes("-C"),
+            takes("-L"),
+            takes("-U"),
+            plain("--brief"),
+            plain("--ignore-case"),
+            plain("--ignore-all-space"),
+            plain("--ignore-space-change"),
+            plain("--ignore-blank-lines"),
+            plain("--text"),
+        ],
+        excluded: &[
+            "-r",
+            "--recursive",
+            "-l",
+            "--paginate",
+            "-X",
+            "--exclude-from",
+            "--from-file",
+            "--to-file",
+        ],
+        numeric: false,
+        operands: 0,
+        reads_files: true,
+        dash_is_stdin: true,
+        needs_path: false,
+        most_paths: Some(2),
+    },
+    // Reports a path's metadata. GNU -c names a format and BSD has no -c, which then reads nothing.
+    // -f is a format under BSD and a flag under GNU, and -t a time format under BSD and a flag under
+    // GNU, so neither is listed. With no path BSD reports on standard input.
+    Filter {
+        program: "stat",
+        flags: &[takes("-c"), takes("--format")],
+        excluded: &["-f", "-t", "-L", "--dereference"],
+        numeric: false,
+        operands: 0,
+        reads_files: true,
+        dash_is_stdin: false,
+        needs_path: true,
+        most_paths: None,
+    },
+    // Walks each named path and reports sizes from metadata. With no path it walks the working
+    // directory. -L and -H follow links out of the tree, and -X, --exclude-from and --files0-from
+    // name files of names.
+    Filter {
+        program: "du",
+        flags: &[
+            plain("-a"),
+            plain("-c"),
+            plain("-h"),
+            plain("-k"),
+            plain("-m"),
+            plain("-s"),
+            plain("-x"),
+            takes("-d"),
+            plain("--summarize"),
+            plain("--total"),
+            plain("--human-readable"),
+            takes("--max-depth"),
+        ],
+        excluded: &[
+            "-L",
+            "-H",
+            "--dereference",
+            "-X",
+            "--exclude-from",
+            "--files0-from",
+        ],
+        numeric: false,
+        operands: 0,
+        reads_files: true,
+        dash_is_stdin: false,
+        needs_path: true,
+        most_paths: None,
     },
 ];
 
@@ -433,8 +697,8 @@ pub const FILTERS: &[Filter] = &[
 /// Held explicitly rather than left absent so the reason survives, and so a test can assert they
 /// stay out. Absence is easy to reverse by accident; a named exclusion is not.
 pub const NEVER: &[&str] = &[
-    "sed", "awk", "gawk", "perl", "python", "python3", "ruby", "sh", "bash", "zsh", "sort", "uniq",
-    "tee", "dd", "xargs", "find",
+    "sed", "awk", "gawk", "perl", "python", "python3", "ruby", "sh", "bash", "zsh", "tee", "dd",
+    "xargs", "find",
 ];
 
 /// The paths a resolved program with these arguments reads, or `None` where nothing here can say.
@@ -443,8 +707,9 @@ pub const NEVER: &[&str] = &[
 /// reads nothing except stdin and the paths returned. `Some(&[])` says stdin was its only input.
 ///
 /// Conservative by construction: an unknown program, an option the entry does not list, an option
-/// written after an operand, an operand the program has no reading for, and a recursive call naming
-/// no path all answer `None`, and `None` means the caller keeps the opaque default.
+/// written after an operand, an operand the program has no reading for, a call with more operands
+/// than the entry admits, a call without the path the entry needs, and a recursive call naming no
+/// path all answer `None`, and `None` means the caller keeps the opaque default.
 pub fn read_set(program: &str, args: &[String]) -> Option<Vec<String>> {
     // A path resolves to a file name; the table names programs.
     let name = program_name(program);
@@ -500,6 +765,16 @@ pub fn read_set(program: &str, args: &[String]) -> Option<Vec<String>> {
         return None;
     }
     if recursing && paths.is_empty() {
+        return None;
+    }
+    if filter.needs_path && paths.is_empty() {
+        return None;
+    }
+    // Counted before a `-` is dropped: `uniq - out` names its output where an input would be.
+    if filter
+        .most_paths
+        .is_some_and(|most| operands.len().saturating_sub(filter.operands) > most)
+    {
         return None;
     }
 
@@ -662,14 +937,164 @@ mod tests {
         assert!(!is_pure_filter("awk", &args(&["{system(\"rm -rf /\")}"])));
     }
 
-    /// Ordinary filters with an output-file option are excluded, and stay excluded even when the
-    /// option is absent: eligibility is not decided by whether this particular call looked safe.
+    /// `sort` and `uniq` take an output file, `sort` through `-o` and `uniq` through a second
+    /// operand. Each shape is refused by the entry, so the call is unproven however the file is
+    /// spelled, and `tee` stays out of the table altogether.
     #[test]
-    fn filters_with_an_output_file_option_are_excluded() {
-        assert!(!is_pure_filter("sort", &args(&[])));
-        assert!(!is_pure_filter("sort", &args(&["-o", "out.txt"])));
-        assert!(!is_pure_filter("uniq", &args(&[])));
+    fn a_sort_or_uniq_call_that_names_an_output_file_proves_nothing() {
+        let calls: &[(&str, &[&str])] = &[
+            ("sort", &["-o", "out.txt", "in.txt"]),
+            ("sort", &["-oout.txt", "in.txt"]),
+            ("sort", &["--output=out.txt", "in.txt"]),
+            ("sort", &["--output", "out.txt", "in.txt"]),
+            ("sort", &["-ro", "out.txt", "in.txt"]),
+            ("sort", &["--compress-program=sh", "in.txt"]),
+            ("sort", &["-T", "/tmp", "in.txt"]),
+            ("sort", &["--temporary-directory=/tmp", "in.txt"]),
+            ("sort", &["--files0-from=list"]),
+            ("sort", &["--out=out.txt", "in.txt"]),
+            ("uniq", &["in.txt", "out.txt"]),
+            ("uniq", &["-c", "in.txt", "out.txt"]),
+            // A dash as the input leaves the second operand as the output file.
+            ("uniq", &["-", "out.txt"]),
+            ("uniq", &["in.txt", "-", "extra"]),
+        ];
+        for (program, call) in calls {
+            assert_eq!(
+                read_set(program, &args(call)),
+                None,
+                "{program} {call:?} was proven"
+            );
+        }
         assert!(!is_pure_filter("tee", &args(&["out.txt"])));
+    }
+
+    /// The point of adding them: the ordinary reading shapes answer with the paths they read.
+    #[test]
+    fn sort_and_uniq_reading_one_input_answer_with_it() {
+        assert_eq!(read_set("sort", &args(&["-rn"])), Some(vec![]));
+        assert_eq!(
+            read_set(
+                "sort",
+                &args(&["-t", ",", "-k", "2,2", "-u", "rows.csv", "more.csv"])
+            ),
+            Some(vec!["rows.csv".to_string(), "more.csv".to_string()])
+        );
+        assert_eq!(read_set("uniq", &args(&["-c"])), Some(vec![]));
+        assert_eq!(
+            read_set("uniq", &args(&["-f", "1", "names.txt"])),
+            Some(vec!["names.txt".to_string()])
+        );
+        // A second operand is an output position whatever it is spelled, `-` included.
+        assert_eq!(read_set("uniq", &args(&["names.txt", "-"])), None);
+    }
+
+    /// `diff` compares two paths. A tree walk follows a link to a directory under GNU, and `-l`
+    /// pipes the output through `pr`, so neither is listed.
+    #[test]
+    fn diff_compares_two_paths_and_never_walks_a_tree() {
+        assert_eq!(
+            read_set("diff", &args(&["-u", "a.txt", "b.txt"])),
+            Some(vec!["a.txt".to_string(), "b.txt".to_string()])
+        );
+        assert_eq!(
+            read_set(
+                "diff",
+                &args(&["-U", "5", "-L", "old", "-L", "new", "a", "b"])
+            ),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        let calls: &[&[&str]] = &[
+            &["-r", "a", "b"],
+            &["-ru", "a", "b"],
+            &["--recursive", "a", "b"],
+            &["-l", "a", "b"],
+            &["--paginate", "a", "b"],
+            &["-X", "patterns", "a", "b"],
+            &["--from-file=a", "b"],
+            &["--to-file=a", "b"],
+            &["a", "b", "c"],
+        ];
+        for call in calls {
+            assert_eq!(
+                read_set("diff", &args(call)),
+                None,
+                "diff {call:?} was proven"
+            );
+        }
+    }
+
+    /// `ls`, `stat` and `du` report on what they are pointed at. Called with no path they report on
+    /// the working directory, or under BSD `stat` on standard input, which the answer cannot name.
+    #[test]
+    fn a_reporting_program_with_no_path_proves_nothing() {
+        for program in ["ls", "stat", "du"] {
+            assert_eq!(read_set(program, &args(&[])), None, "{program} was proven");
+        }
+        assert_eq!(read_set("ls", &args(&["-la"])), None);
+        assert_eq!(read_set("du", &args(&["-sh"])), None);
+        assert_eq!(read_set("stat", &args(&["-c", "%s"])), None);
+        assert_eq!(
+            read_set("ls", &args(&["-la", "src"])),
+            Some(vec!["src".to_string()])
+        );
+        assert_eq!(
+            read_set("du", &args(&["-sh", "src", "docs"])),
+            Some(vec!["src".to_string(), "docs".to_string()])
+        );
+        assert_eq!(
+            read_set("stat", &args(&["-c", "%s", "Cargo.toml"])),
+            Some(vec!["Cargo.toml".to_string()])
+        );
+        // A recursive listing still has to name the tree it lists.
+        assert_eq!(read_set("ls", &args(&["-R"])), None);
+        assert_eq!(
+            read_set("ls", &args(&["-R", "src"])),
+            Some(vec!["src".to_string()])
+        );
+    }
+
+    /// An option that follows a link to a target the answer does not name, or that reads a file of
+    /// names, leaves the call unproven.
+    #[test]
+    fn a_reporting_program_following_links_or_reading_a_list_proves_nothing() {
+        let calls: &[(&str, &[&str])] = &[
+            ("ls", &["-L", "src"]),
+            ("ls", &["-H", "src"]),
+            ("ls", &["-lL", "src"]),
+            ("ls", &["--dereference", "src"]),
+            ("ls", &["--color", "src"]),
+            ("stat", &["-L", "link"]),
+            ("stat", &["-f", "%N", "link"]),
+            ("stat", &["-t", "link"]),
+            ("du", &["-L", "src"]),
+            ("du", &["-H", "src"]),
+            ("du", &["--files0-from=list"]),
+            ("du", &["-X", "patterns", "src"]),
+        ];
+        for (program, call) in calls {
+            assert_eq!(
+                read_set(program, &args(call)),
+                None,
+                "{program} {call:?} was proven"
+            );
+        }
+    }
+
+    /// `cat` of a named file is the commonest read there is, and an option it does not list leaves
+    /// the call unproven.
+    #[test]
+    fn cat_answers_with_the_files_it_reads() {
+        assert_eq!(
+            read_set("cat", &args(&["-n", "a.md", "b.md"])),
+            Some(vec!["a.md".to_string(), "b.md".to_string()])
+        );
+        assert_eq!(
+            read_set("cat", &args(&["-", "a.md"])),
+            Some(vec!["a.md".to_string()])
+        );
+        assert_eq!(read_set("cat", &args(&["--no-such-option", "a.md"])), None);
+        assert_eq!(read_set("cat", &args(&["a.md", "-n"])), None);
     }
 
     /// A shell is never a filter, whatever it is asked to do.

@@ -10037,8 +10037,8 @@ fn a_command_the_planner_read_is_glimpsed_from_its_end() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat build.log"}"#),
-        tool_request("run", r#"{"command":"cat other.log"}"#),
+        tool_request("run", r#"{"command":"sed -n p build.log"}"#),
+        tool_request("run", r#"{"command":"sed -n p other.log"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -10056,8 +10056,8 @@ fn a_command_the_planner_read_is_glimpsed_from_its_end() {
         &mut RecordingSink::new(),
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            "cat",
-            &["build.log"],
+            "sed",
+            &["-n", "p", "build.log"],
             &scratch.path,
         )]),
         None,
@@ -14252,14 +14252,14 @@ fn a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching() {
         &scratch,
         &home.path,
         Some("the-first-session"),
-        r#"{"command":"cat notes.txt"}"#,
+        r#"{"command":"sed -n p notes.txt"}"#,
         &mut writing,
     )
     .expect("the turn runs");
 
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat notes.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p notes.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -14766,7 +14766,7 @@ fn what_a_program_printed_does_not_reach_the_planner() {
     std::fs::write(scratch.path.join("secret.txt"), "SENTINEL-XYZZY\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat secret.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p secret.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -14888,7 +14888,7 @@ fn a_quarantined_reference_is_fed_to_a_program_the_planner_may_not_read() {
     std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\ngamma\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p page.txt"}"#),
         tool_request(
             "run",
             r#"{"command":"sed -n 2p > filtered.txt","stdin_ref":"ref:1"}"#,
@@ -14952,7 +14952,7 @@ fn a_private_reference_fed_to_a_vouched_line_is_still_put_to_a_person() {
     std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\ngamma\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p page.txt"}"#),
         tool_request("run", r#"{"command":"sed -n 2p","stdin_ref":"ref:1"}"#),
         reply_with("done"),
     ]);
@@ -15004,7 +15004,7 @@ fn a_background_line_cannot_be_fed_a_reference() {
     std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p page.txt"}"#),
         tool_request(
             "run",
             r#"{"command":"sed -n 2p","stdin_ref":"ref:1","background":true}"#,
@@ -15055,7 +15055,7 @@ fn a_line_naming_a_file_for_standard_input_cannot_also_name_a_reference() {
     std::fs::write(scratch.path.join("other.txt"), "one\ntwo\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p page.txt"}"#),
         tool_request(
             "run",
             r#"{"command":"sed -n 2p < other.txt","stdin_ref":"ref:1"}"#,
@@ -15167,7 +15167,7 @@ fn a_quarantined_run_says_what_would_make_it_visible() {
     std::fs::write(scratch.path.join("notes.txt"), "some lines\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat notes.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p notes.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -15353,7 +15353,7 @@ fn a_tilde_in_a_command_line_stands_for_the_home_directory_and_not_the_state_dir
     a_run_turn_from_a_home(
         &scratch,
         &home.path,
-        r#"{"command":"cat ~/notes.txt"}"#,
+        r#"{"command":"sed -n p ~/notes.txt"}"#,
         &mut confirmer,
     )
     .expect("the turn completes");
@@ -15363,7 +15363,11 @@ fn a_tilde_in_a_command_line_stands_for_the_home_directory_and_not_the_state_dir
     let steps = request.plan.steps();
     assert_eq!(
         steps[0].args,
-        [home.path.join("notes.txt").display().to_string()],
+        [
+            "-n".to_string(),
+            "p".to_string(),
+            home.path.join("notes.txt").display().to_string()
+        ],
         "the `~` did not stand for the home directory"
     );
     assert!(
@@ -15456,7 +15460,7 @@ fn a_vouched_commands_output_reaches_the_planner() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat secret.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p secret.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -15475,8 +15479,8 @@ fn a_vouched_commands_output_reaches_the_planner() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            "cat",
-            &["secret.txt"],
+            "sed",
+            &["-n", "p", "secret.txt"],
             &scratch.path,
         )]),
         None,
@@ -15552,7 +15556,7 @@ fn the_planner_is_told_how_a_run_it_may_not_read_ended() {
     // Something printed, to stderr, so there is output to be kept from the planner: one that prints
     // nothing is told as exactly that (RUN-24).
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat missing.txt"}"#),
+        tool_request("run", r#"{"command":"sh -c 'echo failed >&2; exit 1'"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -15713,7 +15717,7 @@ fn a_look_at_a_job_that_printed_nothing_new_says_so_and_hands_back_no_reference(
 }
 
 /// Vouching for one command must not make another command of the same program readable. The label
-/// follows the same entry the prompt does, so `cat secret.txt` says nothing about `cat other.txt`.
+/// follows the same entry the prompt does, so `sed -n p secret.txt` says nothing about `sed -n p other.txt`.
 #[test]
 fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
     let scratch = Scratch::new("run-vouched-other");
@@ -15721,7 +15725,7 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat other.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p other.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -15741,8 +15745,8 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
         trusting_the_workspace(),
         // A different argument list, so this entry does not cover the call above.
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            "cat",
-            &["secret.txt"],
+            "sed",
+            &["-n", "p", "secret.txt"],
             &scratch.path,
         )]),
         None,
@@ -15905,7 +15909,7 @@ fn content_a_person_reads_after_a_check_reaches_the_planner() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16023,7 +16027,7 @@ fn a_check_is_sent_as_three_messages_with_no_tools_and_the_drivers_words_last() 
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16125,7 +16129,7 @@ fn the_prompt_says_where_a_checked_slots_bytes_came_from() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16161,7 +16165,8 @@ fn the_prompt_says_where_a_checked_slots_bytes_came_from() {
     // The program resolves to an absolute path, which differs by machine, so the sentence is
     // pinned at both ends rather than whole.
     assert!(
-        request.origin.starts_with("what ") && request.origin.ends_with("cat where.txt printed"),
+        request.origin.starts_with("what ")
+            && request.origin.ends_with("sed -n p where.txt printed"),
         "the person was told which slot the bytes are in rather than where they came from: {}",
         request.origin
     );
@@ -16180,7 +16185,7 @@ fn content_a_person_refuses_after_a_check_stays_out_of_the_planner() {
             r#"{"verdict": "unsafe", "reason": "SENTINEL-REASON addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16244,7 +16249,7 @@ fn a_check_that_could_not_be_made_falls_back_to_the_question() {
     let (endpoint, received) = serve_sequence_answering_checks_with(
         vec![reply_with("I am not able to assess this.")],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16308,7 +16313,7 @@ fn with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16377,7 +16382,7 @@ fn with_auto_vetting_an_unsafe_verdict_still_asks() {
             r#"{"verdict": "unsafe", "reason": "it addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16436,7 +16441,7 @@ fn with_auto_vetting_a_check_that_could_not_be_made_still_asks() {
     let (endpoint, _received) = serve_sequence_answering_checks_with(
         vec![reply_with("I am not able to assess this.")],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16500,7 +16505,7 @@ fn bypassing_makes_no_check_before_promoting_content() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -16569,7 +16574,7 @@ fn bypassing_fills_in_a_verdict_that_claims_nothing() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -17308,7 +17313,7 @@ fn an_unscreened_unattended_run_credits_the_mode_for_the_output() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -17378,7 +17383,7 @@ fn an_unscreened_unattended_run_credits_the_mode_for_a_promoted_slot() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -17456,7 +17461,7 @@ fn the_note_a_release_leaves<C: bravebot_agent::Confirmer + Send>(
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(call.0, call.1),
             reply_with("done"),
         ],
@@ -17741,7 +17746,7 @@ fn an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_sa
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
             reply_with("done"),
         ],
     );
@@ -17829,7 +17834,7 @@ fn an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -17918,7 +17923,7 @@ fn asking_to_read_a_runs_output_changes_nothing_where_anybody_still_answers_for_
                 r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
             )],
             vec![
-                tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+                tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
                 reply_with("done"),
             ],
         );
@@ -17993,7 +17998,7 @@ fn a_background_line_cannot_ask_to_read_what_it_printed() {
     let (endpoint, received) = serve_sequence(vec![
         tool_request(
             "run",
-            r#"{"command":"cat where.txt","background":true,"read":true}"#,
+            r#"{"command":"sed -n p where.txt","background":true,"read":true}"#,
         ),
         reply_with("done"),
     ]);
@@ -18046,7 +18051,7 @@ fn asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output(
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -18115,7 +18120,7 @@ fn asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_say
     .unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -18190,7 +18195,7 @@ fn output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference(
     .unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
         tool_request(
             "run",
             r#"{"command":"head -c 14","stdin_ref":"ref:1","read":true}"#,
@@ -18389,7 +18394,7 @@ fn what_an_ended_job_printed_says_how_to_stop_being_asked() {
 
     let (endpoint, received) = serve_until_job_1_finishes(tool_request(
         "run",
-        r#"{"command":"cat notes.txt","background":true}"#,
+        r#"{"command":"sed -n p notes.txt","background":true}"#,
     ));
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -18448,7 +18453,7 @@ fn what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching(
         &scratch,
         &home.path,
         Some("the-first-session"),
-        r#"{"command":"cat notes.txt"}"#,
+        r#"{"command":"sed -n p notes.txt"}"#,
         &mut first,
     )
     .expect("the turn runs");
@@ -18456,7 +18461,7 @@ fn what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching(
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_until_job_1_finishes(tool_request(
         "run",
-        r#"{"command":"cat notes.txt","background":true}"#,
+        r#"{"command":"sed -n p notes.txt","background":true}"#,
     ));
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -18486,7 +18491,7 @@ fn what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching(
             .lock()
             .unwrap()
             .iter()
-            .all(|request| request.plan.display() != "cat notes.txt"),
+            .all(|request| request.plan.display() != "sed -n p notes.txt"),
         "this test needs the record to have stopped the prompt for the job's line"
     );
     let sent: Vec<String> = received.try_iter().collect();
@@ -18520,7 +18525,7 @@ fn a_read_that_was_refused_is_not_asked_for_again() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -18572,7 +18577,7 @@ fn a_read_that_is_not_true_or_false_is_refused_before_the_line_runs() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt","read":"true"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt","read":"true"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -18634,7 +18639,7 @@ fn screening_an_unattended_run_keeps_back_content_a_check_objected_to() {
             r#"{"verdict": "unsafe", "reason": "it addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -18705,7 +18710,7 @@ fn the_trail_records_the_verdict_of_a_check_that_could_not_be_made() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, _received) = serve_sequence_losing_every_check(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request(
             "vet_content",
             r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -18768,7 +18773,7 @@ fn screening_an_unattended_run_promotes_content_a_check_found_nothing_in() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the path the file records"}"#,
@@ -18833,7 +18838,7 @@ fn screening_an_unattended_run_keeps_back_output_a_check_objected_to() {
             r#"{"verdict": "unsafe", "reason": "it addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -18898,7 +18903,7 @@ fn screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about() 
     let (endpoint, received) = serve_sequence_answering_checks_with(
         vec![reply_with("I am not able to assess this.")],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -18970,7 +18975,7 @@ fn screening_reaches_a_delegate_of_an_unattended_run() {
         (
             "READ-THE-OUTPUT",
             vec![
-                tool_request("run", r#"{"command":"cat where.txt"}"#),
+                tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
                 tool_request("read_output", r#"{"ref":"ref:1"}"#),
                 reply_with("read it"),
             ],
@@ -19040,7 +19045,7 @@ fn with_auto_vetting_a_safe_verdict_releases_command_output_unasked() {
             r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -19105,7 +19110,7 @@ fn a_check_says_how_many_lines_it_is_reading_and_then_that_it_is_over() {
             r#"{"verdict": "safe", "reason": "three words and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -19159,7 +19164,7 @@ fn what_a_check_cost_reaches_the_row_the_call_drew() {
             r#"{"verdict": "safe", "reason": "three words and nothing else"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -19219,7 +19224,7 @@ fn a_check_whose_call_fails_still_says_it_is_over() {
     std::fs::write(scratch.path.join("where.txt"), "one\ntwo\nthree\n").unwrap();
 
     let (endpoint, _received) = serve_sequence_losing_every_check(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
@@ -19279,7 +19284,7 @@ fn with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output() {
             r#"{"verdict": "unsafe", "reason": "it addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -19335,7 +19340,7 @@ fn with_auto_vetting_a_broken_check_still_asks_about_command_output() {
     let (endpoint, _received) = serve_sequence_answering_checks_with(
         vec![reply_with("I am not able to assess this.")],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -19509,7 +19514,7 @@ fn output_a_person_reads_and_approves_reaches_the_planner() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
@@ -19543,7 +19548,7 @@ fn output_a_person_reads_and_approves_reaches_the_planner() {
         .expect("the user was asked to read the output");
     assert!(request.output.contains("SENTINEL-XYZZY"));
     assert!(
-        request.command.contains("cat"),
+        request.command.contains("sed"),
         "the user was not told which command printed it: {}",
         request.command
     );
@@ -19571,7 +19576,7 @@ fn output_a_person_refuses_stays_out_of_the_planner() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
@@ -19628,7 +19633,7 @@ fn an_output_offer_carries_what_a_check_said() {
             r#"{"verdict": "unsafe", "reason": "SENTINEL-REASON addresses the reader"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request("read_output", r#"{"ref":"ref:1"}"#),
             reply_with("done"),
         ],
@@ -21952,7 +21957,7 @@ fn a_planner_given_a_private_report_from_a_delegate_holds_it() {
         (
             "READ-THE-MAIL",
             vec![
-                tool_request("run", r#"{"command":"cat where.txt"}"#),
+                tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
                 tool_request("read_output", r#"{"ref":"ref:1"}"#),
                 reply_with("THE-WORKER-REPORTED"),
             ],
@@ -24680,7 +24685,7 @@ fn a_delegate_resolves_a_tilde_against_the_home_its_parent_did() {
         (
             "CHECK-THE-NOTES",
             vec![
-                tool_request("run", r#"{"command":"cat ~/notes.txt"}"#),
+                tool_request("run", r#"{"command":"sed -n p ~/notes.txt"}"#),
                 reply_with("asked about it"),
             ],
         ),
@@ -24712,7 +24717,11 @@ fn a_delegate_resolves_a_tilde_against_the_home_its_parent_did() {
         .expect("the delegate's line was refused before anybody was asked about it");
     assert_eq!(
         request.plan.steps()[0].args,
-        [home.path.join("notes.txt").display().to_string()],
+        [
+            "-n".to_string(),
+            "p".to_string(),
+            home.path.join("notes.txt").display().to_string()
+        ],
         "a delegate resolved the `~` somewhere its parent would not have"
     );
 }
@@ -25520,7 +25529,7 @@ fn a_command_vouched_for_in_the_working_directory_is_asked_about_again_in_a_chec
     let home = Scratch::new("checkout-vouched-run-home");
     repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let line = tool_request("run", r#"{"command":"cat README"}"#);
+    let line = tool_request("run", r#"{"command":"sed -n p README"}"#);
     let (endpoint, _received) = serve_by_marker(vec![
         (
             "RUN-HERE-TWICE-THEN-APART",
@@ -25555,7 +25564,7 @@ fn a_command_vouched_for_in_the_working_directory_is_asked_about_again_in_a_chec
     .expect("turn runs");
 
     let seen = confirmer.seen.lock().unwrap();
-    // The second `cat README` in the working directory was not put to the person, which is what
+    // The second `sed -n p README` in the working directory was not put to the person, which is what
     // shows the first was vouched for, and the one in the checkout was.
     let directories: Vec<&std::path::Path> = seen
         .iter()
@@ -27686,7 +27695,7 @@ fn what_a_command_printed_reaches_the_person_watching() {
     std::fs::write(scratch.path.join("secret.txt"), "SENTINEL-XYZZY\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat secret.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p secret.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -27716,7 +27725,7 @@ fn what_a_command_printed_reaches_the_person_watching() {
         .first()
         .expect("what the command printed reached nobody");
     assert!(
-        printed.command.ends_with("cat secret.txt"),
+        printed.command.ends_with("sed -n p secret.txt"),
         "the row does not say which command printed it: {}",
         printed.command
     );
@@ -27746,9 +27755,15 @@ fn what_is_reported_about_a_line_says_which_directory_it_ran_in() {
 
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat note.txt","directory":"sub"}"#),
+        tool_request(
+            "run",
+            r#"{"command":"sed -n p note.txt","directory":"sub"}"#,
+        ),
         // Naming the root again, since the first call is where the second would otherwise run.
-        tool_request("run", r#"{"command":"cat sub/note.txt","directory":"."}"#),
+        tool_request(
+            "run",
+            r#"{"command":"sed -n p sub/note.txt","directory":"."}"#,
+        ),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -27805,7 +27820,7 @@ fn the_middle_of_a_capped_output_stays_reachable() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat build.log"}"#),
+        tool_request("run", r#"{"command":"sed -n p build.log"}"#),
         // Following the reference into a file, which is one of the two things a planner holding
         // one can do with it. The second reference of the turn: the planner's own reply took the
         // first.
@@ -27883,7 +27898,7 @@ fn output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked() {
     let cap = 4096;
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat build.log"}"#),
+        tool_request("run", r#"{"command":"sed -n p build.log"}"#),
         tool_request(
             "read_output",
             &format!(r#"{{"ref":"ref:1","offset":{start}}}"#),
@@ -27995,7 +28010,7 @@ fn an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked() {
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request("read_output", r#"{"ref":"ref:1","offset":0}"#),
         reply_with("done"),
     ]);
@@ -29227,7 +29242,7 @@ fn only_a_line_a_job_can_hold_is_offered_to_be_moved() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat page.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p page.txt"}"#),
         tool_request("run", r#"{"command":"sed -n 2p","stdin_ref":"ref:1"}"#),
         tool_request("run", r#"{"command":"echo a && echo b"}"#),
         tool_request("run", r#"{"command":"ls 2>&1"}"#),
@@ -34501,7 +34516,7 @@ mod usage {
             r#"{"kind":"checker","task":"CHILD-TASK"}"#,
         ));
         let (parent, child) = parent_and_child(&run);
-        child.answer(&tool_request("run", r#"{"command":"cat vet.txt"}"#));
+        child.answer(&tool_request("run", r#"{"command":"sed -n p vet.txt"}"#));
         run.request()
             .answer(&tool_request("read_output", r#"{"ref":"ref:1"}"#));
         let vetting = run.request();
@@ -37570,7 +37585,7 @@ fn the_lines_an_output_prompt_states_are_counted_inside_the_kernel() {
     std::fs::write(scratch.path.join("where.txt"), "first\nsecond\nthird\n").unwrap();
 
     let (endpoint, _received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
@@ -37637,7 +37652,7 @@ fn the_lines_a_vetting_prompt_states_are_counted_inside_the_kernel() {
             r#"{"verdict": "safe", "reason": "three paths"}"#,
         )],
         vec![
-            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
             tool_request(
                 "vet_content",
                 r#"{"ref":"ref:1","expects":"the paths the file records"}"#,

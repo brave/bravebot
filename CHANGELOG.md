@@ -19,6 +19,7 @@
  - Added a `context` count to `search`, which returns the lines around each match so it reads without a second call. ([#1468](https://github.com/brave/bravebot/issues/1468))
  - Added `stop` to `schedule_next`, so a self-paced loop that has finished ends without one more tick. ([#1467](https://github.com/brave/bravebot/issues/1467))
  - Added `mcp_servers` to `spawn_agent`, which lists the MCP servers a worker keeps, so a worker sent to fix a bug need not hold your mail. ([#1236](https://github.com/brave/bravebot/issues/1236))
+ - Added `ls`, `cat`, `sort`, `uniq`, `diff`, `stat` and `du` to the programs a line may run unasked when it only reads paths you vouched for. A call that writes (`sort -o`, `uniq IN OUT`) or follows a link (`ls -L`, `diff -r`) still asks. ([#1466](https://github.com/brave/bravebot/issues/1466))
  - Added deleting an archived conversation from the desktop app. Archiving or deleting a bot or conversation now asks first.
  - Added to the desktop app's permissions list when each remembered answer was given.
  - Added the program a bare command name resolves to in the question `bravebot mcp add`, `approve` and `enable` ask, so you see which one a yes would start.

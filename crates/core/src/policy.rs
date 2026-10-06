@@ -8462,6 +8462,52 @@ five
         );
     }
 
+    /// A reading pipeline built from the programs the audit added runs unasked over a vouched
+    /// tree, and a step that names an output file or a link-following option makes the line ask.
+    #[test]
+    fn a_pipeline_of_sort_uniq_cat_and_ls_over_vouched_paths_does_not_ask() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &["src/vendor"]);
+
+        let reading = plan_of(vec![
+            step_named("grep", &["-rh", "TODO", "src/handlers"]),
+            step_named("sort", &["-u"]),
+            step_named("uniq", &["-c"]),
+        ]);
+        assert!(
+            !policy.plan_needs_approval(&reading),
+            "a sort and uniq pipeline over a vouched tree asked"
+        );
+        for line in [
+            vec![step_named("cat", &["-n", "README.md"])],
+            vec![step_named("ls", &["-la", "src/handlers"])],
+            vec![step_named("du", &["-sh", "docs"])],
+            vec![step_named("stat", &["-c", "%s", "Cargo.toml"])],
+            vec![step_named("diff", &["-u", "a.txt", "b.txt"])],
+        ] {
+            assert!(
+                !policy.plan_needs_approval(&plan_of(line.clone())),
+                "{:?} asked",
+                line[0].args
+            );
+        }
+
+        for line in [
+            vec![step_named("sort", &["-o", "out.txt", "in.txt"])],
+            vec![step_named("uniq", &["in.txt", "out.txt"])],
+            vec![step_named("ls", &["-L", "src/handlers"])],
+            vec![step_named("diff", &["-r", "a", "b"])],
+            vec![step_named("cat", &["src/vendor/lib.js"])],
+        ] {
+            assert!(
+                policy.plan_needs_approval(&plan_of(line.clone())),
+                "{} {:?} ran unasked",
+                line[0].program,
+                line[0].args
+            );
+        }
+    }
+
     /// One step nothing can account for is a transformation the proof does not cover, and its
     /// output is what the next step reads, so the whole line is opaque however ordinary the steps
     /// either side of it look.
