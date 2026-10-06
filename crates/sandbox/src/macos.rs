@@ -465,6 +465,26 @@ mod argument_tests {
             vec![OsString::from(path)]
         );
     }
+
+    /// A backslash in a path is escaped as well as a quote. Left alone, the backslash would
+    /// combine with the escape written for a quote after it, the pair would read as an escaped
+    /// backslash, and the quote would end the literal and let the rest of the path be read as
+    /// profile directives.
+    #[test]
+    fn a_backslash_in_a_path_cannot_cancel_the_escape_of_the_quote_after_it() {
+        assert_eq!(quote(r#"/tmp/x\"#), r#""/tmp/x\\""#);
+        assert_eq!(
+            quote(r#"/tmp/x\") (allow network-outbound) (""#),
+            r#""/tmp/x\\\") (allow network-outbound) (\"""#
+        );
+
+        let policy = SandboxPolicy::strict().allow_read(r#"/tmp/x\") (allow network-outbound) ("#);
+        let profile = SeatbeltSandbox::profile(&policy);
+        assert!(
+            profile.contains(r#"(subpath "/tmp/x\\\") (allow network-outbound) (")"#),
+            "the path did not stay one literal: {profile}"
+        );
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

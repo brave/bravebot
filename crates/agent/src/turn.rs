@@ -5946,6 +5946,49 @@ mod tests {
         );
     }
 
+    /// A reply cut off in its prose with no call open is the turn's answer. Asked to carry on, a
+    /// model starts the answer again from the top, so it is not asked, and the person is told the
+    /// answer stops short because the text would otherwise read as a whole one.
+    #[test]
+    fn a_reply_cut_off_in_its_prose_ends_the_turn_and_says_it_stopped_short() {
+        use bravebot_aichat::CutOff;
+        use ceiling::*;
+        let (outcome, reporter, bodies, _, stops) = traced(
+            "ceiling-stop-in-prose",
+            vec![
+                said(
+                    "The three causes are first, the",
+                    &[],
+                    Some(CutOff {
+                        ceiling: CEILING,
+                        call: None,
+                        thought: false,
+                    }),
+                ),
+                said("never asked for", &[], None),
+            ],
+        );
+        assert_eq!(
+            outcome.unwrap().reply_for_display(),
+            "The three causes are first, the"
+        );
+        assert_eq!(bodies.len(), 1, "it was asked again: {bodies:#?}");
+        assert!(
+            reporter
+                .narration
+                .iter()
+                .any(|line| line.contains("answer stops where it did")),
+            "the person was not told: {:?}",
+            reporter.narration
+        );
+        assert_eq!(stops.len(), 1, "{stops:#?}");
+        assert!(
+            stops[0].contains("no call was open") && stops[0].ends_with("the turn ends there"),
+            "{}",
+            stops[0]
+        );
+    }
+
     /// A turn that went on past a ceiling stop shows no sign of it afterwards except here, and one
     /// that ended on one is read back to ask what the model spent the ceiling on. Each stop is a
     /// line with the round, what was open and how much of it had arrived, whether it reasoned, and

@@ -213,6 +213,7 @@ holds the fuller preview.
 
 `verified-by: bravebot_agent::turn::what_a_processor_said_is_put_beside_the_write_it_describes`
 `verified-by: bravebot_agent::turn::a_write_the_planner_wrote_itself_carries_no_claim`
+`verified-by: bravebot_core::policy::a_remark_line_wider_than_the_box_is_cut_where_it_is_released`
 `verified-by: bravebot_agent::manifest::a_planned_write_carries_what_the_processor_said_about_it`
 `verified-by: bravebot_core::policy::what_was_said_about_a_document_is_released_for_the_screen_it_is_approved_on`
 `verified-by: bravebot_core::policy::a_document_nobody_said_anything_about_has_nothing_to_show`

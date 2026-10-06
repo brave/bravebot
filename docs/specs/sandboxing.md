@@ -169,6 +169,8 @@ confined program is told to do.
 `verified-by: bravebot_sandbox::windows::a_quotation_mark_in_an_argument_does_not_end_it`
 `verified-by: bravebot_sandbox::windows::a_path_ending_in_a_separator_does_not_swallow_the_argument_after_it`
 `verified-by: bravebot_sandbox::windows::quoting_a_path_leaves_the_path_it_names_alone`
+`verified-by: bravebot_sandbox::windows::a_backslash_before_a_quotation_mark_does_not_escape_the_escape`
+`verified-by: bravebot_sandbox::macos::a_backslash_in_a_path_cannot_cancel_the_escape_of_the_quote_after_it`
 `verified-by: bravebot_sandbox::windows::an_empty_argument_is_still_an_argument`
 
 <a id="SANDBOX-5"></a>
