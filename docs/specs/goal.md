@@ -369,10 +369,10 @@ not acted on and not reported, as for a goal that was cleared ([GOAL-10](#GOAL-1
 deploy first` sets a goal, and neither runs a turn, so both are carried out as typed
 ([CMD-8](commands.md#CMD-8)).
 
-**Why.** The only way to stop a goal judging an unrelated turn was to clear it and type the
-condition again. The state the person wants is the one they already have, with the judging held
-off, and a pause that is only ever a word the person typed puts nothing the driver did not get from
-them into the decision.
+**Why.** Without a pause, stopping a goal from judging an unrelated turn means clearing it and
+typing the condition again. The state the person wants is the one they already have, with the
+judging held off, and a pause that is only ever a word the person typed puts nothing the driver did
+not get from them into the decision.
 
 **Why not a count.** A pause is not a round, so nothing is spent by it: giving a goal fewer rounds
 for having been interrupted would punish the detour the pause exists for.
