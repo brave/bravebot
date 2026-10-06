@@ -526,6 +526,7 @@ mod tests {
         watching.waiting(Waiting::Prompt);
         assert_eq!(queued(&shared), ["fix the build"]);
         assert!(shared.locked().first.is_none());
+        assert_eq!(shared.locked().job.state, State::Working);
     }
 
     /// BG-4: what the roster says follows what the session waits for, and the kind of a held
@@ -533,6 +534,7 @@ mod tests {
     #[test]
     fn the_entry_follows_what_the_session_waits_for() {
         let shared = a_shared();
+        shared.locked().first = None;
         let mut watching = Watching(Arc::clone(&shared));
         watching.waiting(Waiting::Answer(Held::Fetch));
         let held = shared.locked().job.clone();
