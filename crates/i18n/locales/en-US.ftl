@@ -2072,7 +2072,7 @@ session-resume-already-here = that is the session already open
 # Left in the transcript when /resume names an id that is no session of this directory.
 session-resume-no-such = no session with that id in this directory
 # Left in the transcript when /resume names a session a running background session holds.
-session-resume-held-by-background = that session is held by a running background session. Join it with: bravebot attach { $id }
+session-resume-held-by-background = that session is held by a running background session, so it cannot be resumed here
 session-branch-nothing-written = nothing to branch yet: the session has no record until its first turn ends
 # Left in the transcript when /branch is typed where session records are not written.
 session-branch-unwritable = /branch needs a session record to copy, and this session does not write one

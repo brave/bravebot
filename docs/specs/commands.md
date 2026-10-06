@@ -630,6 +630,7 @@ decide, so the command only says which one the person meant.
 `verified-by: bravebot_tui::app::the_resume_command_carries_its_id_and_is_never_a_prompt`
 `verified-by: bravebot_tui::app::the_resume_command_waits_for_the_turn_in_flight`
 `verified-by: bravebot_tui::sessions::resume_by_id_reads_the_record_named_and_refuses_what_it_cannot_continue`
+`verified-by: bravebot_tui::sessions::resume_refuses_a_record_a_running_background_session_holds`
 `verified-by: bravebot_tui::sessions::resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory`
 
 ## Known costs

@@ -1558,7 +1558,7 @@ session-checkout-not-restored =
 session-resume-nothing-else = aucune autre session à reprendre dans ce répertoire
 session-resume-already-here = c'est la session déjà ouverte
 session-resume-no-such = aucune session avec cet identifiant dans ce répertoire
-session-resume-held-by-background = cette session est tenue par une session d'arrière-plan en cours. Rejoignez-la avec : bravebot attach { $id }
+session-resume-held-by-background = cette session est tenue par une session d'arrière-plan en cours, elle ne peut donc pas être reprise ici
 session-branch-moved =
     cette session tournait sur { $was } ; cette copie de travail est sur { $now }
 session-branch-gone =

@@ -263,7 +263,7 @@ pub enum Refusal {
     /// The record is a manifest run, which has no conversation to continue.
     Manifest,
     /// A running background session holds the record, so a second writer would fork it (BG-9).
-    Held(String),
+    Held,
 }
 
 impl Refusal {
@@ -273,7 +273,7 @@ impl Refusal {
             Self::NoSuchSession => t!(session_resume_no_such).to_string(),
             Self::AlreadyHere => t!(session_resume_already_here).to_string(),
             Self::Manifest => manifest_note().to_string(),
-            Self::Held(id) => t!(session_resume_held_by_background, id = id),
+            Self::Held => t!(session_resume_held_by_background).to_string(),
         }
     }
 }
@@ -297,11 +297,20 @@ pub fn named(project: &Path, current: &str, typed: &str) -> Result<Box<sessions:
 /// background session holds. The picker refuses the first on Enter; the second is checked here
 /// because a record is picked up in this process and not another.
 pub fn continuable(record: Box<sessions::Record>) -> Result<Box<sessions::Record>, Refusal> {
+    continuable_unless(record, bravebot_session::jobs::is_running)
+}
+
+/// [`continuable`], with the question of whether a running background session holds an id put by
+/// the caller, so that the refusal can be reached without one.
+pub fn continuable_unless(
+    record: Box<sessions::Record>,
+    held: impl Fn(&str) -> bool,
+) -> Result<Box<sessions::Record>, Refusal> {
     if record.manifest.is_some() {
         return Err(Refusal::Manifest);
     }
-    if bravebot_session::jobs::is_running(&record.id) {
-        return Err(Refusal::Held(record.id.clone()));
+    if held(&record.id) {
+        return Err(Refusal::Held);
     }
     Ok(record)
 }

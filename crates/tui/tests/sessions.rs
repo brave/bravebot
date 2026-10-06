@@ -5019,6 +5019,23 @@ fn resume_by_id_reads_the_record_named_and_refuses_what_it_cannot_continue() {
     );
 }
 
+/// CMD-14. A record a running background session holds is refused, with a line that does not carry
+/// the id, and one nothing holds is let through. The check is handed in, so no roster is needed.
+#[test]
+fn resume_refuses_a_record_a_running_background_session_holds() {
+    use bravebot_tui::resume::{Refusal, continuable_unless};
+    let scratch = Scratch::new("resume-held");
+    let held = recorded(&scratch.project, "the held one", false);
+    let free = recorded(&scratch.project, "the free one", false);
+    let load = |id: &str| Box::new(sessions::load(&scratch.project, id).expect("a record"));
+
+    let refusal = continuable_unless(load(&held), |id| id == held).unwrap_err();
+    assert_eq!(refusal, Refusal::Held);
+    assert!(!refusal.note().contains(&held), "{}", refusal.note());
+    let record = continuable_unless(load(&free), |id| id == held).expect("a record nothing holds");
+    assert_eq!(record.id, free);
+}
+
 /// CMD-14. A typed id is a person's, but it is joined onto a path all the same: one that climbs out
 /// of the sessions directory finds nothing even where a readable record is waiting at the place it
 /// climbs to.
