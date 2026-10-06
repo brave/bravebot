@@ -18,13 +18,13 @@ const t = load('src/renderer/transcript.ts')
 
 test('an edit writes the words as typed and carries nothing the agent does not read', () => {
   const text = composeHooks([
-    { on: 'tool-finished', tool: 'write_file', run: ['formatter', 'two words', '$(touch nope)', ''], firesForNothing: false },
-    { on: 'turn-started', tool: null, run: ['begin'], firesForNothing: false },
+    { on: 'tool-finished', tool: 'write_file', run: ['formatter', 'two words', '$(touch nope)', ''], timeout: 120, firesForNothing: false },
+    { on: 'turn-started', tool: null, run: ['begin'], timeout: null, firesForNothing: false },
   ])
   // The agent's own answer about an entry is not written back into the file it was read from.
   assert.deepEqual(JSON.parse(text), {
     hooks: [
-      { on: 'tool-finished', tool: 'write_file', run: ['formatter', 'two words', '$(touch nope)', ''] },
+      { on: 'tool-finished', tool: 'write_file', run: ['formatter', 'two words', '$(touch nope)', ''], timeout: 120 },
       { on: 'turn-started', run: ['begin'] },
     ],
   })
@@ -34,7 +34,7 @@ test('hook saves are explicit, reject conflicts and refuse symlinks', () => {
   const directory = mkdtempSync(join(tmpdir(), 'bravebot-hooks-test-'))
   try {
     const path = join(directory, 'hooks.json')
-    const text = composeHooks([{ on: 'turn-finished', tool: null, run: ['echo', 'literal;argument'], firesForNothing: false }])
+    const text = composeHooks([{ on: 'turn-finished', tool: null, run: ['echo', 'literal;argument'], timeout: null, firesForNothing: false }])
     saveHooks(directory, text, null)
     assert.equal(readFileSync(path, 'utf8'), text)
     // `expected` is the text the agent last reported, and a file that has moved since is refused.

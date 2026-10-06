@@ -184,8 +184,11 @@ decision is taken from something a person wrote rather than from something a pro
 <a id="HOOK-7"></a>
 ### HOOK-7: a hook that goes wrong is said out loud, bounded, and ends nothing
 
-A hook that could not be started, that ended badly, or that was still running after 30 seconds and
-was stopped, is said to the person, naming the moment and the program. It reaches a live display as
+A hook that could not be started, that ended badly, or that was still running when its bound ran out
+and was stopped, is said to the person, naming the moment, the program and, for a hook that was stopped, the
+bound in seconds. The bound is 30 seconds unless the entry states a `timeout`, which is a whole number
+of seconds from 1 to 600; an entry whose `timeout` is anything else declares no hook, as HOOK-3 treats
+a malformed argument. It reaches a live display as
 it happens and the turn's own account of itself as well, so a run with nowhere to draw says it too.
 A turn that fails has no account, and a caller that draws nothing as the turn runs keeps what it was
 told and says it beside the failure.
@@ -200,12 +203,21 @@ from a slow model, so one that does not finish is stopped rather than waited on.
 prints is read, so the report is the only way anybody learns their formatter has not run since they
 mistyped its path, and silence there is a hook that quietly stopped working.
 
+The ceiling on `timeout` is there for the same reason as the default: every hook is time added to
+the turn, and a typo of an extra zero must not hold one open for hours. A `timeout` outside the range
+drops the entry rather than being clamped, because the default or the ceiling would be a bound the
+person did not write.
+
 A mistake in this file must not be a program that will not open. It is the user's own file, written
 by hand, and the failure it most often has is a typo.
 
 `verified-by: bravebot_agent::hooks::a_hook_that_ends_badly_is_reported`
 `verified-by: bravebot_agent::hooks::a_hook_whose_program_is_not_there_is_reported`
 `verified-by: bravebot_agent::hooks::a_hook_that_outstays_the_bound_is_stopped`
+`verified-by: bravebot_agent::hooks::a_hook_is_stopped_at_the_timeout_it_declared`
+`verified-by: bravebot_agent::hooks::a_hook_may_outlive_the_default_bound_by_declaring_more`
+`verified-by: bravebot_config::hooks::an_entry_may_state_its_own_timeout`
+`verified-by: bravebot_config::hooks::an_unusable_timeout_drops_the_entry`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_still_says_what_its_hooks_said`
 `verified-by: bravebot_cli::running::a_run_whose_turn_failed_still_says_what_its_hooks_said`
 `verified-by: bravebot_ui_bridge::reporting::what_the_turn_said_is_kept_for_the_event_that_ends_it`
@@ -255,7 +267,7 @@ turn would fire.
 ```json
 {
   "hooks": [
-    { "on": "tool-finished", "tool": "write_file", "run": ["cargo", "fmt"] },
+    { "on": "tool-finished", "tool": "write_file", "run": ["cargo", "fmt"], "timeout": 120 },
     { "on": "turn-finished", "run": ["/usr/bin/osascript", "-e", "display notification \"done\""] }
   ]
 }
@@ -273,7 +285,7 @@ turn would fire.
   arrangement is about which bytes reach which reader, and collecting it would mean holding output
   that nothing is allowed to read.
 - **A hook runs while the turn waits.** Every hook is time added to the turn, up to the bound in
-  HOOK-7 per hook. A `tool-finished` hook on every call pays that on every call. Running one
+  HOOK-7 per hook, which is 30 seconds or the entry's own `timeout` up to 600. A `tool-finished` hook on every call pays that on every call. Running one
   without waiting is not offered, because then a formatter and the next tool call would be reading
   and writing the same file at once.
 - **There is no moment for a session.** A session is many turns, and something that should happen

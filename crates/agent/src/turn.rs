@@ -2826,11 +2826,11 @@ fn fire_hooks<R: Reporter + ?Sized>(
                 program = fired.program,
                 status = status
             ),
-            crate::hooks::Trouble::Stopped => t!(
+            crate::hooks::Trouble::Stopped(limit) => t!(
                 hook_stopped,
                 moment = fired.moment,
                 program = fired.program,
-                seconds = crate::hooks::LIMIT.as_secs()
+                seconds = limit.as_secs()
             ),
         });
     }

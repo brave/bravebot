@@ -165,6 +165,8 @@ export function AgentSettings({ session, onChanged, onDirty }: {
           {!dirty && document?.hooks[index]?.firesForNothing && <Alert type="warning" role="alert">This hook fires for nothing: only a finished tool call carries a tool name. Clear the filter, or choose Tool finishes.</Alert>}
           <Input value={hook.run[0]} placeholder="/path/to/program" disabled={busy || !editable} data-test={`hook-program-${index}`}
             onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: [value, ...hook.run.slice(1)] }) }}>Program</Input>
+          <Input type="number" min={1} max={600} step={1} value={hook.timeout === null || hook.timeout === undefined ? '' : String(hook.timeout)} placeholder="30" disabled={busy || !editable} data-test={`hook-timeout-${index}`}
+            onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, timeout: value.trim() === '' ? null : Number(value) }) }}>Timeout in seconds (optional, 1 to 600)</Input>
           {hook.run.slice(1).map((argument, i) => <div key={i} className="hook-argument">
             <Input value={argument} disabled={busy || !editable} onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: hook.run.map((word, j) => j === i + 1 ? value : word) }) }}>{`Argument ${i + 1}`}</Input>
           <Button size="small" kind="plain-faint" isDisabled={busy || !editable} onClick={() => change(index, { ...hook, run: hook.run.filter((_, j) => j !== i + 1) })} aria-label={`Remove argument ${i + 1} from hook ${index + 1}`}>Remove</Button></div>)}
@@ -176,7 +178,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
         <p className="settings-caption">Arguments are passed exactly as entered; shell syntax is not interpreted. Failed hooks appear in the turn’s notices.</p>
         <div className="settings-actions">
           <Button size="small" kind="filled" isDisabled={!dirty || busy || !editable} onClick={() => void save()} data-test="hook-save">Save hooks</Button>
-          <Button size="small" kind="outline" isDisabled={!editable || busy} onClick={() => { setHooks(rows => [...rows, { on: 'turn-finished', tool: null, run: [''], firesForNothing: false }]); setDirty(true) }} data-test="hook-add">Add hook</Button>
+          <Button size="small" kind="outline" isDisabled={!editable || busy} onClick={() => { setHooks(rows => [...rows, { on: 'turn-finished', tool: null, run: [''], timeout: null, firesForNothing: false }]); setDirty(true) }} data-test="hook-add">Add hook</Button>
           <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => { if (!dirty || window.confirm('Discard unsaved hook changes and reload?')) void loadHooks() }}>Reload hooks</Button>
         </div>
       </section>

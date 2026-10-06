@@ -34,6 +34,7 @@ fn report(path: &Path, read: &Declarations) -> Value {
             "on": hook.moment().as_str(),
             "tool": hook.tool(),
             "run": hook.run(),
+            "timeout": hook.timeout().map(|bound| bound.as_secs()),
             "firesForNothing": hook.fires_for_nothing(),
         })).collect::<Vec<_>>(),
     })
@@ -62,7 +63,7 @@ mod tests {
     fn a_front_end_is_told_the_entries_the_agent_read() {
         let (home, report) = scratch(
             r#"{"hooks": [
-                {"on": "tool-finished", "tool": "write_file", "run": ["fmt", "a b"]},
+                {"on": "tool-finished", "tool": "write_file", "run": ["fmt", "a b"], "timeout": 120},
                 {"on": "turn-started", "tool": "write_file", "run": ["begin"]}
             ]}"#,
         );
@@ -75,8 +76,8 @@ mod tests {
         assert_eq!(
             report["hooks"],
             json!([
-                {"on": "tool-finished", "tool": "write_file", "run": ["fmt", "a b"], "firesForNothing": false},
-                {"on": "turn-started", "tool": "write_file", "run": ["begin"], "firesForNothing": true},
+                {"on": "tool-finished", "tool": "write_file", "run": ["fmt", "a b"], "timeout": 120, "firesForNothing": false},
+                {"on": "turn-started", "tool": "write_file", "run": ["begin"], "timeout": null, "firesForNothing": true},
             ])
         );
     }

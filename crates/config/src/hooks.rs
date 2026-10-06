@@ -46,6 +46,12 @@ const HOOKS_FILE: &str = "hooks.json";
 /// was replaced by something else entirely, is passed over rather than parsed.
 const MAX_BYTES: u64 = 64 * 1024;
 
+/// The most a hook may declare for `timeout`, in seconds.
+///
+/// Every hook holds the turn open while it runs, so there is a ceiling: a typo of an extra zero
+/// declares no hook, and does not hold a turn open for hours.
+pub const MAX_TIMEOUT_SECONDS: u64 = 600;
+
 /// Where a person's hooks are declared, for telling them so.
 pub fn hooks_file(directory: &Path) -> PathBuf {
     directory.join(HOOKS_FILE)
@@ -103,6 +109,9 @@ pub struct Hook {
     tool: Option<String>,
     /// The program and its arguments. Never empty: an entry with nothing to run is not kept.
     run: Vec<String>,
+    /// How long this hook may run, in whole seconds, where the entry stated one. `None` is the
+    /// bound a turn uses for every hook that states none.
+    timeout: Option<u64>,
 }
 
 impl Hook {
@@ -119,6 +128,11 @@ impl Hook {
     /// The program and its arguments.
     pub fn run(&self) -> &[String] {
         &self.run
+    }
+
+    /// How long this hook may run, where it stated one.
+    pub fn timeout(&self) -> Option<std::time::Duration> {
+        self.timeout.map(std::time::Duration::from_secs)
     }
 
     /// Whether this entry names a call that does not happen at its moment, so nothing fires it.
@@ -297,17 +311,20 @@ fn accounted(value: &serde_json::Value, hook: &Hook) -> bool {
     };
     if object
         .keys()
-        .any(|key| !matches!(key.as_str(), "on" | "tool" | "run"))
+        .any(|key| !matches!(key.as_str(), "on" | "tool" | "run" | "timeout"))
     {
         return false;
     }
     // A name read as `None` because it was blank, because it was not a string at all, or trimmed
     // on the way in, is a name that would not survive the round trip.
-    match (object.get("tool"), hook.tool.as_deref()) {
+    let tool_kept = match (object.get("tool"), hook.tool.as_deref()) {
         (None, None) => true,
         (Some(written), Some(read)) => written.as_str() == Some(read),
         _ => false,
-    }
+    };
+    // An entry with an unusable `timeout` is dropped, so a value that was read is one that is
+    // written back as it was.
+    tool_kept && object.get("timeout").and_then(serde_json::Value::as_u64) == hook.timeout
 }
 
 /// One entry, or `None` where it says nothing this build can run.
@@ -339,7 +356,22 @@ fn entry(value: &serde_json::Value) -> Option<Hook> {
     if run.first().map(|program| program.trim().is_empty()) != Some(false) {
         return None;
     }
-    Some(Hook { moment, tool, run })
+    // Whole seconds from 1 to the ceiling. Anything else drops the entry, as an argument that is not
+    // a string does: a bound somebody typed wrongly is not one to guess at, and the default would
+    // be a bound they did not ask for.
+    let timeout = match object.get("timeout") {
+        None => None,
+        Some(value) => match value.as_u64() {
+            Some(seconds) if (1..=MAX_TIMEOUT_SECONDS).contains(&seconds) => Some(seconds),
+            _ => return None,
+        },
+    };
+    Some(Hook {
+        moment,
+        tool,
+        run,
+        timeout,
+    })
 }
 
 #[cfg(test)]
@@ -625,6 +657,61 @@ mod tests {
             .map(Hook::fires_for_nothing)
             .collect();
         assert_eq!(fires_for_nothing, vec![true, false, false]);
+    }
+
+    /// HOOK-7: an entry may state its own bound, in whole seconds, and one that states none has
+    /// none of its own.
+    #[test]
+    fn an_entry_may_state_its_own_timeout() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [
+                {"on": "turn-finished", "run": ["a"], "timeout": 1},
+                {"on": "turn-finished", "run": ["b"], "timeout": 600},
+                {"on": "turn-finished", "run": ["c"]}
+            ]}"#,
+        );
+        let bounds: Vec<Option<u64>> = hooks
+            .declared()
+            .iter()
+            .map(|hook| hook.timeout().map(|bound| bound.as_secs()))
+            .collect();
+        assert_eq!(bounds, vec![Some(1), Some(600), None]);
+        assert!(
+            read(r#"{"hooks": [{"on": "turn-finished", "run": ["a"], "timeout": 5}]}"#).1,
+            "a timeout is a key this reads, so the file is wholly read"
+        );
+    }
+
+    /// HOOK-7: a timeout that is not a whole number of seconds from 1 to the ceiling declares no
+    /// hook, and the entries beside it stay in force.
+    #[test]
+    fn an_unusable_timeout_drops_the_entry() {
+        for value in [
+            "0",
+            "-1",
+            "601",
+            "1.5",
+            "1.0",
+            "\"30\"",
+            "null",
+            "true",
+            "[30]",
+            "99999999999999999999",
+        ] {
+            let text = format!(
+                r#"{{"hooks": [
+                    {{"on": "turn-finished", "run": ["bad"], "timeout": {value}}},
+                    {{"on": "turn-finished", "run": ["good"]}}
+                ]}}"#
+            );
+            let hooks = Hooks::parse(&text);
+            assert_eq!(
+                programs(&hooks, Moment::TurnFinished, None),
+                vec![vec!["good".to_string()]],
+                "timeout {value}"
+            );
+            assert!(!read(&text).1, "timeout {value}");
+        }
     }
 
     /// HOOK-7: a file too large to be the handful of short vectors this reads is passed over.
