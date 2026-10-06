@@ -7,15 +7,17 @@
 use crate::exit::{Ending, fail};
 use crate::plain::Prompting;
 use crate::progress::printable;
-use bravebot_agent::backend::Backend;
+use bravebot_agent::backend::{Backend, CredentialError};
 use bravebot_agent::confirm::Decision;
 use bravebot_agent::home;
 use bravebot_config::bedrock::{Bedrock, Tier};
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::keys::{self, Keys};
-use bravebot_config::provider::Provider;
+use bravebot_config::provider::{Credential, Provider, Source};
 use bravebot_config::{Config, ConfigError, Managed, Settings, env_var};
 use bravebot_i18n::t;
+use bravebot_skus::StoredCredentials;
+use bravebot_skus::store::StoreError;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
@@ -63,6 +65,7 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
     match args.split_first() {
         Some((command, rest)) if command == "login" => login(rest),
         Some((command, rest)) if command == "logout" => logout(rest),
+        Some((command, rest)) if command == "status" => status(rest),
         Some((other, _)) => {
             refused_with_the_forms(t!(auth_unknown_command, command = printable(other)))
         }
@@ -83,6 +86,7 @@ fn refused_with_the_forms(message: impl std::fmt::Display) -> ExitCode {
         "bravebot auth login gateway [id]",
         "bravebot auth logout leo",
         "bravebot auth logout gateway [id]",
+        "bravebot auth status [leo|bedrock|gateway [id]]",
     ] {
         said.push_str("\n  ");
         said.push_str(form);
@@ -745,6 +749,302 @@ fn store(directory: &Path, stored: &Keys) -> std::io::Result<()> {
     written
 }
 
+/// How one sign-in stands, as `bravebot auth status` reports it.
+///
+/// Every text in it is a count or a fixed sentence: nothing here is built from a credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Standing {
+    /// Usable now.
+    SignedIn(String),
+    /// Nothing is there, or what was there has lapsed, and signing in fixes it.
+    NotSignedIn(String),
+    /// Something is there and signing in again would not make it usable.
+    Unusable(String),
+    /// The configuration cannot be read, so the question has no answer.
+    Misconfigured(String),
+}
+
+impl Standing {
+    fn usable(&self) -> bool {
+        matches!(self, Standing::SignedIn(_))
+    }
+
+    fn said(&self) -> String {
+        match self {
+            Standing::SignedIn(detail) => t!(auth_status_signed_in, detail = detail),
+            Standing::NotSignedIn(detail) => t!(auth_status_not_signed_in, detail = detail),
+            Standing::Unusable(detail) | Standing::Misconfigured(detail) => {
+                t!(auth_status_unusable, detail = detail)
+            }
+        }
+    }
+}
+
+/// One sign-in with the name it is reported under: a way, and the account or gateway under it.
+type Line = (String, Standing);
+
+/// `bravebot auth status [way]`: one line per sign-in, and an exit status that says whether it is
+/// usable.
+///
+/// Reads what a turn reads and writes nothing. With a way named, every sign-in under it has to be
+/// usable. With none named, one is enough, since nobody holds all of them and a script asking
+/// whether bravebot can run is asking about the set.
+fn status(args: &[String]) -> ExitCode {
+    let Some((word, rest)) = args.split_first() else {
+        return report(&[Way::Leo, Way::Bedrock, Way::Gateway], None, false);
+    };
+    if word.starts_with('-') {
+        return fail(
+            Ending::Argument,
+            t!(cli_unknown_option, flag = printable(option_name(word))),
+        );
+    }
+    let Some(way) = Way::named(word) else {
+        return refused_with_the_forms(t!(auth_unknown_way, way = printable(word)));
+    };
+    if way == Way::Import {
+        return fail(Ending::Argument, t!(auth_status_import));
+    }
+    let takes = usize::from(way == Way::Gateway);
+    if let Some(flag) = rest.iter().find(|word| word.starts_with('-')) {
+        return fail(
+            Ending::Argument,
+            t!(cli_unknown_option, flag = printable(option_name(flag))),
+        );
+    }
+    if let Some(extra) = rest.get(takes) {
+        return fail(
+            Ending::Argument,
+            t!(
+                auth_unexpected_argument,
+                command = format!("bravebot auth status {}", way.name()),
+                argument = printable(extra)
+            ),
+        );
+    }
+    report(&[way], rest.first().map(String::as_str), true)
+}
+
+/// Print the standing of each of `ways`, then end as [`verdict`] says.
+fn report(ways: &[Way], gateway_id: Option<&str>, named: bool) -> ExitCode {
+    let mut lines: Vec<Line> = Vec::new();
+    for way in ways {
+        match way {
+            Way::Leo => lines.push(("leo".into(), leo())),
+            Way::Bedrock => lines.extend(bedrock_standings(
+                bedrock_config(&Settings::load(), &Managed::load()),
+                inherited_profile().as_deref(),
+                Backend::session_of,
+            )),
+            Way::Gateway => {
+                let unreadable = home::directory().is_some_and(|dir| Keys::read(&dir).is_err());
+                match gateway_standings(Config::from_env(), gateway_id, unreadable, |name| {
+                    std::env::var(name).ok()
+                }) {
+                    Ok(found) => lines.extend(found),
+                    Err((ending, refusal)) => return fail(ending, refusal),
+                }
+            }
+            Way::Import => {}
+        }
+    }
+    for (name, standing) in &lines {
+        println!("{name}: {}", standing.said());
+    }
+    match verdict(&lines, named) {
+        Ending::Done => ExitCode::SUCCESS,
+        ending => fail(
+            ending,
+            if named {
+                t!(auth_status_not_all_usable)
+            } else {
+                t!(auth_status_none_usable)
+            },
+        ),
+    }
+}
+
+/// How the run ends: done where the sign-ins asked about are usable, else the ending CLI-6 gives
+/// the failure. A configuration that could not be read is that ending, and anything else is a
+/// plain failure.
+fn verdict(lines: &[Line], named: bool) -> Ending {
+    let usable = if named {
+        lines.iter().all(|(_, standing)| standing.usable())
+    } else {
+        lines.iter().any(|(_, standing)| standing.usable())
+    };
+    if usable {
+        Ending::Done
+    } else if lines
+        .iter()
+        .any(|(_, standing)| matches!(standing, Standing::Misconfigured(_)))
+    {
+        Ending::Configuration
+    } else {
+        Ending::Failed
+    }
+}
+
+/// The imported Leo subscription, read from the store a turn reads.
+fn leo() -> Standing {
+    // The store answers this the way it answers a file it could not read, so it is asked on its
+    // own, as `ImportedSubscription::discover` does: somebody who never held a subscription is not
+    // told theirs is unusable.
+    if bravebot_skus::store::path().is_err() {
+        return Standing::NotSignedIn(t!(auth_status_leo_nowhere).into());
+    }
+    leo_standing(bravebot_skus::store::load(), || {
+        Config::from_env().map(|config| config.premium_endpoint)
+    })
+}
+
+/// [`leo`] from what the store answered, with the endpoint a turn would spend against asked for
+/// only where there is a batch to check it against.
+fn leo_standing(
+    loaded: Result<StoredCredentials, StoreError>,
+    endpoint: impl FnOnce() -> Result<Option<String>, ConfigError>,
+) -> Standing {
+    let stored = match loaded {
+        Ok(stored) => stored,
+        Err(StoreError::NotFound) => return Standing::NotSignedIn(t!(auth_status_leo_none).into()),
+        // Its text carries the remedy (PREM-8).
+        Err(other) => return Standing::Unusable(printable(&other.to_string())),
+    };
+    let endpoint = match endpoint() {
+        Ok(endpoint) => endpoint,
+        Err(problem) => return Standing::Misconfigured(printable(&problem.to_string())),
+    };
+    if let Some(refusal) = endpoint.as_deref().and_then(|endpoint| {
+        bravebot_agent::subscription::environment_mismatch(endpoint, stored.environment)
+    }) {
+        return Standing::Unusable(printable(&refusal));
+    }
+    Standing::SignedIn(t!(
+        doctor_subscription,
+        environment = stored.environment.as_str(),
+        unspent = stored.remaining(),
+        total = stored.credentials.len()
+    ))
+}
+
+/// Each AWS account the configuration names, asked whether its session gives credentials.
+fn bedrock_standings(
+    config: Result<Config, ConfigError>,
+    inherited: Option<&str>,
+    session: impl Fn(Option<&str>) -> Result<(), CredentialError>,
+) -> Vec<Line> {
+    let config = match config {
+        Ok(config) => config,
+        Err(problem) => {
+            return vec![(
+                "bedrock".into(),
+                Standing::Misconfigured(printable(&problem.to_string())),
+            )];
+        }
+    };
+    let accounts = accounts(&config, inherited);
+    if accounts.is_empty() {
+        return vec![(
+            "bedrock".into(),
+            Standing::NotSignedIn(t!(
+                auth_no_aws_account,
+                region = env_var::AWS_REGION,
+                tiers = listed(Tier::ALL.into_iter().map(Tier::env_var))
+            )),
+        )];
+    }
+    accounts
+        .into_iter()
+        .map(|(profile, account)| {
+            let name = match profile {
+                Some(profile) => format!("bedrock {}", printable(&profile)),
+                None => "bedrock".to_string(),
+            };
+            (name, bedrock_standing(session(account.profile.as_deref())))
+        })
+        .collect()
+}
+
+/// An AWS session as a standing: a lapsed one is signed in again, and a missing CLI or a profile it
+/// does not have is not fixed by signing in.
+fn bedrock_standing(session: Result<(), CredentialError>) -> Standing {
+    match session {
+        Ok(()) => Standing::SignedIn(t!(auth_status_bedrock_good).into()),
+        Err(lapsed @ CredentialError::Refused { .. }) => {
+            Standing::NotSignedIn(printable(&lapsed.to_string()))
+        }
+        Err(other) => Standing::Unusable(printable(&other.to_string())),
+    }
+}
+
+/// Each gateway a provider block names, or the one `named`, with whether a turn would find a key
+/// for it, and where.
+///
+/// A refusal where the id names no gateway, as `auth login gateway` refuses it.
+fn gateway_standings(
+    config: Result<Config, ConfigError>,
+    named: Option<&str>,
+    keys_unreadable: bool,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<Vec<Line>, (Ending, String)> {
+    let config = match config {
+        Ok(config) => config,
+        Err(problem) => {
+            return Ok(vec![(
+                "gateway".into(),
+                Standing::Misconfigured(printable(&problem.to_string())),
+            )]);
+        }
+    };
+    let gateways: Vec<&Provider> = config
+        .providers
+        .iter()
+        .filter(|provider| provider.bedrock.is_none())
+        .collect();
+    if gateways.is_empty() {
+        let none = t!(auth_gateway_none_configured);
+        return match named {
+            Some(_) => Err((Ending::Configuration, none.into())),
+            None => Ok(vec![("gateway".into(), Standing::NotSignedIn(none.into()))]),
+        };
+    }
+    if let Some(id) = named
+        && !gateways.iter().any(|provider| provider.id == id)
+    {
+        // Not repeated back, as in `auth login gateway`: the word may be a key.
+        return Err((
+            Ending::Argument,
+            t!(
+                auth_gateway_not_configured,
+                ids = listed(gateways.iter().map(|provider| provider.id.as_str()))
+            ),
+        ));
+    }
+    Ok(gateways
+        .into_iter()
+        .filter(|provider| named.is_none_or(|id| provider.id == id))
+        .map(|provider| {
+            let standing = match provider.credential_and_source(&lookup) {
+                (Credential::Token(_), Some(Source::Stored)) => {
+                    Standing::SignedIn(t!(doctor_gateway_token_stored).into())
+                }
+                (Credential::Token(_), _) => Standing::SignedIn(t!(doctor_gateway_token).into()),
+                (Credential::NotNeeded, _) => {
+                    Standing::SignedIn(t!(doctor_gateway_token_not_needed).into())
+                }
+                (Credential::Absent, _) if keys_unreadable => {
+                    Standing::Unusable(t!(auth_gateway_held_unreadable).into())
+                }
+                (Credential::Absent, _) => Standing::NotSignedIn(t!(
+                    doctor_gateway_token_absent,
+                    id = printable(&provider.id)
+                )),
+            };
+            (format!("gateway {}", printable(&provider.id)), standing)
+        })
+        .collect())
+}
+
 /// Several names on one line, in the order given.
 fn listed<'n>(names: impl Iterator<Item = &'n str>) -> String {
     names.map(printable).collect::<Vec<_>>().join(", ")
@@ -1285,5 +1585,84 @@ mod tests {
         store(&directory, &Keys::default()).expect("forgotten");
         assert!(!keys::file(&directory).exists(), "an empty file was left");
         store(&directory, &Keys::default()).expect("nothing to remove is not a failure");
+    }
+
+    fn line(standing: Standing) -> Line {
+        ("way".to_string(), standing)
+    }
+
+    /// CLI-23: a way named has to be usable throughout, and with none named one usable sign-in is
+    /// enough. A configuration that could not be read is its own ending, but only where nothing
+    /// asked about is usable.
+    #[test]
+    fn the_verdict_asks_all_of_a_named_way_and_any_of_the_rest() {
+        let good = || line(Standing::SignedIn("good".into()));
+        let absent = || line(Standing::NotSignedIn("absent".into()));
+        let unusable = || line(Standing::Unusable("broken".into()));
+        let misconfigured = || line(Standing::Misconfigured("unreadable".into()));
+
+        assert_eq!(verdict(&[good(), absent()], false), Ending::Done);
+        assert_eq!(verdict(&[good(), absent()], true), Ending::Failed);
+        assert_eq!(verdict(&[good(), good()], true), Ending::Done);
+        assert_eq!(verdict(&[absent(), unusable()], false), Ending::Failed);
+        assert_eq!(verdict(&[], false), Ending::Failed);
+        assert_eq!(
+            verdict(&[absent(), misconfigured()], false),
+            Ending::Configuration
+        );
+        assert_eq!(verdict(&[good(), misconfigured()], false), Ending::Done);
+        assert_eq!(
+            verdict(&[good(), misconfigured()], true),
+            Ending::Configuration
+        );
+    }
+
+    /// CLI-23: an AWS session that lapsed is one signing in fixes; a missing CLI or an unknown
+    /// profile is not, and says so rather than sending somebody to sign in.
+    #[test]
+    fn a_lapsed_aws_session_is_not_signed_in_and_a_missing_cli_is_unusable() {
+        assert!(bedrock_standing(Ok(())).usable());
+        let lapsed = CredentialError::Refused {
+            detail: "expired".into(),
+        };
+        assert!(matches!(
+            bedrock_standing(Err(lapsed)),
+            Standing::NotSignedIn(_)
+        ));
+        for other in [
+            CredentialError::NotInstalled,
+            CredentialError::NoSuchProfile {
+                profile: "work".into(),
+                available: Vec::new(),
+            },
+            CredentialError::Undecodable {
+                detail: "odd".into(),
+            },
+        ] {
+            assert!(
+                matches!(bedrock_standing(Err(other)), Standing::Unusable(_)),
+                "a fault signing in cannot fix was reported as one it can"
+            );
+        }
+    }
+
+    /// CLI-23 and PREM-8: nothing imported is told from a store that could not be read, and the
+    /// endpoint is asked for only once there is a batch to check it against.
+    #[test]
+    fn nothing_imported_is_told_from_a_store_that_could_not_be_read() {
+        let never = || -> Result<Option<String>, ConfigError> {
+            panic!("the endpoint was asked for with no batch to check")
+        };
+        assert!(matches!(
+            leo_standing(Err(StoreError::NotFound), never),
+            Standing::NotSignedIn(_)
+        ));
+        let unreadable = StoreError::Malformed {
+            detail: "not valid JSON".into(),
+        };
+        match leo_standing(Err(unreadable), never) {
+            Standing::Unusable(why) => assert!(why.contains("bravebot auth login leo"), "{why}"),
+            other => panic!("an unreadable store was reported as {other:?}"),
+        }
     }
 }

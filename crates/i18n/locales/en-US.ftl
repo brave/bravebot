@@ -34,6 +34,7 @@ cli-usage-import = Import a Leo Premium subscription
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
 cli-usage-auth-login = Sign in to a model service, listing every way when none is named
 cli-usage-auth-logout = Forget an imported Leo Premium subscription or a stored gateway key
+cli-usage-auth-status = Say whether a sign-in is usable, exiting 0 only if it is
 cli-usage-mcp = Declare, list and approve MCP servers
 cli-usage-completion = Print a shell completion script
 cli-usage-sessions = List the sessions that keep running after the terminal closes
@@ -772,6 +773,18 @@ auth-logout-gateway-forgotten =
     the key for { $id } is forgotten here, and still works at { $host } until it is revoked there
 auth-logout-gateway-forgotten-elsewhere =
     the key for { $id } is forgotten here, and still works at the service that issued it until it is revoked there
+
+# bravebot auth status prints one line per sign-in, as "leo: signed in: <detail>". The detail is a
+# count or a fixed sentence, never a credential.
+auth-status-signed-in = signed in: { $detail }
+auth-status-not-signed-in = not signed in: { $detail }
+auth-status-unusable = unusable: { $detail }
+auth-status-none-usable = no sign-in is usable
+auth-status-not-all-usable = a sign-in asked about is not usable
+auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock or gateway
+auth-status-leo-none = no Leo subscription is imported; run bravebot auth login leo
+auth-status-leo-nowhere = this machine has nowhere to keep credentials, so none is imported
+auth-status-bedrock-good = the AWS session gives credentials to sign a request with
 
 
 ## Declaring an MCP server, and approving one

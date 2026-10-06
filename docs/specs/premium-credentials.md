@@ -258,6 +258,11 @@ text of every refusal, so the turn notice and the onboarding block both carry it
 records a version other than the one this build writes is refused, since the same fields may mean
 something else.
 
+`bravebot auth status` ([CLI-23](cli.md#CLI-23)) prints the store's refusal text as it stands, and
+the same sentence for a batch imported for an environment the endpoint does not accept, so the
+remedy is the one a turn shows. Nothing imported is reported there as not signed in, because the
+person asked, where a turn says nothing about it.
+
 `verified-by: bravebot_skus::store::every_refusal_of_a_stored_batch_names_the_remedy`
 `verified-by: bravebot_skus::store::a_batch_of_another_version_is_refused`
 `verified-by: bravebot_agent::subscription::an_unreadable_batch_is_reported_and_an_absent_one_is_not`
@@ -266,6 +271,9 @@ something else.
 `verified-by: bravebot_agent::home::a_subscription_imported_for_another_environment_is_reported`
 `verified-by: bravebot_agent::home::an_empty_credentials_file_is_reported_rather_than_read_as_absent`
 `verified-by: bravebot_agent::home::a_turn_on_another_backend_is_not_told_about_an_unusable_batch`
+`verified-by: bravebot_agent::subscription::a_batch_for_the_wrong_environment_is_refused_with_its_remedy`
+`verified-by: bravebot_cli::running::auth_status_leo_for_another_environment_prints_the_remedy_a_turn_would`
+`verified-by: bravebot_cli::running::auth_status_leo_with_an_unreadable_batch_is_unusable_with_the_stores_remedy`
 `verified-by: bravebot_agent::backend::only_the_aichat_backend_spends_an_imported_subscription`
 
 <a id="PREM-9"></a>

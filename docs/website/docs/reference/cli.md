@@ -20,6 +20,7 @@ Usage:
   bravebot doctor                        Check configuration and confinement
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
   bravebot auth logout <way>             Forget an imported Leo Premium subscription or a stored gateway key
+  bravebot auth status [way]             Say whether a sign-in is usable, exiting 0 only if it is
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
   bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
@@ -41,6 +42,7 @@ Usage:
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
 | `bravebot auth logout leo` | forget an imported Leo Premium subscription |
 | `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
+| `bravebot auth status [leo\|bedrock\|gateway [id]]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
@@ -440,6 +442,7 @@ what was already true.
 bravebot auth login [leo [channel] | bedrock | import | gateway [id]]
 bravebot auth logout leo
 bravebot auth logout gateway [id]
+bravebot auth status [leo | bedrock | gateway [id]]
 ```
 
 With no way named, `auth login` lists the ways to sign in, marks the ones already in use, and asks
@@ -457,8 +460,24 @@ argument. With one gateway configured it asks for no id.
 
 `auth logout leo` runs `import-leo-creds --forget`. `auth logout gateway [id]` forgets a stored key,
 and the id can be left off when only one is stored. In an incognito session the `leo`, `import` and
-`gateway` ways are refused, and `bedrock` and both forms of `auth logout` are allowed. See
+`gateway` ways are refused, and `bedrock`, `auth status` and both forms of `auth logout` are allowed. See
 [Signing in](../customize/signing-in.md).
+
+`auth status` prints one line per sign-in and changes nothing:
+
+```text
+$ bravebot auth status
+leo: signed in: production subscription imported, 12 of 30 credentials unspent
+bedrock: not signed in: no AWS account is configured for Bedrock: ...
+gateway openrouter: signed in: stored by bravebot auth login gateway (never printed)
+```
+
+A line says signed in, not signed in (signing in fixes it), or unusable (it does not: a stored
+subscription for another Brave channel, an unreadable file, a missing `aws`), with the reason and
+what to run. Only counts and fixed sentences are printed, never a credential. With no way named it
+exits 0 if any sign-in is usable. With a way named it exits 0 only if every sign-in under it is
+usable. Otherwise it prints a `BB1001` line and exits 1, or exits 3 when the configuration could not
+be read. `auth status import` is refused, since an import keeps no sign-in.
 
 ## `import-leo-creds`
 
