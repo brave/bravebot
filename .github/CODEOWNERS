@@ -13,29 +13,21 @@
 # which checks hold a merge.
 #
 # Last matching pattern wins, so keep the more specific rules below the general ones.
-#
-# netzenbot-reviewer is the account the scheduled review-prs job reviews as. GitHub requests the
-# owners of every file a pull request touches, and only the last matching rule counts, so the
-# account is on the catch-all rule and repeated on each rule below it: a change to only one of
-# those files would otherwise ask bbondy and never the reviewer. Nothing waits on it; the ruleset
-# does not require code-owner review.
 
-* @netzenbot-reviewer
+/README.md @bbondy
 
-/README.md @bbondy @netzenbot-reviewer
+/Cargo.toml @bbondy
+/crates/*/Cargo.toml @bbondy
+/package.json @bbondy
+/deny.toml @bbondy
 
-/Cargo.toml @bbondy @netzenbot-reviewer
-/crates/*/Cargo.toml @bbondy @netzenbot-reviewer
-/package.json @bbondy @netzenbot-reviewer
-/deny.toml @bbondy @netzenbot-reviewer
-
-/.github/workflows/ @bbondy @netzenbot-reviewer
-/.github/CODEOWNERS @bbondy @netzenbot-reviewer
-/Dockerfile.cross @bbondy @netzenbot-reviewer
-/install.sh @bbondy @netzenbot-reviewer
-/npm/scripts/ @bbondy @netzenbot-reviewer
-/ui/package.json @bbondy @netzenbot-reviewer
-/package-lock.json @bbondy @netzenbot-reviewer
-/ui/package-lock.json @bbondy @netzenbot-reviewer
-/Cargo.lock @bbondy @netzenbot-reviewer
-/contrib/required-checks.txt @bbondy @netzenbot-reviewer
+/.github/workflows/ @bbondy
+/.github/CODEOWNERS @bbondy
+/Dockerfile.cross @bbondy
+/install.sh @bbondy
+/npm/scripts/ @bbondy
+/ui/package.json @bbondy
+/package-lock.json @bbondy
+/ui/package-lock.json @bbondy
+/Cargo.lock @bbondy
+/contrib/required-checks.txt @bbondy
