@@ -200,3 +200,45 @@ followed it is what makes this a property of the code rather than of whoever wro
 `verified-by: bravebot_agent::turn::a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose`
 `verified-by: bravebot_agent::turn::a_fetched_page_names_the_host_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: by-construction (neither value a successful fetch hands back carries the URL a redirect chain ended at, so no result can name one)`
+
+<a id="FETCH-7"></a>
+### FETCH-7: every fetch asks for Markdown first, with a header nothing can change
+
+Every request a fetch sends carries one `Accept` header, fixed in this program's source:
+
+```
+Accept: text/markdown, */*;q=0.9
+```
+
+The driver sets it before the request goes out. The planner's `url` argument takes no part in it,
+no reply can change it, and every hop of a redirect chain sends the same bytes.
+
+Markdown is the only type ranked. A server holding no Markdown answers with whatever it would
+have answered for `*/*`, so this header changes which type a fetch gets only where Markdown is
+one of the choices.
+
+This changes nothing else. The label is still fixed by `Capability::WebFetch` before the request
+goes out ([FETCH-1](#FETCH-1)), so a `text/markdown` body is untrusted and public exactly as an
+HTML one is and a server cannot raise it by naming a type. The 2 MiB cap is the egress layer's
+and is unchanged ([NET-4](../network-egress.md#NET-4)). The planner still gets a reference and
+never the bytes.
+
+**Why.** The body is read by a processor and by nothing else, and the same page as Markdown costs
+a fraction of the tokens its HTML costs. A server able to answer with either answers with HTML
+unless asked otherwise, so without this the whole HTML body, up to the cap, is what a processor
+has to read.
+
+**Why nothing but Markdown is ranked.** Ranking the rest would state a preference this program
+does not hold. An endpoint that negotiates answers `*/*` with a compact form and `text/html` with
+a full page, so naming HTML above `*/*` would cost a processor more tokens than sending no header
+at all, which is the opposite of the reason for sending one. `*/*` also keeps a server holding
+none of the named types answering with what it has rather than refusing.
+
+**Why no conversion here.** Asking is all the driver does. Turning HTML into Markdown means
+reading the bytes, and [processors.md](../processors.md) makes a processor the one component that
+reads untrusted content, holding no capabilities of its own ([PROC-1](../processors.md#PROC-1)), so
+a converter in the driver would be the driver reading a page.
+
+`verified-by: bravebot_agent::turn::a_fetch_asks_for_markdown_ahead_of_html`
+`verified-by: bravebot_agent::turn::a_redirected_fetch_still_asks_for_markdown_ahead_of_html`
+`verified-by: bravebot_agent::turn::a_markdown_body_is_labelled_exactly_as_an_html_body_is`
