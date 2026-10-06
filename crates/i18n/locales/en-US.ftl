@@ -36,6 +36,8 @@ cli-usage-auth-login = Sign in to a model service, listing every way when none i
 cli-usage-auth-logout = Forget an imported Leo Premium subscription or a stored gateway key
 cli-usage-mcp = Declare, list and approve MCP servers
 cli-usage-completion = Print a shell completion script
+cli-usage-sessions = List the sessions that keep running after the terminal closes
+cli-usage-sessions-stop = Stop one of them
 
 cli-keys-heading = Interactive keys:
 cli-key-send = Send
@@ -2662,3 +2664,28 @@ doctor-direnv-ok = available on PATH
 doctor-direnv-missing = not found on PATH; see https://direnv.net/ or run `brew install direnv`
 
 status-undecided = not decided
+
+sessions-usage = sessions takes --json, or stop and a session's id
+sessions-none = No background sessions.
+sessions-no-home = There is no state directory to find background sessions in.
+sessions-missing = No background session { $id }.
+sessions-ambiguous = More than one background session begins with { $id }.
+sessions-stopped = Stopped { $name }.
+sessions-not-running = { $name } was not running.
+sessions-stop-failed = Could not record the stop: { $problem }
+sessions-state-working = working
+sessions-state-idle = idle
+sessions-state-stopped = stopped
+sessions-state-interrupted = interrupted
+sessions-state-needs-input = needs input ({ $kind })
+sessions-state-needs-input-unnamed = needs input
+sessions-held-write = write
+sessions-held-run = run
+sessions-held-read = read
+sessions-held-fetch = fetch
+sessions-held-server = server
+sessions-held-vouch = vouch
+sessions-held-tools = tools
+sessions-held-move = move
+sessions-held-manifest = manifest
+sessions-held-question = question

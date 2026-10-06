@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod background;
 mod completion;
 mod exit;
 mod import;
@@ -208,6 +209,7 @@ fn main() -> ExitCode {
         ) => run_task(&args, skip_permissions, agent, prompts),
         Some("doctor") => doctor(),
         Some("auth") => auth::command(&args[1..]),
+        Some("sessions") => background::sessions(&args[1..]),
         Some("mcp") => mcp::command(&args[1..]),
         Some("completion") => match completion::command(&args[1..]) {
             Some(()) => ExitCode::SUCCESS,
@@ -268,8 +270,10 @@ fn without_a_definition(first: Option<&str>) -> Option<String> {
         flag @ ("--resume" | "-r" | "--continue" | "-c" | "--fork" | "-f") => {
             Some(t!(cli_agent_not_with_a_recorded_session, flag = flag).to_string())
         }
-        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers"
-        | "completion") => Some(t!(cli_agent_not_for_a_command, command = command).to_string()),
+        command @ ("doctor" | "auth" | "mcp" | "sessions" | "import-leo-creds"
+        | "import-providers" | "completion") => {
+            Some(t!(cli_agent_not_for_a_command, command = command).to_string())
+        }
         _ => None,
     }
 }
@@ -329,8 +333,8 @@ fn flag_named(prompts: &SystemPrompts) -> Option<&'static str> {
 /// rather than ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
     match first? {
-        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers"
-        | "completion") => Some(
+        command @ ("doctor" | "auth" | "mcp" | "sessions" | "import-leo-creds"
+        | "import-providers" | "completion") => Some(
             t!(
                 cli_system_prompt_not_for_a_command,
                 flag = flag,
@@ -447,6 +451,8 @@ fn print_help() {
         ("bravebot --continue", t!(cli_usage_continue)),
         ("bravebot --fork <id>", t!(cli_usage_fork)),
         ("bravebot doctor", t!(cli_usage_doctor)),
+        ("bravebot sessions [--json]", t!(cli_usage_sessions)),
+        ("bravebot sessions stop <id>", t!(cli_usage_sessions_stop)),
         ("bravebot auth login [way]", t!(cli_usage_auth_login)),
         ("bravebot auth logout <way>", t!(cli_usage_auth_logout)),
         ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
@@ -5620,6 +5626,7 @@ mod tests {
             "doctor",
             "auth",
             "mcp",
+            "sessions",
             "import-leo-creds",
             "import-providers",
             "completion",
@@ -5732,6 +5739,7 @@ mod tests {
             "doctor",
             "auth",
             "mcp",
+            "sessions",
             "import-leo-creds",
             "import-providers",
             "completion",

@@ -5895,3 +5895,79 @@ fn the_bash_script_completes_commands_subcommands_and_flags_by_position() {
     assert_eq!(completes(&["bravebot", "do a thing", "--fi"]), ["--file"]);
     assert!(completes(&["bravebot", "do a thing", "pa"]).is_empty());
 }
+
+const SESSION_ID: &str = "3f2a9c1e-7b44-4d0e-9a51-0c6d2b8e4f10";
+
+/// A roster entry as a host would have written it, saying it is working, for a process that is
+/// not there: nothing holds its `live` file.
+fn a_roster_entry_saying_working(prompt: &str) -> String {
+    format!(
+        r#"{{"id":"{SESSION_ID}","directory":"/work/project","checkout":null,"name":"fix the build","prompt":"{prompt}","state":"working","held":null,"pid":4194301,"started":1700000000,"last_turn":null,"mode":"ask"}}"#
+    )
+}
+
+/// BG-5, BG-6: `sessions` lists what is true now. An entry that says it is working and has no
+/// process is listed as interrupted, and the prompt it shows has its control characters pictured.
+#[test]
+fn sessions_lists_an_entry_with_no_process_as_interrupted() {
+    let home = Scratch::new("sessions-list").with_file(
+        &format!(".bravebot/jobs/{SESSION_ID}/state.json"),
+        &a_roster_entry_saying_working(r"fix the\u001b[31m build"),
+    );
+
+    let output = bravebot(&home.path, &[], &["sessions"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    assert!(
+        out.starts_with("3f2a9c1e  fix the build  interrupted"),
+        "{out}"
+    );
+    assert!(!out.contains("working"), "{out}");
+    assert!(!out.contains('\u{1b}'), "{out:?}");
+    assert_eq!(out.lines().count(), 1, "{out:?}");
+
+    let output = bravebot(&home.path, &[], &["sessions", "--json"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    let listed: serde_json::Value = serde_json::from_str(&out).expect("json");
+    assert_eq!(listed[0]["state"], "interrupted", "{out}");
+    assert_eq!(listed[0]["id"], SESSION_ID, "{out}");
+}
+
+/// BG-5: with no sessions the list says so, and exits cleanly.
+#[test]
+fn sessions_with_none_says_none() {
+    let home = Scratch::new("sessions-none");
+    let output = bravebot(&home.path, &[], &["sessions"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    assert_eq!(out.trim(), "No background sessions.");
+    let output = bravebot(&home.path, &[], &["sessions", "--json"]);
+    assert_eq!(said(&output).0.trim(), "[]");
+}
+
+/// BG-11: stopping an entry nothing is running for says so, rewrites it as stopped, and an id that
+/// names nothing is a usage failure rather than a success.
+#[test]
+fn sessions_stop_marks_a_dead_entry_stopped_and_refuses_an_unknown_id() {
+    let home = Scratch::new("sessions-stop").with_file(
+        &format!(".bravebot/jobs/{SESSION_ID}/state.json"),
+        &a_roster_entry_saying_working("fix the build"),
+    );
+
+    let output = bravebot(&home.path, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    assert!(out.contains("was not running"), "{out}");
+
+    let (listed, _) = said(&bravebot(&home.path, &[], &["sessions"]));
+    assert!(listed.contains("stopped"), "{listed}");
+
+    let output = bravebot(&home.path, &[], &["sessions", "stop", "ffffffff"]);
+    assert!(!output.status.success());
+    assert!(said(&output).1.contains("No background session"));
+
+    let output = bravebot(&home.path, &[], &["sessions", "bogus"]);
+    assert!(!output.status.success());
+    assert!(said(&output).1.contains("sessions takes"));
+}

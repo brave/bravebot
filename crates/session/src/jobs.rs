@@ -447,6 +447,20 @@ impl Roster {
     }
 }
 
+/// The roster fields of each entry, as JSON, with the state as it stands now rather than as the
+/// file last said it (BG-5).
+pub fn as_json(seen: &[Seen]) -> String {
+    let jobs: Vec<Job> = seen
+        .iter()
+        .map(|seen| Job {
+            state: seen.state(),
+            held: seen.held(),
+            ..seen.job.clone()
+        })
+        .collect();
+    serde_json::to_string_pretty(&jobs).unwrap_or_else(|_| "[]".to_string())
+}
+
 /// What stopping an entry did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stopped {
@@ -627,6 +641,39 @@ mod tests {
         .expect("copy");
         assert!(roster.get(B).is_none());
         assert_eq!(roster.list().len(), 1);
+    }
+
+    /// BG-5: the JSON is the roster's fields and no others, and the state in it is the observed one.
+    #[test]
+    fn the_json_is_the_roster_fields_with_the_state_as_it_stands() {
+        let mut gone = job(A);
+        gone.is(State::NeedsInput, Some(Held::Write));
+        let seen = Seen {
+            job: gone,
+            live: false,
+        };
+        let value: serde_json::Value = serde_json::from_str(&as_json(&[seen])).expect("json");
+        let object = value[0].as_object().expect("an object");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "checkout",
+                "directory",
+                "held",
+                "id",
+                "last_turn",
+                "mode",
+                "name",
+                "pid",
+                "prompt",
+                "started",
+                "state"
+            ]
+        );
+        assert_eq!(object["state"], "interrupted");
+        assert_eq!(object["held"], serde_json::Value::Null);
     }
 
     #[test]

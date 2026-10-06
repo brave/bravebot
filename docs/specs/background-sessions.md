@@ -17,8 +17,9 @@ A session that keeps running after the terminal that started it closes: how a pe
 what owns its process, what is recorded about it, how it is listed, how a terminal reattaches, how
 a person sends it its next prompt, and what it does when it needs an answer.
 
-Nothing here is built. It is a design, written to be agreed before the work starts, and every clause
-reads `verified-by: none` until the work lands. The clauses that other specs would contradict are
+Only the roster, `bravebot sessions` and `bravebot sessions stop` are built. The rest is a design,
+written to be agreed before the work starts, and a clause reads `verified-by: none` until its work
+lands. The clauses that other specs would contradict are
 named under [What this changes in other specs](#what-this-changes-in-other-specs).
 
 A **background session** is an ordinary session, as [sessions.md](sessions.md) describes one, whose
@@ -131,8 +132,8 @@ was nearest.
 <a id="BG-5"></a>
 ### BG-5: the list shows labels and states, never content
 
-`bravebot sessions` prints one line per background session, across every project: its name, its
-state, its working directory, how long since its last turn, and the last prompt the person typed,
+`bravebot sessions` prints one line per background session, across every project: the first eight
+characters of its id, its name, its state, its working directory, how long since its last turn, and the last prompt the person typed,
 cut as a title is cut. `--json` prints the roster fields for each session. Where a prompt is held,
 the line says that the session needs input and names the kind of prompt it is, by one word from a fixed set with
 a word for each kind a foreground session puts, and shows nothing of what the prompt is about.
@@ -149,7 +150,10 @@ The list is how a person finds a session, and a prompt is answered only by attac
 as the list is. Text from the model's reply or from a tool would be read as the program's own
 sentence, which is the reason the info panel draws nothing from either.
 
-`verified-by: none`
+`verified-by: bravebot_cli::background::a_control_character_in_what_was_typed_cannot_write_a_row`
+`verified-by: bravebot_cli::background::a_held_prompt_shows_its_kind_and_nothing_else`
+`verified-by: bravebot_cli::background::a_session_with_no_process_is_not_listed_as_working`
+`verified-by: bravebot_cli::running::sessions_lists_an_entry_with_no_process_as_interrupted`
 
 <a id="BG-6"></a>
 ### BG-6: a session is in one of five states, and the state is a fact about the process
