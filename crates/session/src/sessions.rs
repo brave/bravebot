@@ -360,6 +360,85 @@ pub struct Record {
     /// Server descendants may outlive both their server and the last undo point.
     #[serde(default)]
     pub server_children_may_run: bool,
+    /// The checkouts the session's delegates were given and it keeps (CHECKOUT-15).
+    ///
+    /// Beside the trust map, which holds the rules copied for them: a resume brings the checkouts
+    /// back with their candidate paths, and a fork brings neither (CHECKOUT-16).
+    ///
+    /// Empty for a record written before this was kept, and for a session that kept none.
+    #[serde(default)]
+    pub checkouts: Vec<StoredCheckout>,
+}
+
+/// A kept checkout as it is written down.
+///
+/// What the driver recorded and nothing a checkout's own files say. A resume takes it as a claim
+/// to check against the disk, not as an answer ([`Workspace::restore_session_checkouts`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredCheckout {
+    /// Its number, `c1` and on.
+    pub id: String,
+    pub path: String,
+    /// The commit it holds, in full.
+    pub commit: String,
+    /// The delegate it was made for, as [`bravebot_core::delegate::DelegateId`] spells it.
+    pub delegate: String,
+    /// Whether the driver recorded a file effect in it or a program started in it.
+    pub worked_in: bool,
+    /// The names the planner typed for files it wrote there.
+    #[serde(default)]
+    pub written: Vec<String>,
+    /// How many writes there went through a reference.
+    #[serde(default)]
+    pub referenced: usize,
+    /// What it took on disk as its delegate ended, where that was measured.
+    #[serde(default)]
+    pub size: Option<StoredSize>,
+}
+
+/// [`bravebot_agent::git::checkout::Size`] as it is written down.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct StoredSize {
+    pub bytes: u64,
+    pub whole: bool,
+}
+
+impl StoredCheckout {
+    fn of(checkout: &bravebot_agent::workspace::SessionCheckout) -> Self {
+        Self {
+            id: checkout.id.clone(),
+            path: checkout.path.display().to_string(),
+            commit: checkout.commit.clone(),
+            delegate: checkout.delegate.to_string(),
+            worked_in: checkout.worked_in,
+            written: checkout.candidates.named.iter().cloned().collect(),
+            referenced: checkout.candidates.referenced,
+            size: checkout.size.map(|size| StoredSize {
+                bytes: size.bytes,
+                whole: size.whole,
+            }),
+        }
+    }
+
+    /// The checkout this describes, or nothing where its delegate's number is not one.
+    fn read(&self, repository: &Path) -> Option<bravebot_agent::workspace::SessionCheckout> {
+        Some(bravebot_agent::workspace::SessionCheckout {
+            id: self.id.clone(),
+            path: PathBuf::from(&self.path),
+            commit: self.commit.clone(),
+            delegate: bravebot_core::delegate::DelegateId::parse(&self.delegate)?,
+            worked_in: self.worked_in,
+            candidates: bravebot_agent::workspace::Candidates {
+                named: self.written.iter().cloned().collect(),
+                referenced: self.referenced,
+            },
+            repository: repository.join(".git"),
+            size: self.size.map(|size| bravebot_agent::git::checkout::Size {
+                bytes: size.bytes,
+                whole: size.whole,
+            }),
+        })
+    }
 }
 
 /// Display-only turn boundaries in the recounted conversation. These never enter planner context.
@@ -816,6 +895,21 @@ fn vouched_for(trust: &TrustStore, path: &Path, backslash_separates: bool) -> bo
         ))
 }
 
+/// A fork carries no checkout and none of the rules copied for them, so no two records list one
+/// directory (CHECKOUT-16). A rule that distrusts a path stays, as it does when a checkout is
+/// removed.
+fn drop_checkouts(record: &mut Record) {
+    let kept = std::mem::take(&mut record.checkouts);
+    let Some(rules) = record.trust.as_ref().filter(|_| !kept.is_empty()) else {
+        return;
+    };
+    let mut trust = restored_rules(Path::new(&record.directory), rules);
+    for checkout in &kept {
+        trust.withdraw_beneath(&checkout.path);
+    }
+    record.trust = Some(stored_rules(&trust));
+}
+
 /// Load weaker decisions last so equivalent path spellings cannot hide them.
 fn restored_rules(root: &Path, rules: &[StoredRule]) -> TrustStore {
     let mut trust = bravebot_agent::workspace::trust_store(root);
@@ -1076,6 +1170,8 @@ pub fn record_manifest_run(
             // None, on the same footing as the asides: a manifest run plans its whole sequence
             // in advance and is not resumed, so there is no session for a rewind to go back in.
             rewind: &[],
+            // None: a manifest run starts no delegate in a checkout of its own.
+            checkouts: &[],
         },
     );
     Some(handle.id().to_string())
@@ -1238,6 +1334,54 @@ impl Record {
         restored_programs(&self.programs, root)
     }
 
+    /// The checkouts this session kept, for the workspace of the session resuming it to take back
+    /// (CHECKOUT-16). `root` is the directory it resumes in, whose `.git` made them.
+    ///
+    /// One whose recorded delegate number is not one is left out, and the workspace names the rest
+    /// it cannot take back.
+    pub fn kept_checkouts(&self, root: &Path) -> Vec<bravebot_agent::workspace::SessionCheckout> {
+        self.checkouts
+            .iter()
+            .filter_map(|checkout| checkout.read(root))
+            .collect()
+    }
+
+    /// Take back the checkouts this session kept into the workspace of the one resuming it, and
+    /// say which could not be taken back (CHECKOUT-16).
+    ///
+    /// None in a session that keeps no state directory, which could not have made them: what the
+    /// record lists is left on disk and out of the list. `handle` holds what was not taken back
+    /// and writes it with the record again, so the next resume that can reach it finds it.
+    pub fn restore_checkouts(&self, workspace: &Workspace, handle: &mut Handle) -> Option<String> {
+        if self.checkouts.is_empty() {
+            return None;
+        }
+        let kept = self.kept_checkouts(workspace.root());
+        let mut unplaced: Vec<String> = self
+            .checkouts
+            .iter()
+            .filter(|stored| !kept.iter().any(|one| one.id == stored.id))
+            .map(|stored| stored.id.clone())
+            .collect();
+        match bravebot_agent::home::directory().filter(|_| !bravebot_core::incognito::engaged()) {
+            Some(state) => unplaced.extend(workspace.restore_session_checkouts(&state, &kept)),
+            None => unplaced.extend(kept.iter().map(|one| one.id.clone())),
+        }
+        handle.unplaced = self
+            .checkouts
+            .iter()
+            .filter(|stored| unplaced.contains(&stored.id))
+            .cloned()
+            .collect();
+        (!unplaced.is_empty()).then(|| {
+            t!(
+                session_checkout_not_restored,
+                count = unplaced.len(),
+                ids = unplaced.join(", ")
+            )
+        })
+    }
+
     /// Open again the directories this session added, and say which could not be opened.
     ///
     /// The map is only half of what `/add-dir` granted, and it is the half that is no use alone:
@@ -1337,6 +1481,8 @@ pub struct Standing<'a> {
     pub manifest: Option<&'a StoredManifest>,
     /// The turns a rewind can go back to, oldest first.
     pub rewind: &'a [RewindPoint],
+    /// The checkouts the session keeps (CHECKOUT-15).
+    pub checkouts: &'a [bravebot_agent::workspace::SessionCheckout],
 }
 
 /// A session worth picking up again, and where to pick it up.
@@ -1349,6 +1495,17 @@ pub struct Resumable {
     pub id: String,
     /// The working directory the session ended in, which is where its record is.
     pub directory: PathBuf,
+}
+
+/// Why [`Handle::branch`] copied nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unbranched {
+    /// No record exists yet, so there is nothing to copy.
+    NothingWritten,
+    /// Records are not written here, as in an incognito session, so a copy would not outlive it.
+    Unwritable,
+    /// A manifest run, which cannot be continued or forked (SESSION-10).
+    Refused,
 }
 
 /// Which of the two links a session keeps.
@@ -1410,6 +1567,10 @@ pub struct Handle {
     /// other one, which is worse than a record that says nothing.
     front: Front,
     server_children_may_run: bool,
+    /// Checkouts the record listed that a resume could not take back, written again with every
+    /// save so a state directory that is out of reach for one session does not erase them for the
+    /// next (CHECKOUT-16).
+    unplaced: Vec<StoredCheckout>,
 }
 
 impl Handle {
@@ -1418,8 +1579,14 @@ impl Handle {
     /// Nothing is written yet: a session that is opened and abandoned should not leave a record,
     /// or the list fills with launches nobody meant.
     pub fn begin(project: &Path, front: Front, build: &str) -> Self {
+        Self::begin_as(new_id(), project, front, build)
+    }
+
+    /// Begin a session under an id that was chosen before it, as a background session's is: the
+    /// roster names it by the same id, so the record and the entry are found from one another.
+    pub fn begin_as(id: String, project: &Path, front: Front, build: &str) -> Self {
         Self {
-            id: new_id(),
+            id,
             project: project.to_path_buf(),
             started: now(),
             branch: branch_of(project),
@@ -1430,6 +1597,7 @@ impl Handle {
             server_children_may_run: false,
             build: build.to_string(),
             front,
+            unplaced: Vec::new(),
         }
     }
 
@@ -1452,6 +1620,10 @@ impl Handle {
             server_children_may_run: record.server_children_may_run(),
             build: build.to_string(),
             front,
+            // Every checkout the record holds is carried through a save until a front end that
+            // restores them says which it took back, so one that restores none (the desktop)
+            // does not write them away (CHECKOUT-16).
+            unplaced: record.checkouts.clone(),
         }
     }
 
@@ -1485,6 +1657,34 @@ impl Handle {
         }
         let title = self.title.clone();
         self.save(&title, standing);
+    }
+
+    /// Copy this session as `--fork` does and carry on in the copy, which is what `/branch` does.
+    ///
+    /// The copy is read back from the record on disk, so the caller saves first where the session
+    /// holds anything the record does not. A `name` becomes the copy's title in place of the
+    /// marked one; an empty one keeps the mark. The original's record and trail are not touched,
+    /// and what is returned is how to pick it up again (SESSION-8).
+    ///
+    /// Refused where nothing was written, because there is no record to copy; where the record
+    /// cannot be written, which an incognito session never does; and for a manifest run, which
+    /// [`fork`] refuses.
+    pub fn branch_off(&mut self, name: &str) -> Result<Resumable, Unbranched> {
+        let Some(original) = self.to_resume() else {
+            return Err(Unbranched::NothingWritten);
+        };
+        let Some(directory) = self.directory() else {
+            return Err(Unbranched::Unwritable);
+        };
+        let Some(record) = fork(&self.project, &self.id) else {
+            return Err(Unbranched::Refused);
+        };
+        if !directory.join(format!("{}.json", record.id)).is_file() {
+            return Err(Unbranched::Unwritable);
+        }
+        *self = Self::resuming(&self.project, &record, self.front, &self.build);
+        self.rename(name);
+        Ok(original)
     }
 
     pub fn id(&self) -> &str {
@@ -1664,6 +1864,17 @@ impl Handle {
                 .rewind
                 .iter()
                 .map(|point| StoredRewind::of(point, &self.project))
+                .collect(),
+            checkouts: standing
+                .checkouts
+                .iter()
+                .map(StoredCheckout::of)
+                .chain(
+                    self.unplaced
+                        .iter()
+                        .filter(|held| !standing.checkouts.iter().any(|one| one.id == held.id))
+                        .cloned(),
+                )
                 .collect(),
         };
 
@@ -2155,7 +2366,7 @@ fn now() -> u64 {
 ///
 /// Random rather than counted, so two of them cannot collide however many processes are running
 /// and whatever the clock does.
-fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     use rand::RngCore;
 
     let mut bytes = [0u8; 16];
@@ -2269,6 +2480,7 @@ pub fn fork(project: &Path, source_id: &str) -> Option<Record> {
     record.title = format!("{} (fork)", record.title);
     record.server_children_may_run = record.server_children_may_run();
     record.rewind.clear();
+    drop_checkouts(&mut record);
 
     if let Some(directory) = writable_project_directory(project) {
         let path = directory.join(format!("{}.json", record.id));
@@ -3094,6 +3306,31 @@ mod tests {
         );
     }
 
+    /// The record is what a resume reads, so a mode that a record kept would be one a resume could
+    /// restore. A record that was handed one, as a newer build or a hand edit would, writes back
+    /// without it, and one built fresh never had a place for it.
+    #[test]
+    fn a_record_does_not_keep_a_permission_mode() {
+        let with_a_mode = serde_json::json!({
+            "id": "1-2",
+            "directory": "/tmp/x",
+            "title": "a session",
+            "started": 1,
+            "updated": 1,
+            "permission_mode": "bypass",
+            "conversation": {"messages": [], "context": "trusted"},
+        });
+        let loaded: Record = serde_json::from_value(with_a_mode).expect("the record loads");
+
+        for (which, record) in [("loaded", loaded), ("built", a_record())] {
+            let written = serde_json::to_string(&record).expect("the record is written");
+            assert!(
+                !written.contains("permission_mode") && !written.contains("bypass"),
+                "the {which} record kept a mode: {written}"
+            );
+        }
+    }
+
     /// The picker offers the top entry, so a reversed comparator would silently hand someone
     /// the session they last touched a month ago. Nothing else in the suite pins the direction.
     #[test]
@@ -3640,6 +3877,7 @@ mod tests {
             },
             manifest: None,
             rewind: Vec::new(),
+            checkouts: Vec::new(),
         }
     }
 
@@ -3820,6 +4058,7 @@ mod tests {
                 directories: &[],
                 manifest: None,
                 rewind: &[],
+                checkouts: &[],
             },
         );
     }
@@ -4016,6 +4255,143 @@ mod tests {
         assert!(fork(&root, "manifest-sess").is_none());
     }
 
+    /// SESSION-31: the copy has its own id and the marked title, the handle moves onto it, and the
+    /// original is left byte for byte as it was, including after the copy saves a turn of its own.
+    #[test]
+    fn branching_moves_onto_a_marked_copy_and_leaves_the_original_untouched() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-branch-copy");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let original_id = handle.id().to_string();
+        let original_path = project_directory(&root)
+            .expect("dir")
+            .join(format!("{original_id}.json"));
+        let before = std::fs::read(&original_path).expect("the original record");
+
+        let left = handle
+            .branch_off("")
+            .expect("a session with a record branches");
+
+        assert_eq!(
+            left.id, original_id,
+            "the id handed back is not the original's"
+        );
+        assert_eq!(left.directory, root);
+        assert_ne!(handle.id(), original_id, "the copy kept the original's id");
+        assert_eq!(handle.title(), "what do the specs say (fork)");
+        let copy = load(&root, handle.id()).expect("the copy's record");
+        assert_eq!(copy.title, "what do the specs say (fork)");
+        assert_eq!(copy.turns, 1, "the copy did not bring the turns along");
+
+        save_a_turn_session(&mut handle);
+        assert_eq!(
+            std::fs::read(&original_path).expect("the original record"),
+            before,
+            "the original's record changed"
+        );
+    }
+
+    /// SESSION-31: a name given to `/branch` is the copy's title, in place of the mark.
+    #[test]
+    fn a_named_branch_takes_the_name_as_its_title() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-branch-named");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+
+        handle.branch_off("try the other parser").expect("branches");
+
+        assert_eq!(handle.title(), "try the other parser");
+        assert_eq!(
+            load(&root, handle.id()).expect("the copy").title,
+            "try the other parser"
+        );
+    }
+
+    /// SESSION-31: nothing is copied before the session has a record, and the handle stays where
+    /// it was.
+    #[test]
+    fn branching_before_anything_is_written_refuses_and_stays_put() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-branch-unwritten");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        let id = handle.id().to_string();
+
+        assert_eq!(handle.branch_off(""), Err(Unbranched::NothingWritten));
+        assert_eq!(handle.id(), id);
+    }
+
+    /// SESSION-31: where the session directory cannot be written, as in an incognito session, the
+    /// command is refused, the handle keeps its id, and no copy is written.
+    #[test]
+    fn branching_where_records_cannot_be_written_refuses_and_writes_no_copy() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-branch-unwritable");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let id = handle.id().to_string();
+        let directory = project_directory(&root).expect("dir");
+        std::fs::remove_dir_all(&directory).expect("remove the records");
+        std::fs::write(&directory, b"not a directory").expect("block the directory");
+
+        assert_eq!(handle.branch_off(""), Err(Unbranched::Unwritable));
+
+        assert_eq!(
+            handle.id(),
+            id,
+            "the handle moved although nothing was copied"
+        );
+        assert_eq!(
+            std::fs::read(&directory).expect("the blocker is untouched"),
+            b"not a directory",
+            "a copy was written"
+        );
+        std::fs::remove_file(&directory).expect("unblock the directory");
+    }
+
+    /// SESSION-31: a manifest run is refused as `--fork` refuses it, and writes no copy.
+    #[test]
+    fn branching_a_manifest_run_is_refused() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-branch-manifest");
+        let record = Record {
+            id: "branch-manifest".to_string(),
+            directory: root.display().to_string(),
+            turns: 1,
+            manifest: Some(StoredManifest {
+                shape: None,
+                proposed: None,
+                plan: None,
+                steps: vec!["one".to_string()],
+                failure: None,
+            }),
+            ..a_record()
+        };
+        let dir = project_directory(&root).expect("dir");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        std::fs::write(
+            dir.join("branch-manifest.json"),
+            serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .unwrap();
+        let mut handle = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+
+        assert_eq!(handle.branch_off(""), Err(Unbranched::Refused));
+        assert_eq!(handle.id(), "branch-manifest");
+        assert_eq!(list(&root).len(), 1, "a copy of a manifest run was written");
+    }
+
     #[test]
     fn truncating_an_audit_log_removes_events_from_undone_turns() {
         if !in_isolated_profile() {
@@ -4075,6 +4451,7 @@ mod tests {
                 directories: &[],
                 manifest: None,
                 rewind: &[],
+                checkouts: &[],
             },
         );
         handle.append_audit(
@@ -4141,6 +4518,7 @@ mod tests {
                     directories: &[],
                     manifest: None,
                     rewind: &[],
+                    checkouts: &[],
                 },
             );
             handle.append_audit(

@@ -273,6 +273,7 @@ what says whether the work wanted splitting.
 `verified-by: bravebot_agent::turn::two_ceiling_stops_in_a_row_end_the_turn`
 `verified-by: bravebot_agent::turn::a_round_between_two_ceiling_stops_starts_the_count_again`
 `verified-by: bravebot_agent::turn::a_call_cut_off_at_the_ceiling_is_never_run`
+`verified-by: bravebot_agent::turn::a_reply_cut_off_in_its_prose_ends_the_turn_and_says_it_stopped_short`
 `verified-by: bravebot_agent::turn::the_line_after_a_ceiling_stop_says_what_to_do_about_it`
 `verified-by: bravebot_agent::turn::the_person_is_told_what_a_ceiling_stop_asked_for`
 `verified-by: bravebot_agent::turn::a_ceiling_stop_between_two_empty_replies_is_not_two_empty_replies_in_a_row`

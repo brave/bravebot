@@ -140,7 +140,7 @@ pub struct Facts<'a> {
     /// How much the session is asking before it acts, as the mode key last left it.
     pub permission_mode: bravebot_agent::PermissionMode,
     /// Whether the session was started with the flag that skips permissions.
-    pub bypass_available: bool,
+    pub began_in_bypass: bool,
     /// Whether a check that finds nothing promotes a slot without the person being asked.
     ///
     /// Reported for the reason the permission mode is: it is a standing answer that stops a prompt
@@ -229,11 +229,11 @@ pub struct Remembered<'a> {
 /// session that never skipped anything.
 pub fn named_mode(
     mode: bravebot_agent::PermissionMode,
-    bypass_available: bool,
+    began_in_bypass: bool,
 ) -> Option<&'static str> {
     use bravebot_agent::PermissionMode;
     match mode {
-        PermissionMode::Ask => bypass_available.then(|| t!(mode_ask)),
+        PermissionMode::Ask => began_in_bypass.then(|| t!(mode_ask)),
         PermissionMode::AcceptEdits => Some(t!(mode_accept_edits)),
         PermissionMode::Plan => Some(t!(mode_plan)),
         PermissionMode::Bypass => Some(t!(mode_bypass)),
@@ -413,7 +413,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // Only where the mode is not the ordinary one. A line saying "asking" on every session would
     // teach people to skim past exactly the one that matters. Beside confinement because it is the
     // other half of the same question: what is holding this session back.
-    if let Some(named) = named_mode(facts.permission_mode, facts.bypass_available) {
+    if let Some(named) = named_mode(facts.permission_mode, facts.began_in_bypass) {
         lines
             .push(Line::new(t!(status_permissions), named).with_note(t!(status_permissions_cycle)));
     }
@@ -847,7 +847,7 @@ mod tests {
             // Asking, which is what every session does unless somebody changed it. The tests about
             // the line set this themselves.
             permission_mode: bravebot_agent::PermissionMode::Ask,
-            bypass_available: false,
+            began_in_bypass: false,
             auto_vetting: false,
             turns: 4,
             tokens: 12_400,
@@ -1618,7 +1618,7 @@ mod tests {
     /// it to asking, a report that goes quiet is the same as one from a session that never skipped
     /// anything, so asking is named there, and only there.
     #[test]
-    fn named_mode_names_asking_where_bypass_was_available() {
+    fn named_mode_names_asking_where_the_session_began_in_bypass() {
         use bravebot_agent::PermissionMode::Ask;
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
@@ -1632,12 +1632,12 @@ mod tests {
 
         let mut facts = facts(&config, &trust);
         facts.permission_mode = Ask;
-        facts.bypass_available = true;
+        facts.began_in_bypass = true;
         let shown = rendered(&report(&facts));
         assert!(shown.contains(asking), "{shown}");
         assert!(shown.contains("shift-tab"), "{shown}");
 
-        facts.bypass_available = false;
+        facts.began_in_bypass = false;
         let shown = rendered(&report(&facts));
         assert!(!shown.contains(asking), "{shown}");
     }

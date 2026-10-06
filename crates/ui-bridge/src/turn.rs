@@ -482,10 +482,10 @@ impl BridgeConfirmer {
             return None;
         };
         *pending = Some(Question { id, kind });
-        drop(pending);
-
         self.emitter
             .send(Event::new(event, &self.session, data(id)));
+        // Answering cannot consume a question before its display is published.
+        drop(pending);
 
         // Blocks until the dispatch thread sends an answer, or until the sending end is
         // dropped — which is what a departed front-end, a closed session, or a shutting
@@ -509,6 +509,8 @@ impl BridgeConfirmer {
         if let Ok(mut pending) = self.pending.lock() {
             *pending = None;
         }
+
+        self.emitter.view_answered(&self.session, id);
 
         // Belt and braces. `Running::answer` already refuses a reply whose kind does not
         // match the outstanding question, so this should be unreachable — and it is

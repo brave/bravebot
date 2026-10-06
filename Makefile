@@ -411,7 +411,8 @@ check-ui: check-ui-build
 check-extension:
 	ls extension/tests/*.test.mjs >/dev/null && node --test extension/tests/*.test.mjs
 
-# CI sets UI_INSTALL to ui/scripts/ci-install.sh, which reuses a cached build of Leo.
+# CI sets UI_INSTALL to ui/scripts/ci-install.sh, which reuses a cached build of Leo, here and for
+# the two Windows packaging steps below.
 UI_INSTALL ?= npm --prefix ui ci
 check-ui-build: check-extension
 	$(UI_INSTALL)
@@ -714,10 +715,11 @@ app-packages-linux:
 # icon and the version resource in `Brave Bot.exe`, which `@electron/packager` writes with resedit,
 # a JavaScript library, so no Windows node and no Wine is involved. The release job then signs
 # every PE in the bundle where it lies: `Brave Bot.exe`, both helpers, and Electron's own DLLs.
-# `app-release-windows` is this and the second step with nothing in between.
+# `app-release-windows` is this and the second step with nothing in between, so the second step
+# uses the packages the first one installed rather than installing them again.
 .PHONY: app-release-windows
 app-release-windows: app-bundles-windows
-	$(MAKE) app-installers-windows
+	$(MAKE) app-installers-windows UI_INSTALL=true
 
 .PHONY: app-bundles-windows
 app-bundles-windows:
@@ -732,7 +734,8 @@ app-bundles-windows:
 		echo "missing from dist/:$$missing" >&2; \
 		echo "run \`make$$builds strip\` first" >&2; exit 1; \
 	fi
-	cd ui && npm ci && npm run typecheck && npm exec -- electron-vite build
+	$(UI_INSTALL)
+	cd ui && npm run typecheck && npm exec -- electron-vite build
 	@set -e; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
 	for pair in $(APP_ARCHES); do \
 		arch=$${pair%%:*}; electron=$${pair#*:}; \
@@ -754,7 +757,7 @@ app-bundles-windows:
 # two installers too.
 .PHONY: app-installers-windows
 app-installers-windows:
-	cd ui && npm ci
+	$(UI_INSTALL)
 	@set -e; for pair in $(APP_ARCHES); do \
 		arch=$${pair%%:*}; electron=$${pair#*:}; \
 		node ui/scripts/windows-installer.mjs --bundle="ui/dist/Brave Bot-win32-$$electron" --arch=$$arch --out=dist; \

@@ -273,6 +273,17 @@ function oldMemoryFolder(held: Bot): string {
 }
 
 /**
+ * Whether a turn about to be sent in `folder` is the first for a bot that still has no definition,
+ * in the one folder whose old notes `migrateBot` records as untrusted (MEMORY-11).
+ *
+ * The record holds that folder's path alone, so a turn told to read the old notes in any other
+ * folder would read a file the trust map has not recorded.
+ */
+export function owesCarryOver(held: Bot, folder: string): boolean {
+  return held.definition === null && folder === oldMemoryFolder(held)
+}
+
+/**
  * Give a bot made before definitions one, the first time it is opened (MEMORY-11).
  *
  * The agent writes the definition and records the bot's old memory, `.bravebot-ui/bots/<slug>.md`
@@ -568,6 +579,31 @@ export function consolidationPrompt(bot: Bot, why: string): string {
     'has turned out to be durable — a decision and why, a constraint, how something here is',
     'arranged — and prune whatever has stopped being true. If nothing in it needs changing, say so',
     'in one line and change nothing; an honest "no" is a better answer than an invented entry.',
+    '',
+    'Do not do any other work in this turn, and do not answer whatever was being discussed.',
+    '',
+  ].join('\n')
+}
+
+/**
+ * What this app says to a migrated bot once its first turn has ended (MEMORY-11).
+ *
+ * The old notes are named in the words of the turn and never handed over as a file, since a file
+ * handed to a turn is one a person is recorded as vouching for. The agent records them as
+ * untrusted, so the run's read of them is quarantined and a person is asked before they reach it.
+ * Only the slug and the definition's name go into it, both judged slugs when they were stored.
+ */
+export function carryOverPrompt(bot: Pick<Bot, 'slug' | 'definition'>): string {
+  return [
+    'This bot was made before bots had definitions, and its earlier notes are still in',
+    `\`${HOME}/bots/${bot.slug}.md\` in this folder. Nobody has read them since they were recorded as`,
+    'untrusted, so reading them asks the person first. If the read is refused or the file is',
+    'withheld, say so and change nothing.',
+    '',
+    `Read that file, then bring \`${memoryPath(bot)}\` up to date with whatever in it still holds: a`,
+    'decision and why, a constraint, how something here is arranged. Leave out anything that has',
+    'stopped being true. If the file is absent or none of it still holds, say so in one line and',
+    'change nothing.',
     '',
     'Do not do any other work in this turn, and do not answer whatever was being discussed.',
     '',

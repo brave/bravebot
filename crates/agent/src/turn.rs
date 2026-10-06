@@ -784,6 +784,12 @@ pub struct Task {
     /// answers a person is still carrying from an earlier session and a flat list cannot.
     /// Supplied per turn for the reason `home` is: which session this is belongs to the caller.
     pub remembering: Option<String>,
+    /// A model the planner may put a question to, when the session named one.
+    ///
+    /// `None` leaves it to the `advisorModel` setting, which may name none. Never offered on a
+    /// delegate's turn: a delegate is not shown the tool and a call to it is answered as an
+    /// unknown name.
+    pub advisor: Option<String>,
     /// The model to request, when the user has chosen one.
     ///
     /// `None` means the configured default applies. Supplied per turn rather than read here for
@@ -820,6 +826,13 @@ pub struct Task {
     /// where it is done, and [`crate::exec::Deadlines::BUILT_IN`] is what a caller that read no
     /// settings file gets.
     pub deadlines: crate::exec::Deadlines,
+    /// Whether a program `run` starts is confined to what its plan accounts for.
+    ///
+    /// Off unless the caller turns it on, which every front end does: a test that runs a program
+    /// in a scratch directory outside the places a session is opened on would otherwise be
+    /// refused. A delegate inherits the spawning turn's answer, since the person's answer about
+    /// what a program may reach does not stop being theirs because the work moved.
+    pub confine_runs: bool,
     /// Rules the user wrote in advance about which actions to ask them about.
     ///
     /// Supplied per turn for the reason `home` and `model` are: which file they came from is the
@@ -1012,6 +1025,7 @@ impl Task {
             // Nothing is remembered past the session unless a caller says which session this is,
             // which is the caller saying there is somebody a prompt could be put to.
             remembering: None,
+            advisor: None,
             model: None,
             effort: None,
             tick: None,
@@ -1031,6 +1045,8 @@ impl Task {
             output_cap: None,
             // And the built-in figures for how long one may run, for the same reason.
             deadlines: crate::exec::Deadlines::BUILT_IN,
+            // Unconfined, which is what a turn has always done.
+            confine_runs: false,
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
             permission_mode: crate::PermissionMode::default(),
@@ -1159,6 +1175,12 @@ impl Task {
         self
     }
 
+    /// Name the model the planner may consult, or `None` to leave it to the `advisorModel` setting.
+    pub fn with_advisor(mut self, model: Option<String>) -> Self {
+        self.advisor = model;
+        self
+    }
+
     /// Address a definition by the name a person typed, or `None` for the session's own planner.
     pub fn addressing(mut self, name: Option<String>) -> Self {
         self.addressing = name;
@@ -1210,6 +1232,13 @@ impl Task {
     /// [`Task::deadlines`].
     pub fn with_deadlines(mut self, deadlines: crate::exec::Deadlines) -> Self {
         self.deadlines = deadlines;
+        self
+    }
+
+    /// Hold every program `run` starts to the profile its plan accounts for. See
+    /// [`Task::confine_runs`].
+    pub fn with_confined_runs(mut self, confine: bool) -> Self {
+        self.confine_runs = confine;
         self
     }
 
@@ -1911,6 +1940,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             profile: task.profile.as_deref(),
             cache: task.cache.as_deref(),
             remembering: task.remembering.as_deref(),
+            advising: None,
             delegated: false,
             confined_to: None,
             servers: None,
@@ -1919,6 +1949,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             permission_mode: task.permission_mode,
             auto_vetting: task.auto_vetting,
             run_directory: &mut run_directory,
+            confine_runs: false,
         },
         confirmer,
         id,
@@ -2923,6 +2954,16 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     outcome
 }
 
+/// The model a turn's planner may consult: the one the command line named, else the one the
+/// settings name. A delegate is offered neither, since the planner that started it already has
+/// the tool.
+fn advisor_for(task: &Task, config: &Config) -> Option<String> {
+    task.advisor
+        .clone()
+        .or_else(|| config.advisor())
+        .filter(|_| task.delegate.is_none())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter + ?Sized + Send>(
     config: &Config,
@@ -2956,6 +2997,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // parts would silently fail to add up to the whole.
     let began = Instant::now();
     let mut spent = Elapsed::default();
+
+    let advisor = advisor_for(task, config);
 
     // Every route into a file this turn takes goes through this copy, so a write that leaves a
     // definition's memory untrusted is recorded wherever it comes from (MEMORY-5).
@@ -3121,6 +3164,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         task.deadlines,
                         tools::Running::Offered,
                     );
+                    if advisor.is_some() {
+                        tools::offer_advisor(&mut offered);
+                    }
                     let names: Vec<&str> = offered
                         .iter()
                         .map(|tool| tool.function.name.as_str())
@@ -3142,6 +3188,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 task.deadlines,
                                 tools::Running::Withheld,
                             );
+                            if advisor.is_some() {
+                                tools::offer_advisor(&mut offered);
+                            }
                         }
                         offered.retain(|tool| addressed.tools().contains(&tool.function.name));
                     }
@@ -3657,6 +3706,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // about several files.
         let mut watches: Vec<String> = Vec::new();
         let mut armed = 0usize;
+        // How many questions the planner has put to its advisor this turn, which the bound on them
+        // is read against.
+        let mut advice_asked = 0usize;
         // The pipelines this turn leaves running. Held here so they end here: dropping this kills
         // whatever is still going, which is what keeps a background job from outliving the turn that
         // started it and becoming an effect nobody is watching.
@@ -4226,6 +4278,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 profile: task.profile.as_deref(),
                                 cache: task.cache.as_deref(),
                                 remembering: task.remembering.as_deref(),
+                                advising: advisor.as_deref().map(|model| {
+                                    crate::advisor::Advising {
+                                        model,
+                                        context: &request.messages,
+                                        asked: &mut advice_asked,
+                                    }
+                                }),
                                 delegated: task.delegate.is_some(),
                                 confined_to: addressed.as_ref().map(|addressed| addressed.tools()),
                                 servers: servers.as_deref_mut(),
@@ -4234,6 +4293,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 permission_mode: task.permission_mode,
                                 auto_vetting: task.auto_vetting,
                                 run_directory: &mut run_directory,
+                                confine_runs: task.confine_runs,
                             },
                             &mut asking,
                             &mut reporter,
@@ -4313,6 +4373,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     task.system_prompts.appending.as_deref(),
                                     task.output_cap,
                                     task.deadlines,
+                                    task.confine_runs,
                                     task.mcp.as_ref(),
                                     cancel,
                                     &mut confirmer,
@@ -5244,6 +5305,62 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    fn a_delegate_spec(kind: &str, held: CapabilitySet) -> bravebot_core::delegate::DelegateSpec {
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "look it up");
+        let mut policy = Policy::begin(routing, ReleasePlan::new(), held, &mut sink).unwrap();
+        policy
+            .before_delegate(
+                &Labelled::trusted(kind.to_string()),
+                &Labelled::trusted("look it up".to_string()),
+                None,
+            )
+            .expect("a trusted run may delegate")
+    }
+
+    fn configured_with_advisor(setting: Option<&str>) -> Config {
+        let mut config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+            _ => None,
+        })
+        .unwrap();
+        config.advisor_model = setting.map(str::to_string);
+        config
+    }
+
+    /// ADVISOR-8: a setting alone names the advisor, and the flag, which is a person's choice for
+    /// this run, outranks it. With neither there is none.
+    #[test]
+    fn the_flag_outranks_the_advisor_setting_and_either_alone_names_one() {
+        let setting = configured_with_advisor(Some("from-settings"));
+        let unset = configured_with_advisor(None);
+        let plain = Task::new("look it up");
+        let flagged = Task::new("look it up").with_advisor(Some("from-flag".into()));
+
+        assert_eq!(
+            advisor_for(&plain, &setting).as_deref(),
+            Some("from-settings")
+        );
+        assert_eq!(
+            advisor_for(&flagged, &setting).as_deref(),
+            Some("from-flag")
+        );
+        assert_eq!(advisor_for(&flagged, &unset).as_deref(), Some("from-flag"));
+        assert_eq!(advisor_for(&plain, &unset), None);
+    }
+
+    /// ADVISOR-1: a delegate is not offered the tool, whatever the settings or the flag name.
+    #[test]
+    fn a_delegate_is_not_given_the_advisor_the_settings_name() {
+        let spec = a_delegate_spec("worker", held(&Task::new("")));
+        let delegated = Task::delegated(spec).with_advisor(Some("from-flag".into()));
+        let config = configured_with_advisor(Some("from-settings"));
+        assert_eq!(advisor_for(&delegated, &config), None);
+    }
+
     /// A delegate is a turn nobody is watching, so no definition may give one longer than such a
     /// turn may run, and the widest kind may give it that long. The ceilings live in the kernel
     /// and this bound here, so the two are held together here.
@@ -5476,18 +5593,7 @@ mod tests {
         );
 
         for kind in bravebot_core::delegate::Kind::NAMES {
-            let mut sink = bravebot_core::event::RecordingSink::new();
-            let mut routing = Routing::new();
-            routing.insert_trusted("task", "look it up");
-            let mut policy =
-                Policy::begin(routing, ReleasePlan::new(), held.clone(), &mut sink).unwrap();
-            let spec = policy
-                .before_delegate(
-                    &Labelled::trusted(kind.to_string()),
-                    &Labelled::trusted("look it up".to_string()),
-                    None,
-                )
-                .expect("a trusted run may delegate");
+            let spec = a_delegate_spec(kind, held.clone());
             let delegated = super::held(
                 &Task::delegated(spec)
                     .with_servers(vec![ServerAlias::new("weather"), ServerAlias::new("docs")]),
@@ -5837,6 +5943,49 @@ mod tests {
             )),
             "{:?}",
             reporter.narration
+        );
+    }
+
+    /// A reply cut off in its prose with no call open is the turn's answer. Asked to carry on, a
+    /// model starts the answer again from the top, so it is not asked, and the person is told the
+    /// answer stops short because the text would otherwise read as a whole one.
+    #[test]
+    fn a_reply_cut_off_in_its_prose_ends_the_turn_and_says_it_stopped_short() {
+        use bravebot_aichat::CutOff;
+        use ceiling::*;
+        let (outcome, reporter, bodies, _, stops) = traced(
+            "ceiling-stop-in-prose",
+            vec![
+                said(
+                    "The three causes are first, the",
+                    &[],
+                    Some(CutOff {
+                        ceiling: CEILING,
+                        call: None,
+                        thought: false,
+                    }),
+                ),
+                said("never asked for", &[], None),
+            ],
+        );
+        assert_eq!(
+            outcome.unwrap().reply_for_display(),
+            "The three causes are first, the"
+        );
+        assert_eq!(bodies.len(), 1, "it was asked again: {bodies:#?}");
+        assert!(
+            reporter
+                .narration
+                .iter()
+                .any(|line| line.contains("answer stops where it did")),
+            "the person was not told: {:?}",
+            reporter.narration
+        );
+        assert_eq!(stops.len(), 1, "{stops:#?}");
+        assert!(
+            stops[0].contains("no call was open") && stops[0].ends_with("the turn ends there"),
+            "{}",
+            stops[0]
         );
     }
 

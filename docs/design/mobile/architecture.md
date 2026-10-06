@@ -1,6 +1,6 @@
 # Mobile architecture and security
 
-Status: proposed, not implemented. The [overview](README.md) records existing code findings; the [client contract](client-contract.md) and [implementation plan](implementation-plan.md) define the prototype.
+Status: the first Rust session-view block is implemented. The TypeScript client and later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-rust-block).
 
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
@@ -42,6 +42,14 @@ Start the embedded runtime only for an explicitly selected on-device session. Re
 Reuse the existing Rust crates for execution, permissions, model-provider access, session lifecycle, and projection. The local proof needs only the view of its supported events; recovery and takeover arrive in later stages. The [client contract](client-contract.md#shared-screen-state) defines the additive view capability, compatibility behavior, and thin TypeScript adapters. Transport validation can reject malformed input early; the execution owner enforces policy.
 
 Keep inspection of released content in a separate presentation layer permitted by [LAYER-1](../../specs/layering.md#LAYER-1). The bridge is currently a non-presentation crate that carries labelled payloads without inspecting them. The proposed session projection must preserve that boundary. Reuse suitable Rust presentation helpers or extract a narrow presentation crate with its first caller and required spec changes. Do not put content inspection in bridge dispatch, `bravebot-core`, or `bravebot-agent`. Presentation outputs are for display and cannot determine execution or enter planner input.
+
+The first block uses `crates/ui-bridge/src/view.rs` for opaque row/status projection and the
+existing emitter for ordered publication. It reuses `wire.rs` for accepted prompt tags and the
+existing confirmer for approval decisions. No dependency or presentation crate is added:
+`bravebot-cli::progress::printable` and the TUI marking helpers inspect released text and draw
+terminal-specific output, which this transport does not need. Extract display transforms with
+the first rendering caller. The [normative view spec](../../specs/session-view.md) and the real
+stdio tests in `crates/ui-bridge/tests/fetch.rs` cover this boundary. Native marking remains untested.
 
 ## Embedded model credentials
 

@@ -707,6 +707,7 @@ editor mid-turn would take the screen from the turn drawing on it.
 `verified-by: bravebot_tui::editor::quitting_without_saving_leaves_the_line_as_it_was`
 `verified-by: bravebot_tui::editor::an_editor_that_failed_does_not_produce_a_line`
 `verified-by: bravebot_tui::editor::the_newline_an_editor_leaves_at_the_end_is_dropped`
+`verified-by: bravebot_tui::editor::the_file_the_editor_opens_is_readable_by_nobody_else`
 `verified-by: bravebot_tui::editor::only_the_last_newline_goes`
 `verified-by: bravebot_tui::editor::line_endings_come_back_the_way_a_paste_does`
 `verified-by: bravebot_tui::editor::the_file_does_not_outlive_the_edit`
@@ -1059,7 +1060,7 @@ reaches for it before reading anything.
 `verified-by: bravebot_tui::app::either_spelling_of_shift_tab_cycles_the_mode`
 `verified-by: bravebot_tui::app::the_mode_key_leaves_the_line_alone`
 `verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`
-`verified-by: bravebot_agent::permission_mode::the_key_cycles_three_modes_without_the_flag`
+`verified-by: bravebot_agent::permission_mode::the_key_cycles_three_modes_where_bypass_is_unreachable`
 `verified-by: bravebot_agent::permission_mode::a_session_started_in_bypass_can_cycle_out_of_it`
 
 
@@ -1462,6 +1463,7 @@ cannot see scroll away above it.
 `verified-by: bravebot_tui::app::the_row_keys_walk_a_paragraph`
 `verified-by: bravebot_tui::app::the_row_keys_reach_the_prompt_history_at_the_ends_of_the_input`
 `verified-by: bravebot_tui::app::a_slash_opens_the_search_over_earlier_prompts`
+`verified-by: bravebot_tui::app::the_letters_that_spell_keys_reach_the_history_and_the_search_mid_turn`
 `verified-by: bravebot_tui::app::the_letters_that_spell_keys_are_typed_in_insert_mode`
 `verified-by: bravebot_tui::app::an_operator_takes_the_row_keys_rather_than_walking_the_ladder`
 

@@ -192,6 +192,7 @@ fn writing_a_session_narrows_the_state_directory() {
             directories: &[],
             manifest: None,
             rewind: &[],
+            checkouts: &[],
         },
     );
 

@@ -160,7 +160,8 @@ try {
   await settings.getByText('No override selected', { exact: true }).waitFor()
   await inertBehind()
   await closeSettings()
-  assert(await hasFocus(page.getByRole('button', { name: 'Settings', exact: true })))
+  // Focus goes back on the next animation frame, after the panel has detached.
+  await until(() => hasFocus(page.getByRole('button', { name: 'Settings', exact: true })), 'focus back on Settings')
   console.log('PASS: real diagnostics, override selection/validation/clearing, stacked sections and focus')
 
   // Simulate a gateway settings file without a model selection: it retains the Brave default.

@@ -10,10 +10,13 @@ use std::io::Write;
 pub(crate) const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 
 /// The subcommands, as the usage table lists them.
-pub(crate) const COMMANDS: [&str; 6] = [
+pub(crate) const COMMANDS: [&str; 9] = [
     "doctor",
     "auth",
     "mcp",
+    "sessions",
+    "attach",
+    "reply",
     "import-leo-creds",
     "import-providers",
     "completion",
@@ -39,8 +42,9 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 21] = [
+const FLAGS: [Flag; 23] = [
     flag("plain", None, false),
+    flag("bg", None, false),
     flag("resume", Some('r'), false),
     flag("continue", Some('c'), false),
     flag("fork", Some('f'), false),
@@ -53,6 +57,7 @@ const FLAGS: [Flag; 21] = [
     flag("mode", None, true),
     flag("model", None, true),
     flag("effort", None, true),
+    flag("advisor", None, true),
     flag("print", Some('p'), false),
     flag("trace", None, false),
     flag("json", None, false),

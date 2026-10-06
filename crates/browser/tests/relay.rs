@@ -15,6 +15,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 const PROGRAM: &str = env!("CARGO_BIN_EXE_bravebot-browser");
@@ -25,6 +26,21 @@ const OTHER: &str = "ponmlkjihgfedcbaponmlkjihgfedcba";
 
 /// Long enough for a host that is working, short enough that one that is not fails the test.
 const WAIT: Duration = Duration::from_secs(10);
+
+/// Held while a process is created and while the lock the host contends for is released.
+///
+/// `Command::spawn` forks, and until the child executes it holds a copy of every descriptor this
+/// process has open. A `flock` lasts until the last copy of its descriptor closes, so a host started
+/// just after the test drops its lock can find it still held by another test's half-started child.
+/// Creating processes one at a time, and releasing the lock between two creations, leaves no such
+/// child alive.
+static CREATING: Mutex<()> = Mutex::new(());
+
+/// Starts `command`, with no other process being created meanwhile.
+fn spawn(command: &mut Command) -> Child {
+    let _creating = CREATING.lock().unwrap_or_else(PoisonError::into_inner);
+    command.spawn().unwrap()
+}
 
 fn origin(id: &str) -> String {
     format!("chrome-extension://{id}/")
@@ -80,14 +96,14 @@ impl Extension {
     }
 
     fn start(directory: &Path, id: &str) -> Self {
-        let mut host = Command::new(PROGRAM)
-            .arg(origin(id))
-            .env("BRAVEBOT_BROWSER_DIR", directory)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut host = spawn(
+            Command::new(PROGRAM)
+                .arg(origin(id))
+                .env("BRAVEBOT_BROWSER_DIR", directory)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        );
         let to_host = host.stdin.take();
         let mut stdout = host.stdout.take().unwrap();
         let (sender, from_host) = mpsc::channel();
@@ -259,14 +275,14 @@ fn reads_that_keep_being_interrupted_stop_at_the_deadline() {
 /// Longer than the server's own reply timeout, so a call it gives up on is still a reply here, and
 /// bounded, so a server that never exits fails the test.
 fn mcp(directory: &Path, requests: &[Value]) -> Vec<Value> {
-    let mut server = Command::new(PROGRAM)
-        .arg("mcp")
-        .current_dir(directory)
-        .env_clear()
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut server = spawn(
+        Command::new(PROGRAM)
+            .arg("mcp")
+            .current_dir(directory)
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped()),
+    );
     let mut stdin = server.stdin.take().unwrap();
     for request in requests {
         writeln!(stdin, "{request}").unwrap();
@@ -487,7 +503,10 @@ fn a_host_does_not_start_while_another_holds_the_lock() {
     assert!(!directory.path().join("socket").exists());
     assert!(!directory.path().join("secret").exists());
 
-    drop(lock);
+    {
+        let _quiet = CREATING.lock().unwrap_or_else(PoisonError::into_inner);
+        drop(lock);
+    }
     let first = Extension::connect(directory.path(), OURS);
     let key = secret(directory.path());
 
@@ -826,14 +845,16 @@ fn installing_writes_one_manifest_for_our_extension_alone() {
     let neighbour = manifests.path().join("com.example.other.json");
     std::fs::write(&neighbour, "{}").unwrap();
 
-    let status = Command::new(PROGRAM)
-        .args(["install", "--manifest-dir"])
-        .arg(manifests.path())
-        .arg(OURS)
-        .env("BRAVEBOT_BROWSER_DIR", directory.path())
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
+    let status = spawn(
+        Command::new(PROGRAM)
+            .args(["install", "--manifest-dir"])
+            .arg(manifests.path())
+            .arg(OURS)
+            .env("BRAVEBOT_BROWSER_DIR", directory.path())
+            .stdout(Stdio::null()),
+    )
+    .wait()
+    .unwrap();
     assert!(status.success());
 
     let written = manifests.path().join("com.brave.bravebot.json");
@@ -857,13 +878,15 @@ fn installing_writes_one_manifest_for_our_extension_alone() {
 fn installing_with_no_id_records_the_extension_in_this_repository() {
     let manifests = tempfile::tempdir().unwrap();
     let directory = tempfile::tempdir().unwrap();
-    let status = Command::new(PROGRAM)
-        .args(["install", "--manifest-dir"])
-        .arg(manifests.path())
-        .env("BRAVEBOT_BROWSER_DIR", directory.path())
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
+    let status = spawn(
+        Command::new(PROGRAM)
+            .args(["install", "--manifest-dir"])
+            .arg(manifests.path())
+            .env("BRAVEBOT_BROWSER_DIR", directory.path())
+            .stdout(Stdio::null()),
+    )
+    .wait()
+    .unwrap();
     assert!(status.success());
     let id = bravebot_browser::install::EXTENSION_ID;
     let written = manifests.path().join("com.brave.bravebot.json");
@@ -881,14 +904,16 @@ fn installing_with_no_id_records_the_extension_in_this_repository() {
 fn installing_refuses_what_is_not_an_extension_id() {
     let manifests = tempfile::tempdir().unwrap();
     let directory = tempfile::tempdir().unwrap();
-    let status = Command::new(PROGRAM)
-        .args(["install", "--manifest-dir"])
-        .arg(manifests.path())
-        .arg("not-an-extension-id")
-        .env("BRAVEBOT_BROWSER_DIR", directory.path())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
+    let status = spawn(
+        Command::new(PROGRAM)
+            .args(["install", "--manifest-dir"])
+            .arg(manifests.path())
+            .arg("not-an-extension-id")
+            .env("BRAVEBOT_BROWSER_DIR", directory.path())
+            .stderr(Stdio::null()),
+    )
+    .wait()
+    .unwrap();
     assert!(!status.success());
     assert_eq!(std::fs::read_dir(manifests.path()).unwrap().count(), 0);
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
@@ -899,11 +924,16 @@ fn installing_refuses_what_is_not_an_extension_id() {
 #[test]
 fn installing_with_a_flag_missing_its_value_prints_the_usage() {
     let directory = tempfile::tempdir().unwrap();
-    let refused = Command::new(PROGRAM)
-        .args(["install", "--manifest-dir"])
-        .env("BRAVEBOT_BROWSER_DIR", directory.path())
-        .output()
-        .unwrap();
+    let refused = spawn(
+        Command::new(PROGRAM)
+            .args(["install", "--manifest-dir"])
+            .env("BRAVEBOT_BROWSER_DIR", directory.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .wait_with_output()
+    .unwrap();
     assert_eq!(refused.status.code(), Some(2));
     let said = String::from_utf8_lossy(&refused.stderr);
     assert!(said.contains("usage: bravebot-browser install"), "{said}");

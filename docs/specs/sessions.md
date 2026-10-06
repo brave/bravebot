@@ -23,6 +23,10 @@ its way out about being picked up. What a resume does to standing permissions is
 is [trace.md](trace.md). Everything else the command line does is [cli.md](cli.md), which governs
 the same file for its own topic.
 
+Everything here describes a session whose process a terminal owns and ends. A session whose process
+outlives the terminal is proposed in [background-sessions.md](background-sessions.md) and nothing
+builds it; until it does, no process other than the one running a session holds its record.
+
 Everything here describes an ordinary session. A session started with `--incognito` keeps none of
 it, and reads all of it: [incognito.md](incognito.md) governs which half is which.
 
@@ -87,9 +91,10 @@ written before they were kept reads as having neither.
 
 What the record says about each individual turn is SESSION-23.
 
-[CHECKOUT-15](checkouts.md#CHECKOUT-15), which nothing yet builds, adds the checkouts a session's
-delegates were given and it keeps: each one's path, its commit, its number, the number of the
-delegate given it, and the paths the driver recorded a file effect on in it.
+The record also holds the checkouts a session's delegates were given and it keeps
+([CHECKOUT-15](checkouts.md#CHECKOUT-15)): each one's path, its commit, its number, the number of
+the delegate given it, the paths the driver recorded a file effect on in it and what it took on
+disk. A record written before they were kept reads as having none.
 
 `verified-by: bravebot_tui::sessions::renaming_a_session_rewrites_the_record_immediately`
 `verified-by: bravebot_tui::sessions::a_chosen_name_survives_the_next_turn`
@@ -97,6 +102,7 @@ delegate given it, and the paths the driver recorded a file effect on in it.
 `verified-by: bravebot_tui::sessions::an_empty_name_is_refused`
 `verified-by: bravebot_session::sessions::a_link_is_written_at_once_and_a_resume_and_a_fork_keep_it`
 `verified-by: bravebot_session::sessions::a_record_from_before_the_links_reads_as_having_none`
+`verified-by: bravebot_tui::sessions::a_record_from_before_checkouts_were_kept_reads_as_having_none`
 
 <a id="SESSION-4"></a>
 ### SESSION-4: a title comes from the prompt, and is cut rather than mangled
@@ -466,15 +472,15 @@ be a way to write it anywhere.
 <a id="SESSION-18"></a>
 ### SESSION-18: an interactive session can be forked to explore an alternative path
 
-The `--fork` flag duplicates an existing session into a new session record with its own identifier,
+The `--fork` flag, and [`/branch`](#SESSION-31) from inside a session, duplicate an existing session into a new session record with its own identifier,
 preserving the conversation transcript, spend history, and audit trail while resetting the start
 time and marking the title. Manifest runs plan their entire sequence and cannot be forked, matching
 the continuation rule in SESSION-10.
 
 Both full-record and mid-history forks keep the source's current file decisions and inherit no
 rewind points. Forking does not rewind disk. The source record stays unchanged.
-[CHECKOUT-16](checkouts.md#CHECKOUT-16), which nothing yet builds, keeps a fork from carrying the
-source's checkouts or the rules copied for them.
+[CHECKOUT-16](checkouts.md#CHECKOUT-16) keeps a fork from carrying the source's checkouts or the
+rules copied for them.
 
 **Why.** Exploring an alternative technical path from a shared prefix preserves the expensive
 context already built up without polluting the original session. Refusing manifest runs maintains
@@ -992,6 +998,56 @@ deleted an open session would have the next save write the record back.
 `verified-by: bravebot_ui_bridge::deleting::a_session_a_window_has_open_is_not_deleted_from_under_it`
 `verified-by: bravebot_ui_bridge::deleting::a_session_with_a_turn_running_is_refused_as_such`
 `verified-by: bravebot_ui_bridge::deleting::a_turn_in_another_session_is_named_as_such_and_deletes_nothing`
+
+<a id="SESSION-31"></a>
+### SESSION-31: `/branch` forks the running session and moves onto the copy
+
+`/branch [name]` writes the copy `--fork` writes ([SESSION-18](#SESSION-18)): its own id, and the
+transcript, spend history and audit trail of the session. The start time is reset and the title is
+marked, or is the name where one is given. It moves the running session onto the copy, so the next
+turn is written to the copy, and it says in the transcript where the original is: its id, the
+directory it is in, and `bravebot --resume` as [SESSION-8](#SESSION-8) prints it. The original's
+record and audit trail are left byte for byte as the last turn wrote them. The copy is written
+again from what the session holds, so it is not older than the session it was made from.
+
+A loop, a goal and the live watches are not written down ([LOOP-11](loop.md#LOOP-11),
+[GOAL-12](goal.md#GOAL-12)), so none carries over: each ends and says so. Nor do the rewind
+points, which a fork inherits none of, so `/undo` in the copy has nothing to go back to. Nothing is rewound on disk. The command is
+refused, with a line saying why and nothing copied, where there is no record to copy because no turn
+has ended, where records are not written (an incognito session), for a manifest run, which
+[SESSION-18](#SESSION-18) refuses to fork, and while the session keeps a checkout. A fork carries
+none ([CHECKOUT-16](checkouts.md#CHECKOUT-16)), so a session carrying on in the copy would go on
+working in a checkout its record does not list; the refusal names each by its id and says to remove
+it with `/checkouts remove`. Typed during a turn it waits for the turn to end
+([CMD-8](commands.md#CMD-8)), since the copy is made from the record the turn is still to write.
+
+The copy holds what `--resume` of it would. The trust map, the programs vouched for and the rules
+are in the record, so they stay. What no record keeps goes with the original: the language servers
+shut down and are asked about again ([LSP-8](tools/lsp.md#LSP-8)), the run prompts already drawn
+are forgotten, a file agreed to be shown or to hold a secret is asked about again
+([CRED-13](credential-protection.md#CRED-13), [CRED-15](credential-protection.md#CRED-15)), and the
+session's own directory is replaced ([TRUST-15](trust-map.md#TRUST-15)).
+
+**Why.** Trying a second approach from the middle of a session otherwise means leaving it, finding
+its id and starting `--fork`, and losing the screen the person was looking at. Keeping the original
+unchanged is what lets the person return to it, and saying its id is what makes that possible
+without having written it down. A goal or loop that continued into the copy would send its next turn
+into a conversation it was not started in.
+
+`verified-by: bravebot_session::sessions::branching_moves_onto_a_marked_copy_and_leaves_the_original_untouched`
+`verified-by: bravebot_session::sessions::a_named_branch_takes_the_name_as_its_title`
+`verified-by: bravebot_session::sessions::branching_before_anything_is_written_refuses_and_stays_put`
+`verified-by: bravebot_session::sessions::branching_where_records_cannot_be_written_refuses_and_writes_no_copy`
+`verified-by: bravebot_session::sessions::branching_a_manifest_run_is_refused`
+`verified-by: bravebot_tui::app::branching_a_session_moves_onto_the_copy_and_leaves_the_original`
+`verified-by: bravebot_tui::app::branching_a_session_with_no_turn_says_so_and_stays_put`
+`verified-by: bravebot_tui::app::the_branch_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::branching_a_session_with_a_goal_takes_the_goal_off`
+`verified-by: bravebot_tui::app::branching_a_session_with_a_watch_ends_it_and_says_so`
+`verified-by: bravebot_tui::app::a_branch_keeps_what_the_record_holds_and_forgets_the_rest`
+`verified-by: bravebot_tui::app::branching_is_refused_while_the_session_keeps_a_checkout`
+`verified-by: bravebot_tui::app::the_branch_command_carries_its_name`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_branch_command_is_still_a_prompt`
 
 ## Known costs
 

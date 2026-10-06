@@ -343,6 +343,11 @@ impl Running {
     /// Returns whether the answer was applied. A `false` is not a retryable failure: the
     /// question is unknown, already answered, or of another kind entirely.
     pub fn answer(&self, request: u64, reply: Reply) -> bool {
+        self.answer_with(request, reply, || {})
+    }
+
+    /// Publish the consumed question before waking the worker that can ask the next one.
+    pub fn answer_with(&self, request: u64, reply: Reply, consumed: impl FnOnce()) -> bool {
         let Ok(mut pending) = self.pending.lock() else {
             return false;
         };
@@ -356,6 +361,7 @@ impl Running {
         // finds nothing to answer whichever of them gets the lock first.
         *pending = None;
         drop(pending);
+        consumed();
         self.answers.send(reply).is_ok()
     }
 

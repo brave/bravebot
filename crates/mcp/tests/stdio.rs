@@ -501,6 +501,19 @@ impl Sandbox for ProgramWouldNotStart {
             std::io::Error::from(std::io::ErrorKind::NotFound),
         ))
     }
+
+    #[cfg(unix)]
+    fn command(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _policy: &SandboxPolicy,
+        _environment: &Environment,
+    ) -> Result<std::process::Command, bravebot_sandbox::SandboxError> {
+        Err(bravebot_sandbox::SandboxError::SpawnFailed(
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        ))
+    }
 }
 
 /// A server nobody can start is a person's own configuration to correct, and it is reported
@@ -543,6 +556,19 @@ impl Sandbox for RecordsStreams {
         _environment: Environment,
     ) -> Result<ConfinedChild, bravebot_sandbox::SandboxError> {
         *self.0.lock().expect("streams") = Some(streams);
+        Err(bravebot_sandbox::SandboxError::SpawnFailed(
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        ))
+    }
+
+    #[cfg(unix)]
+    fn command(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _policy: &SandboxPolicy,
+        _environment: &Environment,
+    ) -> Result<std::process::Command, bravebot_sandbox::SandboxError> {
         Err(bravebot_sandbox::SandboxError::SpawnFailed(
             std::io::Error::from(std::io::ErrorKind::NotFound),
         ))

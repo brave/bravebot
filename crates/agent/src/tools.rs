@@ -1395,6 +1395,36 @@ pub fn for_planner(
     tools
 }
 
+/// Add the `advisor` tool to a planner's list, for a session that named an advisor model.
+///
+/// Built here rather than in the table because no session is offered it by default: it exists only
+/// where somebody chose a model to consult, and a description naming a tool that is not on the
+/// list sends the planner to a name that is not there.
+pub fn offer_advisor(tools: &mut Vec<Tool>) {
+    let mut advisor = Tool::function(
+        "advisor",
+        "Ask a stronger model for guidance. The advisor is given this whole conversation, \
+         exactly as you have it, and the question you write; it has no tools and cannot look \
+         at anything you have not. It returns advice as text, which is yours to weigh and act \
+         on. Use it before committing to an approach you are unsure of, when you are stuck, or \
+         before calling the work done. It costs a request to a larger model, and a turn may ask \
+         it only a few times, so put the whole question in one call rather than several.",
+        json!({
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "What you want the advisor's view on, written so that it \
+                                    can be answered from the conversation alone."
+                }
+            },
+            "required": ["question"]
+        }),
+    );
+    ask_why(&mut advisor);
+    tools.push(advisor);
+}
+
 /// Replace which names `spawn_agent` accepts, and what each is for, with the kinds this turn
 /// resolved. Nothing where the list does not offer the tool.
 fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definitions) {
@@ -1753,9 +1783,36 @@ pub struct Tools<'a> {
     /// instead which effects may happen with nobody to see them. The identifier is what the reading
     /// back uses to tell this session's own answers from an earlier session's.
     pub remembering: Option<&'a str>,
+    /// The advisor this turn may consult, and what it has been asked so far, or `None` where the
+    /// session named none.
+    ///
+    /// Read by dispatch as well as by the tool list, for the reason `arming` is: a call to a tool
+    /// this turn was not offered is answered the way any other unknown name is rather than
+    /// quietly working.
+    pub advising: Option<crate::advisor::Advising<'a>>,
+    /// Whether a program `run` starts is held to the profile its plan accounts for.
+    ///
+    /// `false` for a turn nobody turned it on for, which starts programs with the access the
+    /// user's own shell has. Where it is `true` the platform has to confine every step or the step
+    /// is not started; a platform with no base (Windows) starts them as it always has
+    /// ([SANDBOX-1]).
+    ///
+    /// [SANDBOX-1]: ../../../docs/specs/sandboxing.md
+    pub confine_runs: bool,
 }
 
 impl<'a> Tools<'a> {
+    /// What this call's programs are confined to, or `None` where they are not.
+    fn confinement(&self) -> Option<crate::confine::Confinement> {
+        if !self.confine_runs {
+            return None;
+        }
+        let roots = std::iter::once(self.workspace.root().to_path_buf())
+            .chain(self.workspace.added_directories().iter().cloned())
+            .collect();
+        crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)
+    }
+
     /// Where this turn's credential findings are written, and under whose name.
     ///
     /// Both halves are already here for other reasons, and putting them together in one place is
@@ -2506,6 +2563,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "run" => Some("command"),
         "read_output" => Some("ref"),
         "watch_file" => Some("path"),
+        "advisor" => Some("question"),
         _ => None,
     }
 }
@@ -2967,6 +3025,12 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             tools.armed,
             &arguments,
         ),
+        // Offered to the planner of a session that named an advisor, and to nothing else: a
+        // delegate's task came from a planner, and a call from one is answered as an unknown name
+        // is. Refused here as well as absent from the list.
+        "advisor" if !tools.delegated && tools.advising.is_some() => {
+            advise(policy, tools, &arguments)
+        }
         other => match &server_tool {
             Some((offer, alias, tool)) => {
                 let egress = tools.chat.egress;
@@ -6821,6 +6885,8 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // grant is a sentence somebody answered and a use is a thing that happened.
     let spends = bravebot_core::ambient::spent_by(&plan);
 
+    let confinement = tools.confinement();
+
     if in_the_background {
         // What has to be refused is what start_steps cannot honour, and it honours no route at
         // all, including `2>&1`, which names nothing for anybody to endorse.
@@ -6835,7 +6901,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         tools
             .workspace
             .mark_rewind_gap(crate::rewind::CoverageGap::Command);
-        return match crate::exec::start_steps(steps, &plan.directory, tools.workspace.scratch()) {
+        return match crate::exec::start_steps(
+            steps,
+            &plan.directory,
+            tools.workspace.scratch(),
+            confinement.as_ref(),
+        ) {
             Ok(running) => {
                 // Spent at the moment the programs start, which for a background line is here:
                 // it outlives this call, and nothing later in the turn knows what it reached.
@@ -6912,6 +6983,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             &handoff,
             limit,
             tools.workspace.scratch(),
+            confinement.as_ref(),
         ) {
             Ok(crate::exec::Waited::Moved(moved)) => {
                 // Everything the background branch above does once its line has started, at the
@@ -6955,6 +7027,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             limit,
             tools.workspace.scratch(),
             supplied.as_ref().map(|(bytes, _)| bytes.as_str()),
+            confinement.as_ref(),
             &mut |path| {
                 let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
                 if effects.contains_key(&key) {
@@ -7567,6 +7640,86 @@ fn unreadable_reads(arguments: &Value) -> &'static str {
         _ => {
             "error: 'reads' is required and must be an array of reference names, e.g. \
              \"reads\": [\"ref:0\"]"
+        }
+    }
+}
+
+/// Put the planner's question to the advisor and bring back what it said.
+///
+/// The answer comes back as the result of the call, labelled from the context the advisor was
+/// shown, so the kernel decides in the turn whether the planner reads it or is given a reference.
+/// Every failure is the driver's own words: what a backend says about a failed request can carry
+/// a credential, and the planner is told the category only (TOOL-4).
+fn advise<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    arguments: &Value,
+) -> Produced {
+    let Some(question) = named_argument(arguments, "question") else {
+        return Produced::problem("error: 'question' is required and must be a string");
+    };
+    let Some(advising) = tools.advising.as_mut() else {
+        return Produced::problem("error: no such tool 'advisor'");
+    };
+    if *advising.asked >= crate::advisor::CALLS_PER_TURN {
+        return Produced::problem(format!(
+            "refused: the advisor has been asked {} times this turn, which is as often as a turn \
+             may. Decide from the advice you already have.",
+            crate::advisor::CALLS_PER_TURN
+        ));
+    }
+    let question = match policy.before_advice(&question) {
+        Ok(question) => question,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+
+    // Counted before the call, so one that fails or is cancelled still counts: a planner that
+    // keeps asking a model that keeps failing is the loop the bound is for.
+    *advising.asked += 1;
+    let call = *advising.asked;
+    let model = advising.model;
+
+    let asked_at = std::time::Instant::now();
+    let answer =
+        crate::advisor::consult(policy, &mut tools.chat, model, advising.context, &question);
+    let waited = Some(crate::timing::Interval::since(asked_at));
+    match answer {
+        Ok(advice) => {
+            policy.record_advice(model, call, advice.usage.total(), question.chars().count());
+            Produced::new(
+                advice.answer,
+                format!("the advisor {model}"),
+                format!("the advisor {model} answered"),
+            )
+            .costing(advice.usage)
+            .waiting(waited)
+            .of_content()
+        }
+        Err(crate::advisor::AdviceError::Chat(error)) => {
+            let cancelled = error.is_cancelled();
+            let diagnosis = error.diagnosis();
+            let reason = if cancelled {
+                "cancelled"
+            } else {
+                diagnosis.category.name()
+            };
+            let mut produced = Produced::problem(format!("error: advisor request {reason}"))
+                .costing(error.completed_usage().unwrap_or_default())
+                .waiting(waited);
+            if cancelled {
+                produced.cancelled = Some(crate::outcome::Cancellation {
+                    attempts: diagnosis.attempts,
+                });
+            }
+            produced
+        }
+        Err(crate::advisor::AdviceError::Refused) => Produced::problem(
+            "refused: the settings on this machine do not allow the advisor model. Carry on \
+             without it.",
+        )
+        .waiting(waited),
+        Err(crate::advisor::AdviceError::Denied(error)) => {
+            Produced::problem(format!("error: {error}")).waiting(waited)
         }
     }
 }
@@ -9171,7 +9324,7 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let mut running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let mut running = crate::exec::start_steps(steps, &root, None, None).unwrap();
             let until = Instant::now() + Duration::from_secs(5);
             while !running.ended() {
                 assert!(Instant::now() < until, "job did not end");
@@ -9223,7 +9376,7 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
             let (_, stop) = jobs.keep(
                 running,
                 plan.display(),
@@ -9297,7 +9450,7 @@ mod tests {
             let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
                 panic!("one pipeline");
             };
-            let running = crate::exec::start_steps(steps, &root, None).unwrap();
+            let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
             let (name, stop) = jobs.keep(
                 running,
                 plan.display(),
@@ -9570,6 +9723,8 @@ mod tests {
                 Deadlines::BUILT_IN,
             ));
         }
+
+        offer_advisor(&mut offered);
 
         for tool in offered {
             let name = &tool.function.name;
@@ -12116,6 +12271,76 @@ mod tests {
             }
         }
 
+        /// The advisor is withheld from a delegate and from a session that named none, and refused at
+        /// dispatch as well as left off the list, for the reason `schedule_next` is. The last case is
+        /// the control: a planner with an advisor whose turn has used its questions is refused for
+        /// that reason, so an implementation that refused every call would not pass.
+        #[test]
+        fn a_call_to_an_advisor_nobody_was_offered_is_answered_as_an_unknown_name() {
+            let scratch = super::arguments::Scratch::new("advisor-dispatch");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            for (advised, delegated, asked, expected) in [
+                (false, false, 0, "error: no such tool 'advisor'"),
+                (true, true, 0, "error: no such tool 'advisor'"),
+                (
+                    true,
+                    false,
+                    crate::advisor::CALLS_PER_TURN,
+                    "refused: the advisor has been asked",
+                ),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "choose a file");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let call: ToolCall = serde_json::from_value(json!({
+                    "id": "1",
+                    "function": {
+                        "name": "advisor",
+                        "arguments": r#"{"question": "which file?", "why": "unsure"}"#,
+                    }
+                }))
+                .expect("a call");
+
+                // Leaked because the harness lends `Tools` to the closure for a lifetime of its own,
+                // which nothing borrowed from this test can outlive.
+                let context: &'static [bravebot_aichat::protocol::Message] =
+                    Box::leak(Box::new([bravebot_aichat::protocol::Message::user(
+                        "the task",
+                    )]));
+                let counted: &'static mut usize = Box::leak(Box::new(asked));
+                let output = super::arguments::with_tools(&workspace, |tools| {
+                    tools.delegated = delegated;
+                    tools.advising = advised.then_some(crate::advisor::Advising {
+                        model: "advisor-model",
+                        context,
+                        asked: counted,
+                    });
+                    dispatch(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::Unattended,
+                        &mut crate::report::IgnoreReports,
+                        &call,
+                    )
+                });
+                let told = {
+                    let proof = policy.authorise_display_release("test inspects the tool result");
+                    output.text.clone().declassify(&proof)
+                };
+                assert!(
+                    told.starts_with(expected),
+                    "advised {advised}, delegated {delegated}: {told}"
+                );
+            }
+        }
+
         /// The planner has to be told the wait it is getting, not the wait it asked for, or its
         /// next answer describes a schedule that is not happening.
         #[test]
@@ -12131,6 +12356,15 @@ mod tests {
                     "asked for {asked}: {}",
                     produced.note
                 );
+                for scheduling in [Scheduling::PacingALoop, Scheduling::ArrangingALook] {
+                    let produced =
+                        scheduled(scheduling, json!({"delay_seconds": asked, "noop": false}));
+                    let told = released(&produced.text);
+                    assert!(
+                        told.contains(&format!("again in {held} seconds")),
+                        "{scheduling:?}, asked for {asked}: {told}"
+                    );
+                }
             }
         }
 
@@ -13693,8 +13927,49 @@ mod tests {
                 permission_mode: crate::PermissionMode::default(),
                 auto_vetting: false,
                 run_directory: &mut run_directory,
+                confine_runs: false,
                 remembering: None,
+                advising: None,
             })
+        }
+
+        /// The regression it rejects: a turn that asks for confined runs building its confinement
+        /// from something other than the directories its workspace was opened on, or building none.
+        #[cfg(unix)]
+        #[test]
+        fn a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not()
+        {
+            let scratch = Scratch::new("confine-roots");
+            let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+            let beside = Scratch::new("confine-added");
+            let added = beside.path.clone();
+            workspace
+                .add_directory(&added.to_string_lossy())
+                .expect("added");
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            };
+
+            let (off, on) = with_tools(&workspace, |tools| {
+                let off = tools.confinement().is_some();
+                tools.confine_runs = true;
+                (off, tools.confinement())
+            });
+
+            assert!(!off);
+            let on = on.expect("a platform with a base");
+            let policy = on.policy(&step, workspace.root(), &[]);
+            for root in [workspace.root(), added.canonicalize().unwrap().as_path()] {
+                assert!(
+                    policy.writable.iter().any(|row| row.path == root),
+                    "{root:?} is not written in {policy:?}"
+                );
+            }
         }
 
         pub(super) fn told(

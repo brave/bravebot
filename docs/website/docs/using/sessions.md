@@ -56,6 +56,9 @@ is left exactly as it was. The conversation, the spend history and the audit tra
 copy, since the gates that decided the shared prefix decided the fork's history too. The start time
 is reset and the title is marked.
 
+From inside a session, [`/branch`](../reference/commands.md#branch-name) does the same and moves
+you onto the copy, saying the id of the original so `--resume` reaches it.
+
 A [manifest run](#a-manifest-run-is-recorded-but-cannot-be-continued) is refused, because there is no
 conversation inside one to carry on from. An [incognito](#a-session-that-leaves-nothing-behind)
 session writes no copy, so forking in one opens the conversation and records nothing.

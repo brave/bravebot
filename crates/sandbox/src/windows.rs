@@ -617,6 +617,21 @@ mod tests {
         );
     }
 
+    /// A backslash run directly before a quotation mark inside an argument is doubled and the mark
+    /// escaped. Undoubled, `\"` would be read as a literal quotation mark and the argument would
+    /// stay open, so the next argument would be absorbed into it.
+    #[test]
+    fn a_backslash_before_a_quotation_mark_does_not_escape_the_escape() {
+        assert_eq!(
+            command_line("s.exe", &[r#"a\"b"#.to_string(), "next".to_string()]),
+            r#""s.exe" "a\\\"b" "next""#
+        );
+        assert_eq!(
+            command_line("s.exe", &[r#"a\\"b"#.to_string()]),
+            r#""s.exe" "a\\\\\"b""#
+        );
+    }
+
     /// A path ends in a separator often enough to matter, and a trailing backslash left
     /// undoubled escapes the closing quotation mark, which joins the argument to the next
     /// one.

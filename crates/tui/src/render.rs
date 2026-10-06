@@ -3657,7 +3657,7 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     //
     // An empty part is skipped rather than drawn, so a session with no trail, nothing measured and
     // nothing to open does not open its line on a separator with nothing in front of it.
-    let mode = crate::status::named_mode(session.permission_mode(), session.bypass_available());
+    let mode = crate::status::named_mode(session.permission_mode(), session.began_in_bypass());
     // Beside the permission mode, on the same footing and for the same reason: which vi mode the box
     // is in decides whether the next letter is a letter or an instruction, so of everything here the
     // two of them are what somebody has to catch without going looking. Nothing at all for the box
@@ -7334,7 +7334,7 @@ mod tests {
             PermissionMode::Plan,
             PermissionMode::Bypass,
         ] {
-            let mut session = Session::new("kernel-enforced").allowing_bypass();
+            let mut session = Session::new("kernel-enforced").starting_in_bypass();
             while session.permission_mode() != mode {
                 session.cycle_permission_mode();
             }
@@ -7364,7 +7364,7 @@ mod tests {
     #[test]
     fn the_hint_line_names_asking_after_a_session_leaves_bypass() {
         use bravebot_agent::PermissionMode;
-        let mut session = Session::new("kernel-enforced").allowing_bypass();
+        let mut session = Session::new("kernel-enforced").starting_in_bypass();
         while session.permission_mode() != PermissionMode::Ask {
             session.cycle_permission_mode();
         }
@@ -7479,7 +7479,7 @@ mod tests {
     /// somebody learns once and can find again with `?`.
     #[test]
     fn a_narrow_terminal_gives_up_the_bindings_rather_than_the_mode() {
-        let session = Session::new("kernel").allowing_bypass();
+        let session = Session::new("kernel").starting_in_bypass();
         assert_eq!(
             session.permission_mode(),
             bravebot_agent::PermissionMode::Bypass
@@ -7501,7 +7501,7 @@ mod tests {
         // The second of them has a loop running, whose first tick is still in flight: that is the
         // state the part says one word in, so the whole of it is a fixed string rather than a
         // countdown moving while the test reads it.
-        let mut looping = Session::new("kernel").allowing_bypass();
+        let mut looping = Session::new("kernel").starting_in_bypass();
         looping.start_loop(
             crate::loops::request("5m check the deploy"),
             Vec::new(),
@@ -7511,7 +7511,7 @@ mod tests {
         // thing this row ever has to fit, so a sweep that only ever saw the bare word would pass
         // while the form people spend most of a loop looking at was cut in half. Two days out, so
         // `1d 23h` is what it says for the hour after this line rather than something that moves.
-        let mut counting_down = Session::new("kernel").allowing_bypass();
+        let mut counting_down = Session::new("kernel").starting_in_bypass();
         counting_down.start_loop(
             crate::loops::request("2d check the deploy"),
             Vec::new(),
@@ -7529,7 +7529,7 @@ mod tests {
         let word = t!(loop_hint).to_string();
         let info = t!(panel_hint, chord = "ctrl-x").to_string();
         for session in [
-            Session::new("kernel").allowing_bypass(),
+            Session::new("kernel").starting_in_bypass(),
             looping,
             counting_down,
         ] {
@@ -7685,7 +7685,7 @@ mod tests {
     /// watches, where a reading or an offer of a key can be had again.
     #[test]
     fn a_narrow_terminal_gives_up_a_reading_before_the_jobs_and_the_jobs_before_the_loop() {
-        let mut session = Session::new("kernel").allowing_bypass();
+        let mut session = Session::new("kernel").starting_in_bypass();
         session.start_loop(
             crate::loops::request("5m check the deploy"),
             Vec::new(),
@@ -7738,7 +7738,7 @@ mod tests {
     /// is still there to be found with `/loop` where a mode nobody can read is not.
     #[test]
     fn a_narrow_terminal_gives_up_a_reading_before_the_loop_and_the_loop_before_the_mode() {
-        let mut session = Session::new("kernel").allowing_bypass();
+        let mut session = Session::new("kernel").starting_in_bypass();
         session.start_loop(
             crate::loops::request("5m check the deploy"),
             Vec::new(),

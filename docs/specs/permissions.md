@@ -107,6 +107,7 @@ exceptions, and a matching ask rule prompts even where a more specific allow rul
 list where the narrowest rule won could not be checked by reading it.
 
 `verified-by: bravebot_core::permissions::deny_beats_ask_and_ask_beats_allow_however_specific_the_loser`
+`verified-by: bravebot_core::permissions::deny_beats_ask_for_the_same_subject`
 
 <a id="PERM-3"></a>
 ### PERM-3: a path specifier is gitignore-shaped, and says where it starts
@@ -795,22 +796,23 @@ else.
 
 **Where the refusal is made.** At the entry point, where the flag is taken off the command line
 before anything dispatches on it, so a session, a resumed session, a one-shot run and a session in
-lines are refused alike ([MODE-5](permission-modes.md#MODE-5)). Refusing there is what makes the mode
-unreachable rather than merely unselected: the key on the ladder is offered only where the flag was
-given, so a flag that never got through is a ladder with no fourth rung.
+lines are refused alike ([MODE-5](permission-modes.md#MODE-5)). In a session the same key is read when
+the session starts and again when it moves to another directory, and the mode is left off the ladder
+the key walks, so the flag and the key cannot disagree about whether the mode is available. A session
+already in the mode when a layer wrote the key is put back to asking.
 
 Refused rather than downgraded to asking. A run told to stop asking and carried on with a notice is a
 run whose author believes it is unattended, and the notice is on a stream nobody is reading.
 
-**Why.** The command line asking for the mode is a real gate and it is the only one
-([MODE-5](permission-modes.md#MODE-5)): nothing a settings file said could make the mode unreachable,
-so a person who wanted that had nothing to write and an administrator had nothing to pin. What the
-mode gives up is written down under Known costs in
+**Why.** The mode is reachable by the key in every session ([MODE-5](permission-modes.md#MODE-5)),
+so a person or an administrator who wants it out of reach on a machine has nothing else to write.
+What the mode gives up is written down under Known costs in
 [permission-modes.md](permission-modes.md), and the place it is wrong is a working machine, which is
 exactly the machine somebody else may have a legitimate say in.
 
 `verified-by: bravebot_cli::main::the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable`
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
+`verified-by: bravebot_tui::app::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
 
 <a id="PERM-18"></a>
 ### PERM-18: every layer may write either, and the strictest value any layer named holds

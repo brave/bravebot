@@ -979,6 +979,10 @@ pub struct Config {
     /// Model to request when the user has not picked one. The server may substitute a different
     /// one regardless.
     pub default_model: String,
+    /// The model the settings in force name as the planner's advisor, as the file spelled it.
+    ///
+    /// `None` offers no advisor. [`Config::advisor`] resolves a tier word in it.
+    pub advisor_model: Option<String>,
     /// How many prompt tokens one request may reach before the conversation is compacted.
     ///
     /// A guess, and it has to be one. The server reports what a request cost but never what it
@@ -1155,6 +1159,7 @@ impl Config {
         // any of the places that may name a model, and each is checked against the same pair
         // (BACKEND-48).
         config.models = managed.models().clone();
+        config.advisor_model = settings.advisor_model().map(str::to_string);
         Ok(config)
     }
 
@@ -1271,6 +1276,7 @@ impl Config {
             endpoint: endpoint.trim_end_matches('/').to_string(),
             premium_endpoint,
             default_model,
+            advisor_model: None,
             context_budget,
             budget_was_chosen,
             budget_was_advertised,
@@ -1452,6 +1458,13 @@ impl Config {
     /// heard of and be answered by whatever it substitutes.
     pub fn model_named(&self, name: &str) -> String {
         resolved_model(name, self.tier_account(), self.serves_aichat())
+    }
+
+    /// The model the settings in force name as the planner's advisor, resolved like `--advisor`.
+    pub fn advisor(&self) -> Option<String> {
+        self.advisor_model
+            .as_deref()
+            .map(|name| self.model_named(name))
     }
 
     /// Why the machine-level layer refuses `name`, and the file that refuses it (BACKEND-48).
@@ -3461,6 +3474,26 @@ mod tests {
             })
             .unwrap();
             assert_eq!(config.default_model, expected, "{alias} did not resolve");
+        }
+    }
+
+    /// The advisor setting is a model name like any other, so a tier word in it means the model the
+    /// same word means for the main model, and a setting that is not there offers no advisor.
+    #[test]
+    fn the_advisor_setting_resolves_a_tier_word_and_is_absent_when_unset() {
+        let bedrock = |key: &str| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            other => complete_env(other),
+        };
+        let unset = resolved(&Settings::default(), bedrock, complete_env).expect("configured");
+        assert_eq!(unset.advisor(), None);
+
+        for (written, expected) in [("opus", "opus-arn"), ("some-model", "some-model")] {
+            let settings = Settings::parse(&format!(r#"{{"advisorModel": "{written}"}}"#));
+            let config = resolved(&settings, bedrock, complete_env).expect("configured");
+            assert_eq!(config.advisor().as_deref(), Some(expected), "{written}");
         }
     }
 

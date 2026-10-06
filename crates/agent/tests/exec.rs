@@ -798,6 +798,7 @@ fn entering(
         exec::LIMIT,
         None,
         None,
+        None,
         &mut |path| {
             entered.push(path.to_path_buf());
             Ok(())
@@ -1372,7 +1373,7 @@ fn movable(
 ) -> Result<exec::Waited, ExecError> {
     let plan = bravebot_agent::cmdline::compile(text, at, None, &mut |_, _| Ok(()))
         .unwrap_or_else(|e| panic!("`{text}` should compile: {e}"));
-    past_text_file_busy(|| exec::run_plan_movable(&plan, cancel, handoff, exec::LIMIT, None))
+    past_text_file_busy(|| exec::run_plan_movable(&plan, cancel, handoff, exec::LIMIT, None, None))
 }
 
 /// Waits for a moved job to end, so a test can read the whole of what it printed.
@@ -2217,7 +2218,7 @@ fn a_background_link_pointed_elsewhere_after_approval_is_refused() {
     };
     link(&scratch.path, "tool", &other);
 
-    match past_text_file_busy(|| exec::start_steps(steps, &scratch.path, None)) {
+    match past_text_file_busy(|| exec::start_steps(steps, &scratch.path, None, None)) {
         Err(ExecError::NotStarted { program, .. }) => assert_eq!(program, "./tool"),
         Err(other) => panic!("refused for the wrong reason: {other}"),
         Ok(_) => panic!("a repointed link was started in the background"),
@@ -2228,7 +2229,7 @@ fn a_background_link_pointed_elsewhere_after_approval_is_refused() {
     );
 
     link(&scratch.path, "tool", &approved);
-    let mut job = past_text_file_busy(|| exec::start_steps(steps, &scratch.path, None))
+    let mut job = past_text_file_busy(|| exec::start_steps(steps, &scratch.path, None, None))
         .expect("pointed back, the line starts");
     for _ in 0..100 {
         if job.ended() {

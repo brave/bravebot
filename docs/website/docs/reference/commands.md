@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The twenty-nine commands the interface acts on itself, and the rules every one of them shares.
+description: The thirty commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -19,9 +19,11 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
+| `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
+| `/branch` | `[<name>]` | Copy this session and carry on in the copy, keeping the original to return to |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
@@ -134,6 +136,23 @@ The choice is written to `~/.bravebot`, so it outlives the session and applies i
 Themes of your own are JSON files under `~/.bravebot/themes/`, and nothing in a workspace is read. See
 [Choosing a theme](../customize/configuration.md#choosing-a-theme) and
 [Themes](../using/transcript.md#themes).
+
+## `/advisor [model | off]`
+
+Names the model the planner may consult through the [`advisor`](tools.md#advisor) tool, from the
+next turn on. `/advisor opus` takes it, in the words [`--advisor`](cli.md#--advisor-name) takes, and
+it outranks the [`advisorModel`](../customize/configuration.md#advisormodel) setting. The bare
+`/advisor` says which advisor is in force and opens no picker. A model that this machine's
+administrator refuses, that nothing configured serves, or that needs a sign-in first is not taken,
+and the line says why.
+
+`/advisor off` drops the choice made here. It does not switch off an advisor the setting names, and
+says so when the setting still names one. The choice lasts for the session and is not written down:
+put the model in the setting to have it in every session. Each call the planner makes spends the
+advisor's tokens and is counted in the turn's.
+
+Typed while a turn runs with nothing waiting, it is taken at once and the next turn is the first
+to use it.
 
 ## `/effort [level]`
 
@@ -646,6 +665,27 @@ session it asks the trust question again, restores no standing permissions, and 
 the old session, and says so. With neither running it says nothing about them. The session's pull
 request and issue are not carried over.
 
+## `/branch [name]`
+
+Copies this session as `bravebot --fork` does and moves you onto the copy, so you can try a second
+approach without leaving. The copy has an id of its own and the conversation, spend history and audit
+trail so far, and its title is marked `(fork)`, or is the name you give. The original is left exactly
+as it was, and the transcript says its id and the directory it is in, so `bravebot --resume <id>`
+returns to it.
+
+A running [loop](#loop-interval-prompt), [goal](#goal-condition) or live watch is not written down
+and ends, saying so. The copy starts with no turns for `/undo` to rewind. Nothing on disk is
+rewound.
+
+The copy holds what `--resume` of it would. The folders and programs you trusted stay trusted, and
+you are asked again about language servers, run prompts already shown and files you agreed to show
+despite the credential scan. The copy gets a scratch directory of its own.
+
+It needs a record to copy, so it says there is nothing to branch until the first turn has ended. It
+is refused in an incognito session, which writes none, and while the session keeps a checkout, which
+a copy does not carry: remove it with `/checkouts remove` first. Typed while a turn runs it waits
+for the turn to end.
+
 ## `/export [path]`
 
 Writes the transcript out as a markdown file under the working directory, at the path you name or at
@@ -713,7 +753,7 @@ would not go back rather than as a file that was never there.
 conversation, so `/undo` and `/rewind` after a `--resume` reach the same turns they reached before.
 
 **These changes outside a turn give up every point at once**: `/clear`, `/compact`, `/btw`,
-`/rename`, `/add-dir`, and `/cd`. Every point goes rather than the most recent alone, since such a
+`/rename`, `/branch`, `/add-dir`, and `/cd`. Every point goes rather than the most recent alone, since such a
 change lands after the most recent point and so before none of them. After that `/undo` says there is nothing left to undo
 rather than rewinding to a point describing a different session.
 
@@ -798,7 +838,7 @@ what the session keeps for itself, so they are carried out as you type them, ahe
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. The exception is a line of the same command already waiting, which they wait behind, so
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/issue`, `/pr`,
-`/forget-trust`, `/theme <name>` and `/effort <level>` change only what the session keeps, and are carried out as you
+`/forget-trust`, `/theme <name>`, `/effort <level>` and `/advisor` change only what the session keeps, and are carried out as you
 type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
 waiting `/clear` names the new session. What they say is drawn under the turn and joins the
 transcript once the turn has ended. `/theme` and `/effort` alone open a picker, so they wait.

@@ -1,6 +1,6 @@
 # Mobile agent and remote-control prototypes
 
-Status: proposal, not implemented. Recorded 2 October 2026.
+Status: the first Rust session-view block is implemented. The TypeScript client and later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-rust-block).
 
 Start with the [executive summary](executive-summary.md). It is written to stand alone for readers who need the goal, design choices, implementation sequence, and prototype limits.
 
@@ -96,7 +96,7 @@ The proposal includes React Native for both remote control and embedded executio
 
 ## Persistent-host gaps to implement
 
-The local client stages remain the starting point. Before adding a persistent host, account for these existing limits: the bridge has no live display snapshot API; the renderer adds submitted prompts locally; existing direct-stdio lifetime handling does not supply persistent-listener controller-loss refusal; approval replies lack a turn target; cancellation targets only a session; repeated startup-trust replies can replace trust and wait on the running state lock; the worker marks a turn finished before emitting its final event; and resumed records restore additional directories and trusted-program grants. The architecture and client contract below specify proposed additions for these gaps. They are not existing guarantees.
+The local client stages remain the starting point. Before adding a persistent host, account for these existing limits: the bridge offers a fresh-session initial view but no late subscription or history snapshot; the renderer adds submitted prompts locally; existing direct-stdio lifetime handling does not supply persistent-listener controller-loss refusal; approval replies lack a turn target; cancellation targets only a session; repeated startup-trust replies can replace trust and wait on the running state lock; turn completion and view publication share the emitter lock, but worker-termination evidence remains absent; and resumed records restore additional directories and trusted-program grants. The architecture and client contract below specify proposed additions for these gaps. They are not existing guarantees.
 
 ## Document ownership
 

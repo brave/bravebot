@@ -701,8 +701,9 @@ is not opened beside the working directory, and its name says it was made for a 
 
 The directory goes as the session ends, with everything written in it, whether the session ended by
 being left or by an error on the way out. A session that carries on from another is given its own: a
-resume, a fork, and the session `/clear` begins each open a new directory, and the one belonging to
-the session they followed is removed rather than handed on.
+resume, a fork, the session `/clear` begins and the copy `/branch` carries on in
+([SESSION-31](sessions.md#SESSION-31)) each open a new directory, and the one belonging to the
+session they followed is removed rather than handed on.
 
 **Why.** A resume can come days later, and bytes surviving that gap are a cache nothing evicts.
 There is nothing to reconstruct anyway, since the name carries what tells one directory from its
@@ -1334,8 +1335,8 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   confined stage reads what a turn left here without its plan naming the path, and a file it
   writes here is answered by what was said about the workspace (TRUST-16). What keeps TRUST-16's
   grounds standing after the first instant is the ownership and the mode, and neither tells a
-  program this session started from the session itself. A program `run` starts is unconfined, so
-  what this costs arrives with the profile rather than before it.
+  program this session started from the session itself. A program `run` starts on Linux and macOS
+  is confined ([SANDBOX-17](sandboxing.md#SANDBOX-17)), and this row is in its profile.
 - **Confinement is decided before an operation runs, not while it runs.** Where a path lands is
   worked out by resolving it, and the operation happens after that, so a component that is a
   directory when it is resolved and a symlink when the file is opened carries the bytes with it.
