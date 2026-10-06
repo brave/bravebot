@@ -69,6 +69,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
+| `--safe` | load none of your hooks, skills, definitions, MCP server requests or `AGENTS.md`, and say so once; sign-in, model and permissions still apply |
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
 | `-h`, `--help` | show the help |
@@ -76,8 +77,8 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 
 `-p` may lead, as it does for other agents: `bravebot -p "task"`.
 
-Four flags are taken out of the line before anything dispatches on it, so each may go anywhere and
-each combines with every way of starting, one another included: `--incognito`,
+Five flags are taken out of the line before anything dispatches on it, so each may go anywhere and
+each combines with every way of starting, one another included: `--incognito`, `--safe`,
 `--dangerously-skip-permissions`, `--settings` and `--vet`. `--agent` is taken out there too, and
 combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
 `--fork` or `--mode manifest`.
@@ -86,6 +87,12 @@ way of starting except `--mode manifest`.
 
 `--incognito` writes nothing under `~/.bravebot`. See
 [an incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
+
+`--safe` is for finding out whether your own configuration is why a session misbehaves. The run
+reads none of your hooks, skills, delegate definitions, `mcp.request` entries or `AGENTS.md` files,
+whether they are under `~/.bravebot` or in the project, and says once what it skipped. The built-in
+skills and delegate kinds, `--append-system-prompt` and `--settings` are unaffected, and so are
+sign-in, the model, permission rules and trust. `--bg` refuses it.
 
 `--dangerously-skip-permissions` is the only way to reach the mode that answers every permission
 question, including the ones that decide trust, and the only way a run nobody is watching may write.

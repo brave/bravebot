@@ -589,6 +589,12 @@ pub fn discover<S: Sink>(
         });
     }
 
+    // The program's own skills above are not customizations and stay. Everything below is a file
+    // somebody wrote.
+    if bravebot_core::safe::engaged() {
+        return (catalogue, notices);
+    }
+
     if let Some(home) = home {
         discover_home(policy, &home.join(SKILLS), &mut catalogue, &mut notices);
     }

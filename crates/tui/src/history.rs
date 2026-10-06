@@ -30,9 +30,13 @@ pub struct History {
     next_ticket: usize,
     /// How far back the user has walked. `None` means they are editing, not browsing.
     ///
-    /// Counted from the newest entry: 1 is the most recent prompt. Stored as a distance rather
-    /// than an index so appending an entry cannot silently move what is being viewed.
+    /// Counted from the newest entry: 1 is the most recent prompt, and 0 is the kept draft, which
+    /// sits in front of the walk. Stored as a distance rather than an index so appending an entry
+    /// cannot silently move what is being viewed.
     back: Option<usize>,
+    /// The line last cleared with Escape or Ctrl-C. It is not a sent prompt, so it is not in
+    /// `entries`, is never written to the history file and is not offered to the search.
+    draft: Option<String>,
     /// What was in the input box before browsing started, to restore on the way out.
     stashed: String,
 }
@@ -49,6 +53,7 @@ impl History {
             next_ticket: entries.len(),
             entries,
             back: None,
+            draft: None,
             stashed: String::new(),
         }
     }
@@ -58,7 +63,24 @@ impl History {
         &self.entries
     }
 
+    /// Keep a line that was cleared, replacing any draft kept before it.
+    pub fn keep_draft(&mut self, line: String) {
+        self.draft = Some(line);
+    }
+
+    /// Whether Up has anything to bring back: a sent prompt or a kept draft.
+    pub fn can_recall(&self) -> bool {
+        !self.entries.is_empty() || self.draft.is_some()
+    }
+
+    /// Whether the box shows a sent prompt, as opposed to a line being typed or the kept draft.
+    pub fn on_a_sent_prompt(&self) -> bool {
+        self.back.is_some_and(|back| back > 0)
+    }
+
     /// Record a submitted prompt, sent now from `project`.
+    ///
+    /// Sending drops the kept draft, since the line it was kept from has been superseded.
     ///
     /// Consecutive duplicates are collapsed: sending the same thing twice is usually a retry, and
     /// two identical entries make walking back slower without adding anything. The kept entry is
@@ -67,6 +89,7 @@ impl History {
     pub fn push(&mut self, prompt: impl Into<String>, project: Option<String>) -> Option<&Entry> {
         let entry = Entry::sent(prompt, project);
         self.leave();
+        self.draft = None;
         if self
             .entries
             .last()
@@ -121,7 +144,7 @@ impl History {
     /// `None` when not browsing. The index is the entry's ordinal rather than its distance back,
     /// because "History 78/83" reads as a place in a list.
     pub fn position(&self) -> Option<(usize, usize)> {
-        let back = self.back?;
+        let back = self.back.filter(|back| *back > 0)?;
         Some((self.entries.len() + 1 - back, self.entries.len()))
     }
 
@@ -131,13 +154,17 @@ impl History {
     /// Returns `None` at the oldest entry, leaving the view where it is rather than wrapping:
     /// wrapping to the newest would look like the key had stopped working.
     pub fn older(&mut self, current: &str) -> Option<String> {
-        if self.entries.is_empty() {
+        if !self.can_recall() {
             return None;
         }
 
         let back = match self.back {
             None => {
                 self.stashed = current.to_string();
+                if let Some(draft) = &self.draft {
+                    self.back = Some(0);
+                    return Some(draft.clone());
+                }
                 1
             }
             Some(back) if back < self.entries.len() => back + 1,
@@ -158,7 +185,11 @@ impl History {
     pub fn newer(&mut self) -> Option<String> {
         match self.back {
             None => None,
-            Some(1) => {
+            Some(1) if self.draft.is_some() => {
+                self.back = Some(0);
+                self.draft.clone()
+            }
+            Some(0) | Some(1) => {
                 self.back = None;
                 Some(std::mem::take(&mut self.stashed))
             }
@@ -312,5 +343,91 @@ mod tests {
         assert!(!history.is_browsing());
         assert_eq!(history.older("").as_deref(), Some("c"));
         assert_eq!(history.position(), Some((3, 3)));
+    }
+
+    /// The kept draft is the front of the walk, ahead of the newest sent prompt, and the sent
+    /// prompts are still behind it.
+    #[test]
+    fn up_brings_the_draft_back_before_the_newest_prompt() {
+        let mut history = with(&["first", "second"]);
+        history.keep_draft("cleared".to_string());
+        assert_eq!(history.older("").as_deref(), Some("cleared"));
+        assert_eq!(history.older("").as_deref(), Some("second"));
+        assert_eq!(history.older("").as_deref(), Some("first"));
+        assert_eq!(history.older(""), None);
+    }
+
+    /// Down from the newest sent prompt passes through the draft, and leaving it restores the
+    /// line that was being typed.
+    #[test]
+    fn down_walks_forward_through_the_draft_to_the_typed_line() {
+        let mut history = with(&["sent"]);
+        history.keep_draft("cleared".to_string());
+        history.older("typing");
+        history.older("typing");
+        assert_eq!(history.newer().as_deref(), Some("cleared"));
+        assert_eq!(history.newer().as_deref(), Some("typing"));
+        assert!(!history.is_browsing());
+    }
+
+    /// With nothing sent yet, the draft is all Up has to bring back.
+    #[test]
+    fn a_draft_is_recalled_when_nothing_has_been_sent() {
+        let mut history = History::new();
+        assert!(!history.can_recall());
+        history.keep_draft("cleared".to_string());
+        assert!(history.can_recall());
+        assert_eq!(history.older("").as_deref(), Some("cleared"));
+        assert_eq!(history.older(""), None);
+        assert_eq!(history.newer().as_deref(), Some(""));
+    }
+
+    /// One slot: a second cleared line takes the first one's place.
+    #[test]
+    fn a_second_draft_replaces_the_first() {
+        let mut history = with(&["sent"]);
+        history.keep_draft("one".to_string());
+        history.keep_draft("two".to_string());
+        assert_eq!(history.older("").as_deref(), Some("two"));
+        assert_eq!(history.older("").as_deref(), Some("sent"));
+        assert_eq!(history.newer().as_deref(), Some("two"));
+    }
+
+    /// Sending any prompt drops the draft, including a prompt collapsed into the one before it.
+    #[test]
+    fn sending_drops_the_draft() {
+        let mut history = with(&["sent"]);
+        history.keep_draft("cleared".to_string());
+        history.push("sent", None);
+        assert_eq!(history.older("").as_deref(), Some("sent"));
+        assert_eq!(history.newer().as_deref(), Some(""));
+    }
+
+    /// The draft is not a sent prompt, so it is not among the entries written to disk and searched.
+    #[test]
+    fn the_draft_is_not_a_stored_entry() {
+        let mut history = with(&["sent"]);
+        history.keep_draft("cleared".to_string());
+        assert_eq!(history.len(), 1);
+        assert!(
+            history
+                .entries()
+                .iter()
+                .all(|entry| entry.prompt != "cleared")
+        );
+    }
+
+    /// The border names a place in the list of sent prompts, and the draft is not in it.
+    #[test]
+    fn the_draft_has_no_position_in_the_list_of_sent_prompts() {
+        let mut history = with(&["sent"]);
+        history.keep_draft("cleared".to_string());
+        history.older("");
+        assert!(history.is_browsing());
+        assert!(!history.on_a_sent_prompt());
+        assert_eq!(history.position(), None);
+        history.older("");
+        assert!(history.on_a_sent_prompt());
+        assert_eq!(history.position(), Some((1, 1)));
     }
 }

@@ -42,7 +42,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 23] = [
+const FLAGS: [Flag; 24] = [
     flag("plain", None, false),
     flag("bg", None, false),
     flag("resume", Some('r'), false),
@@ -62,6 +62,7 @@ const FLAGS: [Flag; 23] = [
     flag("trace", None, false),
     flag("json", None, false),
     flag("incognito", None, false),
+    flag("safe", None, false),
     flag("vet", None, false),
     flag("dangerously-skip-permissions", None, false),
     flag("help", Some('h'), false),

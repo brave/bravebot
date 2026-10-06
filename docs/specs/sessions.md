@@ -156,7 +156,9 @@ Queued submissions keep their entries. Where consecutive duplicates share an ent
 while any submission it represents has not been cancelled. Cancelling a generated turn removes no
 input-recall entry, since that turn did not submit one. A cancellation that removes no entry leaves
 the stored history as it stands, because another session may have added to it since this one read it
-and writing this session's list back would take those prompts away.
+and writing this session's list back would take those prompts away. A line cleared with Escape or
+Ctrl-C is not a sent prompt and is not in this history: it is a draft held for the session alone
+([INPUT-39](terminal-input.md#INPUT-39)).
 
 `verified-by: bravebot_tui::sessions::cancelling_removes_only_the_running_prompt_from_recall`
 `verified-by: bravebot_tui::sessions::quitting_removes_only_the_running_prompt_from_recall`
