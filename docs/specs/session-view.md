@@ -14,9 +14,9 @@ documented-by: none (internal: the local RPC view is documented in ui/docs/phase
 
 ## Scope
 
-The opt-in Rust display view for fresh local bridge sessions. This is the first Rust block of
-mobile stages 1–2a. It adds no client package, listener, native binding, recovery, or controller
-model. The view does not grant authority or change the existing reply and cancellation targets.
+The opt-in Rust display view for fresh local bridge sessions. The view has no client package,
+listener, native binding, recovery, or controller model. The view does not grant authority or
+change the existing reply and cancellation targets.
 
 ## Clauses
 
@@ -38,6 +38,8 @@ never answers it. Manifest runs are unsupported on sessions with this view and a
 Legacy clients that do not start a view receive no view events. Their existing operations,
 responses and event payloads retain their meaning.
 
+`verified-by: bravebot_ui_bridge::fetch::a_session_view_cannot_start_during_a_turn`
+`verified-by: bravebot_ui_bridge::fetch::a_session_view_cannot_start_after_completion_resume_or_fork`
 `verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::fetch::session_views_keep_two_sessions_and_terminal_outcomes_separate`
 `verified-by: bravebot_ui_bridge::fetch::a_legacy_session_emits_no_view_events`

@@ -467,6 +467,65 @@ fn a_yes_to_another_kind_of_question_does_not_send_a_fetch() {
     );
 }
 
+/// An active worker holds session state; starting a view must refuse without waiting for it.
+#[test]
+fn a_session_view_cannot_start_during_a_turn() {
+    let mut asked = a_turn_that_asks_to_fetch("bridge-view-running");
+    let refused = asked.front.answered(
+        "session.view.start",
+        json!({"session": asked.session, "version": 1}),
+    );
+    assert_eq!(refused["error"]["code"], "bad_request");
+    asked.reply("fetch.reply", "reject");
+    asked.finish();
+}
+
+/// Fresh-only views cannot omit an existing transcript, including resumed and forked records.
+#[test]
+fn a_session_view_cannot_start_after_completion_resume_or_fork() {
+    let mut asked = a_turn_that_asks_to_fetch("bridge-view-history");
+    asked.reply("fetch.reply", "reject");
+    let done = asked.front.until(|m| m["event"] == "turn.done");
+    // This operation reaps the completed worker, so the history guard must refuse the view.
+    let watches = asked
+        .front
+        .call("watches.list", json!({"session": asked.session}));
+    assert_eq!(watches["busy"], false);
+    let refused = asked.front.answered(
+        "session.view.start",
+        json!({"session": asked.session, "version": 1}),
+    );
+    assert_eq!(
+        refused["error"]["code"], "bad_request",
+        "completed: {refused}"
+    );
+    let fork = asked.front.call(
+        "session.fork",
+        json!({
+            "session": asked.session, "prompt": 0, "text": "read the docs page"
+        }),
+    );
+    let refused = asked.front.answered(
+        "session.view.start",
+        json!({"session": fork["session"], "version": 1}),
+    );
+    assert_eq!(refused["error"]["code"], "bad_request", "fork: {refused}");
+    asked
+        .front
+        .call("session.close", json!({"session": asked.session}));
+    let resumed = asked.front.call(
+        "session.open",
+        json!({
+            "directory": asked._scratch.project(), "id": done["data"]["id"]
+        }),
+    );
+    let refused = asked.front.answered(
+        "session.view.start",
+        json!({"session": resumed["session"], "version": 1}),
+    );
+    assert_eq!(refused["error"]["code"], "bad_request", "resume: {refused}");
+}
+
 /// A negotiated view carries authoritative state through the same process as legacy events.
 #[test]
 fn the_session_view_orders_prompts_approvals_and_labelled_results() {
@@ -474,6 +533,11 @@ fn the_session_view_orders_prompts_approvals_and_labelled_results() {
     let (site, requests) = a_website();
     let (endpoint, rounds) = a_planner_fetching(&format!("{site}/docs"));
     let mut front = FrontEnd::serving(&scratch.home(), &endpoint);
+    let ready = front.until(|m| m["event"] == "agent.ready");
+    assert_eq!(
+        ready["data"]["capabilities"]["sessionView"],
+        bravebot_ui_bridge::view::capability()
+    );
     let info = front.call("agent.info", json!({}));
     assert_eq!(info["capabilities"]["sessionView"]["version"], 1);
     let opened = front.call("session.new", json!({"directory": scratch.project()}));
