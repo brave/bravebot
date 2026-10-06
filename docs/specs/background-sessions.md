@@ -357,6 +357,8 @@ it is stated.
 - **A session ends with its terminal, and no process holds a record.** Both are statements about a
   session that is not a background one. [sessions.md](sessions.md) says so where it describes the
   record, and the state directory lists `jobs/` as proposed.
+- **A message between sessions is proposed apart.** [session-messages.md](session-messages.md) has a
+  session's planner tell another's something, and starts no process and no turn, so BG-2 still holds.
 - **The info panel tells open sessions apart.** The list in [BG-5](#BG-5) tells the background ones
   apart and draws nothing the panel would not.
 - **Where nobody can be asked, the answer is no** ([PROMPT-9](prompting.md#PROMPT-9)). Somebody can

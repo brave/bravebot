@@ -439,6 +439,10 @@ Where a path is known, integrity is the trust map's answer about that path rathe
 capability's, which is what the three rows for reads say and why the first row is the label a read
 starts from. Which paths a person vouched for is in [trust-map.md](trust-map.md).
 
+A road proposed and not built is a message one background session sends another, which
+[session-messages.md](session-messages.md#MSG-9) has arrive under the label it was sent with and be
+quarantined when it has none. It becomes a row when it is built.
+
 Three carriers a reader may go looking for are absent, none of which takes a first label. A
 delegate's reply is model output, labelled in the delegate's own run by the row for what the planner
 wrote, and a delegate starts out holding what the context that wrote its task held. Content restored
