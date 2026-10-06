@@ -552,7 +552,6 @@ mod tests {
         assert_eq!(ids(&picker), ["a", "b"]);
     }
 
-    /// A record from before the links were kept has none, and the empty search lists everything.
     /// `--from-pr 1270` is the number, and the session whose number merely starts with it is not
     /// the one meant.
     #[test]
@@ -573,6 +572,8 @@ mod tests {
         assert!(ids(&picker).is_empty());
     }
 
+    /// A full address names exactly one pull request, so a trailing slash does not change which
+    /// session is meant and a different number in the same repository does not match it.
     #[test]
     fn a_pull_request_address_leaves_only_the_session_linked_to_it() {
         let picker =
@@ -594,6 +595,7 @@ mod tests {
         assert!(ids(&picker).is_empty());
     }
 
+    /// A record from before the links were kept has none, and the empty search lists everything.
     #[test]
     fn a_session_without_links_is_listed_and_found_by_its_title() {
         let mut picker = linked_picker();
