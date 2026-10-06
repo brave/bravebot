@@ -17,7 +17,8 @@ has started, and its plan. Giving a session its links with `--issue` and `--pr`,
 prompt, and from what `gh pr create` prints are proposed in
 [brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267) and not built. How a session
 gets its name is [sessions.md](sessions.md), and the keys a settings file can move are
-[INPUT-32](terminal-input.md#INPUT-32).
+[INPUT-32](terminal-input.md#INPUT-32). Listing the sessions that keep running after their terminal
+is closed is proposed in [background-sessions.md](background-sessions.md) and not built.
 
 ## Clauses
 

@@ -46,7 +46,9 @@ planner typed and counts the writes made through a reference ([CHECKOUT-13](#CHE
 ([CHECKOUT-15](#CHECKOUT-15)). `apply_checkout` brings the files a delegate wrote back, one at a
 time ([CHECKOUT-14](#CHECKOUT-14)), and `/checkouts apply` is the same operation typed by a
 person. A resume brings the kept checkouts back ([CHECKOUT-16](#CHECKOUT-16)); the opening sweep is
-not built.
+not built. [background-sessions.md](background-sessions.md) proposes that a session started in the
+background be given a checkout the same way, for the session and not for a delegate
+([BG-14](background-sessions.md#BG-14)); nothing builds that either.
 
 **A checkout is not a sandbox.** It moves where a delegate's file tools reach and where its
 programs start. A program it runs is as unconfined as any other ([sandboxing.md](sandboxing.md)),

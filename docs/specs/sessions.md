@@ -23,6 +23,10 @@ its way out about being picked up. What a resume does to standing permissions is
 is [trace.md](trace.md). Everything else the command line does is [cli.md](cli.md), which governs
 the same file for its own topic.
 
+Everything here describes a session whose process a terminal owns and ends. A session whose process
+outlives the terminal is proposed in [background-sessions.md](background-sessions.md) and nothing
+builds it; until it does, no process other than the one running a session holds its record.
+
 Everything here describes an ordinary session. A session started with `--incognito` keeps none of
 it, and reads all of it: [incognito.md](incognito.md) governs which half is which.
 
