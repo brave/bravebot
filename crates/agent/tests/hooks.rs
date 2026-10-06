@@ -260,11 +260,68 @@ fn a_hook_that_outstays_the_bound_is_stopped() {
         Duration::from_millis(200),
     );
 
-    assert_eq!(fired[0].trouble, Some(Trouble::Stopped));
+    assert_eq!(
+        fired[0].trouble,
+        Some(Trouble::Stopped(Duration::from_millis(200)))
+    );
     assert!(
         began.elapsed() < Duration::from_secs(20),
         "the bound was not applied"
     );
+}
+
+/// A hooks file declaring one entry that runs `run` with a `timeout`.
+fn declaring_with_timeout(moment: &str, run: &[&str], timeout: u64) -> Hooks {
+    let arguments: Vec<String> = run.iter().map(|word| format!("{word:?}")).collect();
+    Hooks::parse(&format!(
+        r#"{{"hooks": [{{"on": "{moment}", "run": [{}], "timeout": {timeout}}}]}}"#,
+        arguments.join(", ")
+    ))
+}
+
+/// HOOK-7: a hook that states a `timeout` is stopped at that bound and not at the default, and the
+/// stop says the bound it was held to.
+#[test]
+fn a_hook_is_stopped_at_the_timeout_it_declared() {
+    let scratch = Scratch::new("own-timeout-short");
+    let program = script(&scratch.path, "linger", "#!/bin/sh\nsleep 30\n");
+    let hooks = declaring_with_timeout("turn-finished", &[program.to_str().expect("a path")], 1);
+
+    let began = std::time::Instant::now();
+    let fired = fire(&hooks, Moment::TurnFinished, None, &scratch.path);
+
+    assert_eq!(
+        fired[0].trouble,
+        Some(Trouble::Stopped(Duration::from_secs(1)))
+    );
+    assert!(
+        began.elapsed() < Duration::from_secs(15),
+        "the default bound was applied in place of the declared one"
+    );
+}
+
+/// HOOK-7: a hook that states a longer `timeout` than the default is not stopped at the default.
+#[test]
+fn a_hook_may_outlive_the_default_bound_by_declaring_more() {
+    let scratch = Scratch::new("own-timeout-long");
+    let program = script(
+        &scratch.path,
+        "pause",
+        "#!/bin/sh\nsleep 1\ntouch finished\n",
+    );
+    let hooks = declaring_with_timeout("turn-finished", &[program.to_str().expect("a path")], 30);
+
+    // The default is shorter than the hook runs; only the declared bound lets it finish.
+    let fired = fire_within(
+        &hooks,
+        Moment::TurnFinished,
+        None,
+        &scratch.path,
+        Duration::from_millis(200),
+    );
+
+    assert_eq!(fired[0].trouble, None);
+    assert!(scratch.path.join("finished").exists());
 }
 
 /// HOOK-4: two entries on one moment are two commands, run in the order the file listed them.

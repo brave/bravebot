@@ -24,7 +24,7 @@ inside a checkout, so a command named in one would be a command that arrived wit
 ```json
 {
   "hooks": [
-    { "on": "tool-finished", "tool": "write_file", "run": ["cargo", "fmt"] },
+    { "on": "tool-finished", "tool": "write_file", "run": ["cargo", "fmt"], "timeout": 120 },
     { "on": "turn-finished", "run": ["/usr/bin/osascript", "-e", "display notification \"done\""] }
   ]
 }
@@ -108,10 +108,24 @@ A rule about what to refuse is written as a rule, in
 [permissions](../security/permissions.md), where the decision comes from something you wrote rather
 than from something a program read.
 
+## How long a hook may run
+
+A hook is stopped after 30 seconds. An entry may set its own limit with `timeout`, in whole seconds
+from 1 to 600:
+
+```json
+{ "on": "turn-finished", "run": ["make", "test"], "timeout": 300 }
+```
+
+An entry whose `timeout` is anything else, such as 0, 601, 1.5 or a string, declares no hook. It is not
+rounded to the nearest limit, because that would be a limit you did not write. The ceiling is there
+because every hook holds the turn open while it runs.
+
 ## When one goes wrong
 
-A hook that could not be started, that ended badly, or that was still running after 30 seconds and
-was stopped, is reported to you, naming the moment and the program. It reaches a live display as it
+A hook that could not be started, that ended badly, or that was still running when its time ran out
+and was stopped, is reported to you, naming the moment and the program, and the time in seconds for one
+that was stopped. It reaches a live display as it
 happens and the turn's own account of itself as well, so a run with nowhere to draw still says it.
 
 The turn carries on in every case. A hooks file that is missing, unparseable, larger than 64 KB, or
@@ -127,7 +141,7 @@ since you mistyped its path.
   over the file that changed. For a formatter that is a slower run of the same work; for something
   that wanted to act on one file it is the feature not being there.
 - **Nothing a hook prints is kept.** Debugging one means having it write a file.
-- **A hook runs while the turn waits.** Every hook is time added to the turn, up to 30 seconds each. A
+- **A hook runs while the turn waits.** Every hook is time added to the turn, up to 30 seconds each, or the `timeout` the entry sets, at most 600. A
   `tool-finished` hook with no `tool` pays that on every call.
 - **There is no moment for a session.** Something that should happen once when the program opens fires
   per turn instead.

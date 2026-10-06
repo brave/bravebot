@@ -31,7 +31,7 @@ try {
       if (method === 'models.list') return { ok: { models: [{ id: 'local/test', name: 'Test model', provider: 'Local', premium: false, contextWindow: 32000 }], defaultModel: 'local/test', warnings: [] } }
       if (method === 'settings.inspect') return { ok: report }
       // Stands in for the agent's reader: the panel is told what a hook is rather than deciding.
-      if (method === 'hooks.inspect') return state.unreadable ? { error: { code: 'internal', message: 'The hooks file could not be read back.' } } : { ok: state.hooks }
+      if (method === 'hooks.inspect') return state.unreadable ? { error: { code: 'internal', message: 'The hooks file could not be read back.' } } : { ok: { timeoutSeconds: { min: 1, max: 600 }, ...state.hooks } }
       if (method === 'watches.add') { state.watches.push({ number: 1, path: params.path, state: 'watching', remainingSeconds: 604800, armedBy: 0 }) }
       if (method === 'watches.stop') state.watches = params.all ? [] : state.watches.filter(w => w.number !== params.number)
       if (method.startsWith('watches.')) return { ok: { watches: state.watches, busy: false } }

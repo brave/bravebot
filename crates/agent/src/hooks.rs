@@ -36,7 +36,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// How long one hook may run before it is stopped.
+/// How long a hook that states no `timeout` may run before it is stopped.
 ///
 /// Short, because every hook holds the turn open while it runs and a person watching a session has
 /// no way to tell a slow hook from a slow model. A formatter or a notification finishes well inside
@@ -71,8 +71,9 @@ pub enum Trouble {
     /// number because a process killed by a signal has no number, and inventing one for it would
     /// report a hook that was killed as a hook that chose to fail.
     Ended(String),
-    /// It was still running when the bound ran out, and was stopped.
-    Stopped,
+    /// It was still running when its bound ran out, and was stopped. Carries the bound it was
+    /// held to, which is the entry's own `timeout` where it stated one.
+    Stopped(Duration),
 }
 
 /// Run every hook attached to `moment`, in the order the file declared them, and say what became
@@ -88,11 +89,12 @@ pub fn fire(hooks: &Hooks, moment: Moment, tool: Option<&str>, directory: &Path)
     fire_within(hooks, moment, tool, directory, LIMIT)
 }
 
-/// [`fire`], for a stated bound rather than the one a turn uses.
+/// [`fire`], for a stated default bound rather than the one a turn uses. A hook that declared its
+/// own `timeout` keeps it.
 ///
 /// So that a test of what happens to a hook that outstays its welcome does not have to wait the
 /// real bound out. Nothing else states one: how long a turn will wait on a hook is this module's
-/// decision and not a caller's.
+/// decision and the file's, not a caller's.
 pub fn fire_within(
     hooks: &Hooks,
     moment: Moment,
@@ -127,7 +129,8 @@ fn announcement(moment: Moment) -> String {
 }
 
 /// Start one hook, hand it the line, and wait for it.
-fn run(hook: &Hook, said: &str, directory: &Path, limit: Duration) -> Option<Trouble> {
+fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<Trouble> {
+    let limit = hook.timeout().unwrap_or(default);
     let (program, arguments) = hook.run().split_first()?;
     let mut command = Command::new(program);
     // The vector, never a string. There is no shell between the file and the process, so an
@@ -169,7 +172,7 @@ fn run(hook: &Hook, said: &str, directory: &Path, limit: Duration) -> Option<Tro
             // Reaped rather than left. The turn goes on for as long as the session does, and a
             // hook firing every round would otherwise leave one zombie per round behind it.
             let _ = child.wait();
-            return Some(Trouble::Stopped);
+            return Some(Trouble::Stopped(limit));
         }
         std::thread::sleep(TICK);
     }

@@ -2,10 +2,13 @@
  * One hook, as the agent read it. `firesForNothing` is its answer about an entry naming a tool on a
  * moment that has no tool call, and is not worked out again here: what a hook is has one reader.
  */
-export interface Hook { on: 'turn-started' | 'tool-finished' | 'turn-finished'; tool: string | null; run: string[]; firesForNothing: boolean }
+export interface Hook { on: 'turn-started' | 'tool-finished' | 'turn-finished'; tool: string | null; run: string[]; timeout: number | null; firesForNothing: boolean }
 /** `entire` is false where the agent passed over part of the file, so composing it back from
  * `hooks` alone would drop what it did not read. */
-export interface HooksDocument { path: string; text: string | null; entire: boolean; hooks: Hook[] }
+export interface HooksDocument { path: string; text: string | null; entire: boolean; timeoutSeconds: TimeoutRange; hooks: Hook[] }
+/** The whole numbers of seconds the agent accepts for a hook's `timeout`, as it reported them. The
+ * range is the agent's; a form that held its own copy would disagree with the reader the day one changed. */
+export interface TimeoutRange { min: number; max: number }
 /** A refusal that only ever narrows: `value` is null where nothing named it, `path` the weakest file that did. */
 export interface Refusal { value: boolean | null; path: string | null; managed: boolean }
 /** What the settings in force say about the two refusing keys and the run limits. A null limit is the agent's built-in figure. */
@@ -27,8 +30,15 @@ export interface AgentSettings {
   network: { roots: string[]; problem: string | null; trustsNothing: boolean; proxy: string | null; authenticated: boolean; unusableProxy: string | null; noProxy: string | null }
 }
 
+/** The position of the first hook whose `timeout` the agent would drop the entry for, or null. An
+ * empty `timeout` is not sent, and so is not one. */
+export function unusableTimeout(hooks: Hook[], range: TimeoutRange): number | null {
+  const index = hooks.findIndex(({ timeout }) => timeout != null && !(Number.isInteger(timeout) && timeout >= range.min && timeout <= range.max))
+  return index < 0 ? null : index
+}
+
 /** The file the agent will read back, composed from the entries an editor holds. */
 export function composeHooks(hooks: Hook[]): string {
-  const entries = hooks.map(({ on, tool, run }) => ({ on, ...(tool ? { tool } : {}), run }))
+  const entries = hooks.map(({ on, tool, run, timeout }) => ({ on, ...(tool ? { tool } : {}), run, ...(timeout != null ? { timeout } : {}) }))
   return JSON.stringify({ hooks: entries }, null, 2) + '\n'
 }
