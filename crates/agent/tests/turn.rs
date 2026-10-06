@@ -33426,6 +33426,46 @@ fn a_turn_that_failed_still_says_what_its_hooks_said() {
     );
 }
 
+/// HOOK-7: the sentence a person reads about a stopped hook gives the bound that hook declared,
+/// not the default every other hook is held to.
+#[cfg(unix)]
+#[test]
+fn a_stopped_hook_says_the_timeout_it_declared() {
+    let scratch = Scratch::new("hooks-declared-timeout");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let linger = a_hook_script(&scratch.path, "linger", "#!/bin/sh\nsleep 30\n");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"turn-finished\", \"run\": [{linger}], \"timeout\": 2}}"),
+    );
+
+    let (endpoint, _received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("answer something").with_home(Some(home)),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a hook that is stopped does not fail the turn");
+
+    let stopped = |said: &&String| said.contains("linger") && said.contains("stopped");
+    for notices in [&outcome.notices, &reporter.notices] {
+        let said: Vec<&String> = notices.iter().filter(stopped).collect();
+        assert_eq!(said.len(), 1, "one sentence about the hook: {notices:?}");
+        assert!(
+            said[0].contains("after 2 seconds"),
+            "the bound the entry declared, not the default: {}",
+            said[0]
+        );
+    }
+}
+
 mod usage {
     use super::*;
     use bravebot_agent::Spent;

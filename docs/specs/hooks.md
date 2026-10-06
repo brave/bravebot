@@ -216,6 +216,7 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_agent::hooks::a_hook_that_outstays_the_bound_is_stopped`
 `verified-by: bravebot_agent::hooks::a_hook_is_stopped_at_the_timeout_it_declared`
 `verified-by: bravebot_agent::hooks::a_hook_may_outlive_the_default_bound_by_declaring_more`
+`verified-by: bravebot_agent::turn::a_stopped_hook_says_the_timeout_it_declared`
 `verified-by: bravebot_config::hooks::an_entry_may_state_its_own_timeout`
 `verified-by: bravebot_config::hooks::an_unusable_timeout_drops_the_entry`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_still_says_what_its_hooks_said`
