@@ -445,6 +445,42 @@ fn an_import_nested_past_four_hops_is_left_as_written() {
     assert!(preamble.notices[0].message.contains("l5.md"));
 }
 
+/// The 64th import is followed and the 65th is not, however shallow they are. The ones past the
+/// count stay as written and the person is told which they were.
+#[test]
+fn imports_past_the_count_are_left_as_written() {
+    let names: Vec<String> = (0..66).map(|n| format!("part-{n:02}.md")).collect();
+    let bodies: Vec<String> = (0..66).map(|n| format!("BODY-{n:02}")).collect();
+    let root = names
+        .iter()
+        .map(|name| format!("@{name}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut files: Vec<(&str, &str)> = vec![("AGENTS.md", root.as_str())];
+    files.extend(
+        names
+            .iter()
+            .zip(&bodies)
+            .map(|(name, body)| (name.as_str(), body.as_str())),
+    );
+
+    let preamble = composed("import-count", &files, &["."]);
+
+    let followed = bodies[..64].join(" ");
+    assert!(
+        preamble
+            .text
+            .contains(&format!("{followed} @part-64.md @part-65.md")),
+        "{}",
+        preamble.text
+    );
+    assert!(!preamble.text.contains("BODY-64"));
+    assert!(!preamble.text.contains("BODY-65"));
+    assert_eq!(preamble.notices.len(), 2, "{:?}", preamble.notices);
+    assert!(preamble.notices[0].message.contains("part-64.md"));
+    assert!(preamble.notices[1].message.contains("part-65.md"));
+}
+
 /// A path in a fence or in backticks is documentation about an import, not one.
 #[test]
 fn an_import_in_a_code_fence_or_a_code_span_is_not_followed() {

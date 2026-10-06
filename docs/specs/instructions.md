@@ -325,6 +325,7 @@ gate and reads each import through it, so nothing untrusted decides what is read
 
 `verified-by: bravebot_agent::preamble::an_at_path_import_is_expanded_in_place_and_resolved_beside_its_file`
 `verified-by: bravebot_agent::preamble::an_import_nested_past_four_hops_is_left_as_written`
+`verified-by: bravebot_agent::preamble::imports_past_the_count_are_left_as_written`
 `verified-by: bravebot_agent::preamble::an_import_in_a_code_fence_or_a_code_span_is_not_followed`
 `verified-by: bravebot_agent::preamble::an_import_cycle_is_cut_where_it_closes`
 `verified-by: bravebot_agent::preamble::an_import_back_to_the_file_a_pointer_was_read_from_is_a_cycle`
