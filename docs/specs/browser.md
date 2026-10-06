@@ -258,11 +258,11 @@ Brave's own profile directory, and a channel other than stable has its own.
 ### BROWSER-10: the tool list is fixed, and a tool not on it is refused
 
 The MCP server offers the same list whether or not the extension is connected:
-`get_platform_info`, `list_tabs`, `list_frames`, `read_page`, `search_history` and
-`search_bookmarks`. Each calls the extension method of the same name with the tool's arguments. A
+`get_platform_info`, `list_tabs`, `list_frames`, `read_page`, `search_history`,
+`search_bookmarks` and `open_tab`. Each calls the extension method of the same name with the tool's arguments. A
 call naming any other tool is refused by the server and nothing is sent to the extension.
-`list_frames` names a tab by its exact URL, and `read_page` names that tab and, optionally, one
-frame by its exact URL. `get_platform_info` returns the operating system and architecture Brave
+`list_frames` names a tab by its exact URL, `read_page` names that tab and, optionally, one
+frame by its exact URL, and `open_tab` names the HTTP or HTTPS URL to open. `get_platform_info` returns the operating system and architecture Brave
 runs on, and nothing else, so a person can see the extension answer without it telling anything
 about them.
 
@@ -347,13 +347,14 @@ at the same URL cannot be told apart by the argument they approved.
 <a id="BROWSER-14"></a>
 ### BROWSER-14: only the platform check starts on, and a tool that is off touches nothing
 
-Only the platform check starts on. Listing tabs and their frames, reading a page or frame, and
-searching history and bookmarks start off until a person turns them on in the extension's options.
+Only the platform check starts on. Listing tabs and their frames, reading a page or frame, searching history and bookmarks, and
+opening a tab start off until a person turns them on in the extension's options.
 A call to a tool that is off is refused before the browser is asked anything. A history search
 covers all of history, and a search returns at most 100 results.
 
 **Why.** Every tool but the platform check reaches what a person has open, has visited or has
-saved, so none of them reads anything before the person has said it may. The platform check tells
+saved, or send the person's cookies to a site, so none of them does so before the person has said it
+may. The platform check tells
 nothing about them, and is how they see the extension answer before turning anything on. The
 browser's history search covers the last day unless it is given a start time, which would answer a
 search of all of history with a day of it.
@@ -373,6 +374,26 @@ which numbers its requests from 1 as well, so a reply reaching it could be taken
 request of its own and handed to a session that never asked for it.
 
 `verified-by: by-construction (extension/tests/background.test.mjs loads the real service worker against fake runtime, alarm, storage, tab and native-port events; it asserts the worker connects at load and on startup and reconnects on the one-minute alarm after a disconnect, and that a request answered after its port closed and another opened reaches only its own port; make check-extension runs it, and check-ui-build depends on that target, so the Front end CI job runs it on every change the classifier gives the ui area, which a change under extension/ is)`
+
+<a id="BROWSER-16"></a>
+### BROWSER-16: a tab is opened at the URL asked for and kept only on the host that was asked for
+
+`open_tab` takes one argument, `url`, which must be an HTTP or HTTPS URL; any other scheme, or no
+URL, fails without a tab being created. It opens the URL in a new tab that is not made active,
+waits for the tab's top frame to commit, and replies with only the URL it committed. If that URL is
+on a different host from the one asked for, or the page fails to load or does not commit within 20
+seconds, it closes the tab and fails, naming the URL that was asked for and not the one the tab went
+to. The reply holds no page content. Reading what was opened is `read_page` at a URL a person
+supplies.
+
+**Why.** The question before the call shows the URL, and opening it is a request to that site with
+the person's cookies. A redirect to another host is one nobody was shown, which is
+[FETCH-4](tools/fetch-url.md#FETCH-4) for a tab, and a failure that named where the tab went would
+hand the planner a server's bytes as the driver's words, as [FETCH-6](tools/fetch-url.md#FETCH-6)
+describes. The reply goes through [MCP-1](mcp.md#MCP-1), so the final URL is untrusted and private.
+
+`verified-by: bravebot_browser::tools::a_tab_is_opened_by_its_url_alone`
+`verified-by: by-construction (extension/tests/tools.test.mjs asserts that open_tab creates one background tab at the URL asked for and replies with the committed URL alone, that a commit on another host, a different port or a browser error page, a load error and a commit that never comes each close the tab and fail naming the URL asked for, that a same-host redirect is kept, that only the tab's own top frame is read, and that a non-web scheme or no URL reaches no tab; it runs where the test under BROWSER-13 runs)`
 
 ## Known costs
 

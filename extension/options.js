@@ -24,6 +24,10 @@ const LABELS = {
     "Search bookmarks",
     "Your bookmarks, by words in their title or URL.",
   ],
+  open_tab: [
+    "Open a page in a new tab",
+    "An HTTP or HTTPS URL, in a background tab with your cookies. The tab is closed if the page goes to another host.",
+  ],
 };
 
 async function render() {

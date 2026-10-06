@@ -4,10 +4,11 @@
 // Run with `node --test extension/tests/`.
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import {
   DEFAULT_RESULTS,
   MAX_RESULTS,
+  OPEN_TIMEOUT_MS,
   PAGE_TEXT_LIMIT,
   SETTINGS_KEY,
   handle,
@@ -24,9 +25,15 @@ function browser({
   tabMovesAfterScript = {},
   history = [],
   bookmarks = [],
+  // What happens to a tab created at a URL: { kind, url, early }. `kind` is
+  // "committed" or "error" (a URL with no entry never reports anything), `url`
+  // is the page that committed, and `early` reports it before create returns.
+  opening = {},
   stored = tabsOn,
 } = {}) {
   const calls = [];
+  const listeners = { onCommitted: new Set(), onErrorOccurred: new Set() };
+  let nextTabId = 100;
   const currentTabs = new Map(tabs.map((tab) => [tab.id, tab]));
   return {
     calls,
@@ -38,7 +45,31 @@ function browser({
         },
       },
     },
+    listeners,
     tabs: {
+      async create(properties) {
+        calls.push(["tabs.create", properties]);
+        const tab = { id: nextTabId++, url: "", pendingUrl: properties.url };
+        const outcome = opening[properties.url];
+        const report = () => {
+          const event =
+            outcome.kind === "committed" ? "onCommitted" : "onErrorOccurred";
+          for (const listener of [...listeners[event]]) {
+            // A sub-frame of the same tab commits first. It is not the page.
+            listener({ tabId: tab.id, frameId: 3, url: "https://ads.test/" });
+            listener({ tabId: tab.id, frameId: 0, url: outcome.url });
+          }
+        };
+        if (outcome?.early) {
+          report();
+        } else if (outcome) {
+          setTimeout(report, 0);
+        }
+        return tab;
+      },
+      async remove(tabId) {
+        calls.push(["tabs.remove", tabId]);
+      },
       async query(filter) {
         calls.push(["tabs.query", filter]);
         return tabs;
@@ -49,6 +80,15 @@ function browser({
       },
     },
     webNavigation: {
+      onCommitted: {
+        addListener: (listener) => listeners.onCommitted.add(listener),
+        removeListener: (listener) => listeners.onCommitted.delete(listener),
+      },
+      onErrorOccurred: {
+        addListener: (listener) => listeners.onErrorOccurred.add(listener),
+        removeListener: (listener) =>
+          listeners.onErrorOccurred.delete(listener),
+      },
       async getAllFrames({ tabId }) {
         calls.push(["webNavigation.getAllFrames", tabId]);
         if (tabMovesAfterFrames[tabId]) {
@@ -730,6 +770,7 @@ test("only the platform check starts on", async () => {
     ["read_page", { url: tabs[0].url }, "scripting.executeScript"],
     ["search_history", { query: "bank" }, "history.search"],
     ["search_bookmarks", { query: "bank" }, "bookmarks.search"],
+    ["open_tab", { url: "https://brave.com/" }, "tabs.create"],
   ]) {
     const off = browser({ tabs, stored: {} });
     const refused = await handle({ id: 1, method, params }, off);
@@ -740,6 +781,9 @@ test("only the platform check starts on", async () => {
     const on = browser({
       tabs,
       pages: { 1: { title: "Brave", text: "home" } },
+      opening: {
+        "https://brave.com/": { kind: "committed", url: "https://brave.com/" },
+      },
       stored: { [SETTINGS_KEY]: { [method]: true } },
     });
     const answered = await handle({ id: 1, method, params }, on);
@@ -772,4 +816,184 @@ test("open tabs are refused once a person turns them off again", async () => {
     assert.ok(!reached(chrome, "tabs.query"));
     assert.ok(!reached(chrome, "scripting.executeScript"));
   }
+});
+
+// open_tab is a request to a site with the person's cookies, so it opens
+// exactly the URL they approved and reports only where the tab landed.
+test("open_tab opens the URL in a background tab and reports where it loaded", async () => {
+  const url = "https://brave.com/search?q=a";
+  for (const early of [false, true]) {
+    const chrome = browser({
+      opening: { [url]: { kind: "committed", url, early } },
+      stored: { [SETTINGS_KEY]: { open_tab: true } },
+    });
+    const reply = await handle(
+      { id: 1, method: "open_tab", params: { url } },
+      chrome,
+    );
+    assert.deepEqual(reply.result, { url }, `early: ${early}`);
+    assert.deepEqual(
+      chrome.calls.filter(([name]) => name.startsWith("tabs.")),
+      [["tabs.create", { url, active: false }]],
+    );
+    assert.equal(chrome.listeners.onCommitted.size, 0);
+    assert.equal(chrome.listeners.onErrorOccurred.size, 0);
+  }
+});
+
+// A same-host redirect is ordinary: the reply names the page that committed.
+test("open_tab keeps a tab that redirected within the approved host", async () => {
+  const url = "https://brave.com/old";
+  const landed = "https://brave.com/new";
+  const chrome = browser({
+    opening: { [url]: { kind: "committed", url: landed } },
+    stored: { [SETTINGS_KEY]: { open_tab: true } },
+  });
+  const reply = await handle(
+    { id: 1, method: "open_tab", params: { url } },
+    chrome,
+  );
+  assert.deepEqual(reply.result, { url: landed });
+  assert.ok(!reached(chrome, "tabs.remove"));
+});
+
+// The approval named one host. A tab that commits on another is closed, and
+// the failure names the URL that was asked for, not the one it went to.
+test("open_tab closes a tab that committed on another host", async () => {
+  const url = "https://brave.com/go";
+  for (const landed of [
+    "https://evil.test/",
+    "https://brave.com.evil.test/",
+    "https://brave.com:8443/",
+    "https://sub.brave.com/",
+  ]) {
+    const chrome = browser({
+      opening: { [url]: { kind: "committed", url: landed } },
+      stored: { [SETTINGS_KEY]: { open_tab: true } },
+    });
+    const reply = await handle(
+      { id: 1, method: "open_tab", params: { url } },
+      chrome,
+    );
+    assert.ok(!("result" in reply), landed);
+    assert.ok(reply.error.message.includes(url), landed);
+    assert.ok(!reply.error.message.includes(landed), landed);
+    assert.deepEqual(
+      chrome.calls.filter(([name]) => name === "tabs.remove"),
+      [["tabs.remove", 100]],
+      landed,
+    );
+  }
+});
+
+// A page that commits on the approved host but at a non-web URL (an error
+// page, say) is not a page the person approved either.
+test("open_tab closes a tab that committed on a browser error page", async () => {
+  const url = "https://brave.com/";
+  const chrome = browser({
+    opening: {
+      [url]: { kind: "committed", url: "chrome-error://chromewebdata/" },
+    },
+    stored: { [SETTINGS_KEY]: { open_tab: true } },
+  });
+  const reply = await handle(
+    { id: 1, method: "open_tab", params: { url } },
+    chrome,
+  );
+  assert.ok("error" in reply);
+  assert.ok(reached(chrome, "tabs.remove"));
+});
+
+test("open_tab closes a tab whose page failed to load", async () => {
+  const url = "https://brave.test/";
+  const chrome = browser({
+    opening: { [url]: { kind: "error", url } },
+    stored: { [SETTINGS_KEY]: { open_tab: true } },
+  });
+  const reply = await handle(
+    { id: 1, method: "open_tab", params: { url } },
+    chrome,
+  );
+  assert.match(reply.error.message, /failed to load/);
+  assert.ok(reply.error.message.includes(url));
+  assert.ok(reached(chrome, "tabs.remove"));
+});
+
+// A page that never commits is answered before the host gives up on the
+// extension, and the tab it opened is not left behind.
+test("open_tab gives up on a page that never commits and closes the tab", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const url = "https://hang.test/";
+    const chrome = browser({ stored: { [SETTINGS_KEY]: { open_tab: true } } });
+    const pending = handle(
+      { id: 1, method: "open_tab", params: { url } },
+      chrome,
+    );
+    // Let the call reach its wait, then run the clock out.
+    for (let turn = 0; turn < 10; turn += 1) {
+      await Promise.resolve();
+    }
+    assert.ok(!reached(chrome, "tabs.remove"));
+    mock.timers.tick(OPEN_TIMEOUT_MS);
+    const reply = await pending;
+    assert.match(reply.error.message, /did not load in time/);
+    assert.ok(reached(chrome, "tabs.remove"));
+    assert.equal(chrome.listeners.onCommitted.size, 0);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+// The tab's own page is the top frame: a frame inside it committing on another
+// host is not the page that loaded, and one tab's events are not another's.
+test("open_tab reads only its own tab's top-frame commit", async () => {
+  const url = "https://brave.com/";
+  const chrome = browser({
+    opening: { [url]: { kind: "committed", url } },
+    stored: { [SETTINGS_KEY]: { open_tab: true } },
+  });
+  const create = chrome.tabs.create;
+  chrome.tabs.create = async (properties) => {
+    // Another tab commits somewhere else first.
+    for (const listener of [...chrome.listeners.onCommitted]) {
+      listener({ tabId: 7, frameId: 0, url: "https://other.test/" });
+    }
+    return create(properties);
+  };
+  const reply = await handle(
+    { id: 1, method: "open_tab", params: { url } },
+    chrome,
+  );
+  assert.deepEqual(reply.result, { url });
+});
+
+// A scheme the person cannot judge from the question, or no URL at all, never
+// reaches the browser.
+test("open_tab refuses a URL that is not HTTP or HTTPS without opening a tab", async () => {
+  for (const url of [
+    "file:///etc/passwd",
+    "javascript:alert(1)",
+    "data:text/html,hi",
+    "chrome://settings/passwords",
+    "about:blank",
+    "brave.com",
+    " ",
+    "",
+  ]) {
+    const chrome = browser({ stored: { [SETTINGS_KEY]: { open_tab: true } } });
+    const reply = await handle(
+      { id: 1, method: "open_tab", params: { url } },
+      chrome,
+    );
+    assert.equal(reply.error?.code, -32602, JSON.stringify(url));
+    assert.ok(!reached(chrome, "tabs.create"), JSON.stringify(url));
+  }
+  const chrome = browser({ stored: { [SETTINGS_KEY]: { open_tab: true } } });
+  const missing = await handle(
+    { id: 1, method: "open_tab", params: {} },
+    chrome,
+  );
+  assert.equal(missing.error.code, -32602);
+  assert.ok(!reached(chrome, "tabs.create"));
 });

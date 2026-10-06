@@ -96,7 +96,9 @@ JSON-RPC between the MCP server and the extension:
 - reply `{id, result}` or `{id, error}`, matched by `id`
 
 Initial tools: `get_platform_info`, `list_tabs`, `list_frames`, `read_page`,
-`search_history` and `search_bookmarks`. `read_page` can read the top page or one exact HTTP or
+`search_history`, `search_bookmarks` and `open_tab`. `open_tab` opens an HTTP or HTTPS URL a person
+approved in a background tab, closes it if the page that loads is on another host, and returns only
+the URL that loaded. `read_page` can read the top page or one exact HTTP or
 HTTPS frame URL a person chose from `list_frames` and supplied in a later message; the planner does
 not read the untrusted list itself.
 
