@@ -364,6 +364,258 @@ fn a_pointer_that_names_nothing_readable_leaves_the_file_standing() {
     );
 }
 
+/// What `compose` produces for a project holding `files`, with the given paths trusted.
+fn composed(name: &str, files: &[(&str, &str)], trusted: &[&str]) -> preamble::Preamble {
+    let scratch = Scratch::new(name);
+    let project = scratch.directory("project");
+    for (path, contents) in files {
+        let path = project.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink, trusted);
+    preamble::compose(
+        &mut policy,
+        &workspace,
+        None,
+        &Catalogue::default(),
+        None,
+        None,
+        &Attribution::default(),
+    )
+}
+
+/// A long document that splits its conventions across files: the import is replaced where it
+/// stands, and a nested import is resolved against the file it is written in, not the project root.
+#[test]
+fn an_at_path_import_is_expanded_in_place_and_resolved_beside_its_file() {
+    let preamble = composed(
+        "import-expanded",
+        &[
+            (
+                "AGENTS.md",
+                "BEFORE\n\nStyle: @docs/style.md.\n\nAFTER\n\n@docs/other.md\n",
+            ),
+            ("docs/style.md", "STYLE-RULES @nested.md"),
+            ("docs/nested.md", "NESTED-RULES"),
+            ("docs/other.md", "OTHER-RULES"),
+            ("nested.md", "ROOT-DECOY"),
+        ],
+        &["."],
+    );
+
+    assert!(
+        preamble
+            .text
+            .contains("BEFORE\n\nStyle: STYLE-RULES NESTED-RULES.\n\nAFTER\n\nOTHER-RULES"),
+        "the imports were not expanded where they stand: {}",
+        preamble.text
+    );
+    assert!(!preamble.text.contains("ROOT-DECOY"));
+    assert!(!preamble.text.contains("@docs/style.md"));
+    assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
+}
+
+/// Four hops are followed. The fifth is left as written, and the person is told which file it was.
+#[test]
+fn an_import_nested_past_four_hops_is_left_as_written() {
+    let preamble = composed(
+        "import-depth",
+        &[
+            ("AGENTS.md", "ROOT @l1.md"),
+            ("l1.md", "ONE @l2.md"),
+            ("l2.md", "TWO @l3.md"),
+            ("l3.md", "THREE @l4.md"),
+            ("l4.md", "FOUR @l5.md"),
+            ("l5.md", "FIVE-MUST-NOT-LOAD"),
+        ],
+        &["."],
+    );
+
+    assert!(
+        preamble.text.contains("ROOT ONE TWO THREE FOUR @l5.md"),
+        "{}",
+        preamble.text
+    );
+    assert!(!preamble.text.contains("FIVE-MUST-NOT-LOAD"));
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+    assert!(preamble.notices[0].message.contains("l5.md"));
+}
+
+/// The 64th import is followed and the 65th is not, however shallow they are. The ones past the
+/// count stay as written and the person is told which they were.
+#[test]
+fn imports_past_the_count_are_left_as_written() {
+    let names: Vec<String> = (0..66).map(|n| format!("part-{n:02}.md")).collect();
+    let bodies: Vec<String> = (0..66).map(|n| format!("BODY-{n:02}")).collect();
+    let root = names
+        .iter()
+        .map(|name| format!("@{name}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut files: Vec<(&str, &str)> = vec![("AGENTS.md", root.as_str())];
+    files.extend(
+        names
+            .iter()
+            .zip(&bodies)
+            .map(|(name, body)| (name.as_str(), body.as_str())),
+    );
+
+    let preamble = composed("import-count", &files, &["."]);
+
+    let followed = bodies[..64].join(" ");
+    assert!(
+        preamble
+            .text
+            .contains(&format!("{followed} @part-64.md @part-65.md")),
+        "{}",
+        preamble.text
+    );
+    assert!(!preamble.text.contains("BODY-64"));
+    assert!(!preamble.text.contains("BODY-65"));
+    assert_eq!(preamble.notices.len(), 2, "{:?}", preamble.notices);
+    assert!(preamble.notices[0].message.contains("part-64.md"));
+    assert!(preamble.notices[1].message.contains("part-65.md"));
+}
+
+/// A path in a fence or in backticks is documentation about an import, not one.
+#[test]
+fn an_import_in_a_code_fence_or_a_code_span_is_not_followed() {
+    let preamble = composed(
+        "import-code",
+        &[
+            (
+                "AGENTS.md",
+                "Write `@docs/a.md` or ` @docs/a.md ` to import.\n\n```\n@docs/a.md\n```\n\n~~~\n@docs/a.md\n~~~\n",
+            ),
+            ("docs/a.md", "MUST-NOT-LOAD"),
+        ],
+        &["."],
+    );
+
+    assert!(
+        !preamble.text.contains("MUST-NOT-LOAD"),
+        "{}",
+        preamble.text
+    );
+    assert_eq!(preamble.text.matches("@docs/a.md").count(), 4);
+}
+
+/// A fence closes on a run at least as long as the one that opened it, so a shorter run inside is
+/// part of the block, and the import after it is still documentation.
+#[test]
+fn a_shorter_fence_inside_a_longer_one_does_not_end_it() {
+    let preamble = composed(
+        "import-long-fence",
+        &[
+            (
+                "AGENTS.md",
+                "````\n```\n@docs/a.md\n````\n\n``Write `@docs/b.md` here``\n",
+            ),
+            ("docs/a.md", "A-MUST-NOT-LOAD"),
+            ("docs/b.md", "B-MUST-NOT-LOAD"),
+        ],
+        &["."],
+    );
+
+    assert!(
+        !preamble.text.contains("MUST-NOT-LOAD"),
+        "{}",
+        preamble.text
+    );
+}
+
+/// A short file naming another is followed, and when that file imports the first one back the
+/// cycle is cut there rather than the pointer sentence being inlined into it.
+#[test]
+fn an_import_back_to_the_file_a_pointer_was_read_from_is_a_cycle() {
+    let preamble = composed(
+        "import-pointer-cycle",
+        &[
+            ("AGENTS.md", "Refer to `CLAUDE.md`."),
+            ("CLAUDE.md", "REAL @AGENTS.md"),
+        ],
+        &["."],
+    );
+
+    assert!(
+        preamble.text.contains("REAL @AGENTS.md"),
+        "{}",
+        preamble.text
+    );
+    assert!(!preamble.text.contains("REAL Refer to"));
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+}
+
+/// Two files importing each other end at the second visit rather than at the depth limit, and the
+/// file that would have repeated is left as written.
+#[test]
+fn an_import_cycle_is_cut_where_it_closes() {
+    let preamble = composed(
+        "import-cycle",
+        &[
+            ("AGENTS.md", "ROOT @a.md"),
+            ("a.md", "A @b.md"),
+            ("b.md", "B @a.md"),
+        ],
+        &["."],
+    );
+
+    assert!(
+        preamble.text.contains("ROOT A B @a.md"),
+        "{}",
+        preamble.text
+    );
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+    assert!(preamble.notices[0].message.contains("a.md"));
+}
+
+/// An import above the project root is refused, however the path is spelt.
+#[test]
+fn an_import_outside_the_workspace_is_left_as_written() {
+    let preamble = composed(
+        "import-outside",
+        &[
+            ("AGENTS.md", "ROOT @../outside.md @/etc/passwd.md"),
+            ("../outside.md", "OUTSIDE-MUST-NOT-LOAD"),
+        ],
+        &["."],
+    );
+
+    assert!(
+        preamble
+            .text
+            .contains("ROOT @../outside.md @/etc/passwd.md"),
+        "{}",
+        preamble.text
+    );
+    assert!(!preamble.text.contains("OUTSIDE-MUST-NOT-LOAD"));
+}
+
+/// A directory nobody vouched for loads no instructions, so there is nothing to parse an import
+/// out of and nothing the import could read.
+#[test]
+fn an_untrusted_project_loads_no_import() {
+    let preamble = composed(
+        "import-untrusted",
+        &[
+            ("AGENTS.md", "ROOT @docs/a.md"),
+            ("docs/a.md", "MUST-NOT-LOAD"),
+        ],
+        &[],
+    );
+
+    assert!(
+        !preamble.text.contains("MUST-NOT-LOAD"),
+        "{}",
+        preamble.text
+    );
+    assert!(!preamble.text.contains("ROOT"), "{}", preamble.text);
+}
+
 /// The whole reason the block exists. Without it a planner has to run `pwd` to learn where it is,
 /// which costs a prompt to approve the run and a second one to be shown the answer, because a
 /// command's output comes back quarantined.

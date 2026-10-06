@@ -12650,6 +12650,53 @@ fn a_denied_file_an_agents_file_points_at_does_not_reach_the_system_prompt() {
     );
 }
 
+/// An import is a read nobody named, so a rule covering the file it names keeps it out, and the
+/// token stands as written.
+#[test]
+fn a_denied_file_an_agents_file_imports_does_not_reach_the_system_prompt() {
+    let scratch = Scratch::new("agents-imports-a-denied-file");
+    std::fs::write(
+        scratch.path.join("AGENTS.md"),
+        "Conventions. @notes.md Then more of them, long enough that the file is no pointer. \
+         Write a test for everything you change, and keep each commit to one thing. \
+         Name tests for the behaviour they hold, and explain why in the comment above.\n",
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "SECRET_TOKEN=hunter2").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work").with_permissions(rules(&["Read(./notes.md)"], &[], &[])),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(
+        !body.contains("hunter2"),
+        "a denied file reached the system prompt through an import: {body}"
+    );
+    assert!(
+        body.contains("@notes.md"),
+        "the import did not stand as written: {body}"
+    );
+    assert_eq!(
+        outcome.notices,
+        ["notes.md was not loaded: a deny rule in your settings covers it"],
+        "the person was not told why the import was not expanded"
+    );
+}
+
 /// The environment block states whether the GitHub CLI is installed, and what to do about it is a
 /// separate piece the person's own prompt carries. Composed and never appended is the way that goes
 /// wrong silently, so what is asserted is that the two agree: a machine whose probe found the CLI

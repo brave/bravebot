@@ -29,7 +29,7 @@
 //! and is put in front of each request afresh. A persistent session therefore holds one copy of
 //! AGENTS.md however many turns it runs, where a `Message::user` would accumulate one per turn.
 
-use crate::skills::{Catalogue, Notice};
+use crate::skills::{Catalogue, ImportRefusal, Notice};
 use crate::workspace::Workspace;
 use bravebot_config::Attribution;
 use bravebot_core::event::Sink;
@@ -53,6 +53,13 @@ const WORKSPACE_AGENT_FILES: &[&str] = &[AGENTS_FILE, "CLAUDE.md", ".claude/CLAU
 /// A pointer is a sentence. Anything longer is a document that happens to cite another, and
 /// following that would replace instructions with the ones they referred to in passing.
 const POINTER_BYTES: usize = 500;
+
+/// How many files deep an `@path` import may nest, counting the instructions file as zero.
+const IMPORT_DEPTH: usize = 4;
+
+/// How many imports one instructions file may expand in all, so a layout that fans out at every
+/// level cannot read thousands of files.
+const IMPORT_LIMIT: usize = 64;
 
 /// What gets appended to the system prompt, and what to tell the user about it.
 #[derive(Debug, Clone, Default)]
@@ -606,17 +613,242 @@ fn read_workspace_agents<S: Sink>(
         if workspace.rule_denies_reading(policy, &target) {
             notices.push(Notice::denied_by_rule(&target));
         } else if let Ok(Some(pointed)) = read_instructions(policy, workspace, &target) {
+            let text = expand_imports(policy, workspace, &pointed, &[name, &target], notices);
             return Ok(Some(Standing {
                 origin: target,
-                text: pointed,
+                text,
             }));
         }
     }
 
+    let text = expand_imports(policy, workspace, &text, &[name], notices);
     Ok(Some(Standing {
         origin: (*name).to_string(),
         text,
     }))
+}
+
+/// Replace each `@path` token in `text` with the text of the markdown file it names (INSTR-11).
+///
+/// `text` has already passed the trust gate. Each import is read through
+/// [`read_instructions`], so confinement, the trust map and the gate decide as they do for the
+/// pointer of INSTR-8, and a `deny` rule is asked first. A refused import stays as written and
+/// is reported in `notices`. `chain` holds the files read to reach `text`, the one it was read
+/// from last, so a pointer's own file is in it and a cycle back through the pointer is seen.
+fn expand_imports<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    text: &str,
+    chain: &[&str],
+    notices: &mut Vec<Notice>,
+) -> String {
+    Expansion {
+        policy,
+        workspace,
+        notices,
+        remaining: IMPORT_LIMIT,
+        stack: chain.iter().map(|file| (*file).to_string()).collect(),
+    }
+    .expand(text)
+}
+
+struct Expansion<'a, 'p, S: Sink> {
+    policy: &'a mut Policy<'p, S>,
+    workspace: &'a Workspace,
+    notices: &'a mut Vec<Notice>,
+    remaining: usize,
+    /// The files being expanded, outermost first. The last is the one whose text is in hand.
+    stack: Vec<String>,
+}
+
+impl<S: Sink> Expansion<'_, '_, S> {
+    fn expand(&mut self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut open: Option<(char, usize)> = None;
+        for line in text.split_inclusive('\n') {
+            match (open, fence_of(line)) {
+                (None, Some(fence)) => {
+                    open = Some(fence);
+                    out.push_str(line);
+                }
+                (Some((ch, len)), Some((found, run)))
+                    if found == ch && run >= len && fence_closes(line) =>
+                {
+                    open = None;
+                    out.push_str(line);
+                }
+                (Some(_), _) => out.push_str(line),
+                (None, None) => self.expand_line(line, &mut out),
+            }
+        }
+        out
+    }
+
+    /// One line outside a fence. A code span is a run of backticks to the next run of the same
+    /// length, and is copied as it is; a run with no partner is ordinary text.
+    fn expand_line(&mut self, line: &str, out: &mut String) {
+        let mut start = 0;
+        let mut after_code = false;
+        let mut at = 0;
+        while let Some(found) = line[at..].find('`') {
+            let open = at + found;
+            let run = line[open..].len() - line[open..].trim_start_matches('`').len();
+            let body = open + run;
+            let closing = line[body..]
+                .match_indices('`')
+                .map(|(offset, _)| body + offset)
+                .find(|&position| {
+                    let len =
+                        line[position..].len() - line[position..].trim_start_matches('`').len();
+                    len == run && !line[..position].ends_with('`')
+                });
+            match closing {
+                Some(close) => {
+                    self.expand_words(&line[start..open], after_code, out);
+                    out.push_str(&line[open..close + run]);
+                    start = close + run;
+                    after_code = true;
+                    at = start;
+                }
+                None => at = body,
+            }
+        }
+        self.expand_words(&line[start..], after_code, out);
+    }
+
+    /// The text between code spans. After one, the first word starts mid-word unless whitespace
+    /// separates it, so it is not the start of a token.
+    fn expand_words(&mut self, text: &str, after_code: bool, out: &mut String) {
+        for (n, word) in text.split_inclusive(char::is_whitespace).enumerate() {
+            let token = word.trim_end_matches(char::is_whitespace);
+            if n == 0 && after_code && !word.starts_with(char::is_whitespace) {
+                out.push_str(word);
+                continue;
+            }
+            self.expand_token(token, out);
+            out.push_str(&word[token.len()..]);
+        }
+    }
+
+    /// Write `token` to `out`, replaced by the file it names if it is an import.
+    fn expand_token(&mut self, token: &str, out: &mut String) {
+        let Some(rest) = token.strip_prefix('@') else {
+            out.push_str(token);
+            return;
+        };
+        let path = rest.trim_end_matches(import_closers);
+        let trailing = &rest[path.len()..];
+        let Some(target) = self.resolve(path) else {
+            out.push_str(token);
+            return;
+        };
+        match self.import(&target) {
+            Some(text) => {
+                out.push_str(text.trim());
+                out.push_str(trailing);
+            }
+            None => out.push_str(token),
+        }
+    }
+
+    /// The workspace-relative path an import names, resolved against the file it is written in.
+    /// `None` for anything that is not an import: not a markdown file, absolute, or a mention.
+    fn resolve(&mut self, path: &str) -> Option<String> {
+        if path.len() <= 3
+            || !path.to_ascii_lowercase().ends_with(".md")
+            || path.starts_with(['/', '~', '\\'])
+            || path.contains(':')
+        {
+            return None;
+        }
+        let importer = self.stack.last()?;
+        let mut parts: Vec<&str> = importer.split('/').collect();
+        parts.pop();
+        for part in path.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    // Above the workspace, so never a file the project holds.
+                    parts.pop()?;
+                }
+                part => parts.push(part),
+            }
+        }
+        Some(parts.join("/"))
+    }
+
+    /// Tell the person once: a file imported again and again is refused again and again.
+    fn tell(&mut self, notice: Notice) {
+        if !self.notices.contains(&notice) {
+            self.notices.push(notice);
+        }
+    }
+
+    fn refuse(&mut self, import: &str, why: ImportRefusal) {
+        self.tell(Notice::import_refused(import, why));
+    }
+
+    fn import(&mut self, target: &str) -> Option<String> {
+        if !self.workspace.root().join(target).is_file() {
+            // Nothing there: a mention of something shaped like an import, not a refusal.
+            return None;
+        }
+        if self.stack.iter().any(|open| open == target) {
+            self.refuse(target, ImportRefusal::Cycle);
+            return None;
+        }
+        if self.stack.len() > IMPORT_DEPTH || self.remaining == 0 {
+            self.refuse(target, ImportRefusal::TooDeep);
+            return None;
+        }
+        if self.workspace.rule_denies_reading(self.policy, target) {
+            self.tell(Notice::denied_by_rule(target));
+            return None;
+        }
+        match read_instructions(self.policy, self.workspace, target) {
+            Ok(Some(text)) => {
+                self.remaining -= 1;
+                self.stack.push(target.to_string());
+                let expanded = self.expand(&text);
+                self.stack.pop();
+                Some(expanded)
+            }
+            Ok(None) => {
+                self.refuse(target, ImportRefusal::NotLoaded);
+                None
+            }
+            Err(notice) => {
+                self.tell(notice);
+                None
+            }
+        }
+    }
+}
+
+/// The character and length of a code fence this line opens or closes, if it is one.
+///
+/// Up to three spaces of indent and a run of three or more backticks or tildes. A backtick fence
+/// has no backtick in what follows on the line, which is what separates it from a code span.
+fn fence_of(line: &str) -> Option<(char, usize)> {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    let rest = &line[indent..];
+    let ch = rest.chars().next().filter(|ch| matches!(ch, '`' | '~'))?;
+    let run = rest.len() - rest.trim_start_matches(ch).len();
+    (indent <= 3 && run >= 3 && !(ch == '`' && rest[run..].contains('`'))).then_some((ch, run))
+}
+
+/// Whether a fence line carries nothing after its run, which a closing fence must not.
+fn fence_closes(line: &str) -> bool {
+    let line = line.trim();
+    line.chars().all(|ch| line.starts_with(ch))
+}
+
+/// Trailing punctuation that belongs to the sentence an import sits in, not to its path.
+fn import_closers(c: char) -> bool {
+    matches!(
+        c,
+        ',' | ';' | ':' | '!' | '?' | '.' | ')' | ']' | '>' | '}' | '"' | '\'' | '*' | '_'
+    )
 }
 
 /// Read one instruction file through the trust gate.

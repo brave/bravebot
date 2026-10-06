@@ -81,6 +81,24 @@ A file a `deny` [rule](configuration.md#permissions) covers is left out of the t
 project's instructions file is that file, points at it, or is a link to it. You are told it was left
 out.
 
+### Splitting a long file with `@path`
+
+In the project's instructions file, a token that begins with `@` and names a markdown file is
+replaced by that file's text:
+
+```markdown
+Follow the style rules in @docs/style.md before writing any code.
+```
+
+The path is relative to the file the token is written in. Imports inside imported files are
+expanded too, to four hops. A token inside backticks or a fenced code block is left alone, and so is
+a token naming a file that does not exist.
+
+Each import is read by the same route as a pointer, so confinement, the trust map and `deny` rules
+decide. An import that is outside the project, denied, untrusted, part of a cycle or nested too
+deeply stays as written, and you are told which file and why. `~/.bravebot/AGENTS.md` is not
+expanded.
+
 ## Words from the command line
 
 [`--append-system-prompt`](../reference/cli.md#--system-prompt-prompt-and---append-system-prompt-prompt)

@@ -2678,6 +2678,12 @@ skill-model-substituted = { $skill } asked for { $model } and was answered by a 
 # settings deny reading, so it was left out of the turn. The source is its workspace-relative path
 # and stays as it is. "deny" is the name of the settings list the rule sits in.
 source-denied-by-rule = { $source } was not loaded: a deny rule in your settings covers it
+# An `@path` line in AGENTS.md that was left as written. The import is the workspace-relative path
+# and stays as it is. One message per reason: nesting or count past the limit, the file already
+# being expanded further up, and a file that is outside the project, cannot be read or is untrusted.
+import-too-deep = { $import } was not imported: imports are nested too deeply or there are too many
+import-cycle = { $import } was not imported: a file above it already imports it
+import-not-loaded = { $import } was not imported: it is outside this project, cannot be read or is not trusted
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }
