@@ -59,6 +59,7 @@ def gap(gid="parity-session-fork", **extra):
             "proposal": "Add `/fork`. The copy keeps every label.",
             "delta": "Codex forks the whole session; fork from any earlier turn." if kind == "beyond" else "",
             "constraints": "",
+            "spec_home": "",
             "existing_issue": None,
         },
         **extra,
@@ -119,18 +120,78 @@ class Units(unittest.TestCase):
         write_spec(self.root, "tools/run.md", "RUN", "The run tool")
         (self.root / "docs" / "specs" / "README.md").write_text("# Specs\n")
 
-    def test_every_spec_and_every_tool_the_advisory_skill_watches_is_a_unit(self):
+    def test_every_spec_and_every_tool_in_either_list_is_a_unit(self):
         units = pf.all_units(self.root)
         keys = [u["unit"] for u in units]
         self.assertEqual(keys[:2], ["spec:HOOK", "spec:RUN"])
         tools = {u["unit"]: u for u in units if u["kind"] == "peer"}
-        self.assertEqual(len(tools), len({pf.slug(name) for _, name in pf.pa.REPOSITORIES} | {pf.slug(n) for _, _, n in pf.pa.PACKAGES}))
+        advisory = {pf.slug(name) for _, name in pf.pa.REPOSITORIES} | {pf.slug(n) for _, _, n in pf.pa.PACKAGES}
+        listed = {row["slug"] for row in pf.read_peers(pf.PEERS)}
+        self.assertEqual(set(tools), {f"peer:{slug}" for slug in advisory | listed})
         self.assertEqual(tools["peer:claude-code"]["repo"], "anthropics/claude-code")
         self.assertEqual(tools["peer:github-copilot-cli"]["repo"], "github/copilot-cli")
-        self.assertIsNone(tools["peer:aider"]["repo"])
+        self.assertIsNone(tools["peer:amp"]["repo"])
+        self.assertEqual(tools["peer:amp"]["tool_kind"], "terminal")
         self.assertEqual(units[0]["path"], "docs/specs/hooks.md")
         self.assertEqual(units[1]["path"], "docs/specs/tools/run.md")
         self.assertEqual(units[0]["governs"], ["crates/x/src/hooks.md.rs"])
+
+    def test_a_row_adds_a_tool_and_its_repository_replaces_the_advisory_one(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "peers.tsv"
+            path.write_text(
+                "# comment\n\n"
+                "crush\tCrush\tterminal\thttps://example.com/docs\t-\texample/crush\n"
+                "codex\tCodex\tterminal\thttps://example.com/codex\thttps://example.com/codex/log\topenai/renamed\n"
+                "aider\tAider\tterminal\thttps://example.com/aider\t-\t-\n"
+            )
+            tools = pf.peer_tools(path)
+        self.assertEqual(tools["crush"]["repo"], "example/crush")
+        self.assertIsNone(tools["crush"]["changelog"])
+        self.assertEqual(tools["codex"]["repo"], "openai/renamed")
+        self.assertEqual(tools["codex"]["changelog"], "https://example.com/codex/log")
+        self.assertEqual(tools["claude-code"]["repo"], "anthropics/claude-code")
+        self.assertIsNone(tools["aider"]["repo"])
+        self.assertNotIn("kind", tools["claude-code"])
+
+    def test_a_row_that_is_malformed_is_refused_with_its_line(self):
+        good = "amp\tAmp\tterminal\thttps://example.com/amp\thttps://example.com/log\t-"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "peers.tsv"
+            path.write_text(good + "\n")
+            self.assertEqual([r["slug"] for r in pf.read_peers(path)], ["amp"])
+            for line, problem in (
+                (good + "\textra", "7 fields"),
+                (good.rsplit("\t", 1)[0], "5 fields"),
+                (good.replace("terminal", "laptop"), "kind"),
+                (good.replace("https://example.com/amp", "http://example.com/amp"), "docs"),
+                (good.replace("https://example.com/amp", "-"), "docs"),
+                (good.replace("https://example.com/log", "ftp://example.com/log"), "changelog"),
+                (good.rsplit("\t", 1)[0] + "\tjust-a-name", "repo"),
+                (good.rsplit("\t", 1)[0] + "\ta/b/c", "repo"),
+                (good.replace("amp\tAmp", "Amp\tAmp"), "slug"),
+                (good.replace("Amp", ""), "name"),
+            ):
+                with self.subTest(problem=problem, line=line):
+                    path.write_text(good.replace("amp", "first", 1).replace("Amp", "First") + "\n" + line + "\n")
+                    with self.assertRaisesRegex(pf.Problem, rf"peers.tsv:2: .*{problem}"):
+                        pf.read_peers(path)
+            path.write_text(good + "\n" + good + "\n")
+            with self.assertRaisesRegex(pf.Problem, "peers.tsv:2: .*twice"):
+                pf.read_peers(path)
+
+    def test_every_tool_the_advisory_skill_watches_has_a_row_with_an_https_docs_url(self):
+        rows = {row["slug"]: row for row in pf.read_peers(pf.PEERS)}
+        for name in [n for _, n in pf.pa.REPOSITORIES] + [n for _, _, n in pf.pa.PACKAGES]:
+            with self.subTest(tool=name):
+                self.assertIn(pf.slug(name), rows)
+                self.assertTrue(rows[pf.slug(name)]["docs"].startswith("https://"))
+
+    def test_peers_tsv_lists_the_twenty_five_tools_the_review_covers(self):
+        rows = pf.read_peers(pf.PEERS)
+        self.assertEqual(len(rows), 25)
+        for slug in ("crush", "amp", "factory", "augment-code", "warp", "windsurf", "continue", "kiro", "junie", "devin", "jules"):
+            self.assertIn(slug, {row["slug"] for row in rows})
 
     def test_a_person_can_name_a_spec_or_a_tool_bare_or_prefixed(self):
         units = pf.all_units(self.root)
@@ -165,7 +226,7 @@ class Templates(unittest.TestCase):
         for name, supplied in (
             ("gaps.md", shared),
             ("research-spec.md", shared | {"spec_id", "spec_title", "spec_path", "governs", "gap_rules"}),
-            ("research-peer.md", shared | {"peer_name", "peer_source", "gap_rules"}),
+            ("research-peer.md", shared | {"peer_name", "peer_kind", "peer_docs", "peer_changelog", "peer_repo", "gap_rules"}),
             ("verify.md", {"unit", "candidates", "root", "commit", "today", "tracker", "known_gaps", "results_file"}),
             ("merge.md", {"candidates", "issues", "results_file"}),
         ):
@@ -225,6 +286,28 @@ class Candidates(unittest.TestCase):
     def test_a_beyond_gap_must_say_what_it_beats(self):
         self.assertIsNone(pf.check_gap(gap("beyond-fork-anywhere")))
         self.assertIn("delta", pf.check_gap(gap("beyond-fork-anywhere", delta="")))
+
+    def test_a_gap_on_a_topic_no_spec_covers_may_say_where_it_would_be_specified(self):
+        self.assertIsNone(pf.check_gap(gap(spec_home="none; a new spec, remote-sessions.md")))
+        self.assertIn("spec_home", pf.check_gap(gap(spec_home="x" * (pf.MAX_SPEC_HOME + 1))))
+
+    def test_a_tool_review_keeps_eight_gaps_and_a_spec_review_five(self):
+        self.assertEqual((pf.MAX_GAPS, pf.MAX_PEER_GAPS), (5, 8))
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "r.json"
+            many = [gap(f"parity-thing-{chr(97 + n)}") for n in range(pf.MAX_PEER_GAPS + 2)]
+            for unit, kept in (("peer:amp", 8), ("spec:HOOK", 5)):
+                with self.subTest(unit=unit):
+                    path.write_text(json.dumps({"unit": unit, "gaps": many}))
+                    gaps, problem = pf.load_research(path, unit)
+                    self.assertIsNone(problem)
+                    self.assertEqual([g["id"] for g in gaps], [g["id"] for g in many[:kept]])
+            many[8] = gap("parity-thing-i", sources=[])
+            path.write_text(json.dumps({"unit": "peer:amp", "gaps": many}))
+            self.assertIsNone(pf.load_research(path, "peer:amp")[1])
+            many[7] = gap("parity-thing-h", sources=[])
+            path.write_text(json.dumps({"unit": "peer:amp", "gaps": many}))
+            self.assertIn("gap 8", pf.load_research(path, "peer:amp")[1])
 
     def test_more_gaps_than_the_cap_are_cut_and_a_bad_one_discards_the_unit(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -381,9 +464,18 @@ class Work(unittest.TestCase):
         self.assertIn("`docs/specs/hooks.md`", body)
         self.assertIn("Gap id: `parity-session-fork`", body)
         self.assertNotIn("Where it goes past parity", body)
+        self.assertNotIn("Where it lands", body)
         beyond = Path(drafts["beyond-fork-anywhere"]["body_file"]).read_text()
         self.assertIn("## Where it goes past parity\n\nCodex forks the whole session", beyond)
         self.assertIn("## Constraints\n\nSESSION-3 applies.", beyond)
+
+    def test_a_gap_with_no_spec_says_where_it_lands_after_the_proposal(self):
+        self.confirmed(gap(spec_home="none; a new spec, remote-sessions.md. @someone writes it."))
+        self.grouped()
+        quiet(pf.draft, self.args())
+        drafts = json.loads((self.work / "drafts.json").read_text())
+        body = Path(drafts[0]["body_file"]).read_text()
+        self.assertIn("## Proposal\n\nAdd `/fork`. The copy keeps every label.\n\n## Where it lands\n\nnone; a new spec, remote-sessions.md. `@someone` writes it.", body)
 
     def test_a_tool_review_names_the_tool_as_the_source_and_a_gap_found_twice_is_drafted_once(self):
         self.confirmed(gap(), unit="spec:HOOK")
@@ -709,10 +801,10 @@ class Tree(unittest.TestCase):
         write_ledger = {"peer:codex": {"verdict": "reviewed", "issue": "-", "commit": "c", "date": datetime.date.today().isoformat(), "reason": ""},
                         "parity-old-thing": {"verdict": "declined", "issue": "-", "commit": "c", "date": "2026-01-01", "reason": "LABEL-3"}}
         pf.write_ledger(self.root / pf.LEDGER, write_ledger)
-        code, out = quiet(pf.main, ["pending", "--root", str(self.root), "--max", "3", "HOOK", "peer:claude-code", "aider"])
+        code, out = quiet(pf.main, ["pending", "--root", str(self.root), "--max", "3", "HOOK", "peer:claude-code", "amp"])
         self.assertEqual(code, 0)
         research = json.loads(out)["research"]
-        self.assertEqual([r["unit"] for r in research], ["spec:HOOK", "peer:claude-code", "peer:aider"])
+        self.assertEqual([r["unit"] for r in research], ["spec:HOOK", "peer:claude-code", "peer:amp"])
         work = Path(json.loads(out)["work_dir"])
         spec_prompt = Path(research[0]["prompt_file"]).read_text()
         self.assertIn("`docs/specs/hooks.md`", spec_prompt)
@@ -723,9 +815,17 @@ class Tree(unittest.TestCase):
         self.assertEqual((work / "known-gaps.tsv").read_text(), "parity-old-thing\tdeclined\t-\tLABEL-3\n")
         self.assertIn("12\topen\tAdd session forking", (work / "tracker.tsv").read_text())
         peer_prompt = Path(research[1]["prompt_file"]).read_text()
-        self.assertIn("https://github.com/anthropics/claude-code", peer_prompt)
+        self.assertIn("Repository: https://github.com/anthropics/claude-code", peer_prompt)
+        self.assertIn("Documentation site: https://code.claude.com/docs/en/overview", peer_prompt)
+        self.assertIn("Changelog: https://code.claude.com/docs/en/changelog", peer_prompt)
+        self.assertIn("the kind `terminal`", peer_prompt)
+        self.assertIn("keep the first 8", peer_prompt)
         self.assertNotIn("{{", peer_prompt)
-        self.assertIn("none known", Path(research[2]["prompt_file"]).read_text())
+        self.assertIn("keep at most 5", spec_prompt)
+        no_repo = Path(research[2]["prompt_file"]).read_text()
+        self.assertIn("Repository: none known", no_repo)
+        self.assertIn("Documentation site: https://ampcode.com/", no_repo)
+        self.assertNotIn("{{", no_repo)
         manifest = json.loads((work / "manifest.json").read_text())
         self.assertEqual(manifest["subjects"]["spec:HOOK"]["path"], "docs/specs/hooks.md")
 
