@@ -66,6 +66,28 @@ Details: https://developer.chrome.com/docs/extensions/develop/concepts/native-me
   process or web page can reach it. That's not acceptable when it
   exposes history.
 
+## Why the socket needs a secret
+
+Native messaging keeps other extensions off the host, but the socket
+between the host and the MCP server is a file any local process may try
+to connect to. Confinement does not prevent it: every stdio server
+BraveBot starts has egress, and on macOS egress is what reaches a Unix
+socket.
+
+- The host writes a new random secret beside the socket each time it
+  starts, readable by the account alone, in a directory only the account
+  can enter.
+- A peer sends the secret as its first line. A peer that sends anything
+  else, or sends it late, is closed before anything it sent is
+  forwarded.
+- Only a server whose declaration grants that directory can read the
+  secret.
+- A process of the same account that can read the file can use the
+  relay. The extension's per-tool switches are the control for that
+  case.
+
+[BROWSER-3](../specs/browser.md#BROWSER-3) has the limits and the tests.
+
 ## Protocol
 
 JSON-RPC between the MCP server and the extension:
