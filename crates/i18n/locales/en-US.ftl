@@ -2002,6 +2002,7 @@ command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-checkouts = List kept checkouts, bring their files back, or remove one
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name
+command-init = Have the planner draft an AGENTS.md for this project
 command-export = Export the session transcript to a markdown file
 command-copy = Put the last reply on the clipboard, or the one that many replies back
 command-undo = Rewind one turn and put back the files it wrote
@@ -2499,6 +2500,9 @@ manifest-began = planning the whole task first; the session waits here until the
 manifest-ended-unexpectedly = the run ended unexpectedly
 manifest-failed = the run stopped: { $problem }
 manifest-recorded = recorded as { $id }; read it again with bravebot --resume { $id }
+
+# What /init says when the project already has the file it would write.
+init-already-there = { $file } already exists here, so /init leaves it alone
 
 # What the session says about a definition a person addressed with /agent. Every name here is one
 # the session resolved from a source somebody vouched for, so it may be printed; it is never offered

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The thirty commands the interface acts on itself, and the rules every one of them shares.
+description: The thirty-one commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -36,6 +36,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
+| `/init` | | Have the planner draft an `AGENTS.md` for this project |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
 | `/copy` | `[n]` | Put the last reply on the clipboard, or the one that many replies back |
 | `/undo` | | Rewind one turn and put back the files it wrote |
@@ -551,6 +552,22 @@ own record and the session records its name, so the session still resumes as a c
 In [plan mode](../security/permissions.md#answering-in-advance-modes) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
 [Non-interactive use](../using/headless.md) for the `--mode manifest` form.
+
+## `/init`
+
+Has the planner draft an `AGENTS.md` for the project you are in, the file bravebot reads before every
+turn to learn how work is done there. It sends a fixed request for a short guide titled "Repository
+Guidelines" covering the project's structure, its build, test and development commands, its style,
+its testing, and its commit and pull request conventions, and the planner writes it with
+`write_file`, so you are shown the file and asked before it is written.
+
+In a project you vouched for, the planner reads the project's files and drafts from them. In one you
+did not, it cannot see them, so it asks you questions and writes from your answers. Either way, an
+`AGENTS.md` written under that name is read from your next turn on.
+
+If the directory already holds a file called `AGENTS.md`, `/init` says so and does nothing, whatever
+the file contains. A `CLAUDE.md` does not count, only the name `AGENTS.md` is checked, and an `AGENTS.md` written beside a
+`CLAUDE.md` is the one read, since the first file found is the only one.
 
 ## `/agent <name> <task>`
 
