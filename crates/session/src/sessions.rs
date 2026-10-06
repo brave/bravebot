@@ -2360,7 +2360,7 @@ fn now() -> u64 {
 ///
 /// Random rather than counted, so two of them cannot collide however many processes are running
 /// and whatever the clock does.
-fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     use rand::RngCore;
 
     let mut bytes = [0u8; 16];

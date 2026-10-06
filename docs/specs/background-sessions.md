@@ -123,7 +123,10 @@ terminal. A closed set whose sources are named is what lets a reader of a diff c
 untrusted is among them. A field that could hold "whatever is useful" would be filled with whatever
 was nearest.
 
-`verified-by: none`
+`verified-by: bravebot_session::jobs::an_entry_holds_exactly_the_fields_the_spec_names`
+`verified-by: bravebot_session::jobs::the_directory_and_its_files_are_private`
+`verified-by: bravebot_session::jobs::an_id_that_is_a_path_names_nothing`
+`verified-by: bravebot_session::jobs::a_prompt_is_bounded_when_it_is_stored`
 
 <a id="BG-5"></a>
 ### BG-5: the list shows labels and states, never content
@@ -159,16 +162,19 @@ sentence, which is the reason the info panel draws nothing from either.
 | `stopped` | the process was stopped by a person or by [BG-13](#BG-13), and the record is intact |
 | `interrupted` | the process ended while a turn was running ([BG-12](#BG-12)) |
 
-The session's process reports `working`, `needs input` and `idle`; the supervisor sets `stopped` and
-`interrupted` from how the process ended. A roster whose process id names no live process of this
-account, or one started at another time, reads as `interrupted` if its last state was `working` or
-`needs input`, and as `stopped` otherwise, so a supervisor that died is not believed.
+The session's process reports `working`, `needs input` and `idle`; whoever stops it sets `stopped`.
+A process is live while it holds the lock on the `live` file in its directory, which the kernel
+releases when the process ends however it ends. A roster entry with no such lock held reads as
+`interrupted` if its last state was `working` or `needs input`, and as `stopped` otherwise, so
+neither a process that was killed nor a pid that now belongs to another program is believed.
 
 **Why.** A state the list can show truthfully has to be one the process can state without anybody
 reading content. Whether a turn's work is ready for review is a judgement about content, so it is
 not a state.
 
-`verified-by: none`
+`verified-by: bravebot_session::jobs::an_entry_whose_process_is_gone_is_not_believed`
+`verified-by: bravebot_session::jobs::a_held_prompt_without_a_process_is_interrupted_not_needing_input`
+`verified-by: bravebot_session::jobs::a_second_process_cannot_claim_a_live_entry`
 
 <a id="BG-7"></a>
 ### BG-7: a question the session would ask is held until a person answers it

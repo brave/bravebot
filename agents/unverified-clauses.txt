@@ -10,9 +10,7 @@
 docs/specs/background-sessions.md:BG-1: a background session is an ordinary session in a process the terminal does not own
 docs/specs/background-sessions.md:BG-2: only a line a person typed starts one
 docs/specs/background-sessions.md:BG-3: the supervisor moves process state and decides nothing from content
-docs/specs/background-sessions.md:BG-4: the roster is a closed set of fields in the person's own state directory
 docs/specs/background-sessions.md:BG-5: the list shows labels and states, never content
-docs/specs/background-sessions.md:BG-6: a session is in one of five states, and the state is a fact about the process
 docs/specs/background-sessions.md:BG-7: a question the session would ask is held until a person answers it
 docs/specs/background-sessions.md:BG-8: the mode is fixed for the process, bypass is refused, and a rule that allows does not answer
 docs/specs/background-sessions.md:BG-9: attaching draws the session as a foreground one, and detaching leaves it running
