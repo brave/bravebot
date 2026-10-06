@@ -19495,6 +19495,10 @@ fn an_output_offer_carries_what_a_check_said() {
         check.contains("SENTINEL-XYZZY"),
         "the check was not given what the command printed: {check}"
     );
+    assert!(
+        !check.contains("expects"),
+        "the planner said nothing about what the command printed, yet the check was told: {check}"
+    );
     let third = received.recv().expect("third request");
     assert!(
         !third.contains("SENTINEL-REASON"),

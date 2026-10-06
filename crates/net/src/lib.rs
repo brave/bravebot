@@ -1063,6 +1063,92 @@ mod tests {
         assert!(!proxied.reaches_here("http://127.0.0.1:11434/v1"));
     }
 
+    /// A URL naming this machine does not make a request patient when a proxy carries it, because
+    /// the proxy is another machine that can go quiet for good. The proxy here answers after a
+    /// silence longer than the reply bound, so the ask being honoured lets that answer through.
+    #[test]
+    fn a_request_through_a_proxy_keeps_its_bounds_when_it_asks_to_be_patient() {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback");
+        let proxy = format!(
+            "http://127.0.0.1:{}",
+            listener.local_addr().expect("addr").port()
+        );
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            // The client tunnels through the proxy: it asks for a CONNECT, is told it has one, and
+            // then sends the request it means.
+            loop {
+                let mut line = String::new();
+                let mut length = 0;
+                let mut first = None;
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    if line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                    if first.is_none() {
+                        first = Some(line.clone());
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    line.clear();
+                }
+                let Some(first) = first else {
+                    return;
+                };
+                let _ = reader.read_exact(&mut vec![0; length]);
+                if first.starts_with("CONNECT") {
+                    let _ = stream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n");
+                    continue;
+                }
+                std::thread::sleep(Duration::from_millis(800));
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                );
+                return;
+            }
+        });
+
+        let egress = Egress::with_transport(
+            Timeouts {
+                reply: Duration::from_millis(300),
+                idle: Duration::from_millis(300),
+                ..Timeouts::default()
+            },
+            &Transport::stated(TrustRoots::Bundled, Some(&proxy), None),
+        );
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "fetch a page");
+        let mut sink = bravebot_core::event::NullSink;
+        let mut policy = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy begins");
+
+        let outcome = egress
+            .fetch_streaming(
+                &mut policy,
+                Request::post("http://localhost:9/v1", b"{}".to_vec()).patient_on_this_machine(),
+                Label::untrusted_public(),
+                Some(&Cancel::new()),
+            )
+            .map(|_| ());
+        assert!(
+            matches!(outcome, Err(EgressError::Transport { .. })),
+            "the silence from the proxy was waited through: {outcome:?}"
+        );
+    }
+
     /// The classification a retry rests on. Getting it wrong in one direction repeats a request
     /// that will fail identically, and in the other abandons one that would have worked.
     #[test]
