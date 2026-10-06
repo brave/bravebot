@@ -35,6 +35,7 @@ fn save(
             directories: &[],
             manifest: None,
             rewind: session.rewind_points(),
+            checkouts: &[],
         },
     );
 }

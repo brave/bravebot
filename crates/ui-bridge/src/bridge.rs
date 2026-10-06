@@ -2123,6 +2123,9 @@ fn save(
             // manifest so the picker can mark a run that may be read and not continued, and
             // marking one of ours would be a claim about a session nobody can resume.
             manifest: None,
+            // The desktop lists, resumes and applies no checkout yet, so it holds none itself;
+            // the ones a resumed record carries are written back by `Handle` (CHECKOUT-16).
+            checkouts: &[],
         },
     );
     handle.append_audit(turn, trail.events());

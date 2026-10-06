@@ -1521,6 +1521,11 @@ turn-cancelled = tour { $turn } annulé
 ## Reprendre une session qui tournait ailleurs, ou sur autre chose
 
 session-reopen-failed = impossible de rouvrir { $directory } : { $problem }
+session-checkout-not-restored =
+    { $count ->
+        [one] le checkout { $ids } était gardé par cette session mais n'est plus où il a été créé, il n'est donc pas listé
+       *[other] les checkouts { $ids } étaient gardés par cette session mais ne sont plus où ils ont été créés, ils ne sont donc pas listés
+    }
 session-branch-moved =
     cette session tournait sur { $was } ; cette copie de travail est sur { $now }
 session-branch-gone =

@@ -861,6 +861,28 @@ impl DelegateId {
         Self { path, depth: 1 }
     }
 
+    /// The delegate a [`Display`](std::fmt::Display) spelling names, `d2.1` and the like, or nothing
+    /// for any other text, a position of zero or a path deeper than [`MAX_DEPTH`].
+    ///
+    /// For a record that wrote the number down: what it reads back is checked as a path, not
+    /// trusted as one.
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut positions = text.strip_prefix('d')?.split('.');
+        let first = positions.next()?;
+        let mut id = Self::nth(Self::position_of(first)?);
+        for position in positions {
+            id = id.child(Self::position_of(position)?)?;
+        }
+        Some(id)
+    }
+
+    fn position_of(text: &str) -> Option<u32> {
+        if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        text.parse().ok().filter(|position| *position > 0)
+    }
+
     /// The `n`th delegate this one spawned, or nothing where this one sits at [`MAX_DEPTH`].
     pub fn child(self, n: u32) -> Option<Self> {
         let at = usize::from(self.depth);
@@ -1344,6 +1366,40 @@ impl Addressed {
 mod tests {
     use super::*;
     use crate::capability::ServerAlias;
+
+    /// A record writes a delegate's number down and reads it back, and what it reads is checked as
+    /// a path: a position of zero, a sign, a path past the depth limit and stray text are none.
+    #[test]
+    fn a_delegate_number_reads_back_as_it_is_spelled_and_nothing_else_does() {
+        let nested = DelegateId::nth(2)
+            .child(1)
+            .and_then(|id| id.child(7))
+            .unwrap();
+        for id in [DelegateId::nth(1), DelegateId::nth(12), nested] {
+            assert_eq!(DelegateId::parse(&id.to_string()), Some(id));
+        }
+        for text in [
+            "",
+            "d",
+            "d0",
+            "d1.0",
+            "d+1",
+            "d-1",
+            "d1.",
+            "d.1",
+            "D1",
+            "1",
+            "d1.2.3.4",
+            "d1 ",
+            "d99999999999",
+        ] {
+            assert_eq!(
+                DelegateId::parse(text),
+                None,
+                "{text:?} was read as a delegate"
+            );
+        }
+    }
 
     /// The planner selects from the driver's list. Anything else has to resolve to nothing, or
     /// `kind` would be a field the model could write a capability set into.
