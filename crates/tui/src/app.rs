@@ -209,6 +209,8 @@ const MANIFEST_COMMAND: &str = "/manifest";
 /// and can read like an instruction, so it is an argument here and never a command word or a
 /// completion row (ADDRESS-2, ADDRESS-6). See `docs/specs/addressing-a-definition.md`.
 const AGENT_COMMAND: &str = "/agent";
+/// Lists each definition's memory, where it is kept and whether it is withheld (MEMORY-12).
+const MEMORY_COMMAND: &str = "/memory";
 
 /// The line that has the planner draft an `AGENTS.md` for a project that has none.
 ///
@@ -419,6 +421,12 @@ pub fn commands() -> [Command; 33] {
             name: AGENT_COMMAND,
             argument: "<name> <task>",
             description: t!(command_agent),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: MEMORY_COMMAND,
+            argument: "",
+            description: t!(command_memory),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -660,6 +668,8 @@ pub enum Action {
     ForgetTrust,
     /// List the checkouts the session keeps. Needs the workspace, which the loop owns.
     ListCheckouts,
+    /// List each definition's memory (MEMORY-12).
+    ListMemories,
     /// Remove the checkout with this number. Needs the workspace, the trust map and the terminal
     /// to ask on, which the loop owns.
     RemoveCheckout(String),
@@ -1957,6 +1967,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
             crate::jobs_command::Asked::Unreadable => session.note(t!(jobs_command_takes)),
         }
         return Action::Redraw;
+    }
+    // Nothing the person typed after the word reaches it, and nothing is sent: what answers it is
+    // the map and the filesystem, which the loop owns.
+    if line.trim() == MEMORY_COMMAND {
+        return Action::ListMemories;
     }
     if line.trim() == PANEL_COMMAND {
         session.toggle_panel();
@@ -4024,6 +4039,17 @@ fn event_loop(
                         })
                         .pushed(&checkout.id)
                 });
+                needs_draw = true;
+            }
+            Action::ListMemories => {
+                let memories = bravebot_agent::agents::memories(
+                    &workspace,
+                    bravebot_agent::home::directory().as_deref(),
+                    &answers.trust,
+                    answers.rules.permissions.clone(),
+                    &mut Trail::new(),
+                );
+                session.report_memories(&memories);
                 needs_draw = true;
             }
             Action::RemoveCheckout(id) => {
@@ -16652,6 +16678,92 @@ mod tests {
         assert_eq!(
             session.transcript.last().map(|entry| entry.text.as_str()),
             Some(t!(checkouts_command_takes))
+        );
+    }
+
+    /// MEMORY-12. The bare word asks for the listing and sends nothing, and the word with anything
+    /// after it is a prompt, as every command that takes no argument is (CMD-2).
+    #[test]
+    fn the_memory_command_lists_and_takes_no_argument() {
+        let mut session = Session::new("none");
+        for c in "/memory".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::ListMemories
+        );
+
+        for c in "/memory keeper".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert!(matches!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit(_)
+        ));
+    }
+
+    /// MEMORY-12. Each standing is a different sentence naming the definition and the path, a
+    /// withheld memory says why where the record is the reason, and no definition keeping one is
+    /// said in a sentence of its own.
+    #[test]
+    fn the_memory_listing_says_each_standing_with_its_path() {
+        use bravebot_agent::memory::{Listed, Standing};
+        let listed = |name: &str, standing, recorded| Listed {
+            name: name.to_string(),
+            path: format!("/work/.bravebot/memory/{name}.md").into(),
+            standing,
+            recorded,
+        };
+        let mut session = Session::new("none");
+        session.report_memories(&[]);
+        session.report_memories(&[
+            listed("a", Standing::Withheld, false),
+            listed("b", Standing::Withheld, true),
+            listed("c", Standing::NotRead, false),
+            listed("d", Standing::Empty, false),
+            listed("e", Standing::Kept, false),
+        ]);
+        let said: Vec<&str> = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert_eq!(
+            said,
+            [
+                t!(memory_none).to_string(),
+                t!(
+                    memory_withheld,
+                    name = "a",
+                    path = "/work/.bravebot/memory/a.md"
+                )
+                .to_string(),
+                t!(
+                    memory_withheld_recorded,
+                    name = "b",
+                    path = "/work/.bravebot/memory/b.md"
+                )
+                .to_string(),
+                t!(
+                    memory_not_read,
+                    name = "c",
+                    path = "/work/.bravebot/memory/c.md"
+                )
+                .to_string(),
+                t!(
+                    memory_empty,
+                    name = "d",
+                    path = "/work/.bravebot/memory/d.md"
+                )
+                .to_string(),
+                t!(
+                    memory_kept,
+                    name = "e",
+                    path = "/work/.bravebot/memory/e.md"
+                )
+                .to_string(),
+            ]
         );
     }
 

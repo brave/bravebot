@@ -8226,6 +8226,30 @@ impl Session {
         asked
     }
 
+    /// Say where each listed memory is kept and what the map says of it (MEMORY-12), one note
+    /// each, or that no definition keeps one. Paths and standings only: nothing a file holds is
+    /// read to say them.
+    pub fn report_memories(&mut self, memories: &[bravebot_agent::memory::Listed]) {
+        use bravebot_agent::memory::Standing;
+        if memories.is_empty() {
+            self.note(t!(memory_none));
+            return;
+        }
+        for memory in memories {
+            let name = memory.name.as_str();
+            let path = memory.path.display().to_string();
+            self.note(match (memory.standing, memory.recorded) {
+                (Standing::Withheld, true) => {
+                    t!(memory_withheld_recorded, name = name, path = path)
+                }
+                (Standing::Withheld, false) => t!(memory_withheld, name = name, path = path),
+                (Standing::NotRead, _) => t!(memory_not_read, name = name, path = path),
+                (Standing::Empty, _) => t!(memory_empty, name = name, path = path),
+                (Standing::Kept, _) => t!(memory_kept, name = name, path = path),
+            });
+        }
+    }
+
     /// Say which checkouts the session keeps, what each took on disk, whether a remote branch is
     /// at its commit as `pushed` reads it, and what the record shows done in each, or that it keeps
     /// none (CHECKOUT-15).

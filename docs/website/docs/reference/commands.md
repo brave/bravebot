@@ -37,6 +37,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
+| `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
 | `/copy` | `[n]` | Put the last reply on the clipboard, or the one that many replies back |
@@ -561,6 +562,25 @@ own record and the session records its name, so the session still resumes as a c
 In [plan mode](../security/permissions.md#answering-in-advance-modes) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
 [Non-interactive use](../using/headless.md) for the `--mode manifest` form.
+
+## `/memory`
+
+Lists the [memory](../customize/agents.md#memory) of each definition this session resolved that
+keeps one, one line each: the definition's name, the path of its file, and where it stands.
+
+```
+/memory
+```
+
+The standing is what a run under the definition is told about the file. **Withheld** means your
+[trust map](../security/trust.md) does not trust the path, whatever is or is not there, so a read of
+it is quarantined. It says so where a write left the path untrusted and that is still recorded. **Not
+read** means the path is a link, is reached through one, or is not a file. Otherwise the line says
+nothing is kept there yet, or that a file is.
+
+The command shows paths and standings and never the file's bytes, so it reads nothing from a memory
+and has nothing to show of one that is withheld. Open the file yourself to read it. The word takes
+no argument: `/memory` followed by words is a prompt.
 
 ## `/init`
 

@@ -2024,6 +2024,7 @@ command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-checkouts = List kept checkouts, bring their files back, or remove one
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name
+command-memory = List each definition's memory, where it is kept and whether it is withheld
 command-init = Have the planner draft an AGENTS.md for this project
 command-export = Export the session transcript to a markdown file
 command-copy = Put the last reply on the clipboard, or the one that many replies back
@@ -2455,6 +2456,17 @@ checkouts-not-removed = checkout { $id } at { $path } could not be removed, and 
 checkouts-worked-from =
     checkout { $id } at { $path } is kept, since the working directory or a directory added with /add-dir is inside it
 checkouts-kept = checkout { $id } is kept
+## The memory each definition keeps
+
+memory-none = no definition loaded here keeps a memory
+# The path is where the memory is kept, and is left as it is.
+memory-withheld = { $name }: { $path }, withheld, since the map does not trust that path
+memory-withheld-recorded =
+    { $name }: { $path }, withheld, since a write left that path untrusted and the record of it still names the path
+memory-not-read = { $name }: { $path }, not read, since it is a link, is reached through one or is not a file
+memory-empty = { $name }: { $path }, nothing kept there yet
+memory-kept = { $name }: { $path }, a file is kept there
+
 remove-checkout-title = remove this checkout?
 remove-checkout-which = checkout { $id }, made for delegate { $delegate }, is at
 remove-checkout-explained =

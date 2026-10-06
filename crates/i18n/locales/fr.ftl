@@ -1680,6 +1680,7 @@ command-panel = Afficher ou masquer le panneau d'informations à côté de la tr
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
+command-memory = Lister la mémoire de chaque définition, où elle est gardée et si elle est retenue
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-copy = Copier la dernière réponse dans le presse-papiers, ou une plus ancienne en reculant d'autant de réponses
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
@@ -2048,6 +2049,14 @@ checkouts-not-removed =
 checkouts-worked-from =
     la copie de travail { $id } dans { $path } est gardée, car le répertoire de travail ou un répertoire ajouté avec /add-dir s'y trouve
 checkouts-kept = la copie de travail { $id } est gardée
+memory-none = aucune définition chargée ici ne garde de mémoire
+memory-withheld = { $name } : { $path }, retenue, car la carte ne fait pas confiance à ce chemin
+memory-withheld-recorded =
+    { $name } : { $path }, retenue, car une écriture a laissé ce chemin non fiable et le registre en garde encore le chemin
+memory-not-read = { $name } : { $path }, non lue, car c'est un lien, on y accède par un lien ou ce n'est pas un fichier
+memory-empty = { $name } : { $path }, rien n'y est gardé pour l'instant
+memory-kept = { $name } : { $path }, un fichier y est gardé
+
 remove-checkout-title = supprimer cette copie de travail ?
 remove-checkout-which = la copie de travail { $id }, faite pour le délégué { $delegate }, se trouve dans
 remove-checkout-explained =

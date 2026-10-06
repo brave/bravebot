@@ -347,7 +347,7 @@ pub(crate) fn recorded(workspace: &Workspace, home: Option<&Path>) -> Vec<String
 
 /// What the map says of a memory's path, which is what the run is told of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Standing {
+pub enum Standing {
     /// The map does not trust the path, so whatever is or is not there is withheld.
     Withheld,
     /// The path is trusted, and is a link, is reached through one, or is not a file.
@@ -387,6 +387,42 @@ pub(crate) fn standing<S: Sink>(
         }
     }
     Standing::NotRead
+}
+
+/// One definition's memory as `/memory` lists it ([MEMORY-12]).
+///
+/// A path and a standing, and whether the record names the path. Nothing the file holds.
+///
+/// [MEMORY-12]: ../../../docs/specs/definition-memory.md
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    /// The definition's name, which names the file.
+    pub name: String,
+    /// Where the memory is kept, as a run under the definition is told.
+    pub path: PathBuf,
+    /// What the map says of the path.
+    pub standing: Standing,
+    /// Whether the record of paths a write left untrusted names this one.
+    pub recorded: bool,
+}
+
+/// The listing of the memory of the definition `name`, where `recorded` is [`recorded`]'s answer.
+pub(crate) fn listed<S: Sink>(
+    policy: &Policy<'_, S>,
+    workspace: &Workspace,
+    name: &str,
+    recorded: &[String],
+) -> Listed {
+    Listed {
+        name: name.to_string(),
+        path: workspace.root().join(MEMORY).join(format!("{name}.md")),
+        standing: standing(policy, workspace, name),
+        recorded: recorded.contains(
+            &policy
+                .file_authority()
+                .key(&workspace.trust_key(&relative(name))),
+        ),
+    }
 }
 
 /// The sentence a run under a definition keeping a memory is told, in the driver's words.
@@ -994,5 +1030,78 @@ mod tests {
         std::fs::create_dir_all(root.join(".bravebot/memory")).unwrap();
         std::fs::write(root.join(".bravebot/memory/notes.md"), "a note").unwrap();
         assert_eq!(standing_in(&root, distrusted), Standing::Withheld, "a file");
+    }
+    /// MEMORY-12: what `/memory` lists for a directory holding one definition that keeps a memory
+    /// and one that does not.
+    fn listed_in(root: &Path, home: &Path, distrusting: bool) -> Vec<Listed> {
+        let workspace = Workspace::new(root).expect("a workspace");
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(".");
+        if distrusting {
+            trust.distrust(".bravebot/memory/keeper.md");
+        }
+        crate::agents::memories(
+            &workspace,
+            Some(home),
+            &trust,
+            bravebot_core::permissions::Permissions::default(),
+            &mut bravebot_core::event::RecordingSink::new(),
+        )
+    }
+
+    /// MEMORY-12: only a definition that keeps a memory is listed, with the path a run under it is
+    /// told and the standing the map gives it. A path the map does not trust is withheld whatever is
+    /// on disk, and one a write left untrusted says the record is why.
+    #[test]
+    fn a_listed_memory_is_withheld_when_the_map_does_not_trust_it_whatever_is_on_disk() {
+        let scratch = Scratch::new("memory-listing");
+        let root = scratch.path.join("work");
+        let home = scratch.path.join("home");
+        let agents = root.join(".bravebot/agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        for (name, line) in [("keeper", "memory: project\n"), ("plain", "")] {
+            std::fs::write(
+                agents.join(format!("{name}.md")),
+                format!("---\nname: {name}\ndescription: d\nkind: worker\n{line}---\n\nbody\n"),
+            )
+            .unwrap();
+        }
+        let path = root
+            .canonicalize()
+            .unwrap()
+            .join(".bravebot/memory/keeper.md");
+        let only = |listed: Vec<Listed>| {
+            assert_eq!(listed.len(), 1, "a definition keeping none was listed");
+            let [one] = <[Listed; 1]>::try_from(listed).unwrap();
+            assert_eq!(one.name, "keeper");
+            assert_eq!(one.path, path);
+            (one.standing, one.recorded)
+        };
+
+        assert_eq!(
+            only(listed_in(&root, &home, false)),
+            (Standing::Empty, false),
+            "no file"
+        );
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "a note").unwrap();
+        assert_eq!(
+            only(listed_in(&root, &home, false)),
+            (Standing::Kept, false),
+            "a file"
+        );
+        assert_eq!(
+            only(listed_in(&root, &home, true)),
+            (Standing::Withheld, false),
+            "a file the map does not trust"
+        );
+
+        record_before_write(Some(&home), &crate::workspace::key_of(&path), false).unwrap();
+        assert_eq!(
+            only(listed_in(&root, &home, false)),
+            (Standing::Withheld, true),
+            "a path the record names"
+        );
     }
 }
