@@ -504,9 +504,8 @@ mistake to flag. The only fetched value written to disk is a model name the pers
 sight.
 
 A session import runs no model either, and its words reach no request: they are stored as the
-archive, which is drawn and never sent ([SESSION-32](#SESSION-32)). It is a deviation from the
-proposal that prompted it, which carried the prompts into the planner's context; that stays with
-the owner.
+archive, which is drawn and never sent ([SESSION-32](#SESSION-32)). Putting them in a request is
+the owner's decision.
 
 ## Known costs
 
