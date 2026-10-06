@@ -267,15 +267,17 @@ sandbox is the cause. A test that fails under `run` and has no such skip is a bu
 
 **Which tests those are is measured rather than assumed.** The weekly
 [Test determinism](../../.github/workflows/test-determinism.yml) workflow runs the suite a hundred
-times against one build, at four threads and at sixteen, and names every test whose outcome changed,
-with the rate and the panic it produced. Each one gets an issue titled `Flaky test: <name>`, and a
-test that already has one gets nothing further, so the list of open flakes is the search rather than
+times against one build, on Linux at four threads and at sixteen and on macOS and Windows at cargo's
+default, and names every test whose outcome changed, with the rate, the platform and the panic it
+produced. Each one gets an issue titled `Flaky test: <name>`, except from the Windows leg, which
+files nothing because the suite is not expected to pass there yet (#88). A test that already has an
+issue gets nothing further, so the list of open flakes is the search rather than
 a job summary somebody has to remember to read. Search the issues before treating a failure as a
 known flake, and run `contrib/measure-flakes.py --runs 30` to ask this machine over a shorter sweep.
 Neither fails a build over a rate.
 
 **A test missing from that list is not thereby clean.** A hundred runs can only account for a test
-that loses more than about three in a hundred, and the job measures a quiet four core runner, while
+that loses more than about three in a hundred, and the job measures quiet hosted runners, while
 the mock server races that `make check-linux` caps threads for want a machine with something else on
 it. So the workflow reporting nothing means less than the local command reporting nothing on the
 machine that actually failed: every report states the rate it saw, and that bound is what to read

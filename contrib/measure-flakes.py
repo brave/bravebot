@@ -18,6 +18,7 @@ measurement or a report that could not be delivered fails here.
 import argparse
 import json
 import os
+import platform
 import re
 
 # Only ever invoked with an argument list, never a shell string.
@@ -184,6 +185,11 @@ def unseen_floor(runs):
     return 100 * (1 - 0.05 ** (1 / runs))
 
 
+def system():
+    """The operating system's name as a person would write it."""
+    return {"Darwin": "macOS"}.get(platform.system(), platform.system())
+
+
 def machine():
     """What the machine reports, since a rate without it invites the wrong conclusion.
 
@@ -192,7 +198,8 @@ def machine():
     number of tests in flight, and the rate is a property of that, not only of the test.
     """
     count = os.cpu_count()
-    return f"{count} CPUs" if count else "an unknown number of CPUs"
+    cpus = f"{count} CPUs" if count else "an unknown number of CPUs"
+    return f"{cpus} running {system()}"
 
 
 def describe(runs, threads, counts, lost=0):
@@ -915,6 +922,14 @@ def selftest():
         (
             "a rate arrives with the machine that produced it",
             machine() in clean and all(machine() in body for _, body in opened),
+        )
+    )
+    # A rate measured on macOS and one measured on Linux are different findings about one test, and
+    # the issue is the only place a later reader learns which one this was.
+    checks.append(
+        (
+            "a rate arrives with the operating system that produced it",
+            f"running {system()}" in clean and all(system() in body for _, body in opened),
         )
     )
     # Nothing here is triaged, so an issue naming nobody is one no person has agreed to look at:
