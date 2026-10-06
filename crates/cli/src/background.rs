@@ -193,15 +193,17 @@ pub(crate) fn is_running(id: &str) -> bool {
 /// The refusal for `--resume` and `--continue` naming a record a running background session holds,
 /// which says how to join it instead.
 pub(crate) fn refuse_to_resume(id: &str) -> ExitCode {
+    fail(Ending::Failed, held_by_a_background_session(id))
+}
+
+/// Why a session a background process is running cannot be resumed by a second one.
+pub(crate) fn held_by_a_background_session(id: &str) -> String {
     let name = Roster::readable()
         .and_then(|roster| roster.get(id))
         .map(|seen| shown(&seen.job.name))
         .unwrap_or_default();
     let id: String = id.chars().take(ID_SHOWN).collect();
-    fail(
-        Ending::Failed,
-        t!(resume_held_by_background, name = name, id = id),
-    )
+    t!(resume_held_by_background, name = name, id = id).to_string()
 }
 
 /// What a terminal does for a session that is not running.

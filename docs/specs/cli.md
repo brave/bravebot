@@ -6,6 +6,7 @@ governs:
   - crates/cli/src/main.rs
   - crates/cli/src/auth.rs
   - crates/cli/src/completion.rs
+  - crates/cli/src/continued.rs
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
   - crates/cli/src/plain.rs
@@ -494,7 +495,8 @@ in, over a file it was told it could open.
 A run given the flag writes one object, on one line, whether it finished, failed before the turn
 began, or was refused something along the way. It holds how the run ended, the status and
 identifier of CLI-6, the message where there is one, the reply, the model that answered, the
-definition the turn was addressed to where there was one (CLI-17), how many rounds it took, what it
+definition the turn was addressed to where there was one (CLI-17), the session it wrote down where
+it wrote one (CLI-23), how many rounds it took, what it
 cost in tokens, every tool it called with what it acted on and whether that call was refused, and every refusal with the principle it upholds. A tool is named as the driver
 matched it rather than by the word a person is shown. What a call acted on is the name it was given
 rather than a resolved path, since the driver carries that argument without reading it.
@@ -538,6 +540,7 @@ what may change, every field is either frozen by accident or broken without warn
 `verified-by: bravebot_cli::json::a_refusal_names_the_principle_it_upholds`
 `verified-by: bravebot_cli::json::content_cannot_break_out_of_the_object_it_is_written_in`
 `verified-by: bravebot_cli::running::a_run_under_a_definition_names_it_in_the_result_object`
+`verified-by: bravebot_cli::json::a_recorded_run_names_its_session`
 
 <a id="CLI-13"></a>
 ### CLI-13: `--settings` names a file that outranks every layer found
@@ -1253,3 +1256,61 @@ would otherwise receive several lines it never expected.
 `verified-by: bravebot_cli::json::an_event_carries_the_fields_the_result_object_carries_for_the_same_thing`
 `verified-by: bravebot_cli::json::a_refusal_is_streamed_when_the_gate_takes_it`
 `verified-by: bravebot_cli::json::a_run_without_a_stream_writes_no_events`
+
+<a id="CLI-25"></a>
+### CLI-25: a one-shot run is written down, and `--resume` and `--continue` carry one on with a task
+
+A one-shot run in the default turn mode writes a session record when its turn ends, as an ordinary
+session does ([SESSION-1](sessions.md#SESSION-1)), unless `--incognito` is given
+([INCOG-3](incognito.md#INCOG-3)). A run that failed writes none. The result object of CLI-12
+carries the record's id in `session`, and carries `null` where the run wrote none.
+
+`--resume <id>` and `--continue` given with a task, in either order (`-p "task" --resume <id>` and
+`--resume <id> -p "task"`), run the task as one more turn over that record's conversation and write
+the record back with the turn added. Everything else in the record stays as it was read. The run is
+a one-shot run in every other respect, so the refusals of CLI-1 hold and nothing is asked. What the
+session's person vouched for in the trust map comes back, as it does in a session. The commands
+they vouched for do not, and the record keeps them for the session that is next resumed
+interactively.
+
+A resumed run shows the planner what a resumed session shows it ([SESSION-2](sessions.md#SESSION-2)):
+quarantined content stays a reference, and the references are named as no longer naming anything.
+A turn after piped input (CLI-3) is therefore given no byte the first turn was not given.
+
+The flags are refused with the status for an argument (CLI-6), before anything is sent, when no id
+follows `--resume`, when the id or the directory's latest session names no record, when the record
+is a manifest run ([SESSION-10](sessions.md#SESSION-10)) or a session a background process is
+running ([BG-9](background-sessions.md#BG-9)), with `--agent` because a record stores no definition
+(CLI-17), and with `--mode manifest`. `--resume` and `--continue` with no task are the interactive
+resume they were, and a session in lines still writes no record (CLI-14).
+
+**Why.** A script chaining a review, a fix and a summary has to restate everything each time while a
+one-shot run starts empty and leaves nothing to start from. Reading the id out of the result object
+is the only way a script learns which session to name, so a run that wrote a record and did not say
+so would be no better than one that wrote none.
+
+The conversation comes back through the same restore an interactive resume uses, so a rule about
+what a planner may be shown is held in one place and a continued one-shot run cannot be shown more
+than an interactive one would.
+
+`--continue` and a failed run: the record of a run that failed is not written, so a continuation
+after a failure carries on the last turn that completed. What the failed turn did to the working
+directory is not in any record, and the result object of a failed run carries `null` for `session`.
+
+Nothing locks a record. Two processes continuing one id, or a one-shot run continuing a session an
+interactive process is writing, each write the record they read with their own turn added, and the
+later write wins. An interactive resume has the same property, and
+[background-sessions.md](background-sessions.md) refuses it only for a background session, where the
+process that holds the record is known.
+
+`verified-by: bravebot_cli::running::a_one_shot_run_is_written_down_and_names_its_session`
+`verified-by: bravebot_cli::running::a_task_carries_on_the_session_it_names_and_not_the_newest`
+`verified-by: bravebot_cli::running::a_task_continuing_the_latest_session_adds_a_turn_to_its_record`
+`verified-by: bravebot_cli::running::a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried`
+`verified-by: bravebot_cli::running::an_incognito_run_is_not_recorded_and_cannot_be_continued`
+`verified-by: bravebot_cli::running::a_task_that_cannot_carry_on_a_session_is_refused_before_anything_is_sent`
+`verified-by: bravebot_cli::main::a_resume_with_a_task_after_it_runs_the_task_and_one_without_opens_the_session`
+`verified-by: bravebot_cli::main::a_task_may_name_the_session_it_carries_on_before_or_after_it`
+`verified-by: bravebot_cli::main::a_resume_naming_no_session_is_refused`
+`verified-by: bravebot_session::sessions::continuing_a_record_adds_one_turn_and_leaves_what_it_held_as_read`
+`verified-by: bravebot_session::sessions::continuing_a_record_with_no_history_gives_it_none`

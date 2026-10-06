@@ -71,6 +71,9 @@ pub struct Report<'a> {
     /// The definition the run's turn was addressed to, by the name its kernel matched, or `None`
     /// where the turn was the planner's or ended with no outcome to say (CLI-17).
     pub agent: Option<&'a str>,
+    /// The id of the session record this run wrote, which `--resume` takes (CLI-25), or `None`
+    /// where the run wrote none: it was incognito, it failed, or the record could not be written.
+    pub session: Option<&'a str>,
     pub steps: usize,
     pub tokens: Tokens,
     pub calls: &'a [Call],
@@ -154,6 +157,7 @@ pub fn render(report: &Report<'_>) -> String {
         ("reply", quoted(report.reply)),
         ("model", quoted(report.model)),
         ("agent", maybe(report.agent)),
+        ("session", maybe(report.session)),
         ("steps", report.steps.to_string()),
         ("tokens", token_fields(&report.tokens)),
         ("calls", calls),
@@ -299,6 +303,7 @@ mod tests {
             reply: "done",
             model: "qwen-3-235b",
             agent: None,
+            session: None,
             steps: 2,
             tokens: Tokens {
                 total: 4096,
@@ -376,6 +381,7 @@ mod tests {
             reply: "",
             model: "",
             agent: None,
+            session: None,
             steps: 0,
             tokens: Tokens::default(),
             calls: &[],
@@ -388,10 +394,24 @@ mod tests {
             concat!(
                 r#"{"schema":1,"ok":false,"status":3,"reason":"configuration","#,
                 r#""identifier":"BB1003","message":"l'adresse n'a pas de schema","#,
-                r#""reply":"","model":"","agent":null,"steps":0,"#,
+                r#""reply":"","model":"","agent":null,"session":null,"steps":0,"#,
                 r#""tokens":{"total":0,"output":0,"context":0,"cache_read":0,"cache_written":0},"#,
                 r#""calls":[],"refusals":[],"notices":[]}"#,
             )
+        );
+    }
+
+    /// The id is what a script hands to `--resume`, so it is the one string in the object that is a
+    /// reference to something else, and it has to arrive as itself rather than quoted away.
+    #[test]
+    fn a_recorded_run_names_its_session() {
+        let mut report = finished(Ending::Done, &[], &[]);
+        report.session = Some("1787860306-65099");
+        let written = render(&report);
+
+        assert!(
+            written.contains(r#""agent":null,"session":"1787860306-65099","steps":2"#),
+            "{written}"
         );
     }
 

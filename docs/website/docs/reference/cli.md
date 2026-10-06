@@ -17,6 +17,8 @@ Usage:
   bravebot --resume [id]                 Pick up a session in this directory
   bravebot --from-pr <number|url>        Pick up a session linked to a pull request
   bravebot --continue                    Pick up the most recent session in this directory
+  bravebot -p "<task>" --resume <id>     Send a one-shot task as the next turn of a session
+  bravebot -p "<task>" --continue        Send a one-shot task as the next turn of the most recent session
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
@@ -39,6 +41,8 @@ Usage:
 | `bravebot --resume <id>` | resume that session by id |
 | `bravebot --from-pr <number or url>` | choose among the sessions linked to that pull request |
 | `bravebot --continue`, `-c` | pick up the most recent session in this directory |
+| `bravebot -p "<task>" --resume <id>` | run the task as one more turn of that session, without opening it ([below](#continuing-a-session-from-a-one-shot-run)) |
+| `bravebot -p "<task>" --continue` | the same, for the most recent session in this directory |
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
@@ -87,7 +91,7 @@ Five flags are taken out of the line before anything dispatches on it, so each m
 each combines with every way of starting, one another included: `--incognito`, `--safe`,
 `--dangerously-skip-permissions`, `--settings` and `--vet`. `--agent` is taken out there too, and
 combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
-`--fork` or `--mode manifest`.
+`--fork` or `--mode manifest`, a task carrying on a session included.
 `--system-prompt` and `--append-system-prompt` are taken out there as well, and combine with every
 way of starting except `--mode manifest`.
 
@@ -310,7 +314,7 @@ to tell an empty stdout from a result.
 
 It holds how the run ended, the [status and identifier](#exit-codes), the message where there is one,
 the reply, the model that answered, the definition it was addressed to under `agent` (`null` where
-none was), how many rounds it took, what it cost in tokens, every tool it called with what it acted
+none was), the session it wrote down under `session` (`null` where it wrote none), how many rounds it took, what it cost in tokens, every tool it called with what it acted
 on and whether that call was refused, and every refusal with the principle it upholds. A tool is named as the driver matched it rather than by the word you are shown on screen,
 and what a call acted on is the name it was given rather than a resolved path.
 
@@ -339,6 +343,32 @@ The last line is the result object, exactly what `--json` writes for the same ru
 field. Nothing else is on stdout, and progress, the message and the audit trail stay on stderr. The
 schema rule of `--json` applies to each event: fields and event kinds may be added within one number,
 and none is removed or renamed.
+
+## Continuing a session from a one-shot run
+
+```sh
+id=$(bravebot --json -p "review the diff" | jq -r '.session')
+bravebot -p "now fix what you found" --resume "$id"
+bravebot -p "summarise what changed" --continue
+```
+
+A one-shot run is written down as a session of one turn, unless `--incognito` is given, and its
+[`--json`](#--json) object names the record under `session`. A run that failed writes none, and
+`session` is `null`.
+
+`--resume <id>` and `--continue` given with a task run that task as one more turn over the
+session's conversation, in either order with `-p`, and write the record back with the turn added. The
+run is a one-shot run in every other respect: nothing is asked, a write is refused unless
+`--dangerously-skip-permissions` was given, and `--incognito` leaves the record as it was. The paths
+you vouched for in the session still count. The commands you vouched for do not, and stay in the
+record for the next time you resume it interactively. Content a run could not show the planner, such
+as piped input, stays a reference, and the follow-up is told the reference names nothing now.
+
+Given with no task, `--resume` and `--continue` open the session as they always have.
+
+Both are refused with the argument status before anything is sent when the id names no session in
+this directory, when `--continue` finds none, when the session is a `--mode manifest` run or is
+running in the background, and with `--agent` or `--mode manifest`.
 
 ## `--plain`
 

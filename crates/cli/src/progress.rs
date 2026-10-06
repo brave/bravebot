@@ -117,6 +117,9 @@ pub struct Progress<W: Write> {
     notices: Vec<String>,
     /// Where each call and each finished request is written as it happens, for `--json-stream`.
     stream: Option<Stream>,
+    /// Where the turn's prompt entered the recounted conversation, for a run that writes its
+    /// session down.
+    prompt_at: Option<usize>,
 }
 
 impl<W: Write> Progress<W> {
@@ -127,6 +130,7 @@ impl<W: Write> Progress<W> {
             calls: Vec::new(),
             notices: Vec::new(),
             stream: None,
+            prompt_at: None,
         }
     }
 
@@ -134,6 +138,11 @@ impl<W: Write> Progress<W> {
     pub fn streaming(mut self, stream: Option<Stream>) -> Self {
         self.stream = stream;
         self
+    }
+
+    /// Where the prompt entered the conversation, once the turn has said.
+    pub fn prompt_at(&self) -> Option<usize> {
+        self.prompt_at
     }
 
     pub fn spent(&self) -> bravebot_agent::Spent {
@@ -168,6 +177,10 @@ impl<W: Write> Progress<W> {
 }
 
 impl<W: Write> Reporter for Progress<W> {
+    fn prompt_recorded(&mut self, at: usize) {
+        self.prompt_at = Some(at);
+    }
+
     fn spent(&mut self, spent: bravebot_agent::Spent) {
         // Reported more often than the figure moves: at the start, with nothing, and again for a
         // request already counted. Only a change is an event, since a line repeating the last one

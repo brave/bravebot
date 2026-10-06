@@ -119,6 +119,19 @@ refusal and change in token usage, then the same object as the last line, so a s
 progress or tell a hung run from a slow one. [The reference](../reference/cli.md#--json-stream)
 lists the events.
 
+## Sending a follow-up to an earlier run
+
+```sh
+id=$(bravebot --json -p "review the diff" | jq -r '.session')
+bravebot -p "now fix what you found" --resume "$id"
+```
+
+A one-shot run is written down as a session, and `--json` names it under `session`. `--resume <id>`
+or `--continue` with a task runs that task as one more turn of it, so a script can chain a review, a
+fix and a summary over one conversation instead of restating it each time. Piped input stays a
+reference, and `--incognito` writes nothing, so there is no id to pass on.
+[The reference](../reference/cli.md#continuing-a-session-from-a-one-shot-run) has the rest.
+
 ## Configuring one run differently from the next
 
 ```sh
