@@ -774,6 +774,7 @@ mod tests {
             &crate::learned_key(&provider.chat_completions_url(), "refused-the-field"),
             crate::Refusals {
                 caching: true,
+                cache_ttl: false,
                 effort: true,
             },
         );
@@ -804,6 +805,7 @@ mod tests {
             &crate::learned_key(service, "refused-the-field"),
             crate::Refusals {
                 caching: false,
+                cache_ttl: false,
                 effort: true,
             },
         );
@@ -855,6 +857,7 @@ mod tests {
             &crate::learned_key(&provider.chat_completions_url(), "advertised-and-refused"),
             crate::Refusals {
                 caching: false,
+                cache_ttl: false,
                 effort: true,
             },
         );

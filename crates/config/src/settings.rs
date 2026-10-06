@@ -136,6 +136,7 @@ const READ_KEYS: &[&str] = &[
     "mcpServers",
     "model",
     PERMISSIONS_BLOCK,
+    "promptCacheTtl",
     PROVIDER_BLOCK,
     "run",
     "search",
@@ -214,6 +215,8 @@ pub struct Settings {
     /// settled rather than here, so one spelling rule answers for a hand-edited settings file and a
     /// hand-edited record alike.
     effort: Option<String>,
+    /// The lifetime the top-level `promptCacheTtl` key named, if it named one of the two.
+    prompt_cache_ttl: Option<crate::CacheTtl>,
     /// Whether `model` was named by a layer above the person's own file, which a saved `/model`
     /// pick ranks as (BACKEND-11). Always false as of the home-only rule below: a file above the
     /// home one no longer names `model` at all, so nothing can outrank a pick through it. Kept so
@@ -747,6 +750,8 @@ impl Settings {
             model: word(root, "model"),
             advisor_model: word(root, "advisorModel"),
             effort: word(root, "effort"),
+            prompt_cache_ttl: word(root, "promptCacheTtl")
+                .and_then(|word| crate::CacheTtl::parse(&word)),
             // False here, one root being read as the person's own until [`Settings::layered`]
             // says which file it was.
             model_outranks_a_pick: false,
@@ -847,6 +852,15 @@ impl Settings {
     /// [`Settings::model`] is, which [`Settings::effort_outranks_a_pick`] settles.
     pub fn effort(&self) -> Option<&str> {
         self.effort.as_deref()
+    }
+
+    /// The cache lifetime the settings in force chose, if they named `5m` or `1h`.
+    ///
+    /// A word that names neither is absence, so a misspelling leaves the provider's own default
+    /// rather than sending a lifetime nobody chose. It is a person's own setting and is never
+    /// derived from message content.
+    pub fn prompt_cache_ttl(&self) -> Option<crate::CacheTtl> {
+        self.prompt_cache_ttl
     }
 
     /// Whether [`Settings::effort`] came from a file above the person's own (BACKEND-43).
@@ -1046,6 +1060,7 @@ impl Settings {
             && self.permissions.is_empty()
             && self.model.is_none()
             && self.effort.is_none()
+            && self.prompt_cache_ttl.is_none()
             && self.editor_mode.is_none()
             && self.terminal_title.is_none()
             && self.update_check.is_none()
@@ -1154,6 +1169,7 @@ impl Settings {
             .into_iter()
             .chain(self.advisor_model.is_some().then_some("advisorModel"))
             .chain(self.effort.is_some().then_some("effort"))
+            .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.terminal_title.is_some().then_some("terminalTitle"))
             .chain(self.update_check.is_some().then_some("updateCheck"))
@@ -4875,5 +4891,39 @@ mod tests {
             settings.keybindings().get("editor"),
             Some(&"alt-e".to_string())
         );
+    }
+
+    /// Only the two words the providers accept name a lifetime. Anything else is absence, so a
+    /// misspelling leaves the provider's default rather than a lifetime nobody chose, and a file that
+    /// sets only the key is neither empty nor one with a key nothing reads.
+    #[test]
+    fn only_five_minutes_or_an_hour_names_a_cache_lifetime() {
+        use crate::CacheTtl;
+        for (written, expected) in [
+            (r#""5m""#, Some(CacheTtl::FiveMinutes)),
+            (r#""1h""#, Some(CacheTtl::OneHour)),
+            (r#"" 1h ""#, Some(CacheTtl::OneHour)),
+            (r#""2h""#, None),
+            (r#""1H""#, None),
+            (r#""60m""#, None),
+            (r#""""#, None),
+            ("3600", None),
+            ("true", None),
+        ] {
+            let settings = Settings::parse(&format!(r#"{{"promptCacheTtl": {written}}}"#));
+            assert_eq!(settings.prompt_cache_ttl(), expected, "{written}");
+        }
+        assert_eq!(Settings::parse("{}").prompt_cache_ttl(), None);
+
+        let settings = Settings::parse(r#"{"promptCacheTtl": "1h"}"#);
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["promptCacheTtl"]);
+        assert!(!settings.is_empty());
+
+        let settings = Layers::new("prompt-cache-ttl-layers")
+            .global(r#"{"promptCacheTtl": "1h"}"#)
+            .project(r#"{"promptCacheTtl": "5m"}"#)
+            .read();
+        assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::FiveMinutes));
+        assert_eq!(settings.unread_keys().count(), 0);
     }
 }

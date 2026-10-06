@@ -20,7 +20,7 @@ pub mod models;
 pub mod ollama;
 pub mod protocol;
 
-use bravebot_config::{Config, Secret};
+use bravebot_config::{CacheTtl, Config, Secret};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
@@ -204,6 +204,11 @@ pub struct AichatClient<'a> {
     /// extra round trip against a service that refuses, once per process; not asking costs the
     /// whole prompt on every request against every service that would have cached it.
     breakpoints: bool,
+    /// Whether to send the cache lifetime the settings chose, to a gateway.
+    ///
+    /// On until a service refuses it, for the reason breakpoints are. Brave's own endpoint is never
+    /// sent one, a lifetime being a choice about a gateway's account.
+    cache_ttl: bool,
     /// Whether to send the level somebody asked for, where they asked for one.
     ///
     /// On until a service refuses the field, for the same reason breakpoints are: a settings block
@@ -270,6 +275,7 @@ impl<'a> AichatClient<'a> {
             cancel: None,
             gateway: None,
             breakpoints: true,
+            cache_ttl: true,
             effort: true,
             backoff: BACKOFF,
         }
@@ -364,7 +370,7 @@ impl<'a> AichatClient<'a> {
     /// caller holds still being the level they asked for.
     fn body(&self, request: &ChatRequest) -> Result<serde_json::Value, ChatError> {
         let mut body = match self.breakpoints {
-            true => request.marked_body(),
+            true => request.marked_body(self.cache_ttl_asked()),
             false => serde_json::to_value(request),
         }
         .map_err(|e| ChatError::Encode(e.to_string()))?;
@@ -395,7 +401,26 @@ impl<'a> AichatClient<'a> {
     fn recall(&mut self, key: &str) {
         let refusals = remembered(key);
         self.breakpoints = !refusals.caching;
+        self.cache_ttl = !refusals.cache_ttl;
         self.effort = !refusals.effort;
+    }
+
+    /// The cache lifetime a request asks for: the one the settings chose, for a gateway that has
+    /// not refused it.
+    fn cache_ttl_asked(&self) -> Option<CacheTtl> {
+        self.gateway
+            .as_ref()
+            .and(self.config.prompt_cache_ttl)
+            .filter(|_| self.cache_ttl)
+    }
+
+    /// Whether this failure is worth sending the request again without the lifetime.
+    ///
+    /// First in both loops, ahead of the breakpoints that carry it: a service that reads a
+    /// breakpoint and refuses a lifetime on it keeps its caching at its own default. Only where the
+    /// request carried one.
+    fn worth_dropping_cache_ttl(&self, error: &ChatError) -> bool {
+        self.breakpoints && self.cache_ttl_asked().is_some() && refuses_the_body(error)
     }
 
     /// Whether this failure is worth sending the request again without the breakpoints.
@@ -435,6 +460,7 @@ impl<'a> AichatClient<'a> {
                 key,
                 Refusals {
                     caching: !self.breakpoints,
+                    cache_ttl: !self.cache_ttl,
                     effort: !self.effort,
                 },
             );
@@ -530,6 +556,10 @@ impl<'a> AichatClient<'a> {
             match self.complete_once(policy, request) {
                 // No backoff and no count against the attempts: the service answered, and what it
                 // objected to may be a field the next request can simply leave out.
+                Err(error) if self.worth_dropping_cache_ttl(&error) => {
+                    self.cache_ttl = false;
+                    probed = true;
+                }
                 Err(error) if self.worth_dropping_breakpoints(&error) => {
                     self.breakpoints = false;
                     probed = true;
@@ -642,6 +672,10 @@ impl<'a> AichatClient<'a> {
             match self.stream_once(policy, &request, attempt, &mut progress) {
                 // Nothing has been drawn yet: a service refuses the body before it sends a chunk,
                 // so this retry is invisible rather than a reply that starts over.
+                Err(error) if self.worth_dropping_cache_ttl(&error) => {
+                    self.cache_ttl = false;
+                    probed = true;
+                }
                 Err(error) if self.worth_dropping_breakpoints(&error) => {
                     self.breakpoints = false;
                     probed = true;
@@ -1019,6 +1053,8 @@ fn refuses_the_body(error: &ChatError) -> bool {
 pub struct Refusals {
     /// It will not take a request that marks a prefix to cache.
     pub caching: bool,
+    /// It will not take a request that says how long to keep the cache.
+    pub cache_ttl: bool,
     /// It will not take a request that names how hard to think.
     pub effort: bool,
 }
@@ -1348,6 +1384,7 @@ mod tests {
             &learned_key(service, "the-model-that-refused"),
             Refusals {
                 caching: true,
+                cache_ttl: false,
                 effort: true,
             },
         );
@@ -1432,5 +1469,56 @@ mod tests {
         let body = body(&http);
         let keys: Vec<&String> = body.as_object().expect("an object").keys().collect();
         assert_eq!(keys, ["messages", "model"]);
+    }
+
+    /// The lifetime the settings chose goes to a gateway on the prompt's and the conversation's
+    /// breakpoints, and to nowhere else: Brave's own endpoint is sent none, and a gateway whose
+    /// settings chose none is sent the request that went before the setting existed.
+    #[test]
+    fn a_chosen_lifetime_goes_to_a_gateway_and_to_nothing_else() {
+        let egress = Egress::new();
+        let provider = provider(r#"{"z-ai/glm-4.6": {}}"#);
+        let asked = ChatRequest::new(
+            "z-ai/glm-4.6",
+            vec![Message::system("be brief"), Message::user("hello")],
+        );
+        let cache_controls = |client: &AichatClient| {
+            let body = client.body(&asked).expect("a body");
+            body["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .map(|message| message["content"][0]["cache_control"].clone())
+                .collect::<Vec<_>>()
+        };
+        let plain = || serde_json::json!({"type": "ephemeral"});
+
+        let mut chosen = config();
+        chosen.prompt_cache_ttl = Some(CacheTtl::OneHour);
+        let gateway =
+            AichatClient::new(&chosen, &egress).for_gateway(&provider, "z-ai/glm-4.6", None);
+        let hour = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
+        assert_eq!(cache_controls(&gateway), [hour.clone(), hour]);
+
+        let own = AichatClient::new(&chosen, &egress);
+        assert_eq!(
+            cache_controls(&own),
+            [plain(), plain()],
+            "Brave's endpoint was sent one"
+        );
+
+        let unchosen = config();
+        let gateway =
+            AichatClient::new(&unchosen, &egress).for_gateway(&provider, "z-ai/glm-4.6", None);
+        assert_eq!(cache_controls(&gateway), [plain(), plain()]);
+
+        let mut refused =
+            AichatClient::new(&chosen, &egress).for_gateway(&provider, "z-ai/glm-4.6", None);
+        refused.cache_ttl = false;
+        assert_eq!(
+            cache_controls(&refused),
+            [plain(), plain()],
+            "a refused lifetime was sent again"
+        );
     }
 }

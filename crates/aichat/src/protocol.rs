@@ -3,6 +3,7 @@
 //! Only the fields this client uses are modelled. Unknown response fields are ignored
 //! rather than rejected, so a server-side addition does not break the client.
 
+use bravebot_config::CacheTtl;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -427,13 +428,15 @@ impl ChatRequest {
     /// A `Value` rather than a second request type. Every field is serialized from this struct and
     /// only the marked messages' content is written over, so a field added to a request cannot be
     /// forgotten here, which is the way a parallel wire struct goes wrong.
-    pub fn marked_body(&self) -> Result<Value, serde_json::Error> {
+    ///
+    /// `ttl` is the lifetime each breakpoint asks for, or `None` for the service's own default.
+    pub fn marked_body(&self, ttl: Option<CacheTtl>) -> Result<Value, serde_json::Error> {
         let mut body = serde_json::to_value(self)?;
         let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
             return Ok(body);
         };
         for at in breakpoints(&self.messages, self.conversation_is_sent_again) {
-            let content = serde_json::to_value(marked(&self.messages[at].content))?;
+            let content = serde_json::to_value(marked(&self.messages[at].content, ttl))?;
             if let Some(message) = messages.get_mut(at).and_then(Value::as_object_mut) {
                 message.insert("content".to_string(), content);
             }
@@ -445,11 +448,15 @@ impl ChatRequest {
 /// A breakpoint: everything up to and including the block carrying this may be answered out of
 /// the service's cache.
 ///
-/// `ephemeral` is the only lifetime the shape defines.
+/// `ephemeral` is the only kind the shape defines. It may carry a `ttl`, which a service that reads
+/// the field keeps the prefix for and one that does not refuses the request over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CacheControl {
-    Ephemeral,
+    Ephemeral {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ttl: Option<&'static str>,
+    },
 }
 
 /// One content block on its way out, which unlike a [`Part`] can carry a breakpoint.
@@ -531,7 +538,7 @@ fn ends_in_words(message: &Message) -> bool {
 }
 
 /// The same content as blocks, with the breakpoint on the words it ends in.
-fn marked(content: &Content) -> Vec<MarkedPart<'_>> {
+fn marked(content: &Content, ttl: Option<CacheTtl>) -> Vec<MarkedPart<'_>> {
     let mut parts = match content {
         Content::Text(text) => vec![MarkedPart::Text {
             text,
@@ -540,7 +547,9 @@ fn marked(content: &Content) -> Vec<MarkedPart<'_>> {
         Content::Parts(parts) => parts.iter().map(MarkedPart::from).collect(),
     };
     if let Some(MarkedPart::Text { cache_control, .. }) = parts.last_mut() {
-        *cache_control = Some(CacheControl::Ephemeral);
+        *cache_control = Some(CacheControl::Ephemeral {
+            ttl: ttl.map(CacheTtl::wire),
+        });
     }
     parts
 }
@@ -1883,7 +1892,7 @@ mod tests {
                 ],
             );
 
-            let messages = &request.marked_body().unwrap()["messages"];
+            let messages = &request.marked_body(None).unwrap()["messages"];
 
             assert_eq!(
                 messages[0]["content"],
@@ -1915,7 +1924,7 @@ mod tests {
             )
             .giving_up_its_conversation();
 
-            let messages = &request.marked_body().unwrap()["messages"];
+            let messages = &request.marked_body(None).unwrap()["messages"];
 
             assert_eq!(
                 messages[0]["content"][0]["cache_control"],
@@ -1941,7 +1950,7 @@ mod tests {
                 ],
             );
 
-            let messages = &request.marked_body().unwrap()["messages"];
+            let messages = &request.marked_body(None).unwrap()["messages"];
 
             assert_eq!(
                 messages[0]["content"][0]["cache_control"],
@@ -1975,7 +1984,7 @@ mod tests {
                 ],
             );
 
-            let messages = &request.marked_body().unwrap()["messages"];
+            let messages = &request.marked_body(None).unwrap()["messages"];
 
             assert_eq!(messages[1]["content"], json!("first question"));
             assert_eq!(
@@ -2001,7 +2010,7 @@ mod tests {
                 ])],
             );
 
-            let messages = &request.marked_body().unwrap()["messages"];
+            let messages = &request.marked_body(None).unwrap()["messages"];
 
             assert_eq!(
                 messages[0]["content"],
@@ -2026,7 +2035,7 @@ mod tests {
                 ])],
             );
 
-            let messages = &request.marked_body().unwrap()["messages"];
+            let messages = &request.marked_body(None).unwrap()["messages"];
 
             assert_eq!(
                 messages[0]["content"][1]["cache_control"],
@@ -2046,7 +2055,7 @@ mod tests {
                 .streamed();
 
             let plain = serde_json::to_value(&request).unwrap();
-            let marked = request.marked_body().unwrap();
+            let marked = request.marked_body(None).unwrap();
 
             let plain = plain.as_object().unwrap();
             let marked = marked.as_object().unwrap();
@@ -2086,7 +2095,7 @@ mod tests {
                 json!({"type": "ephemeral"});
 
             assert_eq!(
-                request.marked_body().unwrap()["messages"][0]["content"],
+                request.marked_body(None).unwrap()["messages"][0]["content"],
                 expected
             );
         }
@@ -2096,7 +2105,7 @@ mod tests {
         #[test]
         fn an_empty_turn_is_left_alone() {
             let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("")]);
-            let messages = &request.marked_body().unwrap()["messages"];
+            let messages = &request.marked_body(None).unwrap()["messages"];
             assert_eq!(messages[0]["content"], json!(""));
         }
     }
