@@ -2701,6 +2701,7 @@ bg-started = Started { $id }. Join it with: bravebot attach { $id }
 bg-spawn-failed = Could not start the background session: { $problem }
 bg-unsupported = Background sessions are not available on this platform.
 attach-usage = attach takes a session's id
+attach-needs-a-terminal = attach answers a session's prompts from the lines typed, and this is not a terminal
 reply-usage = reply takes a session's id and the prompt to send
 attach-not-running = { $name } is not running.
 attach-unreachable = Could not reach { $name }: { $problem }

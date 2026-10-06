@@ -453,6 +453,9 @@ impl Roster {
                 if std::time::Instant::now() >= deadline {
                     end_group(seen.job.pid, true);
                     std::thread::sleep(std::time::Duration::from_millis(50));
+                    if self.is_live(id) {
+                        return Err(std::io::ErrorKind::TimedOut.into());
+                    }
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
@@ -551,7 +554,8 @@ fn lock(file: &std::fs::File, hold: Hold) -> bool {
     }
 }
 
-/// Nothing holds a lock here, because nothing runs here.
+/// Nothing holds a lock here, because nothing runs here: every entry reads as live, and none can
+/// be written because starting a session is refused (`bg-unsupported`).
 #[cfg(not(unix))]
 fn lock(_file: &std::fs::File, hold: Hold) -> bool {
     matches!(hold, Hold::Exclusive)

@@ -282,6 +282,7 @@ impl Watcher for Watching {
             && let Some(first) = inner.first.take()
         {
             inner.reading = false;
+            inner.phase = Phase::Working;
             inner.queue.push_back(first);
         }
         self.0.publish(&mut inner);
@@ -449,11 +450,15 @@ mod tests {
     const ID: &str = "11111111-1111-4111-8111-111111111111";
 
     fn a_shared() -> Arc<Shared> {
-        let root = std::env::temp_dir().join(format!("bravebot-host-{}-{}", std::process::id(), {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static NEXT: AtomicUsize = AtomicUsize::new(0);
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        }));
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!(
+                "host-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
         let job = Job::starting(
             ID.to_string(),
             std::path::Path::new("/work"),
@@ -548,7 +553,10 @@ mod tests {
 
     impl Write for Kept {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend_from_slice(bytes);
             Ok(bytes.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {

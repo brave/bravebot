@@ -102,6 +102,8 @@ fn launch(roster: &Roster, prompt: &str) -> ExitCode {
     if let Err(err) = roster.leave_first_prompt(&id, prompt) {
         return fail(Ending::Failed, t!(bg_spawn_failed, problem = err));
     }
+    // The host is this same program started again; nothing is trusted from where it says it is.
+    // nosemgrep: rust.lang.security.current-exe.current-exe
     let Ok(me) = std::env::current_exe() else {
         let _ = roster.take_first_prompt(&id);
         return fail(Ending::Failed, t!(bg_not_started));
@@ -182,6 +184,11 @@ pub(crate) fn attach(args: &[String]) -> ExitCode {
         Ok(found) => found,
         Err(code) => return code,
     };
+    // Lines on standard input are offered to the session as the person's answers, so a pipe or a
+    // file there would be a script answering for them.
+    if !std::io::stdin().is_terminal() {
+        return fail(Ending::Argument, t!(attach_needs_a_terminal));
+    }
     talk(&roster, &seen)
 }
 
@@ -299,6 +306,11 @@ fn send(roster: &Roster, seen: &Seen, text: &str) -> ExitCode {
         return fail(Ending::Failed, t!(attach_not_running, name = name));
     };
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    // One line, as the socket reads it: a break in the text would end the reply early.
+    let text: String = text
+        .chars()
+        .map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c })
+        .collect();
     if writeln!(stream, "reply\n{text}").is_err() {
         return fail(Ending::Failed, t!(reply_not_sent, name = name));
     }

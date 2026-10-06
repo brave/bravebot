@@ -5989,6 +5989,12 @@ fn bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal() {
         ),
         (&["--bg", "--incognito", "fix it"][..], "--incognito"),
         (&["--bg", "fix it", "--vet"][..], "--vet"),
+        (&["--vet", "--bg", "fix it"][..], "--vet"),
+        (
+            &["--settings", "s.json", "--bg", "fix it"][..],
+            "--settings",
+        ),
+        (&["--incognito", "--bg", "fix it"][..], "--incognito"),
         (
             &["--bg", "--settings", "s.json", "fix it"][..],
             "--settings",
@@ -6148,6 +6154,16 @@ fn a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle() {
         "a reply or the first prompt answered the trust question"
     );
 
+    // Lines on a pipe would answer for the person, so `attach` from anything but a terminal is
+    // refused before it connects, and the session is still free for one that is.
+    let piped = bravebot(&home.0, &[], &["attach", "3f2a9c1e"]);
+    assert_eq!(piped.status.code(), Some(2), "{}", said(&piped).1);
+    assert!(
+        said(&piped).1.contains("not a terminal"),
+        "{}",
+        said(&piped).1
+    );
+
     let mut terminal = UnixStream::connect(&socket).expect("attach");
     terminal
         .set_read_timeout(Some(Duration::from_secs(60)))
@@ -6185,9 +6201,27 @@ fn a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle() {
         .expect("the reply reached the gateway");
     assert!(second.contains("and the tests"), "{second}");
 
+    // A break in the text of a reply is a space in the prompt, not the end of it.
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while !bravebot(&home.0, &[], &["reply", "3f2a9c1e", "fold\nthe\r\nlines"])
+        .status
+        .success()
+    {
+        assert!(
+            std::time::Instant::now() < until,
+            "the reply was never taken"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let third = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(third.contains("fold the  lines"), "{third}");
+
     let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
     assert!(listed.starts_with("3f2a9c1e"), "{listed}");
-    assert!(listed.contains("and the tests"), "{listed}");
+    assert!(listed.contains("fold the"), "{listed}");
 
     let stopped = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
     assert!(stopped.status.success(), "{}", said(&stopped).1);

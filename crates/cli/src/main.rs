@@ -64,20 +64,13 @@ fn main() -> ExitCode {
         None => Vec::new(),
     };
 
-    // Before the flags below are taken out, because they are what it looks for: a session that
-    // starts in another process reads none of them, and one that ran without a flag it was given
-    // would be running under rules its author did not choose.
-    if args.first().map(String::as_str) == Some("--bg")
-        && let Some(flag) = args
-            .iter()
-            .find(|arg| matches!(arg.as_str(), "--incognito" | "--vet" | "--settings"))
-    {
-        return stopped_before_the_turn(
-            wants_json(&args),
-            Ending::Argument,
-            t!(bg_takes_nothing_else, flag = flag.as_str()),
-        );
-    }
+    // Noted before the flags below are taken out, because they are what it looks for: a session
+    // that starts in another process reads none of them, and one that ran without a flag it was
+    // given would be running under rules its author did not choose.
+    let carried: Option<String> = args
+        .iter()
+        .find(|arg| matches!(arg.as_str(), "--incognito" | "--vet" | "--settings"))
+        .cloned();
 
     // Engaged here rather than deeper in because it must be true before the first thing that could
     // write is reached, and this is the last moment that is certain to be before all of them.
@@ -226,7 +219,14 @@ fn main() -> ExitCode {
         Some("doctor") => doctor(),
         Some("auth") => auth::command(&args[1..]),
         Some("sessions") => background::sessions(&args[1..]),
-        Some("--bg") => background_start(&args[1..], skip_permissions, agent, &prompts),
+        Some("--bg") => match carried {
+            Some(flag) => stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                t!(bg_takes_nothing_else, flag = flag.as_str()),
+            ),
+            None => background_start(&args[1..], skip_permissions, agent, &prompts),
+        },
         Some("attach") => background::attach(&args[1..]),
         Some("reply") => background::reply(&args[1..]),
         Some("__bg-host") => match args.get(1) {
