@@ -93,12 +93,21 @@ fn write_escape_sequence(text: &str) -> bool {
 /// it, rather than at an endpoint that would answer with a number.
 pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 
+/// The longest side, in pixels, a picture over the cap is scaled down to before it is tried again.
+const DOWNSCALED_SIDE: u32 = 2048;
+
+/// The largest canvas a picture over the cap may declare and still be decoded to be scaled down.
+const MAX_DECODED_SIDE: u32 = 16384;
+
+/// The most memory a decode of a picture over the cap may allocate.
+const MAX_DECODE_ALLOC_BYTES: u64 = 512 * 1024 * 1024;
+
 /// What the clipboard had when it was asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pasted {
     Text(String),
     Image(Image),
-    /// A picture too big to send, with the size it would have been.
+    /// A picture too big to send even scaled down, with the size it was as pasted.
     TooLarge(usize),
     /// Nothing this can use: an empty clipboard, or one holding something that is neither.
     Nothing,
@@ -139,7 +148,15 @@ pub fn paste() -> Pasted {
 /// tool spawned for an answer nothing looks at.
 fn chosen(image: Option<(&'static str, Vec<u8>)>, text: impl FnOnce() -> Option<String>) -> Pasted {
     match image {
-        Some((_, bytes)) if bytes.len() > MAX_IMAGE_BYTES => return Pasted::TooLarge(bytes.len()),
+        Some((_, bytes)) if bytes.len() > MAX_IMAGE_BYTES => {
+            return match downscaled(&bytes) {
+                Some(smaller) if smaller.len() <= MAX_IMAGE_BYTES => Pasted::Image(Image {
+                    media_type: "image/png",
+                    bytes: smaller,
+                }),
+                _ => Pasted::TooLarge(bytes.len()),
+            };
+        }
         Some((media_type, bytes)) => return Pasted::Image(Image { media_type, bytes }),
         None => {}
     }
@@ -148,6 +165,33 @@ fn chosen(image: Option<(&'static str, Vec<u8>)>, text: impl FnOnce() -> Option<
         Some(text) if !text.is_empty() => Pasted::Text(text),
         _ => Pasted::Nothing,
     }
+}
+
+/// A picture over the cap, scaled so its longest side is at most [`DOWNSCALED_SIDE`] and encoded as
+/// PNG, or `None` where it will not decode within the limits.
+///
+/// The pixels are decoded and re-encoded and never looked at: nothing here branches on what the
+/// picture shows. The media type of the result is the reader's own literal, `image/png`.
+fn downscaled(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_DECODED_SIDE);
+    limits.max_image_height = Some(MAX_DECODED_SIDE);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC_BYTES);
+    reader.limits(limits);
+    let decoded = reader.decode().ok()?;
+    let scaled = decoded.resize(
+        DOWNSCALED_SIDE,
+        DOWNSCALED_SIDE,
+        image::imageops::FilterType::Triangle,
+    );
+    let mut out = Vec::new();
+    scaled
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .ok()?;
+    Some(out)
 }
 
 /// Whether the clipboard has a picture on it, without reading the picture.
@@ -389,11 +433,50 @@ mod tests {
         assert!(!asked, "the clipboard's text was read for nothing");
     }
 
-    /// A picture over the cap is refused as the picture it is, not quietly replaced by whatever
-    /// text was beside it. Falling through would paste a page's URL in place of the screenshot
-    /// somebody meant, with nothing said about the one they asked for.
+    /// A noisy PNG whose encoding is over the cap, so a plain re-encode would not fit either.
+    fn oversized_png(side: u32) -> Vec<u8> {
+        let mut state = 0x2545_f491_u32;
+        let noise = image::RgbImage::from_fn(side, side, |_, _| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            image::Rgb([
+                (state >> 20) as u8 & 0x3f,
+                (state >> 12) as u8 & 0x3f,
+                (state >> 4) as u8 & 0x3f,
+            ])
+        });
+        let mut out = Vec::new();
+        noise
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .expect("a PNG encodes");
+        assert!(
+            out.len() > MAX_IMAGE_BYTES,
+            "the fixture must be over the cap"
+        );
+        out
+    }
+
+    /// A screenshot over the cap goes through scaled down rather than making the person shrink it
+    /// by hand. The result has to be a picture that decodes, under the cap, whose longest side was
+    /// brought to the fixed size, and whose type is the reader's own literal.
     #[test]
-    fn a_picture_over_the_cap_is_refused_rather_than_swapped_for_the_text() {
+    fn a_picture_over_the_cap_is_scaled_down_and_sent() {
+        let oversized = oversized_png(2800);
+        let chosen = chosen(Some(("image/png", oversized)), || None);
+
+        let Pasted::Image(image) = chosen else {
+            panic!("an oversized picture that decodes was not admitted: {chosen:?}");
+        };
+        assert_eq!(image.media_type, "image/png");
+        assert!(image.bytes.len() <= MAX_IMAGE_BYTES);
+        let decoded = image::load_from_memory(&image.bytes).expect("the result decodes");
+        assert_eq!(decoded.width().max(decoded.height()), DOWNSCALED_SIDE);
+    }
+
+    /// A picture the decoder cannot read is still refused with the size it was pasted at, and not
+    /// swapped for the text beside it: falling through would paste a page's URL in place of the
+    /// screenshot somebody meant, with nothing said about the one they asked for.
+    #[test]
+    fn a_picture_over_the_cap_that_will_not_decode_is_refused_rather_than_swapped_for_the_text() {
         let oversized = vec![0u8; MAX_IMAGE_BYTES + 1];
         let chosen = chosen(Some(("image/png", oversized)), || {
             Some("https://example.invalid/the-page".to_string())

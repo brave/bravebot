@@ -140,8 +140,10 @@ same line however long it runs. A command the driver carries out itself has no t
 travel in, so a marker in one is put back to words, whether the command is dispatched at rest or the
 queue reaches it when the turn ends. Those words say a picture was pasted and cannot be shown, which
 is what a picture on a line queued mid-turn becomes ([dropping.md](dropping.md#DROP-8)), and the
-person is told it did not go. Anything over 10 MB is refused rather than sent, and says so with its
-size.
+person is told it did not go. A picture over 10 MB is decoded, scaled so its longest side is at most
+2048 pixels, re-encoded as PNG and sent in that form when the result is under 10 MB. Only when it will
+not decode, or is still over, is it refused rather than sent, and it says so with the size it was
+pasted at.
 
 **The thumbnail.** Where the terminal draws pictures, a small drawing of each picture named in the
 line sits under the box, so a person can see it is the screenshot they meant. It is drawn for
@@ -161,6 +163,8 @@ leaves the box as it was.
 `verified-by: bravebot_tui::app::a_picture_named_on_a_command_that_waited_is_words_by_the_time_it_is_carried_out`
 `verified-by: bravebot_tui::app::a_command_line_whose_marker_was_deleted_says_nothing_about_a_picture`
 `verified-by: bravebot_tui::app::a_picture_too_large_to_send_says_so_with_its_size`
+`verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_is_scaled_down_and_sent`
+`verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_that_will_not_decode_is_refused_rather_than_swapped_for_the_text`
 `verified-by: bravebot_tui::state::the_first_tick_of_a_loop_carries_the_picture_pasted_into_it`
 `verified-by: bravebot_tui::state::a_later_tick_of_a_loop_says_the_picture_went_with_the_first`
 `verified-by: bravebot_tui::loops::a_pasted_picture_goes_to_one_tick_and_the_settled_line_to_every_other`
@@ -196,7 +200,7 @@ On macOS this reads the pasteboard through `osascript`. On Linux it needs `wl-pa
 `verified-by: bravebot_tui::app::which_key_carries_a_picture_is_said_once_per_session`
 `verified-by: bravebot_tui::clipboard::a_picture_wins_over_the_text_beside_it`
 `verified-by: bravebot_tui::clipboard::the_text_beside_a_picture_is_never_read`
-`verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_is_refused_rather_than_swapped_for_the_text`
+`verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_that_will_not_decode_is_refused_rather_than_swapped_for_the_text`
 `verified-by: bravebot_tui::clipboard::text_alone_is_the_paste`
 `verified-by: bravebot_tui::clipboard::an_empty_clipboard_reads_as_nothing_rather_than_as_empty_text`
 `verified-by: bravebot_tui::clipboard::a_missing_tool_reads_as_nothing_on_the_clipboard`
