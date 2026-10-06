@@ -70,7 +70,8 @@ asks for that, leave it and say so in the report.
    manifest changed. A file no rule names (`ui/`, website, prose) runs nothing and leaves the
    checks to CI. Pass make targets as `--target check-spec` to run those instead; do not widen it to `check-all-local`,
    which CI repeats.
-7. `... push <pr>`, then `... ci <pr> --wait`, which returns as soon as a check fails or after
+7. `... push <pr>`. If it pushed, `... review <pr>` asks netzenbot-reviewer to review the new head,
+   since a review it already gave covers the old one. Then `... ci <pr> --wait`, which returns as soon as a check fails or after
    about nine minutes, exiting 0 when all pass, 1 when one failed and 2 when checks are still
    running. On 1, go back to step 3 with the new logs; new review comments appear in step 4.
    Stop after three rounds and report what is left.
