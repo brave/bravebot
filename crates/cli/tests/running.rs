@@ -6020,12 +6020,9 @@ fn a_host_run_by_hand_has_nothing_to_start_with() {
     let home = Scratch::new("bg-host-by-hand");
     let output = bravebot(&home.path, AT_A_GATEWAY, &["__bg-host", SESSION_ID]);
     assert!(!output.status.success());
-    assert!(
-        !home
-            .path
-            .join(format!(".bravebot/jobs/{SESSION_ID}/attach.sock"))
-            .exists()
-    );
+    let job = home.path.join(format!(".bravebot/jobs/{SESSION_ID}"));
+    assert!(!job.join("attach.sock").exists());
+    assert!(!job.join("state.json").exists());
 }
 
 /// BG-9, BG-10: `attach` and `reply` name a session that is not running as not running.
