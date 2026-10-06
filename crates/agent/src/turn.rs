@@ -1912,6 +1912,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
 
     let skills = crate::skills::Catalogue::default();
     let mut slots = bravebot_core::SlotStore::new();
+    let mut reads = crate::conversation::ShownReads::default();
     let cancel = Cancel::new();
     let mut armed = 0usize;
     let mut jobs = tools::Jobs::default();
@@ -1924,6 +1925,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             deadlines: task.deadlines,
             skills: &skills,
             slots: &mut slots,
+            reads: &mut reads,
             chat: crate::processor::Chat {
                 config,
                 egress,
@@ -4252,6 +4254,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // taken off the tool figure below.
                         let mut asking = crate::confirm::Timed::new(&mut confirmer);
                         let ran_at = Instant::now();
+                        let (quarantine, reads) = conversation.for_a_tool();
                         let mut output = tools::dispatch(
                             &mut policy,
                             &mut tools::Tools {
@@ -4259,7 +4262,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 output_cap: task.output_cap.unwrap_or(tools::OUTPUT_CAP),
                                 deadlines: task.deadlines,
                                 skills: &catalogue,
-                                slots: conversation.quarantine(),
+                                slots: quarantine,
+                                reads,
                                 chat: crate::processor::Chat {
                                     config,
                                     egress,
@@ -4487,6 +4491,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
                         // Three shapes, and which one a result takes was decided by the tool that
                         // produced it and the kernel that labelled it, never here.
+                        let mut shown_window = false;
                         let body = if let Some(entries) = &output.entries {
                             // A listing the planner may not see. The names never come out: it gets one
                             // reference per entry, and can read through and write back to the ones
@@ -4762,6 +4767,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
                             match &presented {
                                 Presentation::Visible(text) => {
+                                    // Only a result the planner was shown counts as a window it holds
+                                    // (READ-8). A quarantined one put nothing in front of it.
+                                    shown_window = true;
                                     // After the sample rather than in the middle of it, where the
                                     // notice naming what went is: what wrote that notice dropped the
                                     // bytes and does not know the slot they were kept in.
@@ -5024,7 +5032,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // before: a conversation may hold both shapes, so long as no call goes unanswered.
                         // The prose one is tagged, so nothing has to recognise it by the words it opens with.
                         match call.id.as_deref().filter(|_| replayed.is_some()) {
-                            Some(id) => conversation.push(Message::tool_result(id, body)),
+                            Some(id) => {
+                                conversation.push(Message::tool_result(id, body));
+                                if shown_window && let Some(window) = output.window.take() {
+                                    conversation.shown_read(window);
+                                }
+                            }
                             None => conversation
                                 .push_composed(Message::user(body), Composed::ToolResult),
                         }

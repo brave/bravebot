@@ -6710,6 +6710,190 @@ fn a_read_of_an_empty_file_still_carries_a_token() {
     );
 }
 
+/// The 16 hex characters after each "change token " in a request body.
+fn tokens_in(body: &str) -> Vec<String> {
+    body.match_indices("change token ")
+        .map(|(at, found)| body[at + found.len()..].chars().take(16).collect())
+        .collect()
+}
+
+/// Reading a file again with nothing written to it used to send every line a second time, and a
+/// planner that checks a file after each step does it on every round for the rest of the session.
+///
+/// Asserts on the request the third round is built from, because that is what the planner holds:
+/// the lines once, then a notice carrying the same token, which is what a question about whether the
+/// file changed is answered from.
+#[test]
+fn a_repeat_read_of_an_untouched_file_is_answered_with_a_notice() {
+    let scratch = Scratch::new("read-repeat-notice");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\nbeta\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt twice"),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+
+    assert_eq!(
+        third.matches("alpha").count(),
+        1,
+        "the lines were sent twice for a file nobody wrote: {third}"
+    );
+    assert!(
+        third.contains("has not changed since it was shown to you"),
+        "the repeat was not answered with a notice: {third}"
+    );
+    let tokens = tokens_in(&third);
+    assert_eq!(tokens.len(), 2, "both answers carry a token: {third}");
+    assert_eq!(
+        tokens[0], tokens[1],
+        "the notice names a different token from the read it stands for"
+    );
+}
+
+/// The notice stands for lines the planner holds, so a write must end it: a planner told a file
+/// is unchanged after somebody wrote it would answer from text that is no longer there.
+#[test]
+fn a_file_written_since_it_was_shown_is_sent_again() {
+    let scratch = Scratch::new("read-repeat-written");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "alpha\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let look = |conversation: &mut bravebot_agent::Conversation| {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        take_a_turn(
+            &config,
+            &workspace,
+            conversation,
+            trusting_the_workspace(),
+            Task::new("read a.txt"),
+        )
+        .expect("turn runs");
+        let _first = received.recv().expect("first request");
+        received.recv().expect("second request")
+    };
+
+    let shown = look(&mut conversation);
+    assert!(shown.contains("alpha"), "the first read showed no lines");
+
+    let repeated = look(&mut conversation);
+    assert!(
+        repeated.contains("has not changed since it was shown to you"),
+        "a repeat across turns was not answered with a notice: {repeated}"
+    );
+
+    std::fs::write(&path, "alpha\nbeta\n").unwrap();
+    let rewritten = look(&mut conversation);
+    assert!(
+        rewritten.contains("beta"),
+        "a written file was answered with a notice: {rewritten}"
+    );
+    let tokens = tokens_in(&rewritten);
+    assert_ne!(
+        tokens.first(),
+        tokens.last(),
+        "the new read carries the old token: {rewritten}"
+    );
+}
+
+/// The notice is for the same window. A different slice of the file is lines nobody has been
+/// shown, whatever the token says about the file as a whole.
+#[test]
+fn a_different_window_of_the_same_file_is_not_answered_with_a_notice() {
+    let scratch = Scratch::new("read-repeat-window");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\nbeta\ngamma\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt","limit":1}"#),
+        tool_request_2("read_file", r#"{"path":"a.txt","offset":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt in parts"),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains("beta") && third.contains("gamma"),
+        "the second window was not sent: {third}"
+    );
+    assert!(
+        !third.contains("has not changed since it was shown to you"),
+        "a different window was answered with a notice: {third}"
+    );
+}
+
+/// A read whose lines the planner was never shown is not a read it holds. Asking twice for a file
+/// it may not see gets a reference twice, and never a notice about lines that do not exist.
+#[test]
+fn a_repeat_read_of_a_file_the_planner_may_not_see_is_not_a_notice() {
+    let scratch = Scratch::new("read-repeat-quarantined");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        Task::new("read a.txt twice"),
+    )
+    .expect("turn runs");
+
+    // The last request is the final round's. A check the quarantine runs is also a request, so the
+    // third is not always it.
+    let third = received.try_iter().last().expect("a final request");
+    assert!(
+        !third.contains("has not changed since it was shown to you"),
+        "a notice stood for lines the planner never saw: {third}"
+    );
+    assert_eq!(
+        third
+            .matches("Quarantined: you will not be shown what this file holds")
+            .count(),
+        2,
+        "each read should have been answered with a reference: {third}"
+    );
+}
+
 /// The model must be told the file is binary, not handed a decoding error it cannot act on.
 #[test]
 fn a_binary_read_tells_the_model_it_is_binary() {
