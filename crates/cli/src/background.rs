@@ -1,4 +1,5 @@
-//! `bravebot sessions`: the sessions that keep running after the terminal closes (BG-5).
+//! `bravebot sessions`, `--bg`, `attach` and `reply`: the sessions that keep running after the
+//! terminal closes (BG-1, BG-2, BG-5, BG-9, BG-10).
 //!
 //! Everything drawn here is a thing the person typed, a fact about a process, or a word from a
 //! fixed set. The roster has no field for anything else (BG-4), so there is nothing in it to
@@ -7,7 +8,7 @@
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
 use bravebot_session::jobs::{Held, Lookup, Roster, Seen, State, Stopped};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 
 /// How long a stop waits for a session to end before it is killed.
@@ -68,6 +69,257 @@ fn stop(typed: &str) -> ExitCode {
         Ok(Stopped::Missing) => fail(Ending::Argument, t!(sessions_missing, id = shown(typed))),
         Err(err) => fail(Ending::Failed, t!(sessions_stop_failed, problem = err)),
     }
+}
+
+/// `bravebot --bg <prompt>`: start a session that keeps running after this terminal closes.
+///
+/// Only a terminal can start one (BG-2). The prompt is handed to the new process through a file only
+/// that process can take, so a process that was merely run has none to start with.
+pub(crate) fn start(words: &[String]) -> ExitCode {
+    let prompt = words
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if prompt.is_empty() {
+        return fail(Ending::Argument, t!(bg_needs_a_prompt));
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return fail(Ending::Argument, t!(bg_needs_a_terminal));
+    }
+    let Some(roster) = Roster::writable() else {
+        return fail(Ending::Failed, t!(sessions_no_home));
+    };
+    launch(&roster, &prompt)
+}
+
+#[cfg(unix)]
+fn launch(roster: &Roster, prompt: &str) -> ExitCode {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let id = bravebot_session::jobs::new_id();
+    if let Err(err) = roster.leave_first_prompt(&id, prompt) {
+        return fail(Ending::Failed, t!(bg_spawn_failed, problem = err));
+    }
+    let Ok(me) = std::env::current_exe() else {
+        let _ = roster.take_first_prompt(&id);
+        return fail(Ending::Failed, t!(bg_not_started));
+    };
+    let spawned = Command::new(me)
+        .arg("__bg-host")
+        .arg(&id)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    if let Err(err) = spawned {
+        let _ = roster.take_first_prompt(&id);
+        return fail(Ending::Failed, t!(bg_spawn_failed, problem = err));
+    }
+    let until = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < until {
+        if roster.get(&id).is_some_and(|seen| seen.live)
+            && roster.socket_of(&id).is_some_and(|s| s.exists())
+        {
+            let shown: String = id.chars().take(ID_SHOWN).collect();
+            println!("{}", t!(bg_started, id = shown));
+            return ExitCode::SUCCESS;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = roster.take_first_prompt(&id);
+    fail(Ending::Failed, t!(bg_not_started))
+}
+
+#[cfg(not(unix))]
+fn launch(_roster: &Roster, _prompt: &str) -> ExitCode {
+    fail(Ending::Failed, t!(bg_unsupported))
+}
+
+/// The hidden command a started session runs under.
+#[cfg(unix)]
+pub(crate) fn host(id: &str) -> ExitCode {
+    crate::host::host(id)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn host(_id: &str) -> ExitCode {
+    ExitCode::FAILURE
+}
+
+/// The session `typed` names, which is running, or the complaint to give.
+fn running(typed: &str) -> Result<(Roster, Seen), ExitCode> {
+    let Some(roster) = Roster::writable() else {
+        return Err(fail(Ending::Failed, t!(sessions_no_home)));
+    };
+    match roster.find(typed) {
+        Ok(seen) if seen.live => Ok((roster, seen)),
+        Ok(seen) => Err(fail(
+            Ending::Failed,
+            t!(attach_not_running, name = shown(&seen.job.name)),
+        )),
+        Err(Lookup::Missing) => Err(fail(
+            Ending::Argument,
+            t!(sessions_missing, id = shown(typed)),
+        )),
+        Err(Lookup::Ambiguous) => Err(fail(
+            Ending::Argument,
+            t!(sessions_ambiguous, id = shown(typed)),
+        )),
+    }
+}
+
+/// `bravebot attach <id>`: the terminal of a background session, for as long as this one stays.
+///
+/// What the session wrote is drawn the way a listing is: control characters pictured, so the
+/// session cannot move the cursor or recolour the screen of the terminal it is read in.
+pub(crate) fn attach(args: &[String]) -> ExitCode {
+    let [typed] = args else {
+        return fail(Ending::Argument, t!(attach_usage));
+    };
+    let (roster, seen) = match running(typed) {
+        Ok(found) => found,
+        Err(code) => return code,
+    };
+    talk(&roster, &seen)
+}
+
+#[cfg(unix)]
+fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
+    use std::io::{BufRead, BufReader, Read};
+
+    let name = shown(&seen.job.name);
+    let Some(mut stream) = roster
+        .socket_of(&seen.job.id)
+        .and_then(|socket| crate::host::reach(&socket).ok())
+    else {
+        return fail(
+            Ending::Failed,
+            t!(
+                attach_unreachable,
+                name = name,
+                problem = t!(attach_not_running, name = shown(&seen.job.name))
+            ),
+        );
+    };
+    if writeln!(stream, "attach").is_err() {
+        return fail(Ending::Failed, t!(attach_not_running, name = name));
+    }
+    let Ok(listening) = stream.try_clone() else {
+        return fail(Ending::Failed, t!(attach_not_running, name = name));
+    };
+    let mut from = BufReader::new(listening);
+    match crate::host::bounded_line(&mut from).as_deref() {
+        Some("ok") => {}
+        Some("attached") => return fail(Ending::Failed, t!(attach_taken, name = name)),
+        _ => return fail(Ending::Failed, t!(attach_not_running, name = name)),
+    }
+    eprintln!("{}", t!(attach_joined, name = name));
+
+    let sending = stream;
+    std::thread::spawn(move || {
+        let mut sending = sending;
+        for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+            if writeln!(sending, "{line}").is_err() {
+                return;
+            }
+        }
+        let _ = sending.shutdown(std::net::Shutdown::Both);
+    });
+
+    let mut out = std::io::stdout().lock();
+    let mut pending: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match from.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                pending.extend_from_slice(&chunk[..read]);
+                let drawn = drawable(&mut pending);
+                if out
+                    .write_all(drawn.as_bytes())
+                    .and_then(|()| out.flush())
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    }
+    eprintln!("{}", t!(attach_left));
+    ExitCode::SUCCESS
+}
+
+#[cfg(not(unix))]
+fn talk(_roster: &Roster, _seen: &Seen) -> ExitCode {
+    fail(Ending::Failed, t!(bg_unsupported))
+}
+
+/// The text in `pending` that is whole, drawn with control characters pictured except the line
+/// break, which stays one. An incomplete character at the end is kept for the next read.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn drawable(pending: &mut Vec<u8>) -> String {
+    let whole = match std::str::from_utf8(pending) {
+        Ok(text) => text.len(),
+        Err(err) if err.error_len().is_none() => err.valid_up_to(),
+        // Bytes that are no character: the replacement for each, so nothing is kept waiting.
+        Err(_) => pending.len(),
+    };
+    let text = String::from_utf8_lossy(&pending[..whole]).into_owned();
+    pending.drain(..whole);
+    text.split('\n').map(shown).collect::<Vec<_>>().join("\n")
+}
+
+/// `bravebot reply <id> <prompt>`: send a prompt to a session that is idle, and only then (BG-10).
+pub(crate) fn reply(args: &[String]) -> ExitCode {
+    let [typed, words @ ..] = args else {
+        return fail(Ending::Argument, t!(reply_usage));
+    };
+    let text = words.join(" ");
+    if text.trim().is_empty() {
+        return fail(Ending::Argument, t!(reply_usage));
+    }
+    let (roster, seen) = match running(typed) {
+        Ok(found) => found,
+        Err(code) => return code,
+    };
+    send(&roster, &seen, text.trim())
+}
+
+#[cfg(unix)]
+fn send(roster: &Roster, seen: &Seen, text: &str) -> ExitCode {
+    use std::io::BufReader;
+
+    let name = shown(&seen.job.name);
+    let Some(mut stream) = roster
+        .socket_of(&seen.job.id)
+        .and_then(|socket| crate::host::reach(&socket).ok())
+    else {
+        return fail(Ending::Failed, t!(attach_not_running, name = name));
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    if writeln!(stream, "reply\n{text}").is_err() {
+        return fail(Ending::Failed, t!(reply_not_sent, name = name));
+    }
+    let answer = crate::host::bounded_line(&mut BufReader::new(stream));
+    match answer.as_deref() {
+        Some("ok") => {
+            println!("{}", t!(reply_sent, name = name));
+            ExitCode::SUCCESS
+        }
+        Some("working") => fail(Ending::Failed, t!(reply_working, name = name)),
+        Some("needs-input") => {
+            let id: String = seen.job.id.chars().take(ID_SHOWN).collect();
+            fail(Ending::Failed, t!(reply_needs_input, name = name, id = id))
+        }
+        _ => fail(Ending::Failed, t!(reply_not_sent, name = name)),
+    }
+}
+
+#[cfg(not(unix))]
+fn send(_roster: &Roster, _seen: &Seen, _text: &str) -> ExitCode {
+    fail(Ending::Failed, t!(bg_unsupported))
 }
 
 /// Text the person typed, as it can be drawn: control characters pictured, and a tab a space, so
@@ -190,5 +442,20 @@ mod tests {
         let gone = seen("fix the build", State::NeedsInput, Some(Held::Run), false);
         let row = &lines_of(&[gone])[0];
         assert!(!row.contains(&held), "{row}");
+    }
+
+    /// BG-9: what a session wrote reaches the terminal with its control characters pictured and its
+    /// line breaks kept, and a character split across two reads is drawn whole.
+    #[test]
+    fn what_a_session_wrote_is_drawn_without_its_control_characters() {
+        let mut pending = b"red \x1b[31mtext\x07\nnext".to_vec();
+        let drawn = drawable(&mut pending);
+        assert_eq!(drawn, "red \u{241b}[31mtext\u{2407}\nnext");
+        assert!(pending.is_empty());
+
+        let mut pending = "caf\u{e9}".as_bytes()[..4].to_vec();
+        assert_eq!(drawable(&mut pending), "caf");
+        pending.extend_from_slice(&"caf\u{e9}".as_bytes()[4..]);
+        assert_eq!(drawable(&mut pending), "\u{e9}");
     }
 }

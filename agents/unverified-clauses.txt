@@ -10,10 +10,8 @@
 docs/specs/background-sessions.md:BG-1: a background session is an ordinary session in a process the terminal does not own
 docs/specs/background-sessions.md:BG-2: only a line a person typed starts one
 docs/specs/background-sessions.md:BG-3: the supervisor moves process state and decides nothing from content
-docs/specs/background-sessions.md:BG-7: a question the session would ask is held until a person answers it
 docs/specs/background-sessions.md:BG-8: the mode is fixed for the process, bypass is refused, and a rule that allows does not answer
 docs/specs/background-sessions.md:BG-9: attaching draws the session as a foreground one, and detaching leaves it running
-docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
 docs/specs/background-sessions.md:BG-11: a person can stop a session, and there is one supervisor per account
 docs/specs/background-sessions.md:BG-12: a process that ends between turns is restarted, and one that ends in a turn is not repeated
 docs/specs/background-sessions.md:BG-13: an idle session is stopped after an hour and wakes on the next reply

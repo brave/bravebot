@@ -20,11 +20,13 @@ bravebot-i18n = { path = "../i18n" }
 # Names a session, which has to be opaque and collide with nothing, and OsRng is the source
 # that gives both.
 rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
 # flock(2), for the lock a background session holds for as long as it runs, and the signal that
 # stops one. rustix rather than libc so this crate keeps forbidding unsafe code.
 rustix = { workspace = true, features = ["fs", "process"] }
-serde = { workspace = true }
-serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

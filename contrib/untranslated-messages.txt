@@ -7,6 +7,21 @@
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
 
+fr:attach-joined
+fr:attach-left
+fr:attach-line-not-sent
+fr:attach-not-running
+fr:attach-taken
+fr:attach-unreachable
+fr:attach-usage
+fr:bg-bypass-refused
+fr:bg-needs-a-prompt
+fr:bg-needs-a-terminal
+fr:bg-not-started
+fr:bg-spawn-failed
+fr:bg-started
+fr:bg-takes-nothing-else
+fr:bg-unsupported
 fr:caffeinate-ended
 fr:caffeinate-explained
 fr:caffeinate-off
@@ -23,12 +38,20 @@ fr:checkouts-unpushed
 fr:cli-advisor-needs-a-name
 fr:cli-advisor-not-with-a-manifest
 fr:cli-option-advisor
+fr:cli-usage-attach
+fr:cli-usage-bg
+fr:cli-usage-reply
 fr:cli-usage-sessions
 fr:cli-usage-sessions-stop
 fr:command-branch
 fr:command-caffeinate
 fr:gigabytes
 fr:kilobytes
+fr:reply-needs-input
+fr:reply-not-sent
+fr:reply-sent
+fr:reply-usage
+fr:reply-working
 fr:session-branch-keeps-checkouts
 fr:session-branch-nothing-written
 fr:session-branch-refused

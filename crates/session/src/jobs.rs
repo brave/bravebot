@@ -25,6 +25,9 @@ const STATE_FILE: &str = "state.json";
 /// The file inside a job's directory whose lock says that the process is alive.
 const LIVE_FILE: &str = "live";
 
+/// The file the line that starts a session is left in for its process.
+const FIRST_PROMPT_FILE: &str = "first-prompt";
+
 /// The longest prompt kept in the roster, in characters.
 ///
 /// A list shows a title cut from it, so the rest is never read; keeping a whole pasted file here
@@ -336,10 +339,7 @@ impl Roster {
         };
         bravebot_agent::home::create_directory(&directory)?;
         let file = bravebot_agent::home::append_to_file(&directory.join(LIVE_FILE))?;
-        Ok(
-            lock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-                .then_some(Lease { _file: file }),
-        )
+        Ok(lock(&file, Hold::Exclusive).then_some(Lease { _file: file }))
     }
 
     /// Whether a process holds the lock for `id`.
@@ -351,7 +351,7 @@ impl Roster {
             return false;
         };
         // Taken and let go at once. Only a holder of the exclusive lock stops this from getting it.
-        !lock(&file, rustix::fs::FlockOperation::NonBlockingLockShared)
+        !lock(&file, Hold::Shared)
     }
 
     /// One entry, or `None` where there is no readable one by that id.
@@ -403,6 +403,30 @@ impl Roster {
         }
     }
 
+    /// Leave the line a person typed for the process that is about to start, where only they can
+    /// read it (BG-2).
+    ///
+    /// A process begins only if this was left for it: the start of a session is something a
+    /// terminal did, and not something any program that can run the same command can do.
+    pub fn leave_first_prompt(&self, id: &str, prompt: &str) -> std::io::Result<()> {
+        let Some(directory) = self.directory_of(id) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "not a session id",
+            ));
+        };
+        bravebot_agent::home::create_directory(&directory)?;
+        bravebot_agent::home::create_new_file(&directory.join(FIRST_PROMPT_FILE), prompt.as_bytes())
+    }
+
+    /// The line left for `id`, taken: it is read once and the file is gone.
+    pub fn take_first_prompt(&self, id: &str) -> Option<String> {
+        let path = self.directory_of(id)?.join(FIRST_PROMPT_FILE);
+        let text = std::fs::read_to_string(&path).ok()?;
+        std::fs::remove_file(&path).ok()?;
+        Some(text)
+    }
+
     /// The socket a running process listens on.
     pub fn socket_of(&self, id: &str) -> Option<PathBuf> {
         self.directory_of(id)
@@ -421,15 +445,13 @@ impl Roster {
         };
         if seen.live {
             // The group is led by the process itself: it makes one of its own on starting.
-            let Some(group) = rustix::process::Pid::from_raw(seen.job.pid as i32) else {
+            if !end_group(seen.job.pid, false) {
                 return Ok(Stopped::Missing);
-            };
-            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::TERM);
+            }
             let deadline = std::time::Instant::now() + grace;
             while self.is_live(id) {
                 if std::time::Instant::now() >= deadline {
-                    let _ =
-                        rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+                    end_group(seen.job.pid, true);
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     break;
                 }
@@ -477,10 +499,49 @@ pub enum Stopped {
 /// What lets it outlive the terminal it was started from, and what lets [`Roster::stop`] reach
 /// everything it started with one signal.
 pub fn leave_the_terminal() {
+    #[cfg(unix)]
     let _ = rustix::process::setsid();
 }
 
-fn lock(file: &std::fs::File, operation: rustix::fs::FlockOperation) -> bool {
+/// How a lock on a `live` file is taken. Neither waits.
+#[derive(Clone, Copy)]
+enum Hold {
+    Exclusive,
+    Shared,
+}
+
+/// Send the terminate signal, or the kill signal, to the process group `pid` leads. `false`
+/// where `pid` names no group.
+#[cfg(unix)]
+fn end_group(pid: u32, hard: bool) -> bool {
+    let Some(group) = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return false;
+    };
+    let signal = match hard {
+        true => rustix::process::Signal::KILL,
+        false => rustix::process::Signal::TERM,
+    };
+    let _ = rustix::process::kill_process_group(group, signal);
+    true
+}
+
+/// Background sessions are not kept where the channel to one cannot be restricted to the person
+/// (BG-1), so there is no process here to end.
+#[cfg(not(unix))]
+fn end_group(_pid: u32, _hard: bool) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn lock(file: &std::fs::File, hold: Hold) -> bool {
+    use rustix::fs::FlockOperation::{NonBlockingLockExclusive, NonBlockingLockShared};
+    let operation = match hold {
+        Hold::Exclusive => NonBlockingLockExclusive,
+        Hold::Shared => NonBlockingLockShared,
+    };
     loop {
         match rustix::fs::flock(file, operation) {
             Ok(()) => return true,
@@ -488,6 +549,12 @@ fn lock(file: &std::fs::File, operation: rustix::fs::FlockOperation) -> bool {
             Err(_) => return false,
         }
     }
+}
+
+/// Nothing holds a lock here, because nothing runs here.
+#[cfg(not(unix))]
+fn lock(_file: &std::fs::File, hold: Hold) -> bool {
+    matches!(hold, Hold::Exclusive)
 }
 
 #[cfg(test)]
@@ -687,6 +754,21 @@ mod tests {
         assert_eq!(roster.find("abcd").unwrap_err(), Lookup::Missing);
         // Too short to be an id: the first character of every id would match.
         assert_eq!(roster.find("1").unwrap_err(), Lookup::Missing);
+    }
+
+    /// BG-2: a process has a line to start with only if one was left for it, and it has it once.
+    #[test]
+    fn a_first_prompt_is_left_once_and_taken_once() {
+        let (_dir, roster) = roster();
+        assert_eq!(roster.take_first_prompt(A), None);
+        roster.leave_first_prompt(A, "fix the build").expect("left");
+        assert!(roster.leave_first_prompt(A, "again").is_err());
+        assert_eq!(
+            roster.take_first_prompt(A).as_deref(),
+            Some("fix the build")
+        );
+        assert_eq!(roster.take_first_prompt(A), None);
+        assert!(roster.leave_first_prompt("../x", "no").is_err());
     }
 
     #[test]
