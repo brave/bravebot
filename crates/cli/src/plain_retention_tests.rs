@@ -48,6 +48,7 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
         servers: None,
         mcp: None,
         asked_about: AskedAbout::new(),
+        beside: None,
         exposed: Default::default(),
         auto_vetting: false,
     }

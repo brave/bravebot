@@ -3,8 +3,10 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod background;
 mod completion;
 mod exit;
+mod host;
 mod import;
 mod json;
 mod mcp;
@@ -61,6 +63,14 @@ fn main() -> ExitCode {
         Some(at) => args.split_off(at),
         None => Vec::new(),
     };
+
+    // Noted before the flags below are taken out, because they are what it looks for: a session
+    // that starts in another process reads none of them, and one that ran without a flag it was
+    // given would be running under rules its author did not choose.
+    let carried: Option<String> = args
+        .iter()
+        .find(|arg| matches!(arg.as_str(), "--incognito" | "--vet" | "--settings"))
+        .cloned();
 
     // Engaged here rather than deeper in because it must be true before the first thing that could
     // write is reached, and this is the last moment that is certain to be before all of them.
@@ -208,6 +218,21 @@ fn main() -> ExitCode {
         ) => run_task(&args, skip_permissions, agent, prompts),
         Some("doctor") => doctor(),
         Some("auth") => auth::command(&args[1..]),
+        Some("sessions") => background::sessions(&args[1..]),
+        Some("--bg") => match carried {
+            Some(flag) => stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                t!(bg_takes_nothing_else, flag = flag.as_str()),
+            ),
+            None => background_start(&args[1..], skip_permissions, agent, &prompts),
+        },
+        Some("attach") => background::attach(&args[1..]),
+        Some("reply") => background::reply(&args[1..]),
+        Some("__bg-host") => match args.get(1) {
+            Some(id) => background::host(id),
+            None => ExitCode::FAILURE,
+        },
         Some("mcp") => mcp::command(&args[1..]),
         Some("completion") => match completion::command(&args[1..]) {
             Some(()) => ExitCode::SUCCESS,
@@ -223,6 +248,29 @@ fn main() -> ExitCode {
         // Anything else is treated as the task prompt.
         Some(_) => run_task(&args, skip_permissions, agent, prompts),
     }
+}
+
+/// `--bg <prompt>`, which starts a session in another process and so cannot carry what the other
+/// flags carry into this one.
+fn background_start(
+    words: &[String],
+    skip_permissions: bool,
+    agent: Option<String>,
+    prompts: &SystemPrompts,
+) -> ExitCode {
+    if skip_permissions {
+        return fail(Ending::Argument, t!(bg_bypass_refused));
+    }
+    if agent.is_some() {
+        return fail(
+            Ending::Argument,
+            t!(bg_takes_nothing_else, flag = "--agent"),
+        );
+    }
+    if let Some(flag) = flag_named(prompts) {
+        return fail(Ending::Argument, t!(bg_takes_nothing_else, flag = flag));
+    }
+    background::start(words)
 }
 
 /// Take `--agent <name>` out of the arguments, answering with the definition it named.
@@ -268,8 +316,10 @@ fn without_a_definition(first: Option<&str>) -> Option<String> {
         flag @ ("--resume" | "-r" | "--continue" | "-c" | "--fork" | "-f") => {
             Some(t!(cli_agent_not_with_a_recorded_session, flag = flag).to_string())
         }
-        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers"
-        | "completion") => Some(t!(cli_agent_not_for_a_command, command = command).to_string()),
+        command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
+        | "import-leo-creds" | "import-providers" | "completion") => {
+            Some(t!(cli_agent_not_for_a_command, command = command).to_string())
+        }
         _ => None,
     }
 }
@@ -329,8 +379,8 @@ fn flag_named(prompts: &SystemPrompts) -> Option<&'static str> {
 /// rather than ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
     match first? {
-        command @ ("doctor" | "auth" | "mcp" | "import-leo-creds" | "import-providers"
-        | "completion") => Some(
+        command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
+        | "import-leo-creds" | "import-providers" | "completion") => Some(
             t!(
                 cli_system_prompt_not_for_a_command,
                 flag = flag,
@@ -447,6 +497,11 @@ fn print_help() {
         ("bravebot --continue", t!(cli_usage_continue)),
         ("bravebot --fork <id>", t!(cli_usage_fork)),
         ("bravebot doctor", t!(cli_usage_doctor)),
+        ("bravebot sessions [--json]", t!(cli_usage_sessions)),
+        ("bravebot sessions stop <id>", t!(cli_usage_sessions_stop)),
+        ("bravebot --bg <prompt>", t!(cli_usage_bg)),
+        ("bravebot attach <id>", t!(cli_usage_attach)),
+        ("bravebot reply <id> <prompt>", t!(cli_usage_reply)),
         ("bravebot auth login [way]", t!(cli_usage_auth_login)),
         ("bravebot auth logout <way>", t!(cli_usage_auth_logout)),
         ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
@@ -5630,6 +5685,9 @@ mod tests {
             "doctor",
             "auth",
             "mcp",
+            "sessions",
+            "attach",
+            "reply",
             "import-leo-creds",
             "import-providers",
             "completion",
@@ -5742,6 +5800,9 @@ mod tests {
             "doctor",
             "auth",
             "mcp",
+            "sessions",
+            "attach",
+            "reply",
             "import-leo-creds",
             "import-providers",
             "completion",

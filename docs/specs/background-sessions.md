@@ -17,9 +17,16 @@ A session that keeps running after the terminal that started it closes: how a pe
 what owns its process, what is recorded about it, how it is listed, how a terminal reattaches, how
 a person sends it its next prompt, and what it does when it needs an answer.
 
-Nothing here is built. It is a design, written to be agreed before the work starts, and every clause
-reads `verified-by: none` until the work lands. The clauses that other specs would contradict are
-named under [What this changes in other specs](#what-this-changes-in-other-specs).
+The roster, `bravebot sessions`, `bravebot sessions stop`, `bravebot --bg`, `bravebot attach` and
+`bravebot reply` are built, and the session a background process runs is the session in lines. A
+clause that is built whole names its tests. A clause with a part still to build reads
+`verified-by: none` until all of it lands, and the parts not built are: the supervisor and restarts
+([BG-12](#BG-12)), the idle stop ([BG-13](#BG-13)), starting a session again from `attach` or
+`reply`, `/bg` and `/detach`, the refusal of `--resume`, `--continue` and `--fork` for a record a
+running session holds, the checkout ([BG-14](#BG-14)), and holding a question from an MCP server
+that has to be started. A session that needs one of those servers starts without it. The clauses
+that other specs would contradict are named under
+[What this changes in other specs](#what-this-changes-in-other-specs).
 
 A **background session** is an ordinary session, as [sessions.md](sessions.md) describes one, whose
 process a supervisor owns instead of a terminal. The **supervisor** is a small process that starts,
@@ -123,13 +130,16 @@ terminal. A closed set whose sources are named is what lets a reader of a diff c
 untrusted is among them. A field that could hold "whatever is useful" would be filled with whatever
 was nearest.
 
-`verified-by: none`
+`verified-by: bravebot_session::jobs::an_entry_holds_exactly_the_fields_the_spec_names`
+`verified-by: bravebot_session::jobs::the_directory_and_its_files_are_private`
+`verified-by: bravebot_session::jobs::an_id_that_is_a_path_names_nothing`
+`verified-by: bravebot_session::jobs::a_prompt_is_bounded_when_it_is_stored`
 
 <a id="BG-5"></a>
 ### BG-5: the list shows labels and states, never content
 
-`bravebot sessions` prints one line per background session, across every project: its name, its
-state, its working directory, how long since its last turn, and the last prompt the person typed,
+`bravebot sessions` prints one line per background session, across every project: the first eight
+characters of its id, its name, its state, its working directory, how long since its last turn, and the last prompt the person typed,
 cut as a title is cut. `--json` prints the roster fields for each session. Where a prompt is held,
 the line says that the session needs input and names the kind of prompt it is, by one word from a fixed set with
 a word for each kind a foreground session puts, and shows nothing of what the prompt is about.
@@ -146,7 +156,10 @@ The list is how a person finds a session, and a prompt is answered only by attac
 as the list is. Text from the model's reply or from a tool would be read as the program's own
 sentence, which is the reason the info panel draws nothing from either.
 
-`verified-by: none`
+`verified-by: bravebot_cli::background::a_control_character_in_what_was_typed_cannot_write_a_row`
+`verified-by: bravebot_cli::background::a_held_prompt_shows_its_kind_and_nothing_else`
+`verified-by: bravebot_cli::background::a_session_with_no_process_is_not_listed_as_working`
+`verified-by: bravebot_cli::running::sessions_lists_an_entry_with_no_process_as_interrupted`
 
 <a id="BG-6"></a>
 ### BG-6: a session is in one of five states, and the state is a fact about the process
@@ -159,16 +172,19 @@ sentence, which is the reason the info panel draws nothing from either.
 | `stopped` | the process was stopped by a person or by [BG-13](#BG-13), and the record is intact |
 | `interrupted` | the process ended while a turn was running ([BG-12](#BG-12)) |
 
-The session's process reports `working`, `needs input` and `idle`; the supervisor sets `stopped` and
-`interrupted` from how the process ended. A roster whose process id names no live process of this
-account, or one started at another time, reads as `interrupted` if its last state was `working` or
-`needs input`, and as `stopped` otherwise, so a supervisor that died is not believed.
+The session's process reports `working`, `needs input` and `idle`; whoever stops it sets `stopped`.
+A process is live while it holds the lock on the `live` file in its directory, which the kernel
+releases when the process ends however it ends. A roster entry with no such lock held reads as
+`interrupted` if its last state was `working` or `needs input`, and as `stopped` otherwise, so
+neither a process that was killed nor a pid that now belongs to another program is believed.
 
 **Why.** A state the list can show truthfully has to be one the process can state without anybody
 reading content. Whether a turn's work is ready for review is a judgement about content, so it is
 not a state.
 
-`verified-by: none`
+`verified-by: bravebot_session::jobs::an_entry_whose_process_is_gone_is_not_believed`
+`verified-by: bravebot_session::jobs::a_held_prompt_without_a_process_is_interrupted_not_needing_input`
+`verified-by: bravebot_session::jobs::a_second_process_cannot_claim_a_live_entry`
 
 <a id="BG-7"></a>
 ### BG-7: a question the session would ask is held until a person answers it

@@ -5920,3 +5920,561 @@ fn the_bash_script_completes_commands_subcommands_and_flags_by_position() {
     assert_eq!(completes(&["bravebot", "do a thing", "--fi"]), ["--file"]);
     assert!(completes(&["bravebot", "do a thing", "pa"]).is_empty());
 }
+
+const SESSION_ID: &str = "3f2a9c1e-7b44-4d0e-9a51-0c6d2b8e4f10";
+
+/// A roster entry as a host would have written it, saying it is working, for a process that is
+/// not there: nothing holds its `live` file.
+fn a_roster_entry_saying_working(prompt: &str) -> String {
+    format!(
+        r#"{{"id":"{SESSION_ID}","directory":"/work/project","checkout":null,"name":"fix the build","prompt":"{prompt}","state":"working","held":null,"pid":4194301,"started":1700000000,"last_turn":null,"mode":"ask"}}"#
+    )
+}
+
+/// BG-5, BG-6: `sessions` lists what is true now. An entry that says it is working and has no
+/// process is listed as interrupted, and the prompt it shows has its control characters pictured.
+#[test]
+fn sessions_lists_an_entry_with_no_process_as_interrupted() {
+    let home = Scratch::new("sessions-list").with_file(
+        &format!(".bravebot/jobs/{SESSION_ID}/state.json"),
+        &a_roster_entry_saying_working(r"fix the\u001b[31m build"),
+    );
+
+    let output = bravebot(&home.path, &[], &["sessions"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    assert!(
+        out.starts_with("3f2a9c1e  fix the build  interrupted"),
+        "{out}"
+    );
+    assert!(!out.contains("working"), "{out}");
+    assert!(!out.contains('\u{1b}'), "{out:?}");
+    assert_eq!(out.lines().count(), 1, "{out:?}");
+
+    let output = bravebot(&home.path, &[], &["sessions", "--json"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    let listed: serde_json::Value = serde_json::from_str(&out).expect("json");
+    assert_eq!(listed[0]["state"], "interrupted", "{out}");
+    assert_eq!(listed[0]["id"], SESSION_ID, "{out}");
+}
+
+/// BG-5: with no sessions the list says so, and exits cleanly.
+#[test]
+fn sessions_with_none_says_none() {
+    let home = Scratch::new("sessions-none");
+    let output = bravebot(&home.path, &[], &["sessions"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    assert_eq!(out.trim(), "No background sessions.");
+    let output = bravebot(&home.path, &[], &["sessions", "--json"]);
+    assert_eq!(said(&output).0.trim(), "[]");
+}
+
+/// BG-11: stopping an entry nothing is running for says so, rewrites it as stopped, and an id that
+/// names nothing is a usage failure rather than a success.
+#[test]
+fn sessions_stop_marks_a_dead_entry_stopped_and_refuses_an_unknown_id() {
+    let home = Scratch::new("sessions-stop").with_file(
+        &format!(".bravebot/jobs/{SESSION_ID}/state.json"),
+        &a_roster_entry_saying_working("fix the build"),
+    );
+
+    let output = bravebot(&home.path, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    assert!(out.contains("was not running"), "{out}");
+
+    let (listed, _) = said(&bravebot(&home.path, &[], &["sessions"]));
+    assert!(listed.contains("stopped"), "{listed}");
+
+    let output = bravebot(&home.path, &[], &["sessions", "stop", "ffffffff"]);
+    assert!(!output.status.success());
+    assert!(said(&output).1.contains("No background session"));
+
+    let output = bravebot(&home.path, &[], &["sessions", "bogus"]);
+    assert!(!output.status.success());
+    assert!(said(&output).1.contains("sessions takes"));
+}
+
+/// BG-2: `--bg` cannot start with a flag that would not reach the session it starts, with bypass,
+/// or from anything but a terminal, and each refusal leaves nothing in the roster.
+#[test]
+fn bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal() {
+    let home = Scratch::new("bg-refusals");
+    for (arguments, said_so) in [
+        (
+            &["--bg", "--dangerously-skip-permissions", "fix it"][..],
+            "refused for a background session",
+        ),
+        (&["--bg", "--agent", "reviewer", "fix it"][..], "--agent"),
+        (
+            &["--bg", "--system-prompt", "be brief", "fix it"][..],
+            "--system-prompt",
+        ),
+        (&["--bg", "--incognito", "fix it"][..], "--incognito"),
+        (&["--bg", "fix it", "--vet"][..], "--vet"),
+        (&["--vet", "--bg", "fix it"][..], "--vet"),
+        (
+            &["--settings", "s.json", "--bg", "fix it"][..],
+            "--settings",
+        ),
+        (&["--incognito", "--bg", "fix it"][..], "--incognito"),
+        (
+            &["--bg", "--settings", "s.json", "fix it"][..],
+            "--settings",
+        ),
+        (&["--bg"][..], "takes the prompt"),
+        (&["--bg", "fix it"][..], "not one"),
+    ] {
+        let output = bravebot(&home.path, &[], arguments);
+        let (out, err) = said(&output);
+        assert!(!output.status.success(), "{arguments:?} started: {out}");
+        assert!(err.contains(said_so), "{arguments:?}: {err}");
+        assert!(out.is_empty(), "{arguments:?}: {out}");
+    }
+    assert!(
+        !home.path.join(".bravebot/jobs").exists()
+            || std::fs::read_dir(home.path.join(".bravebot/jobs"))
+                .expect("read the roster")
+                .next()
+                .is_none(),
+        "a refused start left an entry"
+    );
+}
+
+/// BG-2: a process that was merely run as the host has no prompt to start with and ends, without
+/// listening on anything.
+#[cfg(unix)]
+#[test]
+fn a_host_run_by_hand_has_nothing_to_start_with() {
+    let home = Scratch::new("bg-host-by-hand");
+    let output = bravebot(&home.path, AT_A_GATEWAY, &["__bg-host", SESSION_ID]);
+    assert!(!output.status.success());
+    let job = home.path.join(format!(".bravebot/jobs/{SESSION_ID}"));
+    assert!(!job.join("attach.sock").exists());
+    assert!(!job.join("state.json").exists());
+}
+
+/// BG-9, BG-10: `attach` and `reply` name a session that is not running as not running.
+#[test]
+fn attach_and_reply_refuse_a_session_that_is_not_running() {
+    let home = Scratch::new("bg-attach-dead").with_file(
+        &format!(".bravebot/jobs/{SESSION_ID}/state.json"),
+        &a_roster_entry_saying_working("fix the build"),
+    );
+    for arguments in [
+        &["attach", "3f2a9c1e"][..],
+        &["reply", "3f2a9c1e", "again"][..],
+    ] {
+        let output = bravebot(&home.path, &[], arguments);
+        assert!(!output.status.success(), "{arguments:?}");
+        assert!(said(&output).1.contains("is not running"), "{arguments:?}");
+    }
+    for arguments in [
+        &["attach", "ffffffff"][..],
+        &["reply", "ffffffff", "again"][..],
+    ] {
+        let output = bravebot(&home.path, &[], arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+    }
+    for arguments in [&["attach"][..], &["reply", "3f2a9c1e"][..]] {
+        let output = bravebot(&home.path, &[], arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+    }
+}
+
+/// The home of a background-session test. The socket's path has to fit in `sun_path`, which is far
+/// shorter than a path under this tree's `target`.
+#[cfg(unix)]
+struct ShortHome(PathBuf);
+
+#[cfg(unix)]
+impl ShortHome {
+    fn new() -> Self {
+        // One per test: they run side by side in this process.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = PathBuf::from(format!(
+            "/tmp/bbbg-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create the home");
+        Self(path)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ShortHome {
+    fn drop(&mut self) {
+        let _ = bravebot(&self.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// BG-1, BG-2, BG-7, BG-9, BG-10, end to end: a host started with a first prompt asks the trust
+/// question before it reads that prompt, refuses a reply while that question is held, takes the
+/// answer from an attached terminal, runs the first prompt, and then takes a reply once, while idle.
+#[cfg(unix)]
+#[test]
+fn a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle() {
+    use std::os::unix::net::UnixStream;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let state = home.0.join(".bravebot");
+    let job = state.join(format!("jobs/{SESSION_ID}"));
+    std::fs::create_dir_all(&job).expect("the entry's directory");
+    std::fs::write(state.join("settings.json"), settings_for(&gateway)).expect("settings");
+    std::fs::write(job.join("first-prompt"), "fix the build").expect("the first prompt");
+    let work = home.0.join("work");
+    std::fs::create_dir_all(&work).expect("a directory to work in");
+
+    let mut host = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args(["__bg-host", SESSION_ID])
+        .current_dir(&work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the host starts");
+
+    let socket = job.join("attach.sock");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while !socket.exists() {
+        assert!(std::time::Instant::now() < until, "the host never listened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let said_to = |text: &str| -> String {
+        let mut stream = UnixStream::connect(&socket).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .expect("timeout");
+        write!(stream, "{text}").expect("write");
+        let mut answer = String::new();
+        BufReader::new(stream)
+            .read_line(&mut answer)
+            .expect("an answer");
+        answer.trim().to_string()
+    };
+    let wait_for = |wanted: &str, text: &str| {
+        let until = std::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            let answer = said_to(text);
+            if answer == wanted {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "never answered {wanted}: {answer}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+
+    // The trust question is held, and a reply does not answer it. Nothing reached the gateway.
+    wait_for("needs-input", "reply\nyes\n");
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a reply or the first prompt answered the trust question"
+    );
+
+    // Lines on a pipe would answer for the person, so `attach` from anything but a terminal is
+    // refused before it connects, and the session is still free for one that is.
+    let piped = bravebot(&home.0, &[], &["attach", "3f2a9c1e"]);
+    assert_eq!(piped.status.code(), Some(2), "{}", said(&piped).1);
+    assert!(
+        said(&piped).1.contains("not a terminal"),
+        "{}",
+        said(&piped).1
+    );
+
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "attach").expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    let mut transcript = String::new();
+    let read_until = |seen: &mut BufReader<UnixStream>, transcript: &mut String, wanted: &str| {
+        let mut chunk = [0u8; 1024];
+        while !transcript.contains(wanted) {
+            let read = match seen.read(&mut chunk) {
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                other => other.expect("the session spoke"),
+            };
+            assert!(
+                read > 0,
+                "the session ended before {wanted:?}: {transcript}"
+            );
+            transcript.push_str(&String::from_utf8_lossy(&chunk[..read]));
+        }
+    };
+    read_until(&mut seen, &mut transcript, "trust this directory?");
+    assert!(transcript.starts_with("ok\n"), "{transcript}");
+    writeln!(terminal, "n").expect("answer the question");
+
+    read_until(&mut seen, &mut transcript, "all done");
+    let first = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the first prompt reached the gateway");
+    assert!(first.contains("fix the build"), "{first}");
+
+    // Idle now, so a reply is taken, and it is the prompt of the next turn.
+    wait_for("ok", "reply\nand the tests\n");
+    let second = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(second.contains("and the tests"), "{second}");
+
+    // A break in the text of a reply is a space in the prompt, not the end of it.
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while !bravebot(&home.0, &[], &["reply", "3f2a9c1e", "fold\nthe\r\nlines"])
+        .status
+        .success()
+    {
+        assert!(
+            std::time::Instant::now() < until,
+            "the reply was never taken"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let third = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(third.contains("fold the  lines"), "{third}");
+
+    let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+    assert!(listed.starts_with("3f2a9c1e"), "{listed}");
+    assert!(listed.contains("fold the"), "{listed}");
+
+    let stopped = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    assert!(stopped.status.success(), "{}", said(&stopped).1);
+    host.wait().expect("the host ends once stopped");
+}
+
+/// BG-10: a reply with no text is refused even when standard input carries some, because a prompt
+/// that arrived on a pipe is not a line a person typed.
+#[test]
+fn a_reply_does_not_read_standard_input() {
+    let home = Scratch::new("bg-reply-stdin");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("HOME", &home.path)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .args(["reply", "3f2a9c1e"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the built binary runs");
+    let _ = child
+        .stdin
+        .take()
+        .expect("standard input")
+        .write_all(b"delete everything\n");
+    let output = child.wait_with_output().expect("it ends");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        said(&output).1.contains("reply takes"),
+        "{}",
+        said(&output).1
+    );
+}
+
+/// A host for a session at `gateway`, with `extra` merged into the user settings, started with a
+/// first prompt in a directory of its own. Returns the process and its socket.
+#[cfg(unix)]
+fn a_started_host(
+    home: &ShortHome,
+    gateway: &Gateway,
+    extra: &str,
+) -> (std::process::Child, PathBuf) {
+    let state = home.0.join(".bravebot");
+    let job = state.join(format!("jobs/{SESSION_ID}"));
+    std::fs::create_dir_all(&job).expect("the entry's directory");
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(gateway)).expect("settings");
+    let extra: serde_json::Value = serde_json::from_str(extra).expect("the extra settings");
+    for (key, value) in extra.as_object().expect("an object") {
+        settings[key] = value.clone();
+    }
+    std::fs::write(state.join("settings.json"), settings.to_string()).expect("settings");
+    std::fs::write(job.join("first-prompt"), "fix the build").expect("the first prompt");
+    let work = home.0.join("work");
+    std::fs::create_dir_all(&work).expect("a directory to work in");
+    let host = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args(["__bg-host", SESSION_ID])
+        .current_dir(&work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the host starts");
+    let socket = job.join("attach.sock");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while !socket.exists() {
+        assert!(std::time::Instant::now() < until, "the host never listened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    (host, socket)
+}
+
+/// What a terminal attached to `socket` has been shown so far, read until it contains `wanted`.
+#[cfg(unix)]
+fn shown_until(seen: &mut BufReader<std::os::unix::net::UnixStream>, wanted: &str) -> String {
+    let mut transcript = String::new();
+    let mut chunk = [0u8; 1024];
+    while !transcript.contains(wanted) {
+        let read = match seen.read(&mut chunk) {
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            other => other.expect("the session spoke"),
+        };
+        assert!(
+            read > 0,
+            "the session ended before {wanted:?}: {transcript}"
+        );
+        transcript.push_str(&String::from_utf8_lossy(&chunk[..read]));
+    }
+    transcript
+}
+
+/// A streamed reply that calls `write_file` for `out.txt`, so the session has a write to approve.
+#[cfg(unix)]
+fn writing_out_txt() -> String {
+    let frame = serde_json::json!({"model":"reasons-only","choices":[{
+        "index":0,"delta":{"role":"assistant","tool_calls":[{
+            "index":0,"id":"call-1","type":"function","function":{
+                "name":"write_file","arguments":"{\"path\":\"out.txt\",\"contents\":\"hi\"}"}}]},
+        "finish_reason":"tool_calls"}]});
+    let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+    format!(
+        "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// BG-7, BG-8: a rule in the user's settings that allows a write does not answer for a person who
+/// is not there. The session still holds the write and reports that it needs input, and the file
+/// is not written.
+///
+/// A property of the process: the rule is read from the file, the choice between the foreground
+/// and the unattended reading is made where the session is built, and only the state a reply
+/// sees and the file's absence say which was chosen.
+#[cfg(unix)]
+#[test]
+fn an_allow_rule_does_not_answer_a_write_a_background_session_holds() {
+    use std::os::unix::net::UnixStream;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| writing_out_txt());
+    let home = ShortHome::new();
+    let (mut host, socket) = a_started_host(
+        &home,
+        &gateway,
+        r#"{"permissions": {"allow": ["Edit(out.txt)"]}}"#,
+    );
+
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "attach").expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    shown_until(&mut seen, "trust this directory?");
+    writeln!(terminal, "n").expect("answer the question");
+
+    // The write is put to the person, with the allow rule in the file.
+    let transcript = shown_until(&mut seen, "out.txt");
+    assert!(transcript.contains("out.txt"), "{transcript}");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut stream = UnixStream::connect(&socket).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .expect("timeout");
+        write!(stream, "reply\nyes\n").expect("write");
+        let mut answer = String::new();
+        BufReader::new(stream)
+            .read_line(&mut answer)
+            .expect("an answer");
+        if answer.trim() == "needs-input" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the session never reported needing input: {answer}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !home.0.join("work/out.txt").exists(),
+        "the allow rule answered for a person who was not there"
+    );
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = host.wait();
+}
+
+/// BG-7: a server the user has not approved is not started by a background session and not asked
+/// about either. The session says it was not started and why, and goes on to its first prompt.
+///
+/// A property of the process: the declaration is read from the user's settings, the asking mode is
+/// chosen where the session is built, and the words say which was chosen. A session built with
+/// the foreground's choice would hold a question about the server instead of finishing the turn.
+#[cfg(unix)]
+#[test]
+fn a_server_nobody_approved_is_not_started_by_a_background_session() {
+    use std::os::unix::net::UnixStream;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let started = home.0.join("server-started");
+    // Declared where only the person can write one, and requested by name in the settings, but
+    // approved nowhere.
+    std::fs::create_dir_all(home.0.join(".bravebot")).expect("the state directory");
+    std::fs::write(
+        home.0.join(".bravebot/mcp.json"),
+        serde_json::json!({"servers": {"weather": {
+            "transport": "stdio",
+            "argv": ["/bin/sh", "-c", format!("touch {}", started.display())],
+            "variables": ["PATH"],
+        }}})
+        .to_string(),
+    )
+    .expect("the declaration");
+    let (mut host, socket) =
+        a_started_host(&home, &gateway, r#"{"mcp": {"request": ["weather"]}}"#);
+
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "attach").expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    shown_until(&mut seen, "trust this directory?");
+    writeln!(terminal, "n").expect("answer the question");
+
+    let transcript = shown_until(&mut seen, "all done");
+    assert!(
+        transcript.contains("weather was not started: a one-shot run asks nobody"),
+        "{transcript}"
+    );
+    assert!(!started.exists(), "the server was started unapproved");
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = host.wait();
+}

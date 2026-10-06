@@ -279,6 +279,7 @@ dependencies = [
  "bravebot-core",
  "bravebot-i18n",
  "rand 0.8.7",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "tempfile",
