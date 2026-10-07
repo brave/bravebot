@@ -22,7 +22,7 @@ The roster, `bravebot sessions`, `bravebot sessions stop`, `bravebot --bg`, `bra
 clause that is built whole names its tests. A clause with a part still to build reads
 `verified-by: none` until all of it lands, and the parts not built are: the supervisor and restarts
 ([BG-12](#BG-12)), the idle stop ([BG-13](#BG-13)), starting an `interrupted` session again from
-`attach` or `reply`, `/bg` and `/detach`, and the checkout ([BG-14](#BG-14)). A question from an
+`attach` or `reply`, `/bg`, and the checkout ([BG-14](#BG-14)). A question from an
 MCP server that has to be started is held like any other, and is drawn as a foreground session
 draws it. A `stopped` session is started again from `attach` or `reply` by a terminal, resuming the
 record the process wrote after each turn, and `--resume` and `--continue` refuse a record a running
@@ -245,7 +245,8 @@ is started again in the mode every session opens in and attached to.
 
 One terminal is attached at a time. A second `attach` is refused and names the session. Closing the
 terminal, losing its connection or typing `/detach` ends the attachment and nothing
-else: a turn that is running keeps running, and a held prompt stays held.
+else: a turn that is running keeps running, and a held prompt stays held. The line `/detach` is not
+sent to the session.
 
 The channel between the terminal and the process is local to the machine. It is restricted to the
 person's account and carries content with the label it was released under, so the terminal marks

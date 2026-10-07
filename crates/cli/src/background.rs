@@ -323,6 +323,9 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
     std::thread::spawn(move || {
         let mut sending = sending;
         for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+            if leaves(&line) {
+                break;
+            }
             if writeln!(sending, "{line}").is_err() {
                 return;
             }
@@ -352,6 +355,13 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
     }
     eprintln!("{}", t!(attach_left));
     ExitCode::SUCCESS
+}
+
+/// Whether a line typed in an attached terminal leaves the session running and goes no further
+/// than this process (BG-9).
+#[cfg_attr(not(unix), allow(dead_code))]
+fn leaves(line: &str) -> bool {
+    line.trim() == "/detach"
 }
 
 #[cfg(not(unix))]
@@ -491,6 +501,18 @@ mod tests {
     use super::*;
     use bravebot_session::jobs::{Job, Mode};
     use std::path::Path;
+
+    /// BG-9: `/detach` leaves, with space around it too, and nothing that only contains it does,
+    /// so a prompt that mentions the word is still sent to the session.
+    #[test]
+    fn only_a_line_of_detach_leaves() {
+        assert!(leaves("/detach"));
+        assert!(leaves("  /detach \t"));
+        assert!(!leaves("/detach now"));
+        assert!(!leaves("please /detach"));
+        assert!(!leaves("detach"));
+        assert!(!leaves(""));
+    }
 
     fn seen(prompt: &str, state: State, held: Option<Held>, live: bool) -> Seen {
         let mut job = Job::starting(

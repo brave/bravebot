@@ -6792,6 +6792,76 @@ impl Drop for ShortHome {
     }
 }
 
+/// BG-9: `/detach` typed in an attached terminal leaves the session running and is not sent to it as
+/// a prompt. The line is typed ahead of the end of the input, which would detach as well, so what
+/// shows `/detach` was understood is that the session, idle and reading, was never given it.
+#[cfg(target_os = "linux")]
+#[test]
+fn typing_detach_leaves_a_session_running_without_sending_it() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let (mut host, socket) = a_started_host(&home, &gateway, "{}");
+    {
+        use std::os::unix::net::UnixStream;
+        let mut terminal = UnixStream::connect(&socket).expect("attach");
+        terminal
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .expect("timeout");
+        writeln!(terminal, "attach").expect("attach");
+        let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+        shown_until(&mut seen, "trust this directory?");
+        loop {
+            writeln!(terminal, "n").expect("answer the question");
+            if shown_until_any(&mut seen, &["all done", "Not sent"]).contains("all done") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let first = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the first prompt reached the gateway");
+    assert!(first.contains("fix the build"), "{first}");
+
+    // Idle and reading, which is when a line sent to it is taken as a prompt. The earlier terminal
+    // has to have been seen to leave too, or the attach below is refused.
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    let output = loop {
+        let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+        if listed.contains("idle") {
+            let output = in_a_terminal_answering(
+                &home.0,
+                AT_A_GATEWAY,
+                &["attach", "3f2a9c1e"],
+                "/detach\n",
+            );
+            if output.status.success() {
+                break output;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "never attached to an idle session"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let (out, err) = said(&output);
+    assert!(
+        out.contains("Attached to") || err.contains("Attached to"),
+        "{out}{err}"
+    );
+    assert!(
+        gateway.asked.recv_timeout(Duration::from_secs(3)).is_err(),
+        "the session was given the line /detach as a prompt"
+    );
+    let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+    assert!(listed.contains("idle"), "{listed}");
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = host.wait();
+}
+
 /// BG-1, BG-2, BG-7, BG-9, BG-10, end to end: a host started with a first prompt asks the trust
 /// question before it reads that prompt, refuses a reply while that question is held, takes the
 /// answer from an attached terminal, runs the first prompt, and then takes a reply once, while idle.
