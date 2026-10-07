@@ -291,7 +291,7 @@ impl LandlockSandbox {
         // A refusal is made by listing: Landlock grants a directory with everything beneath it.
         let enumerated = !policy.unreadable.is_empty();
         let readable = policy.readable_by_enumeration();
-        let writable: Vec<_> = policy.writable.iter().map(|row| row.path.clone()).collect();
+        let writable = policy.writable_by_enumeration();
 
         // Landlock applies to the calling thread and is inherited across exec, so the
         // ruleset is installed in the child between fork and exec.
@@ -328,7 +328,14 @@ impl LandlockSandbox {
                         .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
                 }
 
-                if !writable.is_empty() {
+                if enumerated {
+                    ruleset = ruleset
+                        .add_rules(path_beneath_rules(
+                            &writable,
+                            AccessFs::from_all(HANDLED_ABI),
+                        ))
+                        .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
+                } else if !writable.is_empty() {
                     ruleset = ruleset
                         .add_rules(rules_for_every_path(
                             &writable,
@@ -1011,6 +1018,49 @@ mod tests {
             Some(TOUCH_FAILED),
             "a file was made outside the temporary directory"
         );
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&temporary_directory);
+    }
+
+    /// The regression it rejects: a session opened on the home directory itself, whose write row
+    /// is a Landlock grant of everything beneath it, reads included, so the credential directories
+    /// refused to the read rows are handed back by the write row.
+    #[test]
+    fn a_write_row_over_the_home_does_not_hand_back_a_credential_location() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let temporary_directory = a_temporary_directory("bravebot-run-base-home-root-tmp");
+        let home = crate::testutil::scratch_dir("bravebot-run-base-home-root");
+        let _ = std::fs::remove_dir_all(&home);
+        for row in [".aws/credentials", ".ssh/id_ed25519", "docs/notes.txt"] {
+            let file = home.join(row);
+            std::fs::create_dir_all(file.parent().expect("a row has a parent"))
+                .expect("the scratch home is creatable");
+            std::fs::write(&file, CONTENTS).expect("the scratch home is writable");
+        }
+        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home))
+            .allow_write(&home)
+            .nameable_under(&sandbox.capabilities())
+            .policy;
+        let cat = |path: &Path| {
+            let mut child = sandbox
+                .spawn(
+                    "/usr/bin/cat",
+                    &[path.display().to_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn");
+            child.wait().expect("should wait").code()
+        };
+
+        assert_eq!(cat(&home.join("docs/notes.txt")), Some(0));
+        for row in [".aws/credentials", ".ssh/id_ed25519"] {
+            assert_eq!(cat(&home.join(row)), Some(CAT_FAILED), "{row} was read");
+        }
 
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&temporary_directory);

@@ -432,7 +432,9 @@ directory is granted with everything beneath it and no subdirectory can be held 
 directories above each refused location are listed when the stage starts and granted entry by
 entry, with the refused one left out, a link in a listing is not followed, and what is compared is
 the names in a directory against the table and where a link leads, never what a file holds. A
-refused location that is not on disk is still left out of the listing, so a directory made there
+write row above a refused location is listed the same way, since a Landlock write grant carries
+the right to read beneath it, so a session opened on the home directory cannot make an entry
+directly in it. A refused location that is not on disk is still left out of the listing, so a directory made there
 during the run is outside every grant. A refusal with no grant above it is a policy that holds back
 nothing it was ever given, and is refused as one that confines nothing ([SANDBOX-2](#SANDBOX-2)). The
 Windows backend has no way to subtract from a container and refuses a policy that carries a
@@ -497,6 +499,9 @@ confining a program was for.
 `verified-by: bravebot_sandbox::policy::a_link_is_not_granted`
 `verified-by: bravebot_sandbox::policy::a_refusal_that_is_a_link_is_refused_where_it_leads_as_well`
 `verified-by: bravebot_sandbox::policy::a_refusal_that_is_not_on_disk_still_shapes_the_rows`
+`verified-by: bravebot_sandbox::policy::a_write_row_above_a_refusal_is_spread_around_it`
+`verified-by: bravebot_sandbox::policy::without_a_refusal_the_write_enumeration_is_the_write_rows`
+`verified-by: bravebot_sandbox::linux::a_write_row_over_the_home_does_not_hand_back_a_credential_location`
 `verified-by: bravebot_sandbox::windows::a_policy_refusing_a_read_is_refused_rather_than_applied`
 `verified-by: bravebot_sandbox::linux::a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest`
 `verified-by: bravebot_sandbox::linux::a_stage_under_the_run_base_runs_programs_and_writes_only_where_it_was_given`
@@ -755,8 +760,8 @@ request that built it. On macOS the refusal of a `.git` write is lifted for thes
 <a id="SANDBOX-18"></a>
 ### SANDBOX-18: the profile a stage runs under is composed from the plan and the session's directories
 
-On Linux and macOS a stage's policy is the run base ([SANDBOX-12](#SANDBOX-12)), with `.git` writes
-allowed, plus: the cache rows of every toolchain, written, since the machine is already read and a
+On Linux and macOS a stage of a session that names a home directory has as its policy the run base
+([SANDBOX-12](#SANDBOX-12)), with `.git` writes allowed, plus: the cache rows of every toolchain, written, since the machine is already read and a
 cache is where any build may write ([SANDBOX-15](#SANDBOX-15)); the credential scope its argv names
 ([SANDBOX-16](#SANDBOX-16)); each directory the session was opened on, to read and write; the
 session's scratch directory, to read and write; and the plan's directory as the place it starts.
@@ -766,8 +771,10 @@ own environment is a write row ([SANDBOX-3](#SANDBOX-3)). Nothing else is in it:
 those, no credential location the stage's scope does not name, and no socket for a stage without
 the remote scope.
 
-On Windows a stage's policy is the keyed base ([SANDBOX-12](#SANDBOX-12)), with `.git` writes
-allowed, plus:
+On Windows, and on Linux and macOS in a session that names no home directory, since the credential
+rows are rows under it and a read of the whole machine with none to subtract is the one grant that
+must not be made, a stage's policy is the keyed base ([SANDBOX-12](#SANDBOX-12)), with `.git`
+writes allowed, plus:
 the toolchain list its resolved binary brings ([SANDBOX-15](#SANDBOX-15)); the credential scope its
 argv names ([SANDBOX-16](#SANDBOX-16)); the directories its program is read from, which are the
 directories on the `PATH` it starts with and the directory it resolved into, each with its links
@@ -802,6 +809,7 @@ open the home.
 `verified-by: bravebot_agent::confine::the_description_follows_the_platform_it_describes`
 `verified-by: bravebot_agent::confine::a_step_whose_plan_names_no_credential_reaches_nothing_in_the_home`
 `verified-by: bravebot_agent::confine::a_toolchains_cache_is_granted_to_its_own_binary_only`
+`verified-by: bravebot_agent::confine::a_session_with_no_home_is_not_granted_the_machine`
 `verified-by: bravebot_agent::confine::a_push_reaches_the_remote_scope_and_a_status_does_not`
 `verified-by: bravebot_agent::confine::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
 `verified-by: bravebot_agent::confine::an_assignment_in_front_of_a_push_removes_its_scope`

@@ -83,9 +83,12 @@ impl Confinement {
     }
 
     /// Whether a step reads the machine except the credential locations, which is every step where
-    /// the platform has a mechanism that can subtract from a read and no step where it has not.
+    /// the platform has a mechanism that can subtract from a read and the session names a home
+    /// directory to find them under. With no home the credential rows cannot be built, and a read
+    /// of the whole machine with no refusal is the one thing this must not grant, so the step is
+    /// held to the listed rows instead.
     fn reads_the_machine(&self) -> bool {
-        self.prelude != Prelude::Windows
+        self.prelude != Prelude::Windows && self.home.is_some()
     }
 
     /// The toolchain list and the credential scope a step brings to its profile.
@@ -995,6 +998,31 @@ mod tests {
 
         assert!(described.carried.is_empty());
         assert_eq!(described.directories, [PathBuf::from("/work/project")]);
+    }
+
+    /// The regression it rejects: a session with no home directory granted a read of the machine
+    /// with no credential row to subtract, which is every credential on it read by absolute path.
+    #[test]
+    fn a_session_with_no_home_is_not_granted_the_machine() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let confined = Confinement::new(
+                prelude,
+                PathBuf::from("/tmp"),
+                None,
+                vec![PathBuf::from("/work/project")],
+                None,
+            );
+
+            let policy =
+                confined.policy(&step("/usr/bin/make", &["check"]), Path::new("/work"), &[]);
+
+            assert!(
+                !policy.readable.iter().any(|row| row == Path::new("/")),
+                "{prelude:?} read the machine with no home: {:?}",
+                policy.readable
+            );
+            assert!(!confined.describe(&[]).reads_the_machine);
+        }
     }
 
     /// The list a toolchain brings follows the binary the step resolved to, so a `cargo` stage

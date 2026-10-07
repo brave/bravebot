@@ -281,7 +281,26 @@ impl SandboxPolicy {
         if self.unreadable.is_empty() {
             return self.readable.clone();
         }
+        self.around_the_refusals(self.readable.iter())
+    }
 
+    /// The write rows a backend that cannot hold back a subdirectory grants instead of
+    /// [`SandboxPolicy::writable`].
+    ///
+    /// A write grant on such a backend carries the right to read beneath it, so a writable
+    /// directory above a refusal would hand back what the read rows hold out. It is spread around
+    /// the refusals the way [`SandboxPolicy::readable_by_enumeration`] spreads a read row, which
+    /// leaves the directory itself without the right to make an entry directly in it.
+    ///
+    /// Without a refusal this is the path of each row of [`SandboxPolicy::writable`].
+    pub fn writable_by_enumeration(&self) -> Vec<PathBuf> {
+        if self.unreadable.is_empty() {
+            return self.writable.iter().map(|row| row.path.clone()).collect();
+        }
+        self.around_the_refusals(self.writable.iter().map(|row| &row.path))
+    }
+
+    fn around_the_refusals<'a>(&self, rows: impl Iterator<Item = &'a PathBuf>) -> Vec<PathBuf> {
         let mut refused = self.unreadable.clone();
         refused.extend(
             self.unreadable
@@ -290,7 +309,7 @@ impl SandboxPolicy {
         );
 
         let mut granted: Vec<PathBuf> = Vec::new();
-        for row in &self.readable {
+        for row in rows {
             spread_around(row, &refused, &mut granted);
         }
         granted.sort();
@@ -1233,6 +1252,39 @@ mod tests {
         assert!(!rows.contains(&top.join("home")), "{rows:?}");
         assert!(rows.contains(&top.join("home/.aws")), "{rows:?}");
         assert!(!rows.contains(&top.join("home/.kube")), "{rows:?}");
+    }
+
+    /// The regression it rejects: a write row left whole above a refusal, which on a backend that
+    /// grants a directory with everything beneath it, reads included, hands back the credential
+    /// directory the read rows hold out.
+    #[test]
+    fn a_write_row_above_a_refusal_is_spread_around_it() {
+        let top = a_machine_with_a_home("sandbox-policy-writable");
+        let policy = SandboxPolicy::strict()
+            .allow_read(&top)
+            .allow_write(top.join("home"))
+            .allow_write(top.join("etc"))
+            .deny_read(top.join("home/.aws"));
+
+        let rows = policy.writable_by_enumeration();
+
+        assert!(!rows.contains(&top.join("home")), "{rows:?}");
+        assert!(!rows.contains(&top.join("home/.aws")), "{rows:?}");
+        assert!(rows.contains(&top.join("home/docs")), "{rows:?}");
+        assert!(rows.contains(&top.join("home/.ssh")), "{rows:?}");
+        assert!(rows.contains(&top.join("etc")), "{rows:?}");
+    }
+
+    #[test]
+    fn without_a_refusal_the_write_enumeration_is_the_write_rows() {
+        let policy = SandboxPolicy::strict()
+            .allow_write("/tmp")
+            .allow_write("/work");
+
+        assert_eq!(
+            policy.writable_by_enumeration(),
+            vec![PathBuf::from("/tmp"), PathBuf::from("/work")]
+        );
     }
 
     #[test]
