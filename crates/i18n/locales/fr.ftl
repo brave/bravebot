@@ -136,10 +136,6 @@ cli-directory-ends-checkouts = { $directory } contient le répertoire de travail
 cli-settings-needs-a-path = --settings demande le chemin d'un fichier de réglages
 cli-settings-not-a-file = --settings ne nomme aucun fichier : { $path }
 cli-agent-needs-a-name = --agent demande le nom d'une définition
-# Le drapeau est l'un de --resume, --continue et --fork, tel qu'il a été tapé.
-cli-agent-not-with-a-recorded-session =
-    --agent démarre une nouvelle session, et { $flag } en reprend une enregistrée, qui ne garde pas
-    la définition sous laquelle elle travaillait
 cli-agent-not-for-a-command =
     --agent nomme la définition sous laquelle travaille une session ou une tâche, et { $command }
     ne démarre ni l'une ni l'autre
@@ -2154,6 +2150,12 @@ agent-no-such-definition = aucune définition ne s'appelle { $name } ; cette ses
 agent-answered = { $name } a répondu
 session-working-under =
     chaque tour est adressé à { $definition } ; /agent <nom> <tâche> en désigne une autre pour un tour
+# Dit quand une session reprise avait été démarrée sous une définition qui ne peut plus servir. La
+# raison suit à la ligne suivante. Le nom est celui que le pilote a enregistré depuis --agent.
+session-recorded-definition-gone =
+    cette session avait été démarrée sous { $definition }, et la restriction est levée : chaque tour
+    à partir d'ici est celui de la session elle-même, avec les outils et le modèle qu'elle aurait
+    sans --agent
 session-model-is-the-definitions =
     chaque tour est adressé à { $definition }, qui demande { $model }, donc /model n'a rien à
     changer ; lancez bravebot sans --agent pour choisir un modèle

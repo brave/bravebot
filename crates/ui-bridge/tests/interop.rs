@@ -164,6 +164,70 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
     assert!(text.contains(&"second answer"));
 }
 
+/// ADDRESS-3: the desktop addresses no definition, so a terminal session started under one and
+/// resumed here writes a record that no longer names it. The terminal would otherwise resume the
+/// desktop's turns as the definition's.
+#[test]
+fn resuming_a_session_started_under_a_definition_stops_recording_it() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    let project = scratch("resume-drops-agent");
+    let trust = TrustStore::new(&project);
+    let snapshot = bravebot_agent::Conversation::new().snapshot();
+    let programs = TrustedPrograms::new();
+    let spend = BTreeMap::new();
+    let timing = BTreeMap::new();
+    let todos = BTreeMap::new();
+
+    let standing = |turns| Standing {
+        history: None,
+        rewind: &[],
+        checkouts: &[],
+        asides: &[],
+        conversation: &snapshot,
+        turns,
+        tokens: 1,
+        spend: &spend,
+        timing: &timing,
+        model: None,
+        todos: &todos,
+        trust: &trust,
+        programs: &programs,
+        directories: &[],
+        manifest: None,
+    };
+
+    let mut handle = Handle::begin(
+        &project,
+        bravebot_ui_bridge::FRONT,
+        bravebot_ui_bridge::agent_build(),
+    );
+    handle.set_agent(Some("rule-reviewer".to_string()));
+    handle.save("first", standing(1));
+    let id = handle.id().to_string();
+    let record = sessions::load(&project, &id).expect("the record should load");
+    assert_eq!(
+        record.agent.as_deref(),
+        Some("rule-reviewer"),
+        "the fixture session was not recorded under its definition"
+    );
+
+    let mut state = bravebot_ui_bridge::running::State::resumed(&project, &record, trust.clone());
+    state
+        .handle
+        .as_mut()
+        .expect("a resumed session already has its handle")
+        .save("second", standing(2));
+
+    let reread = sessions::load(&project, &id).expect("the record should still load");
+    assert_eq!(reread.turns, 2, "the turn did not land in the session");
+    assert_eq!(
+        reread.agent, None,
+        "a turn taken in the desktop was recorded as the definition's"
+    );
+}
+
 /// Resuming a session and taking a turn continues that session, rather than forking it.
 ///
 /// The bug this pins down was invisible from inside a window: the turn ran, the reply

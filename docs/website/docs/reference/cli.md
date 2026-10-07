@@ -259,8 +259,15 @@ has is refused with the list of names that exist. A definition whose model needs
 machine has not made is also refused. Each refusal exits with status 2.
 
 If `--agent` is given twice, the last name is used. A blank name, or one opening with `-`, is
-refused. A session record does not store the name, so `--agent` is refused with `--resume`,
-`--continue` and `--fork`.
+refused.
+
+The session record keeps the name. `--resume`, `--continue`, `--fork`, `--from-pr`, `/resume` and a
+`-p` run carrying a session on all work under the definition the session was started under, so
+`bravebot --resume <id>` needs no `--agent`. A `--agent` given with one of them names the
+definition for that session instead. If the recorded definition no longer exists, the session opens
+without it, says which definition is gone and that the narrowing is gone with it, and stops
+recording the name. A recorded definition whose model needs a sign-in is refused rather than
+replaced by the planner.
 
 A model the definition names is the one every turn uses. In a session, `/status` shows it as the
 definition's, and `/model` is refused. On a one-shot run, `--model` outranks the definition's model,

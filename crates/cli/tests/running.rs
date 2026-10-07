@@ -7964,7 +7964,7 @@ fn an_incognito_run_is_not_recorded_and_cannot_be_continued() {
     );
 }
 
-/// CLI-25, CLI-17 and SESSION-10: what cannot be carried on is refused by the status for an
+/// CLI-25 and SESSION-10: what cannot be carried on is refused by the status for an
 /// argument before anything is sent. A script falling back to a fresh conversation would answer
 /// the follow-up as though nothing came before it.
 #[test]
@@ -7972,17 +7972,12 @@ fn a_task_that_cannot_carry_on_a_session_is_refused_before_anything_is_sent() {
     let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
     let scratch =
         Scratch::new("cli-running-continued-refused").with_settings(&settings_for(&gateway));
-    let (_, stdout, _) = a_recorded_run(&scratch, &["-p", "first"]);
-    let id = session_of(&stdout).expect("the first run named its session");
+    let _ = a_recorded_run(&scratch, &["-p", "first"]);
     let _ = requests(&gateway);
 
     for (arguments, said_in_the_refusal) in [
         (vec!["-p", "next", "--resume", "no-such-id"], "no-such-id"),
         (vec!["-p", "next", "--resume"], "--resume requires"),
-        (
-            vec!["--agent", "someone", "-p", "next", "--resume", id.as_str()],
-            "--resume",
-        ),
         (
             vec!["--mode", "manifest", "-p", "next", "--continue"],
             "--mode manifest",
@@ -7999,6 +7994,104 @@ fn a_task_that_cannot_carry_on_a_session_is_refused_before_anything_is_sent() {
     assert!(
         requests(&gateway).is_empty(),
         "a refused run sent a request"
+    );
+}
+
+/// CLI-17, CLI-25 and ADDRESS-3: a run carrying a session on works under the definition the
+/// session was started with, without being told, and the record keeps saying so. A definition
+/// deleted since is said on stderr and the run goes on as the planner's, no longer recorded.
+#[test]
+fn a_continued_run_works_under_the_definition_the_session_recorded() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-continued-agent")
+        .with_settings(&settings_for(&gateway))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+    let offered = |body: &str, tool: &str| body.contains(&format!(r#""name":"{tool}""#));
+
+    let (output, stdout, stderr) = a_recorded_run(
+        &scratch,
+        &["--agent", "rule-reviewer", "-p", "FIRST-QUESTION"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    let _ = requests(&gateway);
+
+    let (output, stdout, stderr) =
+        a_recorded_run(&scratch, &["-p", "SECOND-QUESTION", "--continue"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(r#""agent":"rule-reviewer""#),
+        "the continued run was not addressed to the recorded definition: {stdout}"
+    );
+    let sent = requests(&gateway).join("\n");
+    assert!(
+        sent.contains("FIRST-QUESTION")
+            && sent.contains("addressed this turn to rule-reviewer")
+            && !offered(&sent, "write_file")
+            && offered(&sent, "read_file"),
+        "the continued run was not confined to the definition: {sent}"
+    );
+
+    std::fs::remove_file(scratch.path.join(".bravebot/agents/rule-reviewer.md"))
+        .expect("delete the definition");
+    let (output, stdout, stderr) =
+        a_recorded_run(&scratch, &["-p", "THIRD-QUESTION", "--continue"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stderr.contains("rule-reviewer") && stderr.contains("the narrowing is gone"),
+        "the loss of the definition was not said: {stderr}"
+    );
+    assert!(stdout.contains(r#""agent":null"#), "{stdout}");
+    let sent = requests(&gateway).join("\n");
+    assert!(
+        offered(&sent, "write_file"),
+        "the run did not go on as the planner's: {sent}"
+    );
+
+    let (_, _, stderr) = a_recorded_run(&scratch, &["-p", "FOURTH-QUESTION", "--continue"]);
+    assert!(
+        !stderr.contains("the narrowing is gone"),
+        "the record went on naming a definition that was gone: {stderr}"
+    );
+}
+
+/// CLI-17 and ADDRESS-3: a `--agent` given to a run that carries a session on replaces the
+/// definition the session recorded, for that run and for the runs that continue it after.
+#[test]
+fn a_definition_named_on_a_continued_run_replaces_the_recorded_one() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-continued-agent-replaced")
+        .with_settings(&settings_for(&gateway))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        )
+        .with_state(
+            "agents/scribe.md",
+            &a_definition("scribe", "kind: reader\n"),
+        );
+
+    let (output, stdout, stderr) =
+        a_recorded_run(&scratch, &["--agent", "rule-reviewer", "-p", "FIRST"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+
+    let (output, stdout, stderr) = a_recorded_run(
+        &scratch,
+        &["--agent", "scribe", "-p", "SECOND", "--continue"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(r#""agent":"scribe""#),
+        "the name given with the continuation did not address the run: {stdout}"
+    );
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["-p", "THIRD", "--continue"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(r#""agent":"scribe""#),
+        "the record went on naming the definition it was replaced by: {stdout}"
     );
 }
 

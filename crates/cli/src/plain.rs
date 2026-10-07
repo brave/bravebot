@@ -299,7 +299,7 @@ fn run(
         .transpose()
     {
         Ok(agent) => agent,
-        Err(refused) => return fail(Ending::Argument, refused),
+        Err(refused) => return fail(Ending::Argument, refused.into_message()),
     };
     // With the definition's model, because the opening line named the session's before the name
     // was matched, and every prompt asks for the definition's.
@@ -349,6 +349,7 @@ fn run(
     // effort level. A session in lines opens no picker, so the model in force here is the stored
     // one or the configured one, and this is the only place either can be looked up.
     //
+    let under = agent.as_ref().map(|definition| definition.name.clone());
     // The definition's model where it names one, since that is the one every turn will ask for.
     let named = agent
         .as_ref()
@@ -422,7 +423,7 @@ fn run(
         },
         kept: hosted_as
             .as_deref()
-            .map(|id| Kept::opening(workspace.root(), id, resumed.as_ref())),
+            .map(|id| Kept::opening(workspace.root(), id, resumed.as_ref(), under.as_deref())),
         servers: None,
         mcp: reached.session(),
         beside: beside_turns,
@@ -624,9 +625,10 @@ impl Kept {
         root: &std::path::Path,
         id: &str,
         resumed: Option<&bravebot_session::sessions::Record>,
+        under: Option<&str>,
     ) -> Self {
         use bravebot_session::sessions::{Front, Handle};
-        match resumed {
+        let mut kept = match resumed {
             Some(record) => Self {
                 handle: Handle::resuming(root, record, Front::Terminal, bravebot_stamp::BUILD),
                 turns: record.turns,
@@ -644,7 +646,11 @@ impl Kept {
                 tokens: 0,
                 spend: std::collections::BTreeMap::new(),
             },
-        }
+        };
+        // What this session's turns are addressed to, not what the record it resumed was under:
+        // a session that does not work under that definition must not claim it.
+        kept.handle.set_agent(under.map(str::to_string));
+        kept
     }
 
     fn after_a_turn(
@@ -1995,6 +2001,40 @@ mod tests {
             "the session did not say which directory the kept answer trusts and where it is kept: \
              {said}"
         );
+    }
+
+    /// The record a background session writes names what its own turns are addressed to, and not
+    /// the definition of the record it resumed: its turns are not addressed to that one.
+    #[test]
+    fn a_background_session_records_the_definition_it_works_under_not_the_one_it_resumed() {
+        let record: bravebot_session::sessions::Record =
+            serde_json::from_value(serde_json::json!({
+                "id": "1-2",
+                "directory": "/tmp/x",
+                "title": "a session",
+                "started": 1,
+                "updated": 1,
+                "turns": 0,
+                "tokens": 0,
+                "conversation": {
+                    "messages": [],
+                    "context": "trusted",
+                    "references": 0,
+                    "archive": [],
+                    "measured": 0,
+                    "asked_to_write": false,
+                },
+                "agent": "rule-reviewer",
+            }))
+            .expect("a record");
+        let root = std::path::Path::new("/tmp/x");
+
+        let unnamed = Kept::opening(root, "1-2", Some(&record), None);
+        assert_eq!(unnamed.handle.agent(), None);
+        let named = Kept::opening(root, "1-2", Some(&record), Some("another"));
+        assert_eq!(named.handle.agent(), Some("another"));
+        let fresh = Kept::opening(root, "3-4", None, Some("another"));
+        assert_eq!(fresh.handle.agent(), Some("another"));
     }
 
     /// With no answer kept about this directory the question is put. A yes here, and the `r` the
