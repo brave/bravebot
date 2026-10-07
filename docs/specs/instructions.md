@@ -22,7 +22,7 @@ It does not cover what a skill file looks like or what any source is trusted for
 ## The sources
 
 <a id="INSTR-1"></a>
-### INSTR-1: six sources kept as files, and no others
+### INSTR-1: eight sources kept as files, and no others
 
 | File | Applies to |
 |---|---|
@@ -31,13 +31,22 @@ It does not cover what a skill file looks like or what any source is trusted for
 | `~/.bravebot/agents/<name>.md` | every project |
 | `<workspace>/AGENTS.md`, else `CLAUDE.md`, else `.claude/CLAUDE.md` | this project |
 | `<workspace>/.bravebot/skills/<name>/SKILL.md` | this project |
+| `<workspace>/.claude/skills/<name>/SKILL.md` | this project |
+| `<workspace>/.agents/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.bravebot/agents/<name>.md` | this project |
 
 The two roots are spelled differently on purpose: the user's own directory is already `.bravebot`,
 so its skills and definitions sit directly beneath it, while a project keeps its own out of the
 way in a dotted directory rather than at the root where `AGENTS.md` sits.
 
-The command line is a seventh source that is not a file, and [INSTR-10](#INSTR-10) is the whole of it.
+`.claude/skills` and `.agents/skills` are read for the same reason `CLAUDE.md` is: a project that
+wrote its skills for another agent should not have them ignored over the spelling, and copying or
+symlinking each one into `.bravebot/skills` is work the project should not have to do.
+[INSTR-12](#INSTR-12) is their order and the root they are read at. The user's own
+`~/.claude/skills` and `~/.agents/skills` are not sources, because [INSTR-2](#INSTR-2) tries no
+user directory but `~/.bravebot`.
+
+The command line is a ninth source that is not a file, and [INSTR-10](#INSTR-10) is the whole of it.
 
 A skill is a directory because it has other material to keep beside its instructions. A delegate
 definition is one file, so `agents/` is flat: there is nothing for the directory to hold. What a
@@ -67,6 +76,7 @@ next machine.
 `verified-by: bravebot_agent::preamble::the_project_file_may_be_named_claude_md`
 `verified-by: bravebot_agent::preamble::only_the_first_project_file_that_exists_is_read`
 `verified-by: bravebot_agent::skills::a_workspace_skill_shadows_a_home_skill_of_the_same_name`
+`verified-by: bravebot_agent::skills::a_skill_in_a_foreign_project_directory_is_offered`
 `verified-by: bravebot_agent::agents::a_definition_in_the_users_own_directory_is_selectable`
 `verified-by: bravebot_agent::agents::a_definition_in_a_vouched_for_project_is_selectable`
 
@@ -334,13 +344,40 @@ gate and reads each import through it, so nothing untrusted decides what is read
 `verified-by: bravebot_agent::preamble::an_untrusted_project_loads_no_import`
 `verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_imports_does_not_reach_the_system_prompt`
 
+<a id="INSTR-12"></a>
+### INSTR-12: a project's skill directories are read least specific first, at the root only
+
+`.agents/skills`, then `.claude/skills`, then `.bravebot/skills`, so a skill in `.bravebot/skills`
+shadows one of the same name under either of the others, by the shadowing of
+[INSTR-4](#INSTR-4). A project that ships its own version of a ported skill means it.
+
+The project root only. A `.claude/skills` or `.agents/skills` inside a subdirectory is an ordinary
+directory and no source, which is [INSTR-1](#INSTR-1)'s refusal to walk upward read downward as
+well: what a turn is advertised would otherwise depend on how deep the checkout is.
+
+Each is read through the trust map like `.bravebot/skills`, so an untrusted project offers none of
+them, each directory is checked for trust before it is enumerated at all, and what was skipped is
+counted with the directory it was skipped from named and no skill inside it
+([SKILL-4](skills.md#SKILL-4), [SKILL-6](skills.md#SKILL-6)).
+
+**Why not the user's own `~/.claude/skills` and `~/.agents/skills`.** [INSTR-2](#INSTR-2) tries no
+user directory but `~/.bravebot`, and reading instructions from a directory the person never chose
+here is the fallback that clause refuses. Adding them is a separate decision and is not settled
+here.
+
+`verified-by: bravebot_agent::skills::a_bravebot_skill_shadows_a_foreign_one_of_the_same_name`
+`verified-by: bravebot_agent::skills::a_foreign_skills_directory_below_the_root_is_not_a_source`
+`verified-by: bravebot_agent::skills::a_foreign_skill_in_an_untrusted_project_is_counted_and_not_named`
+
 ## Known costs
 
 Accepted deliberately. Do not "fix" one without changing this spec first.
 
-- **Resolution costs a directory listing and up to three file reads every turn.** Cheap next to the
-  model call it precedes, and the alternative is a cache that has to be invalidated by something,
-  which is a second thing to be wrong about how the filesystem looks.
+- **Resolution costs up to three directory listings and up to three file reads every turn.** Cheap
+  next to the model call it precedes, and the alternative is a cache that has to be invalidated by
+  something, which is a second thing to be wrong about how the filesystem looks. A project keeping
+  skills in one directory pays two listings of directories that are not there, which is two failed
+  `read_dir` calls.
 - **Looking for the GitHub CLI walks `$PATH` every turn**, for the same reason and against the same
   alternative: the block is composed per turn, so a value read once would be the one that goes stale
   when something is installed mid-session. The machine that pays most is the one without the CLI,

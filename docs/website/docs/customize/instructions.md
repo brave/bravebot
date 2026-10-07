@@ -21,7 +21,7 @@ happens, rather than to ask the planner for it, see [Hooks](hooks.md). For a who
 planner loads only when the task calls for it, see [Skills](skills.md). For a kind of delegate the
 planner can hand a sub-task to, see [Delegate definitions](agents.md).
 
-## The six sources
+## The eight sources
 
 | File | Applies to |
 |---|---|
@@ -30,12 +30,20 @@ planner can hand a sub-task to, see [Delegate definitions](agents.md).
 | `~/.bravebot/agents/<name>.md` | every project |
 | `<workspace>/AGENTS.md`, else `CLAUDE.md`, else `.claude/CLAUDE.md` | this project |
 | `<workspace>/.bravebot/skills/<name>/SKILL.md` | this project |
+| `<workspace>/.claude/skills/<name>/SKILL.md` | this project |
+| `<workspace>/.agents/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.bravebot/agents/<name>.md` | this project |
 
 And no others. There is **no search of parent directories** and no nested instructions file. A rule
 that walked upwards would pick up instructions from whatever happened to be above a project on this
 machine, which is a different set of instructions on the next machine. A file at any other path is an
 ordinary file, read only when something asks for it by name, or when the source points at it.
+
+**A project's skills are read from three directories, at the project root only.**
+`.agents/skills`, then `.claude/skills`, then `.bravebot/skills`, so a skill in `.bravebot/skills`
+wins a name clash with either of the others. Skills you wrote for another agent work here without
+being copied or symlinked. Your own `~/.claude/skills` and `~/.agents/skills` are not read, because
+`~/.bravebot` is the one user directory tried.
 
 **The project's file is looked for under three names, and the first that exists is the one.** Not all
 three: a repository holding two of them holds one set of instructions under two names, and reading
