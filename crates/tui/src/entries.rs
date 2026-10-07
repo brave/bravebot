@@ -121,13 +121,59 @@ pub fn matching(root: &Path, typed: &str) -> Vec<Entry> {
 ///
 /// `None` unless the last word begins with `@`, so a reference already finished by a space is left
 /// alone and an ordinary prompt offers nothing. That is what closes the list.
-pub fn typed_reference(line: &str) -> Option<&str> {
-    let last = line.split_whitespace().next_back()?;
+///
+/// The path comes back unescaped, so a `\ ` the person typed to keep a space in the name is a plain
+/// space here, the way [`matching`] and [`names_a_file`] expect it.
+pub fn typed_reference(line: &str) -> Option<String> {
+    let (start, end) = word_spans(line).pop()?;
     // Only while it is still being typed: a space after a reference means the user moved on.
-    if line.ends_with(char::is_whitespace) {
+    if end != line.len() {
         return None;
     }
-    last.strip_prefix('@')
+    line[start..end].strip_prefix('@').map(unescape)
+}
+
+/// Where each word of a line begins and ends.
+///
+/// Words end at whitespace, except that a space written after a backslash belongs to the word, so
+/// `@My\ Documents/a.md` is one. A backslash anywhere else is an ordinary character, which keeps a
+/// sentence containing one from naming a path.
+fn word_spans(line: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = None;
+    let mut chars = line.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        if c.is_whitespace() {
+            if let Some(begun) = start.take() {
+                spans.push((begun, at));
+            }
+            continue;
+        }
+        start.get_or_insert(at);
+        if c == '\\' && chars.next_if(|&(_, next)| next == ' ').is_some() {
+            continue;
+        }
+    }
+    if let Some(begun) = start {
+        spans.push((begun, line.len()));
+    }
+    spans
+}
+
+/// Where the last word of the line begins, which is where a completed reference is written.
+pub fn last_word_starts_at(line: &str) -> usize {
+    word_spans(line)
+        .pop()
+        .map_or(line.len(), |(start, _)| start)
+}
+
+/// A path as it is written in a line: each space behind a backslash, so it stays in the word.
+pub fn escape(path: &str) -> String {
+    path.replace(' ', "\\ ")
+}
+
+fn unescape(written: &str) -> String {
+    written.replace("\\ ", " ")
 }
 
 /// Whether what has been typed already names a file in the workspace.
@@ -161,10 +207,11 @@ pub fn names_a_file(root: &Path, typed: &str) -> bool {
 /// This is what becomes a turn's context. A trailing slash is dropped, since a directory is a place
 /// to type through rather than a file to read, and one named anyway is not a file to include.
 pub fn referenced(line: &str) -> Vec<String> {
-    line.split_whitespace()
-        .filter_map(|word| word.strip_prefix('@'))
+    word_spans(line)
+        .into_iter()
+        .filter_map(|(start, end)| line[start..end].strip_prefix('@'))
+        .map(unescape)
         .filter(|path| !path.is_empty() && !path.ends_with('/'))
-        .map(str::to_string)
         .collect()
 }
 
@@ -282,8 +329,8 @@ mod tests {
     /// user moved on.
     #[test]
     fn what_counts_as_a_reference_being_typed() {
-        assert_eq!(typed_reference("look at @Car"), Some("Car"));
-        assert_eq!(typed_reference("@"), Some(""));
+        assert_eq!(typed_reference("look at @Car").as_deref(), Some("Car"));
+        assert_eq!(typed_reference("@").as_deref(), Some(""));
         assert_eq!(typed_reference("@Cargo.toml "), None, "finished by a space");
         assert_eq!(typed_reference("an ordinary prompt"), None);
         assert_eq!(typed_reference(""), None);
@@ -372,5 +419,58 @@ mod tests {
     #[test]
     fn a_bare_at_sign_names_nothing() {
         assert!(referenced("what does @ do").is_empty());
+    }
+
+    /// A backslash before a space keeps the space in the name, in what is being typed and in what
+    /// is sent, and only there: a backslash anywhere else ends nothing and starts nothing.
+    #[test]
+    fn a_backslash_before_a_space_continues_a_reference() {
+        assert_eq!(
+            typed_reference(r"read @My\ Documents/no").as_deref(),
+            Some("My Documents/no")
+        );
+        assert_eq!(
+            typed_reference(r"read @My\ ").as_deref(),
+            Some("My "),
+            "an escaped space at the end is still being typed"
+        );
+        assert_eq!(
+            typed_reference(r"read @My\ Documents/notes.md ").as_deref(),
+            None,
+            "an unescaped space finishes it"
+        );
+        assert_eq!(
+            referenced(r"compare @My\ Documents/a.md with @b.md"),
+            vec!["My Documents/a.md".to_string(), "b.md".to_string()]
+        );
+        assert!(referenced(r"@My\ Documents/").is_empty(), "a directory");
+        // Ordinary prose with a backslash names nothing.
+        assert!(referenced(r"a path like C:\dir\ and more").is_empty());
+        assert_eq!(referenced(r"see @a\b.md now"), vec![r"a\b.md".to_string()]);
+        assert_eq!(typed_reference(r"C:\ and so on"), None);
+    }
+
+    /// The escaped form of a path with a space reads back as the same path.
+    #[test]
+    fn an_escaped_path_reads_back_unchanged() {
+        for path in ["a b/c d.md", r"odd\ name.md", "plain.md", r"back\slash.md"] {
+            let line = format!("@{}", escape(path));
+            assert_eq!(referenced(&line), vec![path.to_string()], "{line}");
+            assert_eq!(typed_reference(&line).as_deref(), Some(path), "{line}");
+        }
+    }
+
+    /// A name with a space is offered, found as finished, and is the word a completion replaces.
+    #[test]
+    fn a_name_with_a_space_is_listed_and_finished() {
+        let scratch = Scratch::new("space");
+        std::fs::create_dir_all(scratch.path.join("My Documents")).expect("create");
+        std::fs::write(scratch.path.join("My Documents/notes.md"), "").expect("write");
+        assert_eq!(
+            paths(&matching(&scratch.path, "My Documents/")),
+            vec!["My Documents/notes.md"]
+        );
+        assert!(names_a_file(&scratch.path, "My Documents/notes.md"));
+        assert_eq!(last_word_starts_at(r"read @My\ Doc"), 5);
     }
 }

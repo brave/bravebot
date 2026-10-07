@@ -35,6 +35,9 @@ reference, and a bare `@` names nothing.
 
 Sending a prompt that ends in a half-typed reference completes it rather than sending the fragment.
 
+A name containing a space is written with a backslash before the space, as in
+`@My\ Documents/notes.md`. Completing it from the picker writes that form for you.
+
 :::caution
 Content you have not read is content you are vouching for. Be as careful naming a file as answering
 yes to a directory: the planner will act on what it says.
