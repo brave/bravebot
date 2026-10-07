@@ -8292,6 +8292,18 @@ impl Session {
         }
     }
 
+    /// Name each checkout in the working directory's `checkouts/` that no session record lists,
+    /// where nothing removes one (CHECKOUT-16). Another session may be using it.
+    pub fn report_unlisted_checkouts(&mut self, unlisted: &[(String, std::path::PathBuf)]) {
+        for (id, path) in unlisted {
+            self.note(t!(
+                checkouts_unlisted,
+                id = id.as_str(),
+                path = path.display().to_string()
+            ));
+        }
+    }
+
     /// Send the next tick, if one is due and the session is free to take it.
     ///
     /// Called on the way round the interface's own loop, so a tick waits for the turn in flight
@@ -13792,6 +13804,42 @@ mod tests {
             .iter()
             .map(|entry| entry.text.clone())
             .collect()
+    }
+
+    /// CHECKOUT-16. Each checkout no record lists is named with its own path and the sentence that
+    /// another session may be using it, and none is named where there are none.
+    #[test]
+    fn a_checkout_no_record_lists_is_named_with_its_path() {
+        let mut s = session();
+        let before = s.transcript.len();
+        s.report_unlisted_checkouts(&[]);
+        assert_eq!(s.transcript.len(), before, "a note with nothing to name");
+
+        s.report_unlisted_checkouts(&[
+            ("c2".to_string(), "/state/checkouts/work/c2".into()),
+            ("c10".to_string(), "/state/checkouts/work/c10".into()),
+        ]);
+        let said: Vec<&str> = s.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert_eq!(
+            said,
+            [
+                t!(
+                    checkouts_unlisted,
+                    id = "c2",
+                    path = "/state/checkouts/work/c2"
+                )
+                .to_string(),
+                t!(
+                    checkouts_unlisted,
+                    id = "c10",
+                    path = "/state/checkouts/work/c10"
+                )
+                .to_string(),
+            ]
+        );
     }
 
     /// CHECKOUT-15. Each checkout is listed with what the record shows done in it, and with the

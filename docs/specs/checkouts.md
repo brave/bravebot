@@ -811,9 +811,16 @@ claimed checkout is left at, and holds the lock through the removal. It reads ev
 project, and removes nothing where one will not parse, since that one might list any of them. It
 leaves everything where `.git` is a link. The desktop does not run it and writes no checkouts into
 its record or resumes none, which is the issue's last stage. On Windows nothing is removed, and
-`/checkouts` does not yet name a checkout no record lists.
+`/checkouts` names each directory under this working directory's key that is a plain `c<number>`
+directory and not a link, that no record of the project lists and that this session does not keep,
+with its path, and says another session may be using it. It names none where a record cannot be read.
+Unix names none: the sweep removes them, and one it leaves is held by a running session.
 
 `verified-by: bravebot_agent::git::the_sweep_takes_only_an_unlisted_checkout_nobody_holds`
+`verified-by: bravebot_agent::git::the_unlisted_checkouts_are_the_numbered_directories_no_record_lists`
+`verified-by: bravebot_agent::workspace::a_checkout_the_session_keeps_is_not_named_as_one_no_record_lists`
+`verified-by: bravebot_tui::sessions::the_checkouts_no_record_lists_are_named_and_nothing_is_named_where_a_record_is_unreadable`
+`verified-by: bravebot_tui::state::a_checkout_no_record_lists_is_named_with_its_path`
 `verified-by: bravebot_tui::sessions::the_checkouts_the_records_list_are_every_id_and_none_where_one_cannot_be_read`
 `verified-by: bravebot_agent::workspace::a_sweep_leaves_the_checkouts_a_session_made_or_took_back`
 `verified-by: bravebot_cli::running::a_one_shot_run_removes_the_checkouts_no_session_holds_and_leaves_a_held_one`

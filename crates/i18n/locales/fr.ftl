@@ -2137,6 +2137,8 @@ checkouts-unread =
 checkouts-none =
     cette session ne garde aucune copie de travail. Un délégué qui en reçoit une la garde quand
     quelque chose y a été fait
+checkouts-unlisted =
+    la copie de travail { $id } dans { $path } : aucun enregistrement de session ne la liste, et une autre session peut l'utiliser. Si aucune ne le fait, supprimez le répertoire et lancez git worktree prune pour la retirer
 checkouts-no-such =
     cette session ne garde pas de copie de travail { $id }. /checkouts liste celles qu'elle garde
 checkouts-command-takes =

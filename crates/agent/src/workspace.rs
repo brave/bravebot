@@ -4112,6 +4112,24 @@ impl Workspace {
         crate::git::checkout::sweep(&self.root.join(".git"), &directory, listed)
     }
 
+    /// The checkouts under this working directory's key in `state`'s `checkouts/` that `listed`
+    /// does not name and this session does not keep, with their paths, by number (CHECKOUT-16).
+    /// Removes nothing: it is what `/checkouts` names where the opening sweep removes none.
+    pub fn unlisted_checkouts(
+        &self,
+        state: &Path,
+        listed: &dyn Fn(&str) -> bool,
+    ) -> Vec<(String, PathBuf)> {
+        let Ok(state) = state.canonicalize() else {
+            return Vec::new();
+        };
+        let directory = state
+            .join("checkouts")
+            .join(crate::home::key_for(&self.root));
+        let kept: Vec<String> = self.session_checkouts().into_iter().map(|c| c.id).collect();
+        crate::git::checkout::unlisted(&directory, &|id| listed(id) || kept.iter().any(|k| k == id))
+    }
+
     /// For starting over inside one process: the session beginning here has made no checkout, so
     /// the list empties for every clone. The checkouts themselves stay on disk.
     pub fn forget_session_checkouts(&self) {
