@@ -6847,10 +6847,10 @@ fn typing_detach_leaves_a_session_running_without_sending_it() {
         std::thread::sleep(Duration::from_millis(200));
     };
     let (out, err) = said(&output);
-    assert!(
-        out.contains("Attached to") || err.contains("Attached to"),
-        "{out}{err}"
-    );
+    let shown = format!("{out}{err}");
+    assert!(shown.contains("Attached to"), "{shown}");
+    assert!(shown.contains("Detached from"), "{shown}");
+    assert!(!shown.contains("The session ended."), "{shown}");
     assert!(
         gateway.asked.recv_timeout(Duration::from_secs(3)).is_err(),
         "the session was given the line /detach as a prompt"

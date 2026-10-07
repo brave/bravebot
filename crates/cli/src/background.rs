@@ -315,15 +315,19 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
     match crate::host::bounded_line(&mut from).as_deref() {
         Some("ok") => {}
         Some("attached") => return fail(Ending::Failed, t!(attach_taken, name = name)),
+        Some("stopping") => return fail(Ending::Failed, t!(attach_stopping, name = name)),
         _ => return fail(Ending::Failed, t!(attach_not_running, name = name)),
     }
-    eprintln!("{}", t!(attach_joined, name = name));
+    eprintln!("{}", t!(attach_joined, name = name.clone()));
 
     let sending = stream;
+    let detached = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let typed_detach = std::sync::Arc::clone(&detached);
     std::thread::spawn(move || {
         let mut sending = sending;
         for line in std::io::stdin().lock().lines().map_while(Result::ok) {
             if leaves(&line) {
+                typed_detach.store(true, std::sync::atomic::Ordering::SeqCst);
                 break;
             }
             if writeln!(sending, "{line}").is_err() {
@@ -353,7 +357,11 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
             }
         }
     }
-    eprintln!("{}", t!(attach_left));
+    if detached.load(std::sync::atomic::Ordering::SeqCst) {
+        eprintln!("{}", t!(attach_detached, name = name));
+    } else {
+        eprintln!("{}", t!(attach_left));
+    }
     ExitCode::SUCCESS
 }
 
@@ -428,6 +436,7 @@ fn send(roster: &Roster, seen: &Seen, text: &str) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("working") => fail(Ending::Failed, t!(reply_working, name = name)),
+        Some("stopping") => fail(Ending::Failed, t!(reply_stopping, name = name)),
         Some("needs-input") => {
             let id: String = seen.job.id.chars().take(ID_SHOWN).collect();
             fail(Ending::Failed, t!(reply_needs_input, name = name, id = id))
