@@ -38756,6 +38756,162 @@ fn what_an_edit_changed_is_diffed_inside_the_kernel_before_it_is_released() {
     );
 }
 
+/// CRED-18: the scan classifies a write's contents in this process. A scan that asked a hosted
+/// model whether the bytes were a credential would disclose the credential to it, and the model
+/// endpoint is the one place such a request could go, so every request that reaches it is a round
+/// of the planner's own and no other.
+///
+/// Both writes are scanned and one is refused, so the count holds where the scan found something
+/// and where it let a write through.
+#[test]
+fn scanning_a_write_sends_no_model_a_question_about_it() {
+    let scratch = Scratch::new("credential-scan-stays-local");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &format!(r#"{{"path":".env","contents":"AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"}}"#),
+        ),
+        tool_request_2(
+            "write_file",
+            &format!(r#"{{"path":"app.env","contents":"SECRET_KEY_BASE={GENERATED_SECRET}\n"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("set the project up"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        sent.len(),
+        3,
+        "the turn made a request that is not one of the planner's three rounds"
+    );
+    assert!(
+        sent.iter().all(|body| !body.contains(A_CHECK_ASKING)),
+        "a request put a question to the model that the planner did not ask"
+    );
+}
+
+/// CRED-22: a turn that finds a credential leaves no acceptance for it. The finding is written
+/// and stays open, and nothing else is written beside it under the findings directory, so a turn
+/// that cleared its own leak would have to leave a file this names.
+///
+/// The directory is read whole rather than for one file name, so an acceptance kept under a name
+/// this test never heard of is still a second file.
+#[test]
+fn a_turn_that_finds_a_credential_leaves_it_unaccepted() {
+    let home = Scratch::new("credential-finding-unaccepted-home");
+    let scratch = Scratch::new("credential-finding-unaccepted");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &format!(r#"{{"path":".env","contents":"SECRET_KEY_BASE={GENERATED_SECRET}\n"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("set the project up").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    fn files_under(directory: &std::path::Path, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries {
+            let path = entry.expect("a directory entry").path();
+            if path.is_dir() {
+                files_under(&path, found);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+
+    let store = bravebot_agent::findings::Store::new(&home.path, workspace.root());
+    let mut written = Vec::new();
+    files_under(&home.path.join("findings"), &mut written);
+    assert_eq!(
+        written,
+        [store.path().to_path_buf()],
+        "the turn wrote something under the findings directory besides the record"
+    );
+    assert_eq!(
+        store.open().len(),
+        1,
+        "the finding the turn recorded is not open: {:?}",
+        store.recorded()
+    );
+}
+
+/// CRED-22: the model cannot write the baseline itself. The record's directory is outside the
+/// workspace, and a write the person approves is still a write to a path the workspace does not
+/// reach, so an acceptance would have to be put there by some other means than the file tool.
+///
+/// The person approves everything here, so a refusal is the tool's own and not the confirmer's.
+#[test]
+fn a_turn_cannot_write_an_acceptance_with_the_file_tool() {
+    let home = Scratch::new("credential-baseline-tool-home");
+    let scratch = Scratch::new("credential-baseline-tool");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let store = bravebot_agent::findings::Store::new(&home.path, workspace.root());
+    let record = store.path();
+    let acceptance = record
+        .parent()
+        .expect("the record's directory")
+        .join("accepted")
+        .join(record.file_name().expect("the record's name"));
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &format!(
+                r#"{{"path":{path:?},"contents":"{{\"reason\":\"mine\"}}\n"}}"#,
+                path = acceptance.display().to_string()
+            ),
+        ),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("accept it").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        answered.contains("outside the workspace"),
+        "the write was not refused for reaching outside the workspace: {answered}"
+    );
+    assert!(
+        !acceptance.exists(),
+        "the file tool wrote the baseline: {}",
+        acceptance.display()
+    );
+}
+
 /// CRED-19's other half: a finding is written outside the tree, so it outlives the turn that made
 /// it. A line on a screen lasts as long as somebody is looking at it, and the scan exists to tell
 /// a person what is in their own tree: one who had scrolled past, or who was not at the terminal,

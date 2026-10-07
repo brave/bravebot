@@ -2242,6 +2242,28 @@ mod tests {
         assert_eq!(attempting, [Disposition::Enrol]);
     }
 
+    /// CRED-17: a scan result is not an input to a tier. The functions that produce a tier take the
+    /// arrangement and the performer, so passing them a finding means changing a signature, which
+    /// stops compiling here.
+    ///
+    /// Held to the whole signature rather than to the absence of a name, because the failure is a
+    /// parameter added later, and no test over today's callers sees that. A finding reaching a
+    /// tier by a new function, a static or the environment is not seen here.
+    #[test]
+    fn no_tier_is_computed_from_a_scan_result() {
+        let tier_of: fn(Held<'static>) -> Tier = Held::tier;
+        let walk_of: fn(Held<'static>) -> &'static [GateDrop] = Held::walk;
+        let after: for<'a> fn(Disposition, Held<'a>, Performer) -> Result<Tier, NotMoved> =
+            Disposition::apply;
+
+        assert_eq!(tier_of(Held::SubscriptionBatch), Tier::Granted);
+        assert_eq!(walk_of(Held::SubscriptionBatch).len(), 1);
+        assert_eq!(
+            after(Disposition::Accept, Held::SigningKey, Performer::Absent),
+            Ok(Tier::Held)
+        );
+    }
+
     /// CRED-2: an imported subscription's credential batch is a credential this machine holds and
     /// spends, so it is in the record with a tier of its own. Left out, a batch sitting in a file
     /// under the machine and spent by every premium request has no recorded tier at all, which is
