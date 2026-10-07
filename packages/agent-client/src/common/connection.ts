@@ -24,6 +24,10 @@ export interface Deadlines {
   schedule(ms: number, fire: () => void): () => void
 }
 
+/** Bounds on what one connection holds: a caller in a loop cannot grow either without limit. */
+const MAX_PENDING = 256
+const MAX_REQUEST_CHARS = 8 * 1024 * 1024
+
 export type Outcome = { ok: unknown } | { error: RpcError }
 
 interface Waiting {
@@ -59,15 +63,24 @@ export class RpcConnection {
 
   /**
    * Send a request. An `untimed` request has no deadline, for best-effort work whose silence must
-   * not end the connection.
+   * not end the connection. A `control` request (cancel, close) is not held back by the limit on
+   * waiting requests, so a caller can always stop work.
    */
   request(
     method: string,
     params: Record<string, unknown> = {},
     sync?: (outcome: Outcome) => void,
-    options: { untimed?: boolean } = {},
+    options: { untimed?: boolean; control?: boolean } = {},
   ): Promise<unknown> {
     if (this.ended !== null) return Promise.reject(new ConnectionLostError(this.ended))
+    let line: string
+    try {
+      line = JSON.stringify({ id: this.nextId + 1, method, params }) + '\n'
+    } catch (error) {
+      return Promise.reject(new RpcError('bad_request', describeFailure(error) ?? 'the parameters cannot be written'))
+    }
+    if (line.length > MAX_REQUEST_CHARS) return Promise.reject(new RpcError('frame_limit', `a request may be at most ${MAX_REQUEST_CHARS} characters`))
+    if (!options.control && this.waiting.size >= MAX_PENDING) return Promise.reject(new RpcError('request_limit', `at most ${MAX_PENDING} requests may wait for an answer`))
     const id = ++this.nextId
     return new Promise((resolve, reject) => {
       const cancel = options.untimed
@@ -77,11 +90,11 @@ export class RpcConnection {
           )
       this.waiting.set(id, { resolve, reject, sync, cancel })
       try {
-        this.sink.write(JSON.stringify({ id, method, params }) + '\n')
+        this.sink.write(line)
       } catch (error) {
         this.waiting.delete(id)
         cancel?.()
-        reject(new RpcError('write_failed', describeFailure(error) ?? 'unreadable failure'))
+        reject(new RpcError('write_failed', describeFailure(error) ?? 'unreadable failure', 'unknown'))
       }
     })
   }
@@ -144,7 +157,8 @@ export class RpcConnection {
     waiting.cancel?.()
     const result = incoming.result
     if ('error' in result) {
-      const error = new RpcError(result.error.code, result.error.message)
+      // `internal` is the bridge reporting its own bug, possibly after acting; every other code is a refusal.
+      const error = new RpcError(result.error.code, result.error.message, result.error.code === 'internal' ? 'unknown' : 'rejected')
       this.sync(waiting, { error })
       waiting.reject(error)
     } else {

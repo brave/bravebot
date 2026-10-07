@@ -1,8 +1,13 @@
-/** The failure the bridge itself reported for one request: a closed set of codes plus a message. */
+/**
+ * A request that failed. `outcome` says what the caller may conclude: `rejected` means the request
+ * was refused and had no effect; `unknown` means it may have reached the bridge and taken effect, so
+ * the caller must look at the current state before trying again.
+ */
 export class RpcError extends Error {
   constructor(
     readonly code: string,
     message: string,
+    readonly outcome: 'rejected' | 'unknown' = 'rejected',
   ) {
     super(message)
     this.name = 'RpcError'
@@ -36,7 +41,7 @@ export class UnsupportedError extends Error {
 /** The connection ended. Requests in flight fail with this; nothing is retried. */
 export class ConnectionLostError extends RpcError {
   constructor(detail: string) {
-    super('agent_gone', detail)
+    super('agent_gone', detail, 'unknown')
     this.name = 'ConnectionLostError'
   }
 }

@@ -1,6 +1,6 @@
 # Mobile prototype implementation plan
 
-Status: the first Rust session-view block and the stdio TypeScript client's session lifecycle and approval replies are implemented. The local client program and the remaining stage 1–2a evidence are outstanding, so stages 1–2a are incomplete. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
+Status: stages 1–2a are complete: the Rust session view and the stdio TypeScript client in `packages/agent-client`, tested against a real `bravebot-rpc`. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
 
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
@@ -59,10 +59,12 @@ lifecycle (capability refusal, framing and correlation fixtures, view applicatio
 cancel and close) and approval replies for `confirm`, `run`, `fetch` and `ask`, tested against a
 real `bravebot-rpc` (see
 [the implemented client](client-contract.md#implemented-typescript-client)). The local client
-program and the remaining evidence are outstanding, so stages 1–2a are incomplete. No native or
-listener work is included.
+program, composed-workflow and save-failure evidence, and the record of the U1 investigation
+complete stages 1–2a. No native or listener work is included.
 
 ### 1. Define the common client and fixtures
+
+Status: complete.
 
 Create `packages/agent-client/` as a standalone TypeScript package with its own build and test commands, dependency-free wire types, and a thin typed interface. Keep the Node adapter separate. Review `ui/src/main/bridge.ts` for reusable framing/correlation logic, without importing Electron or migrating desktop callers in this stage. Put portable scenario fixtures in `packages/agent-client/test-fixtures/` and a Node test program in `packages/agent-client/scripts/`.
 
@@ -73,6 +75,8 @@ Map every initial operation to existing bridge behavior or a named addition. Imp
 Done when the interface and fixtures define the small baseline, its Rust view has a real stdio caller, and legacy callers retain their protocol. No socket framework or local Rust engine in the TypeScript client is required. Inventory existing tests so stage 2 adds binding/client evidence rather than duplicating agent tests.
 
 ### 2a. Validate the TypeScript client locally
+
+Status: complete on the local host. Run `make check-agent-client`.
 
 Drive the real `bravebot-rpc` process through the new adapter, with isolated home/project files and a controlled model backend. Reuse patterns from existing bridge process tests. Demonstrate a turn, explicit trust, supported approval/denial, cancellation, and truthful effects.
 

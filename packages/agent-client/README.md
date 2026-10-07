@@ -10,6 +10,7 @@ and [the spec](../../docs/specs/session-view.md).
 src/common   wire types, framing, correlation, view application, AgentClient interface
              (no Node, DOM, Electron or JNI)
 src/node     the child-process adapter
+scripts      local-client: drives one session from a terminal
 test-fixtures  wire-contract.json (written by a Rust test) and scenarios/ (language-independent)
 tests        node:test suites, including ones that run a real bravebot-rpc
 ```
@@ -37,6 +38,20 @@ question and ends the turn.
 
 A view that has `ended` is the last state received. It is not recovered: version 1 has no
 reconnect, so start a new session.
+
+## Try it from a terminal
+
+```sh
+npm run build
+node dist/scripts/local-client.js --rpc /path/to/bravebot-rpc --directory /path/to/project \
+  --trust no --decide prompt "your prompt"
+```
+
+`--trust yes|no` is required: the program never assumes a trust answer. `--decide` is `approve`,
+`reject` or `prompt` (ask on the terminal; without a terminal, or after Ctrl-D, the answer is reject). A user question is
+declined. The child inherits this process's environment, so it reaches the model the way `bravebot-rpc`
+normally does. Released payloads are printed as one line of JSON with control and bidirectional
+characters escaped; this is a diagnostic dump, not a display surface.
 
 ## Check
 

@@ -180,12 +180,12 @@ class Session implements AgentSession {
   }
 
   async cancel(): Promise<void> {
-    await this.connection.request('turn.cancel', this.params())
+    await this.connection.request('turn.cancel', this.params(), undefined, { control: true })
   }
 
   async close(): Promise<CloseOutcome> {
     try {
-      await this.connection.request('session.close', this.params())
+      await this.connection.request('session.close', this.params(), undefined, { control: true })
     } catch (error) {
       // The bridge says the session is already gone, so there is nothing left to keep registered.
       if (error instanceof RpcError && error.code === 'no_such_session') this.forget(this.id)
@@ -356,7 +356,7 @@ export class RpcAgentClient implements AgentClient {
       this.sessions.delete(session.id)
       // Best effort and unawaited: the caller gets the startup failure now. The request has no deadline,
       // so a silent bridge leaves it pending until the connection ends rather than ending the connection.
-      this.#connection.request('session.close', { session: session.id }, undefined, { untimed: true }).catch(() => undefined)
+      this.#connection.request('session.close', { session: session.id }, undefined, { untimed: true, control: true }).catch(() => undefined)
       throw error
     }
     return session

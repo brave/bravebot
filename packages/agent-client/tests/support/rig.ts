@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { connectStdio, type StdioConnection } from '../../src/node/index.js'
 import type { AgentSession, ViewState } from '../../src/common/index.js'
 import { ModelStub, type PlannerStep } from './model-stub.js'
+import { FIXTURES } from './scenario.js'
 import { within } from './wait.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -43,7 +44,7 @@ export interface Rig {
 }
 
 /** A real bridge process, a project directory and a home of its own, and a stub model with `plans`. */
-export async function startRig(plans: Record<string, PlannerStep[]>): Promise<Rig> {
+export async function startRig(plans: Record<string, PlannerStep[]>, options: { chunked?: boolean } = {}): Promise<Rig> {
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'agent-client-')))
   const project = join(scratch, 'project')
   const home = join(scratch, 'home')
@@ -52,7 +53,9 @@ export async function startRig(plans: Record<string, PlannerStep[]>): Promise<Ri
   const stub = await ModelStub.start(plans)
   const diagnostics: string[] = []
   const rpc = connectStdio({
-    command: rpcBinary(),
+    // Chunked runs the real bridge behind a proxy that hands its output on a few bytes at a time.
+    command: options.chunked ? process.execPath : rpcBinary(),
+    args: options.chunked ? [join(FIXTURES, 'chunking-proxy.mjs'), rpcBinary()] : [],
     env: isolatedEnvironment(home, stub.endpoint),
     cwd: scratch,
     workspaces: [{ id: 'project', name: 'Project', directory: project }],

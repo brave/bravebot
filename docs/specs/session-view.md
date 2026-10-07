@@ -110,7 +110,9 @@ It neither inspects released text nor supplies display data to execution or plan
 `view.rs` belongs beside the bridge under the [layering spec](layering.md)'s non-presentation constraint. Version 1 performs
 no control-character or label-to-segment transform. A future content-reading transform belongs in
 an allowed presentation module or crate with its first caller; placing it in this projection is
-forbidden. A rendering surface must still meet the [layering spec](layering.md)'s marking rules.
+forbidden. A rendering surface must still meet the [layering spec](layering.md)'s marking rules. The package's
+terminal program escapes control, zero-width and bidirectional characters in its own diagnostic dump; it is not a
+rendering surface and does not trigger extraction.
 
 `verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::view::approval_replacements_preserve_the_payload_and_kind`
@@ -137,4 +139,4 @@ question the client cannot answer is refused without being sent, and a run is an
 `remember`.
 
 `verified-by: bravebot_ui_bridge::view::the_client_wire_contract_matches_the_rust_types`
-`verified-by: by-construction (packages/agent-client/tests runs the shared scenarios under four chunkings, and drives a real bravebot-rpc against a model service of its own for accepted turns, trust deciding whether a write is asked about, approval and rejection of a write, a command and a fetch with different real effects, a typed and a declined answer to a question, cancellation, interleaved sessions, close, EOF, malformed input and failing callbacks, with labelled rows carried whole in the scenarios; make check-agent-client runs it, and the Front end CI job runs that target)`
+`verified-by: by-construction (packages/agent-client/tests runs the shared scenarios under four chunkings, and drives a real bravebot-rpc against a model service of its own for accepted turns, trust deciding whether a write is asked about, approval and rejection of a write, a command and a fetch with different real effects, a typed and a declined answer to a question, cancellation, interleaved sessions, fetched bytes copied into a file, a write that lands when the session cannot be saved, close, EOF, malformed input and failing callbacks, with labelled rows carried whole in the scenarios, and runs the local program in scripts/local-client.ts against the same process; make check-agent-client runs it, and the Front end CI job runs that target)`
