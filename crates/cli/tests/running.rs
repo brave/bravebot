@@ -7138,8 +7138,8 @@ fn an_attach_from_a_terminal_starts_a_stopped_session() {
     assert!(second.contains("fix the build"), "{second}");
 }
 
-/// BG-9: `--resume` and `--continue` name a record a running background session holds, and say to
-/// attach, instead of opening a second writer on it.
+/// BG-9 and CLI-24: `--resume` and `--continue`, with or without a task, name a record a running
+/// background session holds, and say to attach, instead of opening a second writer on it.
 #[cfg(unix)]
 #[test]
 fn a_record_a_running_session_holds_is_not_resumed() {
@@ -7178,6 +7178,23 @@ fn a_record_a_running_session_holds_is_not_resumed() {
         );
         assert!(err.contains("bravebot attach 3f2a9c1e"), "{err}");
     }
+
+    for arguments in [
+        &["-p", "next", "--resume", SESSION_ID][..],
+        &["-p", "next", "--continue"][..],
+    ] {
+        let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        let err = said(&output).1;
+        assert!(
+            err.contains("held by a running background session"),
+            "{arguments:?}: {err}"
+        );
+    }
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a refused task reached the gateway"
+    );
 
     let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
     let _ = host.wait();
@@ -7970,6 +7987,55 @@ fn a_task_that_cannot_carry_on_a_session_is_refused_before_anything_is_sent() {
             vec!["--mode", "manifest", "-p", "next", "--continue"],
             "--mode manifest",
         ),
+    ] {
+        let (output, stdout, _) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stdout}");
+        assert!(
+            stdout.contains(said_in_the_refusal),
+            "{arguments:?} did not say {said_in_the_refusal}: {stdout}"
+        );
+    }
+    assert!(
+        requests(&gateway).is_empty(),
+        "a refused run sent a request"
+    );
+}
+
+/// CLI-24 and SESSION-10: a record a manifest run wrote has no conversation to carry on, so a task
+/// naming it by id is refused before anything is sent, and `--continue` does not take it for the
+/// latest session.
+#[test]
+fn a_task_naming_a_manifest_record_is_refused_before_anything_is_sent() {
+    fn the_record_under(path: &Path) -> Option<PathBuf> {
+        for entry in std::fs::read_dir(path).ok()? {
+            let path = entry.ok()?.path();
+            if path.is_dir() {
+                if let Some(found) = the_record_under(&path) {
+                    return Some(found);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "json") {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch =
+        Scratch::new("cli-running-continued-manifest").with_settings(&settings_for(&gateway));
+    let (_, stdout, _) = a_recorded_run(&scratch, &["-p", "first"]);
+    let id = session_of(&stdout).expect("the first run named its session");
+    let path = the_record_under(&scratch.path.join(".bravebot/sessions")).expect("the record");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    record["manifest"] = serde_json::json!({});
+    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let _ = requests(&gateway);
+
+    for (arguments, said_in_the_refusal) in [
+        (vec!["-p", "next", "--resume", id.as_str()], "manifest run"),
+        (vec!["-p", "next", "--continue"], "no session to continue"),
     ] {
         let (output, stdout, _) = a_recorded_run(&scratch, &arguments);
 

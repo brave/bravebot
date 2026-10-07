@@ -1281,8 +1281,8 @@ The flags are refused with the status for an argument (CLI-6), before anything i
 follows `--resume`, when the id or the directory's latest session names no record, when the record
 is a manifest run ([SESSION-10](sessions.md#SESSION-10)) or a session a background process is
 running ([BG-9](background-sessions.md#BG-9)), with `--agent` because a record stores no definition
-(CLI-17), and with `--mode manifest`. `--resume` and `--continue` with no task are the interactive
-resume they were, and a session in lines still writes no record (CLI-14).
+(CLI-17), and with `--mode manifest`. `--resume` and `--continue` with no task open the session
+interactively, and a session in lines writes no record (CLI-14).
 
 **Why.** A script chaining a review, a fix and a summary has to restate everything each time while a
 one-shot run starts empty and leaves nothing to start from. Reading the id out of the result object
@@ -1309,6 +1309,8 @@ process that holds the record is known.
 `verified-by: bravebot_cli::running::a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried`
 `verified-by: bravebot_cli::running::an_incognito_run_is_not_recorded_and_cannot_be_continued`
 `verified-by: bravebot_cli::running::a_task_that_cannot_carry_on_a_session_is_refused_before_anything_is_sent`
+`verified-by: bravebot_cli::running::a_task_naming_a_manifest_record_is_refused_before_anything_is_sent`
+`verified-by: bravebot_cli::running::a_record_a_running_session_holds_is_not_resumed`
 `verified-by: bravebot_cli::main::a_resume_with_a_task_after_it_runs_the_task_and_one_without_opens_the_session`
 `verified-by: bravebot_cli::main::a_task_may_name_the_session_it_carries_on_before_or_after_it`
 `verified-by: bravebot_cli::main::a_resume_naming_no_session_is_refused`
