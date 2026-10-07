@@ -2288,10 +2288,10 @@ The fallback is used only where the same service answers for both models: the sa
 same gateway, or the aichat endpoint. A fallback another service would answer is not used and the
 failure ends the turn, because naming a model is the person's agreement to send the conversation
 to the service that serves it ([BACKEND-3](#BACKEND-3)), and nothing here agreed to the first
-model's service handing it on. A turn does not move from the fallback model, which is the model it is asked: a failure of that
-model ends the turn.
-A delegate, and a turn running on the model a definition named ([DELEGATE-22](delegation.md#DELEGATE-22)),
-do not fall back: that model is a boundary its file drew.
+model's service handing it on. A turn moves to the fallback at most once; a failure on the fallback
+model ends the turn. A delegate, and a turn running on the model a definition named
+([DELEGATE-22](delegation.md#DELEGATE-22)), do not fall back: that model is a boundary its file
+drew.
 
 The person is told which model failed and which one the turn moved to, and the trail records both
 names with the category. The model that answered is not then reported as a substitution for the
