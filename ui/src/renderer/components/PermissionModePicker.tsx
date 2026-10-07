@@ -3,7 +3,7 @@ import { PERMISSION_MODES, type PermissionMode } from '../../shared/protocol'
 import { Button, ButtonMenu, Icon, type IconName } from '../nala'
 import { keyshortcuts } from './IconButton'
 
-/** As the Session menu writes `mode.cycle`'s accelerator. */
+/** As the Chat menu writes `mode.cycle`'s accelerator. */
 const SHORTCUT = '⌘⇧M'
 
 const MODES: Record<PermissionMode, { label: string; icon: IconName; says: string }> = {

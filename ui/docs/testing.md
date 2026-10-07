@@ -72,7 +72,7 @@ matter:
 - `npm run drive:permission-mode`: the composer's permission mode, through the real app and
   bridge, against a model service the script serves itself, in a directory nobody trusted.
   Accepting edits writes with no card and still asks about a command, the control works while a
-  turn runs, plan mode writes nothing and asks nothing, and the Session menu item walks the
+  turn runs, plan mode writes nothing and asks nothing, and the Chat menu item walks the
   modes. No paid inference.
 - After building, `node scripts/drive-agent-rpc.mjs`: an actual automatic watch turn against
   a local fake gateway, real lifecycle hook subprocesses, context measurements and stop/close.
