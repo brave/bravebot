@@ -353,9 +353,9 @@ A call to a tool that is off is refused before the browser is asked anything. A 
 covers all of history, and a search returns at most 100 results.
 
 **Why.** Every tool but the platform check reaches what a person has open, has visited or has
-saved, or send the person's cookies to a site, so none of them does so before the person has said it
-may. The platform check tells
-nothing about them, and is how they see the extension answer before turning anything on. The
+saved, or sends their cookies to a site, so none of them does so before the person has said it
+may. The platform check tells nothing about them, and is how they see the extension answer before
+turning anything on. The
 browser's history search covers the last day unless it is given a start time, which would answer a
 search of all of history with a day of it.
 
