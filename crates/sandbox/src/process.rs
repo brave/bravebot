@@ -112,6 +112,20 @@ impl fmt::Debug for Variables {
     }
 }
 
+/// The three handles a confined process is started with, made by the caller.
+///
+/// For a caller running a pipeline, which wires one stage's output to the next stage's input and
+/// cannot say that with [`Streams`]. Each is the process's own once handed over: this process's
+/// copy is closed when the process has started, so a pipe reaches its end when the stage writing
+/// to it exits rather than when the caller does.
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct Attached {
+    pub stdin: std::os::windows::io::OwnedHandle,
+    pub stdout: std::os::windows::io::OwnedHandle,
+    pub stderr: std::os::windows::io::OwnedHandle,
+}
+
 /// The write end of a confined process's standard input.
 #[derive(Debug)]
 pub struct ConfinedStdin(File);
@@ -216,6 +230,16 @@ impl ConfinedChild {
             Started::Spawned(child) => child.wait(),
             #[cfg(windows)]
             Started::Created(process) => process.wait(),
+        }
+    }
+
+    /// The process's exit status if it has exited, without waiting for it to.
+    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        match &mut self.started {
+            #[cfg(not(windows))]
+            Started::Spawned(child) => child.try_wait(),
+            #[cfg(windows)]
+            Started::Created(process) => process.try_wait(),
         }
     }
 

@@ -117,12 +117,17 @@ impl Toolchain {
     fn cache_directories(self, prelude: Prelude) -> &'static [&'static str] {
         match (self, prelude) {
             (Self::Cargo, _) => &[".cargo/registry", ".cargo/git"],
-            (Self::Node, _) => &[".npm/_cacache"],
+            (Self::Node, Prelude::Linux | Prelude::MacOs) => &[".npm/_cacache"],
+            (Self::Node, Prelude::Windows) => &["AppData/Local/npm-cache/_cacache"],
             (Self::Python, Prelude::Linux) => &[".cache/pip"],
             (Self::Python, Prelude::MacOs) => &["Library/Caches/pip"],
+            (Self::Python, Prelude::Windows) => &["AppData/Local/pip/Cache"],
             (Self::Go, Prelude::Linux) => &[".cache/go-build", "go/pkg/mod", "go/pkg/sumdb"],
             (Self::Go, Prelude::MacOs) => {
                 &["Library/Caches/go-build", "go/pkg/mod", "go/pkg/sumdb"]
+            }
+            (Self::Go, Prelude::Windows) => {
+                &["AppData/Local/go-build", "go/pkg/mod", "go/pkg/sumdb"]
             }
             (Self::Maven, _) => &[".m2/repository"],
             (Self::Gradle, _) => &[".gradle/caches", ".gradle/wrapper", ".gradle/native"],
@@ -170,7 +175,7 @@ mod tests {
         Toolchain::Gradle,
     ];
 
-    const BOTH_PLATFORMS: [Prelude; 2] = [Prelude::Linux, Prelude::MacOs];
+    const EVERY_PLATFORM: [Prelude; 3] = [Prelude::Linux, Prelude::MacOs, Prelude::Windows];
 
     fn a_list(toolchain: Toolchain, prelude: Prelude) -> SandboxPolicy {
         toolchain.grant(SandboxPolicy::strict(), prelude, Path::new(A_HOME))
@@ -261,7 +266,7 @@ mod tests {
     /// directory holding the cache hands the token to every build in that ecosystem.
     #[test]
     fn a_list_names_a_cache_and_never_the_directory_holding_it() {
-        for prelude in BOTH_PLATFORMS {
+        for prelude in EVERY_PLATFORM {
             for toolchain in EVERY_TOOLCHAIN {
                 let policy = a_list(toolchain, prelude);
                 for credential in [
@@ -292,7 +297,7 @@ mod tests {
     /// the `cargo` or the `node` a later stage resolves to, which is reach past its own run.
     #[test]
     fn an_install_is_read_and_never_written() {
-        for prelude in BOTH_PLATFORMS {
+        for prelude in EVERY_PLATFORM {
             let cargo = a_list(Toolchain::Cargo, prelude);
             assert!(reaches(&cargo, "/home/a-person/.cargo/bin/cargo"));
             assert!(reaches(
@@ -328,7 +333,7 @@ mod tests {
     /// able to set `build.rustc-wrapper` there runs a program of its own in every later build.
     #[test]
     fn a_cargo_list_reads_the_configuration_cargo_cannot_start_without() {
-        for prelude in BOTH_PLATFORMS {
+        for prelude in EVERY_PLATFORM {
             let cargo = a_list(Toolchain::Cargo, prelude);
             for configuration in [
                 "/home/a-person/.cargo/config.toml",
@@ -351,10 +356,10 @@ mod tests {
     /// something in the cargo registry for a later `cargo build` to read.
     #[test]
     fn a_list_writes_its_own_ecosystems_cache_and_no_other() {
-        for prelude in BOTH_PLATFORMS {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
             let platform_caches = match prelude {
                 Prelude::Linux => "/home/a-person/.cache",
-                Prelude::MacOs => "/home/a-person/Library/Caches",
+                _ => "/home/a-person/Library/Caches",
             };
             let caches = [
                 (
@@ -431,7 +436,7 @@ mod tests {
             "/home/a-person/Library/Caches/go-build/00"
         ));
 
-        for prelude in BOTH_PLATFORMS {
+        for prelude in EVERY_PLATFORM {
             for toolchain in EVERY_TOOLCHAIN {
                 let policy = a_list(toolchain, prelude);
                 for someone_elses in [
@@ -448,12 +453,48 @@ mod tests {
         }
     }
 
+    /// Windows keeps a program's caches under `AppData\Local`, and a row naming that directory is
+    /// every other program's state with them, so each cache is named on its own.
+    #[test]
+    fn windows_writes_the_cache_its_toolchain_uses_there() {
+        for (toolchain, cache) in [
+            (
+                Toolchain::Python,
+                "/home/a-person/AppData/Local/pip/Cache/http",
+            ),
+            (Toolchain::Go, "/home/a-person/AppData/Local/go-build/00"),
+            (
+                Toolchain::Node,
+                "/home/a-person/AppData/Local/npm-cache/_cacache/index-v5",
+            ),
+        ] {
+            let on_windows = a_list(toolchain, Prelude::Windows);
+            assert!(
+                writes(&on_windows, cache),
+                "{toolchain:?} on Windows: {cache}"
+            );
+            for another in EVERY_TOOLCHAIN
+                .into_iter()
+                .filter(|other| *other != toolchain)
+            {
+                assert!(
+                    !writes(&a_list(another, Prelude::Windows), cache),
+                    "{another:?} writes {toolchain:?}'s cache {cache}"
+                );
+            }
+            assert!(!reaches(
+                &on_windows,
+                "/home/a-person/AppData/Local/another-program/state"
+            ));
+        }
+    }
+
     /// Every file under a home directory is either named by a row or out of reach, so a row
     /// naming the directory itself, or `~/.config`, `~/.cache` or `~/Library` whole, is every
     /// other file there granted at once.
     #[test]
     fn no_list_names_a_directory_that_holds_other_programs_files() {
-        for prelude in BOTH_PLATFORMS {
+        for prelude in EVERY_PLATFORM {
             for toolchain in EVERY_TOOLCHAIN {
                 for row in granted_paths(&a_list(toolchain, prelude)) {
                     for too_wide in [

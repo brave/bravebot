@@ -43,6 +43,8 @@ pub mod toolchain;
 pub mod windows;
 
 use policy::{Capabilities, ConfinementLevel, SandboxPolicy};
+#[cfg(windows)]
+pub use process::Attached;
 pub use process::{
     ConfinedChild, ConfinedStderr, ConfinedStdin, ConfinedStdout, Environment, Stream, Streams,
     Variables,
@@ -94,7 +96,7 @@ impl fmt::Display for SandboxError {
 impl std::error::Error for SandboxError {}
 
 /// A platform confinement backend.
-pub trait Sandbox {
+pub trait Sandbox: Send {
     /// What this backend can enforce here, on this kernel.
     fn capabilities(&self) -> Capabilities;
 
@@ -133,6 +135,30 @@ pub trait Sandbox {
         policy: &SandboxPolicy,
         environment: &Environment,
     ) -> Result<std::process::Command, SandboxError>;
+
+    /// Start a confined process on handles the caller made, or refuse.
+    ///
+    /// The counterpart of [`Sandbox::command`] where confinement is an argument to process
+    /// creation: the pipeline the caller runs cannot be described by [`Streams`], and there is
+    /// no command to hand back, so the caller hands over the three handles instead and watches
+    /// the process it gets back. Only on the platform that has no `command`.
+    ///
+    /// A backend that does not provide it refuses, so a caller cannot reach an unconfined
+    /// process by asking a backend that never wrote one.
+    #[cfg(windows)]
+    fn spawn_attached(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _policy: &SandboxPolicy,
+        _attached: Attached,
+        _environment: Environment,
+    ) -> Result<ConfinedChild, SandboxError> {
+        Err(SandboxError::Unavailable {
+            platform: std::env::consts::OS,
+            detail: "this backend starts no process on handles the caller made".into(),
+        })
+    }
 }
 
 /// The backend for the current platform.

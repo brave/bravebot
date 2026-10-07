@@ -79,10 +79,9 @@ If confinement cannot be established the process does not run. An unavailable ba
 spawn rather than falling back, and the platform lookup never hands back a backend that would
 confine nothing.
 
-The one place a program starts without a backend is a platform with no base to build a profile on,
-which is Windows: a program `run` starts there is not confined until a base exists
-([SANDBOX-17](#SANDBOX-17)). No other caller is carved out, and on Linux and macOS a program `run`
-starts is refused when the backend will not apply its profile.
+The one place a program starts without a backend is a platform with no base to build a profile on.
+There is none today: a program `run` starts is refused on every platform when the backend will not
+apply its profile ([SANDBOX-17](#SANDBOX-17)).
 
 **Why.** Silently degrading is worse than an error: the caller believes it has a guarantee it does
 not have, and the audit trail records a sandbox that was never applied.
@@ -418,9 +417,11 @@ and the git configuration a stage reads for an identity. Nothing a program print
 supplied, no argument vector and no configuration file adds a row, and the developer directory is
 granted only where the platform installs one. The home directory is in no row, no directory a
 credential sits in is in one, and the only paths granted for writing are the temporary directory
-and the null device. Egress and children are left where they were, since what the base bounds is
+and, where the platform has one as a file, the null device. Egress and children are left where they were, since what the base bounds is
 the filesystem. A platform whose prelude is not written down has no base, and so nothing to
-assemble a profile from.
+assemble a profile from. The Windows prelude is empty: an AppContainer reads `C:\Windows` and the
+Program Files directories without an entry of its own, and a row there would be an entry only an
+account holding the right to change those directories could write.
 
 **Why.** A profile denies everything and then names what may be reached, so something has to
 carry what every program needs before any plan is read: a dynamic executable without its loader
@@ -447,6 +448,7 @@ confining a program was for.
 `verified-by: bravebot_sandbox::base::a_developer_directory_anywhere_else_is_in_no_row`
 `verified-by: bravebot_sandbox::base::a_prelude_names_the_machines_directories_and_none_of_a_persons`
 `verified-by: bravebot_sandbox::base::a_platform_with_no_prelude_written_down_has_no_base`
+`verified-by: bravebot_sandbox::base::a_windows_base_names_no_system_directory`
 `verified-by: bravebot_sandbox::linux::a_program_starts_under_the_base_this_machine_resolved`
 `verified-by: bravebot_sandbox::linux::a_program_under_the_base_can_name_the_account_it_runs_as`
 `verified-by: bravebot_sandbox::linux::a_program_under_the_base_reads_the_machine_and_not_a_private_key`
@@ -529,6 +531,7 @@ file it cannot open, which a machine with a `~/.cargo/config.toml` otherwise mee
 `verified-by: bravebot_sandbox::toolchain::a_list_names_a_cache_and_never_the_directory_holding_it`
 `verified-by: bravebot_sandbox::toolchain::an_install_is_read_and_never_written`
 `verified-by: bravebot_sandbox::toolchain::a_cargo_list_reads_the_configuration_cargo_cannot_start_without`
+`verified-by: bravebot_sandbox::toolchain::windows_writes_the_cache_its_toolchain_uses_there`
 `verified-by: bravebot_sandbox::toolchain::a_list_writes_its_own_ecosystems_cache_and_no_other`
 `verified-by: bravebot_sandbox::toolchain::each_platform_writes_the_cache_its_toolchain_uses_there`
 `verified-by: bravebot_sandbox::toolchain::no_list_names_a_directory_that_holds_other_programs_files`
@@ -604,7 +607,7 @@ the scope, so a model-written `GH_CONFIG_DIR=` moves nothing.
 <a id="SANDBOX-17"></a>
 ### SANDBOX-17: a program `run` starts is started under its plan's profile, or not started
 
-On Linux and macOS every stage of a plan `run` starts is started under the profile
+On every platform every stage of a plan `run` starts is started under the profile
 [SANDBOX-18](#SANDBOX-18) composes for it: each stage of a pipeline, a stage of a line left running
 in the background, and a stage of a plan a subagent runs. The profile is applied after the stage's
 environment is set and scrubbed and before its standard streams are connected, so it is the process
@@ -617,17 +620,21 @@ Confinement is a property of the session and not of the plan: the terminal, desk
 one-shot front ends each ask for it when they open a session. A caller that does not ask, which is a
 test driving the executor directly, starts stages as the user's own shell would.
 
-A platform with no base to build a profile on starts a stage unconfined, as the user's own shell would. That is Windows, where
-the decision is to confine Linux and macOS first and leave coverage of the third to
-[brave/bravebot#1632](https://github.com/brave/bravebot/issues/1632). The carve-out is the absence
-of a base and no other reason: a platform that has one and cannot apply a policy refuses.
+On Windows the stage is created in a container instead of being handed back as a command, since
+confinement there is an argument to the call that creates the process: the executor gives the
+backend the three standard streams it has made and keeps the sandbox alive for as long as the
+process, because the entries the backend wrote are removed as it is dropped. A batch file (`.bat`
+or `.cmd`) is refused there, because the command interpreter reads its argument line by its own
+rules and a quoting that is safe for every other program is not safe for it. Any other program the
+platform cannot confine is refused as it is elsewhere.
 
 **Why.** A profile that is applied when it can be and skipped when it cannot is the silent
 degradation [SANDBOX-1](#SANDBOX-1) exists to forbid, and the person who endorsed a line believes it
 ran under what the plan accounts for. An off switch would be the setting a person reaches for after
 one refusal and forgets, and every session after it would run unconfined. Starting the
-process already confined, through a command the caller spawns, keeps the stage's pipes and process
-group its own, so the executor's cancellation and job handling are unchanged.
+process already confined, through a command the caller spawns or, on Windows, through the call
+that creates it, keeps the stage's pipes its own, so the executor's cancellation and job handling
+are unchanged.
 
 **What it costs.** A program argument that names a path outside the directories the session was
 opened on is refused by the kernel, since only redirections are opened by this process on the
@@ -645,6 +652,8 @@ stage's behalf. A `cat ~/notes.txt` fails, and a person adds the directory
 `verified-by: bravebot_agent::tools::a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not`
 `verified-by: bravebot_sandbox::linux::a_command_handed_back_is_confined_when_the_caller_spawns_it`
 `verified-by: bravebot_sandbox::macos::a_command_handed_back_is_confined_when_the_caller_spawns_it`
+`verified-by: bravebot_sandbox::windows::a_batch_file_is_refused_and_an_executable_is_not`
+`verified-by: bravebot_agent::confine::variable_names_match_without_case_only_when_folding`
 
 <a id="SANDBOX-18"></a>
 ### SANDBOX-18: the profile a stage runs under is composed from the plan and the session's directories
@@ -656,7 +665,13 @@ directories on the `PATH` it starts with and the directory it resolved into, eac
 followed, the parent of a `bin` directory among them, and none that is the home directory, above it
 or a parent inside it; the two files the step names as read, the one it was started as and the one
 it resolved to; each directory the session was opened on, to read and write; the session's scratch
-directory, to read and write; and the plan's directory as the place it starts. Where the stage
+directory, to read and write; and the plan's directory as the place it starts. On Windows a read row
+under a directory every container already reads, `C:\Windows` and the Program Files directories
+(bar the `Temp` and `WindowsApps` directories directly under them, which keep their own lists),
+is not written, since the entry is one only an administrator can add and the container has the
+access without it; a write row there is written, and fails for an account that cannot. A drive path is
+named without the `\\?\` prefix a canonical form carries there, so it compares with the rows, unless
+the plain spelling would be 260 characters or more. Where the stage
 carries the remote scope, the socket `SSH_AUTH_SOCK` names in its own environment is a write row,
 since a socket is reached through a write ([SANDBOX-3](#SANDBOX-3)). Nothing else is in it: no
 credential directory, no directory above a session directory, and no socket for a stage without the
@@ -682,6 +697,10 @@ open the home.
 `verified-by: bravebot_agent::confine::an_assignment_in_front_of_a_push_removes_its_scope`
 `verified-by: bravebot_agent::confine::a_program_at_the_top_of_the_home_is_granted_as_a_file_and_not_as_the_home`
 `verified-by: bravebot_agent::confine::the_path_outside_the_home_is_read_and_the_homes_own_bin_brings_no_parent`
+`verified-by: bravebot_agent::confine::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
+`verified-by: bravebot_sandbox::windows::what_every_container_reads_is_the_machines_own_directories`
+`verified-by: bravebot_sandbox::windows::nothing_else_is_taken_to_be_readable_by_every_container`
+`verified-by: bravebot_sandbox::windows::a_write_grant_under_a_system_directory_still_needs_its_entry`
 
 <a id="SANDBOX-19"></a>
 ### SANDBOX-19: the planner is told its programs are confined, and a failed step says what it ran under
@@ -730,13 +749,12 @@ chooses `It failed` over `It exited 0`.
 
 ## Programs a person asked for
 
-A program `run` ([tools/run.md](tools/run.md)) starts is confined on Linux and macOS
+A program `run` ([tools/run.md](tools/run.md)) starts is confined on Linux, macOS and Windows
 ([SANDBOX-17](#SANDBOX-17), [SANDBOX-18](#SANDBOX-18)), and the clauses above are what the profile
 is held to. What confinement bounds is the filesystem: a program is held to the paths the plan a
 person endorsed accounts for, and not to whatever else it could open. The programs somebody might
 ask for cannot be listed in advance, and a `git push` needs the credentials under `~/.ssh`, so the
-remote scope above is what lends those to a stage whose argv names the operation. Windows has no
-base yet, so a program there is unconfined. Each part of the decision that is not built is marked
+remote scope above is what lends those to a stage whose argv names the operation. Each part of the decision that is not built is marked
 where it appears.
 
 **The grant is the plan, not the prompt.** A command line compiles to a plan carrying its read set,
@@ -764,6 +782,8 @@ whose plan never named them.
 | the system temporary directory this process resolved as the session opened | read and write |
 | on macOS, the developer directory `xcode-select -p` names as the session opens, where it is `/Library/Developer/CommandLineTools` or an application bundle's directly in `/Applications`, which is then the bundle whole | read |
 | the git configuration any stage may read for an identity: `~/.gitconfig` and `~/.config/git/config` | read |
+
+On Windows the base holds the last two rows only, since a container reads the system directories without an entry of its own.
 
 Four rows is the whole of what stays invisible, and each one is here because every program needs it
 and none of it sits beside a token. The prelude is what a dynamic executable needs to start at all.
@@ -1014,12 +1034,14 @@ reported as what it is.
   ([SANDBOX-3](#SANDBOX-3)), which is wider than a row that carried a connect and no write. A
   policy row for a connect alone would narrow it. The row has not been exercised against a running
   agent.
-- What a program needs in order to start on Windows is not written down, so there is no base
-  there and nothing to assemble a profile from. The rows above are the Unix ones, and what a
-  Windows base has to settle first is whether a container reaches the system directories through
-  an access entry the platform already wrote, or whether the base names them and every run writes
-  an entry of its own onto a directory of the machine's. Until it does, a program `run` starts there is
-  unconfined ([SANDBOX-17](#SANDBOX-17)).
+- The Windows base is empty, on the ground that a container reads the system directories through
+  an entry the platform already wrote. That is not exercised: no job runs the suite on Windows, so
+  whether a program such as `cmd.exe /c`, `git` or a compiler starts under it, and whether a
+  `PATH` or session directory the account cannot change refuses the whole program, is argued
+  and not shown. A program that needs a file outside those directories is refused by the kernel
+  until its plan names the file.
+- A grant on a single file is written without inheritance, which is the entry a file takes. The
+  program started is granted as a file this way, and that is also unexercised.
 - Subprocess denial has no mechanism on Windows or on Linux. A container bounds what a process
   reaches rather than whether it creates children, and a child of a confined process is inside the
   same container rather than outside it, so a policy asking for that denial is refused on both
@@ -1052,6 +1074,6 @@ reported as what it is.
 - The suite does not run on Windows. The decisions this backend makes before a process starts are
   pure and are run by every job that runs the suite: which capability a policy asks for, what each
   grant permits, which policies are refused, and how an argument is written onto a command line.
-  The Win32 calls that apply them are compiled and linted by the
-  `x86_64-pc-windows-gnu` clippy job and run by nothing, so [SANDBOX-3](#SANDBOX-3)'s guarantee
+  The Win32 calls that apply them, and the call that starts a process on streams the caller made,
+  are compiled and linted by the `x86_64-pc-windows-gnu` clippy job and run by nothing, so [SANDBOX-3](#SANDBOX-3)'s guarantee
   there is argued rather than exercised.

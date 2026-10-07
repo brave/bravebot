@@ -9,10 +9,11 @@
 
 use super::{
     Grant, OWNER_ONLY_DIRECTORY_SDDL, OWNER_ONLY_FILE_SDDL, capability_names, command_line,
-    environment_block, grants_for, paths_that_are_not_there, profile_name, refusal_for,
+    environment_block, grants_to_write, paths_that_are_not_there, profile_name, refusal_for,
+    refusal_for_program,
 };
 use crate::policy::{Capabilities, SandboxPolicy};
-use crate::process::{ConfinedChild, Environment, Stream, Streams};
+use crate::process::{Attached, ConfinedChild, Environment, Stream, Streams};
 use crate::{Sandbox, SandboxError};
 use std::ffi::{OsStr, c_void};
 use std::fs::{File, OpenOptions};
@@ -25,7 +26,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use windows_sys::Win32::Foundation::{
     CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_SUCCESS, GENERIC_WRITE, HANDLE,
-    HLOCAL, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
+    HLOCAL, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ACCESS_MODE, ConvertStringSecurityDescriptorToSecurityDescriptorW, EXPLICIT_ACCESS_W,
@@ -144,6 +145,16 @@ impl AppContainerSandbox {
     /// Recorded before the call rather than after, so a grant the platform wrote and then
     /// reported a failure for is still one this backend removes.
     fn write(&self, path: &Path, grant: Grant) -> Result<()> {
+        // Inheritance is a property of a directory's entry, and a file has nothing under it for
+        // the entry to reach.
+        let grant = if path.is_file() {
+            Grant {
+                inheritance: 0,
+                ..grant
+            }
+        } else {
+            grant
+        };
         self.granted
             .lock()
             .unwrap_or_else(|held| held.into_inner())
@@ -187,7 +198,51 @@ impl Sandbox for AppContainerSandbox {
         streams: Streams,
         environment: Environment,
     ) -> std::result::Result<ConfinedChild, SandboxError> {
+        let capabilities = self.prepare(program, policy)?;
+        start(
+            &self.sid,
+            &capabilities,
+            program,
+            args,
+            Wiring::Streams(streams),
+            &environment,
+            policy.starting_in.as_deref(),
+        )
+    }
+
+    fn spawn_attached(
+        &self,
+        program: &str,
+        args: &[String],
+        policy: &SandboxPolicy,
+        attached: Attached,
+        environment: Environment,
+    ) -> std::result::Result<ConfinedChild, SandboxError> {
+        let capabilities = self.prepare(program, policy)?;
+        start(
+            &self.sid,
+            &capabilities,
+            program,
+            args,
+            Wiring::Handles(attached),
+            &environment,
+            policy.starting_in.as_deref(),
+        )
+    }
+}
+
+impl AppContainerSandbox {
+    /// Refuse what this backend will not apply, write the grants, and resolve the capabilities
+    /// the token is built with.
+    fn prepare(
+        &self,
+        program: &str,
+        policy: &SandboxPolicy,
+    ) -> std::result::Result<Vec<Sid>, SandboxError> {
         if let Some(refusal) = refusal_for(policy) {
+            return Err(refusal);
+        }
+        if let Some(refusal) = refusal_for_program(program) {
             return Err(refusal);
         }
 
@@ -211,7 +266,7 @@ impl Sandbox for AppContainerSandbox {
             });
         }
 
-        for (path, grant) in grants_for(policy) {
+        for (path, grant) in grants_to_write(policy, &readable_by_every_container()) {
             self.write(&path, grant)
                 .map_err(|e| SandboxError::SetupFailed {
                     mechanism: "appcontainer",
@@ -223,22 +278,26 @@ impl Sandbox for AppContainerSandbox {
                 })?;
         }
 
-        let capabilities =
-            capability_sids(&capability_names(policy)).map_err(|e| SandboxError::SetupFailed {
-                mechanism: "appcontainer",
-                detail: format!("a capability the policy grants could not be resolved: {e}"),
-            })?;
-
-        start(
-            &self.sid,
-            &capabilities,
-            program,
-            args,
-            streams,
-            &environment,
-            policy.starting_in.as_deref(),
-        )
+        capability_sids(&capability_names(policy)).map_err(|e| SandboxError::SetupFailed {
+            mechanism: "appcontainer",
+            detail: format!("a capability the policy grants could not be resolved: {e}"),
+        })
     }
+}
+
+/// The directories every container reads without an entry of its own: the system directory and
+/// the two Program Files directories, as this machine spells them.
+fn readable_by_every_container() -> Vec<PathBuf> {
+    [
+        "SystemRoot",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+    ]
+    .into_iter()
+    .filter_map(std::env::var_os)
+    .map(PathBuf::from)
+    .collect()
 }
 
 /// A process started under a container.
@@ -280,6 +339,29 @@ impl CreatedProcess {
             return Err(Error::last_os_error());
         }
         Ok(std::process::ExitStatus::from_raw(code))
+    }
+
+    #[allow(unsafe_code)]
+    pub(crate) fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>> {
+        use std::os::windows::process::ExitStatusExt;
+
+        let process = self.raw();
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let waited = unsafe { WaitForSingleObject(process, 0) };
+        if waited == WAIT_TIMEOUT {
+            return Ok(None);
+        }
+        if waited != WAIT_OBJECT_0 {
+            return Err(Error::last_os_error());
+        }
+
+        let mut code = 0u32;
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let read = unsafe { GetExitCodeProcess(process, &mut code) };
+        if read == 0 {
+            return Err(Error::last_os_error());
+        }
+        Ok(Some(std::process::ExitStatus::from_raw(code)))
     }
 
     #[allow(unsafe_code)]
@@ -658,13 +740,46 @@ fn inheritable(handle: RawHandle) -> Result<OwnedHandle> {
     Ok(unsafe { OwnedHandle::from_raw_handle(copy as RawHandle) })
 }
 
+/// What the three standard streams of the process are attached to.
+enum Wiring {
+    /// Decided here: a pipe this process keeps an end of, nothing, or this process's own.
+    Streams(Streams),
+    /// Handles the caller made, for a pipeline wiring one stage's output to the next.
+    Handles(Attached),
+}
+
+impl Wiring {
+    fn attach(self) -> Result<(Attachment, Attachment, Attachment)> {
+        match self {
+            Self::Streams(streams) => Ok((
+                input(streams.stdin)?,
+                output(streams.stdout, std::io::stdout().as_raw_handle())?,
+                output(streams.stderr, std::io::stderr().as_raw_handle())?,
+            )),
+            Self::Handles(Attached {
+                stdin,
+                stdout,
+                stderr,
+            }) => {
+                let held = |handle: OwnedHandle| -> Result<Attachment> {
+                    Ok(Attachment {
+                        child: inheritable(handle.as_raw_handle())?,
+                        ours: None,
+                    })
+                };
+                Ok((held(stdin)?, held(stdout)?, held(stderr)?))
+            }
+        }
+    }
+}
+
 /// Start the process, or refuse.
 fn start(
     sid: &Sid,
     capabilities: &[Sid],
     program: &str,
     args: &[String],
-    streams: Streams,
+    wiring: Wiring,
     environment: &Environment,
     directory: Option<&Path>,
 ) -> std::result::Result<ConfinedChild, SandboxError> {
@@ -673,7 +788,7 @@ fn start(
         capabilities,
         program,
         args,
-        streams,
+        wiring,
         environment,
         directory,
     )
@@ -686,15 +801,13 @@ fn started(
     capabilities: &[Sid],
     program: &str,
     args: &[String],
-    streams: Streams,
+    wiring: Wiring,
     environment: &Environment,
     directory: Option<&Path>,
 ) -> Result<ConfinedChild> {
     let mut line = wide(OsStr::new(&command_line(program, args)))?;
 
-    let stdin = input(streams.stdin)?;
-    let stdout = output(streams.stdout, std::io::stdout().as_raw_handle())?;
-    let stderr = output(streams.stderr, std::io::stderr().as_raw_handle())?;
+    let (stdin, stdout, stderr) = wiring.attach()?;
 
     let mut granted: Vec<SID_AND_ATTRIBUTES> = capabilities
         .iter()
