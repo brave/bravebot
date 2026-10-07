@@ -307,9 +307,9 @@ the summariser does not. Without the argument they find out what was dropped on 
 
 When a round's request comes back with a status a service uses to refuse the body (400 or 422), and
 a cut COMPACT-4 and COMPACT-5 would make exists, the turn compacts once, as COMPACT-8 would have, and
-sends the same request again. Once a turn: the second refusal is the turn's failure, as it was
-before, and compacts nothing. Where there is nothing to cut, the refusal is reported as it was and no
-summary is asked for.
+sends the same request again. Once a turn: the second refusal is returned as the turn's error,
+unchanged, and compacts nothing. Where there is nothing to cut, the refusal is the turn's error,
+unchanged, and no summary is asked for.
 
 The inputs are the status and the driver's own measurement of the conversation, which is what
 COMPACT-5 decides on. The reply's body is never read, because it is bytes a remote service wrote and
@@ -318,12 +318,12 @@ the driver does not branch on those.
 **Why a status is enough here, and is not enough elsewhere.** 400 and 422 are what a prompt too long
 and a field the service dislikes both come back as (backends.md, Known costs), so nothing about the
 cause is concluded. What a wrong guess costs is one summariser call, which COMPACT-5 bounds, and the
-refusal is then reported unchanged. The retry records nothing about breakpoints or effort levels:
+refusal is then returned as the turn's error. The retry records nothing about breakpoints or effort levels:
 those probes learn from a refusal that a request without the field survives, and this refusal says
 nothing about a field.
 
-COMPACT-1 and COMPACT-6 are unchanged: a summary is adopted only while the context is trusted, and
-the record keeps what the request gave up. A summariser that failed earlier in the turn is not tried
+COMPACT-1 and COMPACT-6 apply to this summary as to any other: it is adopted only while the context
+is trusted, and the record keeps what the request gave up. A summariser that failed earlier in the turn is not tried
 again, as in COMPACT-8.
 
 `verified-by: bravebot_agent::turn::a_request_refused_as_too_large_is_sent_again_after_one_compaction`
