@@ -1727,6 +1727,7 @@ command-watch = Lister les fichiers que cette session surveille, et en arrêter 
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
+command-plan = Passer en mode plan, et commencer une tâche si vous en donnez une
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
 command-memory = Lister la mémoire de chaque définition, où elle est gardée et si elle est retenue

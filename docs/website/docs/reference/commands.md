@@ -36,6 +36,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
 | `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
+| `/plan` | `[task]` | Enter plan mode, and start on a task if you give one |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
@@ -565,6 +566,19 @@ directory, or a directory added with `/add-dir`, is kept: `/cd` out of it first.
 **The list is held in memory.** After `/clear` it starts empty and the earlier checkouts stay on disk,
 and `--resume` brings none back.
 
+## `/plan [task]`
+
+Sets [plan mode](../security/permissions.md#answering-in-advance-modes), as the mode key does when it
+reaches planning. With a task it also starts a turn on that task, which runs in plan mode.
+
+```
+/plan fix the auth bug
+```
+
+The turn is sent the task and not the line, so it never sees `/plan`. Bare `/plan` sets the mode and
+sends nothing. There is no command for bypassing every check. Typed while a turn runs it waits for
+the turn to end, and the turn in flight keeps the mode it began with.
+
 ## `/manifest <task>`
 
 Plans one task in full, shows you the plan, then runs it with nothing re-planned.
@@ -920,7 +934,7 @@ nothing else done to it. A leading `~` is expanded only as a whole first segment
 own name begins with a tilde is not a home-relative path. Nothing shortens it, splits it, or asks the
 planner what it meant. The one exception is the marker for a picture you pasted or a file you dropped
 beside the line. A command that cannot carry it gets words in place of a picture and the file's name in
-place of a drop. `/btw`, `/manifest` and `/loop` send their argument, so a marker stays in
+place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, so a marker stays in
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/copy`,

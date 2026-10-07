@@ -2082,6 +2082,7 @@ command-jobs = List this turn's background jobs, and stop one by its name
 command-panel = Show or hide the info panel beside the transcript
 command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-checkouts = List kept checkouts, bring their files back, or remove one
+command-plan = Enter plan mode, and start on a task if you give one
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name
 command-memory = List each definition's memory, where it is kept and whether it is withheld

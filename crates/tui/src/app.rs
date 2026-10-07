@@ -221,6 +221,12 @@ const MEMORY_COMMAND: &str = "/memory";
 /// project` stays a prompt (CMD-2). See [`crate::init_command`] and CMD-13.
 const INIT_COMMAND: &str = "/init";
 
+/// The line that sets plan mode, and with a task starts a turn on it.
+///
+/// The same endorsement as the key that cycles to plan mode (MODE-12): it only narrows what is
+/// permitted. There is no word for bypassing, which MODE-5 leaves to the command line.
+const PLAN_COMMAND: &str = "/plan";
+
 /// One command, and what it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Command {
@@ -262,7 +268,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 35] {
+pub fn commands() -> [Command; 36] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -412,6 +418,12 @@ pub fn commands() -> [Command; 35] {
             name: CHECKOUTS_COMMAND,
             argument: "[apply <n> | remove <n>]",
             description: t!(command_checkouts),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: PLAN_COMMAND,
+            argument: "[task]",
+            description: t!(command_plan),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -1744,7 +1756,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 enum Carries {
     /// Everything a prompt carries, because what answers the line is a turn.
     ///
-    /// `/loop` and `/agent`. A tick is an ordinary turn, so its first one carries the pictures and
+    /// `/loop`, `/agent` and `/plan`. A tick is an ordinary turn, so its first one carries the pictures and
     /// the files the person named exactly as the prompt they typed them into would have, and an
     /// addressed run is a turn of the session's own.
     Everything,
@@ -1763,7 +1775,7 @@ enum Carries {
 
 /// What the line is, read off the line: both callers have one and neither knows any more than that.
 fn carries(line: &str) -> Carries {
-    if [LOOP_COMMAND, AGENT_COMMAND]
+    if [LOOP_COMMAND, AGENT_COMMAND, PLAN_COMMAND]
         .iter()
         .any(|command| argument_to(line, command).is_some())
     {
@@ -1936,6 +1948,16 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // anything back from it.
     if let Some(task) = argument_to(line, MANIFEST_COMMAND) {
         return Action::Manifest(task.to_string(), pasted, attached);
+    }
+    // The task is the prompt, as it is for `/agent`; the remainder of the line is sent and the typed
+    // line is not (CMD-4). The mode is set before the turn begins, so the turn reads plan mode
+    // (MODE-8).
+    if let Some(task) = argument_to(line, PLAN_COMMAND) {
+        session.enter_plan_mode();
+        if task.is_empty() {
+            return Action::Redraw;
+        }
+        return Action::Submit(session.start_planned(task, pasted, attached));
     }
     // A turn the driver writes the prompt of. Nothing the person typed after the word reaches it:
     // the word takes no argument, so a line with one was never this command.
@@ -15906,6 +15928,81 @@ mod tests {
             session.looping().map(|running| running.prompt()),
             Some("check the deploy")
         );
+    }
+
+    /// The turn is sent the task and not the line, and it begins in plan mode (MODE-12). A wrong
+    /// implementation sends `/plan fix the auth bug`, or starts the turn before the mode is set.
+    #[test]
+    fn the_plan_command_sets_plan_mode_and_sends_only_its_task() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("none");
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+        for c in "/plan fix the auth bug".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("fix the auth bug".to_string())
+        );
+        assert_eq!(session.permission_mode(), PermissionMode::Plan);
+        assert_eq!(session.status, Status::Working);
+        assert_eq!(
+            session.transcript.last().expect("the task is said").text,
+            "fix the auth bug"
+        );
+    }
+
+    /// Without a task there is nothing to send, so the word sets the mode and the session stays
+    /// at rest. Typed from bypassing it narrows to planning.
+    #[test]
+    fn the_plan_command_without_a_task_sets_the_mode_and_sends_nothing() {
+        use bravebot_agent::PermissionMode;
+        for session in [
+            Session::new("none"),
+            Session::new("none").starting_in_bypass(),
+        ] {
+            let mut session = session;
+            assert_eq!(
+                dispatch_command(&mut session, commanded("/plan")),
+                Action::Redraw
+            );
+            assert_eq!(session.permission_mode(), PermissionMode::Plan);
+            assert_eq!(session.status, Status::Idle);
+            assert!(session.transcript.is_empty(), "something was said");
+        }
+    }
+
+    /// The word names plan mode, not the next rung: a session already planning stays there, and one
+    /// asking is not moved to accepting edits. A longer word is a prompt.
+    #[test]
+    fn the_plan_command_sets_plan_mode_rather_than_cycling_to_the_next() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("none");
+        for _ in 0..2 {
+            dispatch_command(&mut session, commanded("/plan"));
+            assert_eq!(session.permission_mode(), PermissionMode::Plan);
+        }
+
+        assert_eq!(command_typed("/planning the release"), None);
+    }
+
+    /// A turn keeps the mode it began with (MODE-8), so the word waits for the turn in flight
+    /// rather than changing the mode its confirmer was built with.
+    #[test]
+    fn the_plan_command_waits_for_the_turn_in_flight() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        for c in "/plan look at it".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+        assert_eq!(session.queued.len(), 1, "the command did not wait");
+        assert_eq!(session.queued[0].prompt, "/plan look at it");
     }
 
     /// An interval with nothing after it is a loop somebody asked for and cannot have, so the

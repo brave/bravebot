@@ -148,7 +148,9 @@ by asking what to clear.
 That a command may go on to start a request of its own is a separate thing: `/compact` sends a
 conversation to be summarised, which [compaction.md](compaction.md) governs, `/btw` sends a copy of
 the conversation with a question on the end of it, which [watching.md](watching.md) governs, and
-`/model` reaches the network to list models. None of them sends the typed line.
+`/model` reaches the network to list models. `/plan <task>` starts a turn, and what that turn is sent
+is the task after the word, which [permission-modes.md](permission-modes.md) governs. None of them sends
+the typed line.
 
 `verified-by: bravebot_tui::app::typing_the_status_command_reports_rather_than_prompting`
 `verified-by: bravebot_tui::app::typing_the_cost_command_reports_rather_than_prompting`
