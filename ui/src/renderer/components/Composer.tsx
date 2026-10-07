@@ -1,13 +1,23 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import type { FileAttachment } from '../../shared/files'
 import { projectLabel } from '../../shared/recents'
+import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
+import { MentionList } from './MentionList'
 import { ModelPicker } from './ModelPicker'
 import { PermissionModePicker } from './PermissionModePicker'
 import type { PermissionMode } from '../../shared/protocol'
+
+/** The bridge's offer for `line`, or nothing offered when it cannot answer or answers out of shape. */
+async function askOffer(session: string, line: string, cursor: number): Promise<MentionOffer> {
+  const { ok } = await window.bravebot.request<Partial<MentionOffer>>('mentions.offer', { session, line, cursor })
+  return typeof ok?.typed === 'string' && Array.isArray(ok.entries)
+    ? { typed: ok.typed, entries: ok.entries, completes: ok.completes === true }
+    : { typed: null, entries: [], completes: false }
+}
 
 /** How many lines the field grows to before it starts to scroll. */
 const FIELD_MAX_ROWS = 6
@@ -47,6 +57,9 @@ export interface ComposerProps {
   queuePaused: boolean
   onResumeQueued: () => void
   onRemoveQueued: (index: number) => void
+  /** Why the last message did not go, said on the box it was sent from. */
+  refusal: string | null
+  onDismissRefusal: () => void
   backendReady: boolean | null
   onSetup: () => void
   onCheckBackend: () => void
@@ -140,7 +153,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
     draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, attachments, onAttach, onRemoveAttachment, onPreview,
-    queued, queuePaused, onResumeQueued, onRemoveQueued, backendReady, onSetup, onCheckBackend, onDiagnostics,
+    queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
@@ -188,6 +201,48 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     return () => cancelAnimationFrame(frame)
   }, [draft, session, input])
 
+  // A half-typed `@` name and what it could become (NAME-4). The bridge reads the draft with the
+  // terminal's rules and lists the project, and the last answer stays drawn while the next is on
+  // its way, so the list does not blink between keys.
+  const [offer, setOffer] = useState<{ session: string; line: string; value: MentionOffer } | null>(null)
+  const [cursor, setCursor] = useState(0)
+  const [dismissed, setDismissed] = useState<string | null>(null)
+  useEffect(() => {
+    setCursor(0)
+    // A bot's page before its first conversation has no folder to list.
+    if (!session) return
+    let current = true
+    void askOffer(session, draft, 0).then((value) => { if (current) setOffer({ session, line: draft, value }) })
+    return () => { current = false }
+  }, [session, draft])
+  const typed = offer?.session === session ? offer.value.typed : null
+  const offered = typed !== null && dismissed !== typed && offer ? offer.value.entries : []
+  const active = Math.max(0, Math.min(cursor, offered.length - 1))
+
+  /** The offer for exactly this line and row, waiting for it unless the last answer was for it. */
+  const freshOffer = async (line: string, at: number): Promise<MentionOffer> =>
+    at === 0 && offer?.session === session && offer.line === line ? offer.value : askOffer(session, line, at)
+  const choose = (entry: MentionEntry) => {
+    setCursor(0)
+    latest.current.onDraft(acceptMention(latest.current.draft, entry))
+  }
+  /** Enter: complete a half-typed name, or send a line whose last name is finished (NAME-7). */
+  const enter = async (line: string, at: number) => {
+    if (session) {
+      const value = await freshOffer(line, at)
+      const entry = value.entries[Math.min(at, value.entries.length - 1)]
+      if (value.typed !== null && dismissed !== value.typed && value.completes && entry) return choose(entry)
+    }
+    const props = latest.current
+    if (props.askingTrust || props.starting || props.backendReady === false || !props.draft.trim()) return
+    if (props.running) props.onQueue()
+    else submit()
+  }
+
+  // Read by the key handler for the reason `latest` is.
+  const mention = useRef({ typed, offered, active, dismissed, freshOffer, choose, enter })
+  mention.current = { typed, offered, active, dismissed, freshOffer, choose, enter }
+
   const blocked = askingTrust || backendReady === false || starting
   const canSend = !blocked && draft.trim().length > 0
 
@@ -230,6 +285,13 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             ))}
           </div>
         )}
+        {refusal && (
+          <div className="composer-tray composer-notice send-refused" role="alert" data-test="send-refused">
+            <Icon name="warning-triangle-outline" />
+            <span className="notice-text"><strong>Not sent</strong> · {refusal}</span>
+            <IconButton icon="close" size="tiny" label="Dismiss" tooltip="Dismiss" onClick={onDismissRefusal} />
+          </div>
+        )}
         <div className={`composer-shell${footer ? ' with-footer' : ''}`}>
         <div className="composer-box">
           {attachments.length > 0 && (
@@ -255,20 +317,41 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             onKeyDown={({ innerEvent }) => {
               const event = innerEvent as unknown as KeyboardEvent
               const now = latest.current
-              if (event.key === 'Escape' && now.running && !event.isComposing && !openElsewhere()) {
+              const composing = event.isComposing || event.keyCode === 229
+              const list = mention.current
+              const plain = !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey
+              if (!composing && plain && list.offered.length > 0) {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault()
+                  setCursor(Math.max(0, Math.min(list.offered.length - 1, list.active + (event.key === 'ArrowDown' ? 1 : -1))))
+                  return
+                }
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setDismissed(list.typed)
+                  return
+                }
+              }
+              if (!composing && plain && event.key === 'Tab' && list.offered.length > 0) {
+                event.preventDefault()
+                const at = list.active
+                void list.freshOffer(now.draft, at).then((value) => {
+                  const entry = value.entries[Math.min(at, value.entries.length - 1)]
+                  if (value.typed !== null && entry) mention.current.choose(entry)
+                })
+                return
+              }
+              if (event.key === 'Escape' && now.running && !composing && !openElsewhere()) {
                 event.preventDefault()
                 now.onCancel()
                 return
               }
-              if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey
-                && !event.isComposing && event.keyCode !== 229) {
+              if (event.key === 'Enter' && plain && !composing) {
                 event.preventDefault()
                 // The round button is Stop for the whole time a reply is generating. Enter still
                 // queues a follow-up, which is the path the button used to offer as "Queue message".
-                if (!event.repeat && !now.askingTrust && !now.starting && now.backendReady !== false && now.draft.trim()) {
-                  if (now.running) now.onQueue()
-                  else submit()
-                }
+                if (!event.repeat) void list.enter(now.draft, list.active)
               }
             }} />
           <div className="composer-toolbar">
@@ -289,6 +372,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
         </div>
         {footer && <ComposerFooter {...footer} disabled={running} />}
         </div>
+        {offered.length > 0 && <MentionList entries={offered} active={active} onActive={setCursor} onChoose={choose} />}
       </div>
     </footer>
   )

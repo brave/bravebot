@@ -652,7 +652,16 @@ Either list is checked in full before a turn starts. Each of these refuses the s
 
 `null` for either list is the same as leaving it out.
 
-None of these lists may be named by a renderer in this app; see §9 and `src/main/sanitise.ts`.
+None of these lists may be named by a renderer in this app; see §9 and `src/main/sanitise.ts`. The
+app's main process composes `files` itself from native-picker grants.
+
+Unless `composed` is set, the bridge adds to `files` every name `prompt` gives with `@`, read with
+the terminal's rule (NAME-6): each word starting with `@`, without the `@`, except a bare `@` and a
+name ending in `/`. Each is surveyed first by the read the turn makes of a named file: inside the
+workspace, present, not a directory, and text by the agent's binary test. A name that fails is a
+`bad_request` naming it (`@<name> is not a file in this project. …` or
+`@<name> is not a text file, so it cannot be sent. …`), and no turn starts. A prompt with
+`composed` set names no file.
 
 Spawns the worker thread and calls `turn::resume` with an
 RPC `Confirmer`, an RPC `Reporter`, and a `Trail` sink — the same call shape as
@@ -689,6 +698,32 @@ not an error.
 A pending confirmation checks cancellation at most every 50 ms and resolves to refusal.
 No approval is sent, and no additional client reply is required. Cancellation also
 covers the race where the question is registered just after the stop request.
+
+#### `mentions.offer`
+
+```json
+{ "id": 7, "method": "mentions.offer", "params": { "session": "s1", "line": "Summarise @src/ma", "cursor": 0 } }
+→ { "typed": "src/ma", "entries": [{ "path": "src/main.rs", "directory": false }], "completes": true }
+```
+
+What the message box offers for a half-typed `@` name (NAME-4, NAME-5, NAME-9), from the
+`bravebot-mentions` crate the terminal uses, against the session's project. `typed` is what
+follows the `@` of the line's last word while it is still being typed, or `null`, which closes
+the list. `entries` is one directory of the project: directories first, narrowed by the prefix,
+at most 40, version-control, build and dependency directories left out, and nothing for `..` or
+an absolute path. `completes` is whether Enter with the cursor on row `cursor` (default 0)
+completes the name rather than sending the line (NAME-7). Names and kinds only; no file is read.
+
+#### `mentions.named`
+
+```json
+{ "id": 8, "method": "mentions.named", "params": { "session": "s1", "prompt": "Summarise @README.md" } }
+→ { "files": ["README.md"] }
+```
+
+The files a prompt names with `@`, surveyed as `turn.send` surveys them, or the same
+`bad_request` that `turn.send` would answer. For drawing the **Read** rows before a send and
+refusing it early; `turn.send` reads the prompt again, and that is the check that decides.
 
 #### `confirm.reply`
 
@@ -1117,7 +1152,8 @@ the directory was made.
 - Replies arrive whole in `turn.done`; output-token events report counts, not text.
 - MCP configuration (declaring, approving ahead of time, enabling and forgetting), subscription
   import and skills authoring have no dedicated UI. `bravebot mcp` in a terminal does the first.
-- File browsing, previews and attachments are Electron IPC features, not RPC methods.
+- File browsing, previews and attachments are Electron IPC features, not RPC methods. `@`
+  completion is `mentions.offer` and `mentions.named`.
 - One `bravebot-rpc` process has one client. There is no multi-client transport.
 
 ---

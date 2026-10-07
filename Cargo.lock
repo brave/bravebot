@@ -359,6 +359,7 @@ dependencies = [
  "bravebot-aichat",
  "bravebot-config",
  "bravebot-core",
+ "bravebot-mentions",
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-session",

@@ -69,8 +69,11 @@ The briefing itself is written under the app's own data directory rather than a 
 it is not pinned to a project root. It is written to a name of its own and renamed into
 place, never opened by the name the turn will name, so a link left at the briefing's path is
 displaced instead of written through.
-Previews never send content to a model. Attachment selection still requires the native
-picker and a separate Send action.
+Previews never send content to a model. A file goes to a model only with a send, either
+picked through the native picker, which the `attachment` check above covers, or named with
+`@` in the prompt. The bridge reads those names back out of the prompt at `turn.send` and
+surveys each with the agent's own read, confined to the session's workspace, before the turn
+starts. See [security](security.md).
 
 Drafts are stored locally in `experience.json` with mode 0600; clearing a draft removes
 its saved text. Memory history retains up to 30 revisions. Reset preserves revisions for

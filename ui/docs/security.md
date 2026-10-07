@@ -24,10 +24,26 @@ See [file access and retention](file-access-security.md) for the helper's guaran
 and limits. Do not assume every filesystem operation uses the helper.
 
 File contents **do** cross IPC for previews and bot-memory editing. These operations
-do not themselves send the contents to a model. File attachments require a native
-picker, a session-bound grant, validation at send time, and an explicit Send action.
-The main process strips raw `files`, `dropped`, `attachments` and `images` from renderer
-turn requests and composes authorized paths itself. Bot briefings are also composed by the main process.
+do not themselves send the contents to a model. A file reaches the agent as trusted
+context in one of two ways, each ending in an explicit send:
+
+- A native picker selection, which leaves a session-bound token.
+- A name written with `@` in the prompt, as the terminal accepts one
+  ([NAME-1](../../docs/specs/naming-files.md#NAME-1)). The renderer can name any file
+  inside the folder the conversation runs in this way (its project, or a bot's home
+  folder), and nothing outside it.
+
+The main process strips raw `files`, `dropped`, `attachments` and `images` from renderer turn requests
+and composes `files` itself from the picker's tokens, each checked through the helper as
+a regular text file by the agent's binary test. The `@` names are not the renderer's to
+list: at `turn.send` the bridge reads them back out of the prompt with the terminal's
+rule (`bravebot-mentions`) and surveys each with the agent's own read of a named file,
+which refuses `..`, an absolute path and a link leading out of the workspace, a missing
+name, a directory and a binary file. A name that fails refuses the whole send with a
+message naming it, before a turn starts. There is no cap on the number of files or on a
+text file's size, matching the terminal. The completion list for a half-typed name
+(`mentions.offer`) is the terminal's list of one directory at a time, and returns names
+and kinds only. Bot briefings are also composed by the main process.
 Both lists are admitted as trusted context, so the only path a bot contributes is the
 briefing, whose every byte the main process wrote from what somebody typed. A bot's memory
 is neither named nor quoted in it: the briefing says where the memory is and the model reads

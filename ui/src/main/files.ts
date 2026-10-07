@@ -16,8 +16,10 @@ import { isAttachableProjectFile, readProjectText } from './project-files'
  * double-clicked: a link is a way out of the folder, and this panel is about the folder.
  *
  * Text reads additionally use pinned directory descriptors through the secure-file helper.
- * Previews are returned only to the person reviewing the project. Sending file contents to
- * the agent requires a separate native selection and an opaque attachment token.
+ * Previews are returned only to the person reviewing the project. The renderer names no path for
+ * the agent to read: a file goes to it through a native selection that leaves an opaque attachment
+ * token, or as a name written with `@` in the prompt, which the bridge reads back out of the
+ * prompt at `turn.send` and confines to the session's workspace itself.
  */
 
 import { shell, dialog, type BrowserWindow } from 'electron'

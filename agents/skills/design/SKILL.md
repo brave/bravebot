@@ -29,8 +29,10 @@ surface needs all of it.
 - **Layout can change, capability stays.** Restructure freely, but keep every capability,
   accessible name, security marking and `data-test` hook unless a deliberate evaluation removes it.
 - **Nothing approves for the person.** No approval accelerators (a keyboard shortcut that approves a
-  decision card), no card that takes focus from the composer, no drag or paste attach (attachments
-  need the native picker's grant). See `ui/docs/security.md` and `ui/docs/file-access-security.md`.
+  decision card), no card that takes focus from the composer, no drag or paste attach (a file goes
+  only through the native picker's grant or an `@` name the bridge reads back out of the sent
+  prompt and confines to the conversation's folder). See `docs/best-practices/ui.md#UI-003`,
+  `ui/docs/security.md` and `ui/docs/file-access-security.md`.
 
 ## The window
 

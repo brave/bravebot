@@ -26,7 +26,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [turns.md](turns.md) | `TURN` | 7 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing, checks nothing or runs into its output ceiling |
 | [prompting.md](prompting.md) | `PROMPT` | 10 | every moment the system stops and puts something to a human, and what an answer grants |
 | [permission-modes.md](permission-modes.md) | `MODE` | 12 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
-| [naming-files.md](naming-files.md) | `NAME` | 8 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
+| [naming-files.md](naming-files.md) | `NAME` | 9 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
 | [pasting.md](pasting.md) | `PASTE` | 10 | what Ctrl-V puts into a turn, text or picture, and on what footing |
 | [dropping.md](dropping.md) | `DROP` | 10 | what dragging a file onto a window puts into a turn, and on what footing |
 | [shell-mode.md](shell-mode.md) | `SHELL` | 5 | the `!` prompt: a line the user typed, and why the planner can never reach it |

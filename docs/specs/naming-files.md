@@ -6,6 +6,7 @@ governs:
   - crates/mentions/src/lib.rs
   - crates/tui/src/state.rs
   - crates/cli/src/main.rs
+  - crates/ui-bridge/src/mentions.rs
 documented-by: docs/website/docs/using/context.md
 ---
 
@@ -138,11 +139,35 @@ unescaped path.
 would offer an entry that completes to text naming a different path. Where a reference ends is
 decided from the line the user typed, not from file contents.
 
-`verified-by: bravebot_tui::entries::a_backslash_before_a_space_continues_a_reference`
-`verified-by: bravebot_tui::entries::an_escaped_path_reads_back_unchanged`
-`verified-by: bravebot_tui::entries::a_name_with_a_space_is_listed_and_finished`
+`verified-by: bravebot_mentions::lib::a_backslash_before_a_space_continues_a_reference`
+`verified-by: bravebot_mentions::lib::an_escaped_path_reads_back_unchanged`
+`verified-by: bravebot_mentions::lib::a_name_with_a_space_is_listed_and_finished`
 `verified-by: bravebot_tui::references::a_name_with_a_space_completes_to_a_reference_that_names_it`
 `verified-by: bravebot_tui::references::enter_completes_a_half_typed_reference_past_an_escaped_space`
+
+<a id="NAME-9"></a>
+### NAME-9: the desktop message box names a file on the same terms
+
+The clauses above are worded for the terminal, and the desktop app's message box keeps each of
+them, because both front ends call the same `bravebot-mentions` code: the same list (NAME-4), `..`,
+an absolute path and a link leading out of the workspace refused (NAME-5), a name ending in `/`, a
+bare `@` and an address in a sentence naming nothing (NAME-6), and Enter completing a half-typed
+name and sending a finished one (NAME-7), and a backslash before a space keeping the space in a name
+(NAME-8). The bridge reads the names back out of the prompt at
+`turn.send` rather than taking a list from the window, so the files that go are the ones the sent
+line names. Each is surveyed by the read the turn will make, and a name that would fail it (outside
+the workspace, missing, a directory, or not text) refuses the send before a turn starts, where the
+terminal would end the turn. The project is the folder the conversation runs in, which for a bot's
+conversation is the bot's home folder or the project chosen for it. A prompt the app composes
+itself names no file.
+
+**Why.** One person names files in both front ends, and a name the window treated differently from
+the terminal would send a file nobody chose or drop one somebody did.
+
+`verified-by: bravebot_ui_bridge::mentions::the_window_is_offered_the_terminals_list_of_the_project`
+`verified-by: bravebot_ui_bridge::mentions::a_prompt_names_only_text_files_inside_the_project`
+`verified-by: bravebot_ui_bridge::mentions::a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn`
+`verified-by: by-construction (the window's half is not a crate this workspace compiles, so ui/scripts/drive-at-mentions.mjs drives the real app and bridge against a stub model and asserts the list, its keys, Tab into a directory, Enter completing a half-typed name, the file's contents in the model request, the Read row, the refusal of @../outside.txt at send, and that a bot's conversation with no project lists and reads the bot's home folder and refuses a project file)`
 
 ## Known costs
 

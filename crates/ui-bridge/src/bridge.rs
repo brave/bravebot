@@ -139,6 +139,29 @@ impl Bridge {
             "session.mode" => self.set_permission_mode(request),
             "session.rewind" => self.rewind_session(request),
             "turn.send" => self.send_turn(request),
+            "mentions.offer" => {
+                let open = self
+                    .open
+                    .get(&request.string("session")?)
+                    .ok_or_else(Failure::no_such_session)?;
+                let cursor = request.param("cursor").as_u64().unwrap_or(0);
+                Ok(crate::mentions::offer(
+                    &open.project,
+                    &request.string("line")?,
+                    usize::try_from(cursor).unwrap_or(usize::MAX),
+                ))
+            }
+            "mentions.named" => {
+                let open = self
+                    .open
+                    .get(&request.string("session")?)
+                    .ok_or_else(Failure::no_such_session)?;
+                let settings =
+                    crate::settings::layers(Some(&open.project), self.settings.as_deref());
+                let workspace = session_workspace(open, &settings)?;
+                let files = crate::mentions::named(&workspace, &request.string("prompt")?)?;
+                Ok(json!({ "files": files }))
+            }
             "turn.cancel" => self.cancel_turn(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
@@ -891,6 +914,26 @@ impl Bridge {
         // too.
         let addressing = named.or_else(|| open.definition.clone());
 
+        // The layers the configuration below comes from, read here rather than in the worker so
+        // what they say is what stood when the turn was asked for. Three answers come off them:
+        // the workspace the turn reads through, what a commit message or a pull request this turn
+        // writes may carry (BACKEND-30), and the caps a search this turn makes runs under
+        // (SEARCH-9).
+        let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+        let workspace = session_workspace(open, &settings)?;
+        // The files the prompt names with `@` (NAME-9), read out of the prompt here rather than
+        // taken from the front end, and each one surveyed by the read the turn will make, so a
+        // name that would end the turn refuses the send before anything starts. A prompt nobody
+        // typed names nothing, the same line the terminal draws.
+        let mut files = files;
+        if composed.is_none() {
+            for named in crate::mentions::named(&workspace, &prompt)? {
+                if !files.contains(&named) {
+                    files.push(named);
+                }
+            }
+        }
+
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
         // A model the machine-level layer refuses is not requested, whichever service would have
@@ -899,11 +942,6 @@ impl Bridge {
         if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
             return Err(Failure::bad_request(refused));
         }
-        // The same layers the configuration above came from, read here rather than in the worker
-        // so what they say is what stood when the turn was asked for. Two answers come off them:
-        // what a commit message or a pull request this turn writes may carry (BACKEND-30), and
-        // the caps a search this turn makes runs under (SEARCH-9).
-        let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
@@ -918,40 +956,10 @@ impl Bridge {
             .mcp_requested()
             .map(|(file, alias)| (file.to_path_buf(), alias.to_string()))
             .collect();
-        let mut workspace = turn_workspace(
-            open.project.clone(),
-            &settings,
-            &bravebot_config::Managed::load(),
-        )
-        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
-
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
         let watches = Arc::clone(&open.watches);
-        let (turn_number, directories, scratch) = state
-            .lock()
-            .map(|s| {
-                (
-                    s.turns + 1,
-                    s.directories.clone(),
-                    s.scratch.path().map(Path::to_path_buf),
-                )
-            })
-            .unwrap_or((1, Vec::new(), None));
-        // The session's own directory outside the project, made as the session opened. Set by the
-        // code that holds it, so a turn cannot widen its own reach (TRUST-14).
-        workspace.open_scratch(scratch);
-
-        // A workspace is built per turn and opens the project only, so the directories a
-        // resumed session had open have to be opened again here. The rules about them came back
-        // with the trust map, and a rule about a directory nothing can open refuses every path
-        // under it for escaping the workspace — with nothing on screen to say why. One that has
-        // since moved or been deleted cannot be reopened and is left closed: the refusal it
-        // causes is the one that was already happening, and this protocol has no way to say so
-        // outside a turn.
-        for directory in &directories {
-            let _ = workspace.add_directory(&directory.display().to_string());
-        }
+        let turn_number = state.lock().map(|s| s.turns + 1).unwrap_or(1);
 
         // A fresh token and a fresh channel per turn. Reusing either could cancel a turn
         // before it started, or deliver yesterday's answer to today's question.
@@ -1095,34 +1103,20 @@ impl Bridge {
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         // Read when the run is accepted and kept to its end, as a turn keeps its own (MODE-8).
         let permission_mode = open.permission_mode;
-        let mut workspace = turn_workspace(
-            open.project.clone(),
-            &settings,
-            &bravebot_config::Managed::load(),
-        )
-        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+        let workspace = session_workspace(open, &settings)?;
 
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
-        let (run, turns, directories, scratch) = state
+        let (run, turns) = state
             .lock()
             .map(|mut s| {
                 // A run writes files as a turn does, so the same coverage gap applies.
                 s.rewind
                     .record_gap(bravebot_agent::rewind::CoverageGap::Desktop);
                 s.runs += 1;
-                (
-                    s.runs,
-                    s.turns,
-                    s.directories.clone(),
-                    s.scratch.path().map(Path::to_path_buf),
-                )
+                (s.runs, s.turns)
             })
-            .unwrap_or((1, 0, Vec::new(), None));
-        workspace.open_scratch(scratch);
-        for directory in &directories {
-            let _ = workspace.add_directory(&directory.display().to_string());
-        }
+            .unwrap_or((1, 0));
 
         let cancel = Cancel::new();
         let (answers_tx, answers_rx) = mpsc::channel();
@@ -1830,6 +1824,41 @@ pub fn turn_workspace(
     Ok(Workspace::new(project)?
         .with_search_caps(caps.files, caps.time)
         .with_reads_kept_inside(inside))
+}
+
+/// The workspace a turn in this session reads through, as the session stands now.
+///
+/// A workspace is built per turn and opens the project only, so the directories a resumed session
+/// had open are opened again here. The rules about them came back with the trust map, and a rule
+/// about a directory nothing can open refuses every path under it for escaping the workspace, with
+/// nothing on screen to say why. One that has since moved or been deleted cannot be reopened and
+/// is left closed: the refusal it causes is the one that was already happening, and this protocol
+/// has no way to say so outside a turn.
+///
+/// The session's own directory outside the project, made as the session opened, is set by the
+/// code that holds it, so a turn cannot widen its own reach (TRUST-14).
+fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Failure> {
+    let mut workspace = turn_workspace(
+        open.project.clone(),
+        settings,
+        &bravebot_config::Managed::load(),
+    )
+    .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+    let (directories, scratch) = open
+        .state
+        .lock()
+        .map(|s| {
+            (
+                s.directories.clone(),
+                s.scratch.path().map(Path::to_path_buf),
+            )
+        })
+        .unwrap_or((Vec::new(), None));
+    workspace.open_scratch(scratch);
+    for directory in &directories {
+        let _ = workspace.add_directory(&directory.display().to_string());
+    }
+    Ok(workspace)
 }
 
 /// Everything a worker needs to run one turn.
