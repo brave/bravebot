@@ -1035,7 +1035,10 @@ pub struct Servers {
     /// wants is the session's: this is built once for one and carried by the turn.
     session: Option<SessionIndex>,
     /// This agent's own credential names, withheld from every server. RUN-12's reason.
-    withheld: Vec<String>,
+    ///
+    /// Asked at each launch rather than once, because servers start lazily (LSP-8) and a provider
+    /// block added after the session began names a variable a later server must not receive.
+    withheld: fn() -> Vec<String>,
     /// What the running servers are, for a screen that may not take this set's lock.
     roster: Roster,
 }
@@ -1054,7 +1057,7 @@ impl Servers {
         state: Option<PathBuf>,
         resolve: fn(&str) -> Option<PathBuf>,
         incognito: bool,
-        withheld: Vec<String>,
+        withheld: fn() -> Vec<String>,
     ) -> Self {
         Self {
             running: HashMap::new(),
@@ -1147,7 +1150,8 @@ impl Servers {
             }
 
             let cache = self.index_dir(language)?;
-            let server = Server::launch(language, &resolved, &self.root, &cache, &self.withheld)?;
+            let server =
+                Server::launch(language, &resolved, &self.root, &cache, &(self.withheld)())?;
             self.running.insert(language, server);
             self.publish();
         }
@@ -1227,7 +1231,7 @@ mod tests {
     #[test]
     fn starting_a_server_is_put_to_a_person() {
         let mut asked = 0;
-        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new());
+        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new);
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "look up");
@@ -1281,7 +1285,7 @@ mod tests {
         // A server already running is not asked about again, which is what the map decides. Pinned on
         // the bookkeeping rather than on a live process: `running` is what `ask` consults before it
         // reaches the approval, so a language present in it is a language nobody is asked about.
-        let servers = Servers::new(root(), None, |_| None, false, Vec::new());
+        let servers = Servers::new(root(), None, |_| None, false, Vec::new);
         assert_eq!(servers.running(), 0);
         assert_eq!(
             Language::for_path("src/a.rs"),
@@ -1592,7 +1596,7 @@ mod tests {
         let names = ["cache", "index_dir", "cache_dir"];
         let debug = format!(
             "{:?}",
-            Servers::new(root(), None, |_| None, false, Vec::new())
+            Servers::new(root(), None, |_| None, false, Vec::new)
         );
         for name in names {
             assert!(
@@ -1606,7 +1610,7 @@ mod tests {
     /// guessing one from the symbol's name.
     #[test]
     fn a_query_with_no_file_is_told_no_server_is_running() {
-        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new());
+        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new);
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "look up");
@@ -1667,7 +1671,7 @@ mod tests {
             None,
             |program| Some(PathBuf::from("/usr/bin").join(program)),
             false,
-            Vec::new(),
+            Vec::new,
         );
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = bravebot_core::policy::Routing::new();
@@ -1768,7 +1772,7 @@ mod tests {
     /// LSP-8: nothing starts until something asks.
     #[test]
     fn no_server_starts_until_a_request_needs_one() {
-        let servers = Servers::new(root(), None, |_| None, false, Vec::new());
+        let servers = Servers::new(root(), None, |_| None, false, Vec::new);
         assert_eq!(
             servers.running(),
             0,
@@ -1779,7 +1783,7 @@ mod tests {
     /// LSP-8: the set is what stops the processes, so dropping it must stop them all.
     #[test]
     fn dropping_the_set_stops_every_server() {
-        let servers = Servers::new(root(), None, |_| None, false, Vec::new());
+        let servers = Servers::new(root(), None, |_| None, false, Vec::new);
         // Nothing running, so this is the degenerate case; the property that matters is that the
         // set owns its servers, which is by construction, and that dropping it is not a leak.
         drop(servers);
@@ -1867,7 +1871,7 @@ mod tests {
     /// question for a language already running starts nothing, which is what the map decides.
     #[test]
     fn a_server_is_started_once_and_reused() {
-        let servers = Servers::new(root(), None, |_| None, false, Vec::new());
+        let servers = Servers::new(root(), None, |_| None, false, Vec::new);
         assert_eq!(servers.running(), 0);
 
         // Two files of the same language must map to one server, and two languages to two.
@@ -1895,7 +1899,7 @@ mod tests {
         );
         // A server is only ever owned by a `Server`, whose `Drop` kills it, so there is no path
         // that leaks one. Dropping a set with nothing in it must still be sound.
-        drop(Servers::new(root(), None, |_| None, false, Vec::new()));
+        drop(Servers::new(root(), None, |_| None, false, Vec::new));
     }
 
     /// LSP-9: the capability is checked before a process is started, so a run that was not granted
@@ -2096,7 +2100,7 @@ done
             None,
             the_server_that_rejects_a_position,
             false,
-            Vec::new(),
+            Vec::new,
         );
 
         for operation in [
@@ -2167,7 +2171,7 @@ done
             None,
             the_server_that_rejects_a_query,
             false,
-            Vec::new(),
+            Vec::new,
         );
 
         // A whole-tree query names no file, so it goes to whichever server is running. The
@@ -2232,7 +2236,7 @@ done
             None,
             the_server_that_rejects_with_prose,
             false,
-            Vec::new(),
+            Vec::new,
         );
 
         let refused = ask_with_the_server_approved(
@@ -2426,7 +2430,7 @@ done
             Some(state.clone()),
             the_server_that_reports_in_incognito,
             true,
-            Vec::new(),
+            Vec::new,
         );
 
         a_definition_in(&mut servers, &file);
@@ -2472,7 +2476,7 @@ done
             None,
             the_server_that_reports_with_no_state_directory,
             false,
-            Vec::new(),
+            Vec::new,
         );
 
         a_definition_in(&mut servers, &file);
@@ -2521,7 +2525,7 @@ done
             Some(state.clone()),
             the_server_that_reports_with_a_state_directory,
             false,
-            Vec::new(),
+            Vec::new,
         );
 
         a_definition_in(&mut servers, &file);

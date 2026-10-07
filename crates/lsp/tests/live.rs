@@ -75,7 +75,7 @@ fn ask(question: &Question<'_>) -> Option<bravebot_lsp::Answer> {
         std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".bravebot")),
         resolve,
         false,
-        Vec::new(),
+        Vec::new,
     );
 
     // LSP-5 asks before a server starts. A test is not a person, so it says yes explicitly rather

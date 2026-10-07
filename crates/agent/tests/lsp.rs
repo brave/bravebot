@@ -371,8 +371,9 @@ fn a_server_approved_in_one_turn_answers_the_next() {
 /// variable a provider block names does not reach the server, which runs whatever the project's
 /// toolchain makes of it.
 ///
-/// The block names a variable no built-in list holds, and the set is built after the settings
-/// exist, which is when a session builds it. The server records its environment on the way up.
+/// The block names a variable no built-in list holds, and the servers are built before the
+/// settings are read, since the server is started by the first question and the set is worked out
+/// then. The server records its environment on the way up.
 #[test]
 fn a_language_server_is_not_handed_a_gateways_environment_token() {
     let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
@@ -413,6 +414,9 @@ fn a_language_server_is_not_handed_a_gateways_environment_token() {
         reject: false,
     };
 
+    // Built before the provider block is in force, which is when a session builds it: the server
+    // starts on the first question, after.
+    let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
     let previous_home = std::env::var_os("HOME");
     // SAFETY: PATH_LOCK is held for the whole of this body, so no other test in this binary reads
     // or writes the environment, and both variables are put back before any assertion.
@@ -421,7 +425,6 @@ fn a_language_server_is_not_handed_a_gateways_environment_token() {
         std::env::set_var("ACME_GATEWAY_TOKEN", "a-live-gateway-token");
         std::env::remove_var("BRAVEBOT_SUBPROCESS_ENV_SCRUB");
     }
-    let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
     let outcome = turn::resume(
         &config,
         &egress,
