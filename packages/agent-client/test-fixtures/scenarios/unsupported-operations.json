@@ -1,0 +1,20 @@
+{
+  "name": "unsupported-operations",
+  "description": "An unknown bridge method is refused by the bridge, and a question of a kind this client does not answer stays visible as unsupported.",
+  "steps": [
+    {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
+    {"expectRequest": "info", "method": "agent.info", "params": {}},
+    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}}}}]},
+    {"expectRequest": "new", "method": "session.new", "params": {"directory": "/work"}},
+    {"send": [{"event": "trust.request", "session": "s1", "data": {"directory": "/work", "keeping": null}}, {"id": "$new", "ok": {"session": "s1"}}]},
+    {"expectRequest": "view", "method": "session.view.start", "params": {"session": "s1", "version": 1}},
+    {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "status": "idle", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
+    {"await": "a", "bindSession": "a"},
+    {"start": "teleport", "call": "raw", "args": {"method": "session.teleport", "params": {"session": "s1"}}},
+    {"expectRequest": "t", "method": "session.teleport", "params": {"session": "s1"}},
+    {"send": [{"id": "$t", "error": {"code": "bad_request", "message": "unknown method `session.teleport`"}}]},
+    {"await": "teleport", "error": {"name": "RpcError", "code": "bad_request"}},
+    {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 1, "turn": 1, "status": "running", "pending": null, "rows": [{"id": 1, "turn": 1, "kind": "prompt", "event": null, "data": {"text": "go"}, "resolved": false}]}}, {"event": "session.view.update", "session": "s1", "data": {"sequence": 2, "turn": 1, "status": "waiting", "pending": {"row": 2, "request": 9, "kind": "output", "supported": false, "data": {"request": 9, "command": "cat x"}}, "rows": [{"id": 2, "turn": 1, "kind": "approval", "event": "output.request", "data": {"request": 9, "command": "cat x"}, "resolved": false}]}}]},
+    {"expectView": "a", "status": "waiting", "pending": {"kind": "output", "supported": false}}
+  ]
+}

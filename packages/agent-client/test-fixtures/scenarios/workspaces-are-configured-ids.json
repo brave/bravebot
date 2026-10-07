@@ -1,0 +1,12 @@
+{
+  "name": "workspaces-are-configured-ids",
+  "description": "Sessions are created from configured workspace ids, never raw paths, and operations this client lacks fail without sending.",
+  "steps": [
+    {"expectWorkspaces": [{"id": "work", "name": "Work"}, {"id": "one", "name": "One"}, {"id": "two", "name": "Two"}]},
+    {"start": "bad", "call": "createSession", "args": {"workspace": "/etc"}},
+    {"await": "bad", "error": {"name": "RpcError", "code": "unknown_workspace"}},
+    {"start": "attach", "call": "unsupported", "args": {"operation": "takeControl"}},
+    {"await": "attach", "error": {"name": "UnsupportedError"}},
+    {"expectNoRequest": true}
+  ]
+}

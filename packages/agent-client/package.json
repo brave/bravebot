@@ -1,0 +1,31 @@
+{
+  "name": "@brave/agent-client",
+  "version": "0.0.0",
+  "description": "A thin typed client for the bravebot session view",
+  "license": "MPL-2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/common/index.d.ts",
+      "default": "./dist/src/common/index.js"
+    },
+    "./node": {
+      "types": "./dist/src/node/index.d.ts",
+      "default": "./dist/src/node/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.common.json && tsc -p tsconfig.json --noEmit",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "test": "node --test --test-timeout=120000 dist/tests/*.test.js",
+    "check": "npm run typecheck && npm run build && npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.7.2"
+  }
+}

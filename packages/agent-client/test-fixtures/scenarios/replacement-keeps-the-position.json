@@ -1,0 +1,16 @@
+{
+  "name": "replacement-keeps-the-position",
+  "description": "A replaced row keeps its position and id; every status field is replaced.",
+  "steps": [
+    {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
+    {"expectRequest": "info", "method": "agent.info", "params": {}},
+    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}}}}]},
+    {"expectRequest": "new", "method": "session.new", "params": {"directory": "/work"}},
+    {"send": [{"event": "trust.request", "session": "s1", "data": {"directory": "/work", "keeping": null}}, {"id": "$new", "ok": {"session": "s1"}}]},
+    {"expectRequest": "view", "method": "session.view.start", "params": {"session": "s1", "version": 1}},
+    {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "status": "idle", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
+    {"await": "a", "bindSession": "a"},
+    {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 1, "turn": 1, "status": "running", "pending": null, "rows": [{"id": 1, "turn": 1, "kind": "prompt", "event": null, "data": {"text": "go"}, "resolved": false}]}}, {"event": "session.view.update", "session": "s1", "data": {"sequence": 2, "turn": 1, "status": "waiting", "pending": {"row": 2, "request": 2, "kind": "run", "supported": true, "data": {"request": 2, "command": "ls"}}, "rows": [{"id": 2, "turn": 1, "kind": "approval", "event": "run.request", "data": {"request": 2, "command": "ls"}, "resolved": false}]}}, {"event": "session.view.update", "session": "s1", "data": {"sequence": 3, "turn": 1, "status": "running", "pending": null, "rows": [{"id": 3, "turn": 1, "kind": "narration", "event": "narration", "data": {"text": "after"}, "resolved": false}]}}, {"event": "session.view.update", "session": "s1", "data": {"sequence": 4, "turn": 1, "status": "cancelled", "pending": null, "rows": [{"id": 2, "turn": 1, "kind": "approval", "event": "run.request", "data": {"request": 2, "command": "ls"}, "resolved": true}, {"id": 4, "turn": 1, "kind": "error", "event": "turn.error", "data": {"kind": "cancelled"}, "resolved": false}]}}]},
+    {"expectView": "a", "sequence": 4, "status": "cancelled", "pending": null, "rows": [{"id": 1}, {"id": 2, "resolved": true, "data": {"request": 2, "command": "ls"}}, {"id": 3}, {"id": 4, "kind": "error"}]}
+  ]
+}

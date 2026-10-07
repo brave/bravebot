@@ -1,0 +1,128 @@
+{
+  "capability": {
+    "approvals": [
+      "confirm",
+      "run",
+      "fetch",
+      "ask"
+    ],
+    "reconnect": false,
+    "scope": "fresh_session",
+    "start": "session.view.start",
+    "version": 1
+  },
+  "rowKinds": [
+    "prompt",
+    "narration",
+    "quarantined",
+    "approval",
+    "reply",
+    "error",
+    "activity"
+  ],
+  "statuses": [
+    "awaiting_trust",
+    "idle",
+    "running",
+    "waiting",
+    "completed",
+    "failed",
+    "cancelled",
+    "detached"
+  ],
+  "update": {
+    "pending": {
+      "data": {
+        "host": "example.test",
+        "request": 7,
+        "url": "https://example.test/"
+      },
+      "kind": "fetch",
+      "request": 7,
+      "row": 4,
+      "supported": true
+    },
+    "rows": [
+      {
+        "data": {
+          "label": "(U,pub)",
+          "text": "released"
+        },
+        "event": null,
+        "id": 1,
+        "kind": "prompt",
+        "resolved": false,
+        "turn": 1
+      },
+      {
+        "data": {
+          "label": "(U,pub)",
+          "text": "released"
+        },
+        "event": "tool.started",
+        "id": 2,
+        "kind": "narration",
+        "resolved": false,
+        "turn": 1
+      },
+      {
+        "data": {
+          "label": "(U,pub)",
+          "text": "released"
+        },
+        "event": "tool.started",
+        "id": 3,
+        "kind": "quarantined",
+        "resolved": false,
+        "turn": 1
+      },
+      {
+        "data": {
+          "label": "(U,pub)",
+          "text": "released"
+        },
+        "event": "tool.started",
+        "id": 4,
+        "kind": "approval",
+        "resolved": true,
+        "turn": 1
+      },
+      {
+        "data": {
+          "label": "(U,pub)",
+          "text": "released"
+        },
+        "event": "tool.started",
+        "id": 5,
+        "kind": "reply",
+        "resolved": false,
+        "turn": 1
+      },
+      {
+        "data": {
+          "label": "(U,pub)",
+          "text": "released"
+        },
+        "event": "tool.started",
+        "id": 6,
+        "kind": "error",
+        "resolved": false,
+        "turn": 1
+      },
+      {
+        "data": {
+          "label": "(U,pub)",
+          "text": "released"
+        },
+        "event": "tool.started",
+        "id": 7,
+        "kind": "activity",
+        "resolved": false,
+        "turn": 1
+      }
+    ],
+    "sequence": 3,
+    "status": "waiting",
+    "turn": 1
+  }
+}
