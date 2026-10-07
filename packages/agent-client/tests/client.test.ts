@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { ConnectionLostError, ProtocolError, RpcAgentClient, RpcError, UnsupportedError } from '../src/common/index.js'
+import { rawRequest } from '../src/common/client.js'
 import { FIXTURES } from './support/scenario.js'
 
 const contract = JSON.parse(readFileSync(join(FIXTURES, 'wire-contract.json'), 'utf8')) as { capability: unknown }
@@ -97,7 +98,7 @@ for (const failure of ['listener', 'formatting', 'diagnostic'] as const) {
     assert.equal(second.view.sequence, 1)
     assert.deepEqual(seen, [null])
 
-    const inFlight = client.raw('turn.send')
+    const inFlight = rawRequest(client, 'turn.send')
     inFlight.catch(() => undefined)
     assert.doesNotThrow(() => client.transportClosed('eof'))
     assert.equal(second.view.ended?.reason, 'connection_lost')

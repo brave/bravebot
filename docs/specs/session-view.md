@@ -129,7 +129,8 @@ that view at its last received state; it claims no recovery. It reports a close 
 with worker termination and save success unknown. A failed close keeps the session registered for
 view updates and connection-loss reporting, unless the bridge reports that the session is gone. Sessions open only in configured workspace ids, and a
 request unanswered past its deadline ends the connection with its outcome unknown. Startup trust is
-sent only when a caller asks. The client holds released payloads as received and branches on none of
+sent only when a caller asks. No export of the package reaches raw dispatch or the connection, so these
+rules hold for every caller. The client holds released payloads as received and branches on none of
 them. Rust still decides every transition. This version does not answer questions: a pending
 question stays in the view until the turn is cancelled.
 

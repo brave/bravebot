@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { rawRequest } from '../../src/common/client.js'
 import { RpcAgentClient, type AgentSession } from '../../src/common/index.js'
 import { subsetMismatch, within } from './wait.js'
 
@@ -96,7 +97,7 @@ export async function runScenario(scenario: Scenario, chunking: Chunking): Promi
     describe: () => client.describe(),
     createSession: (args) => client.createSession({ workspace: args.workspace }),
     unsupported: (args) => client.unsupported(args.operation),
-    raw: (args) => client.raw(args.method, args.params),
+    raw: (args) => rawRequest(client, args.method, args.params),
     answerTrust: (args, target) => target().answerTrust(args.trusted),
     send: (args, target) => target().send(args.text),
     cancel: (_args, target) => target().cancel(),

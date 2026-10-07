@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { LineFramer, ProtocolError } from '../src/common/index.js'
+import {ProtocolError } from '../src/common/index.js'
+import { LineFramer } from '../src/common/framing.js'
 
 test('a line split across chunks is delivered once, whole', () => {
   const framer = new LineFramer()

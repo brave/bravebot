@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import { CapabilityError, ConnectionLostError, UnsupportedError } from '../src/common/index.js'
 import { connectStdio } from '../src/node/index.js'
 import { FIXTURES } from './support/scenario.js'
+import { rawOn } from './support/raw.js'
 import { within } from './support/wait.js'
 
 test('a runtime without the session view is refused before any session is created', async () => {
@@ -13,7 +14,7 @@ test('a runtime without the session view is refused before any session is create
   try {
     await assert.rejects(legacy.client.createSession({ workspace: 'work' }), CapabilityError)
     await assert.rejects(legacy.client.describe(), CapabilityError)
-    await legacy.raw('agent.info')
+    await rawOn(legacy, 'agent.info')
     const requests = legacy.stderr().split('\n').filter(Boolean).map((line) => (JSON.parse(line.slice('request '.length)) as { method: string }).method)
     assert.deepEqual(requests, ['agent.info', 'agent.info'], 'no session.new was sent to the old runtime')
   } finally {
@@ -33,7 +34,7 @@ test('a child exit reports its code and ends the connection', async () => {
   const exit = await within(quick.exited, 'the child to exit')
   assert.equal(exit.code, 3)
   // Stdout can reach EOF before the exit code is known; the exit promise still reports it.
-  await assert.rejects(quick.raw('agent.info'), ConnectionLostError)
+  await assert.rejects(rawOn(quick, 'agent.info'), ConnectionLostError)
 })
 
 test('output split mid-character across reads is decoded whole', async () => {
@@ -47,7 +48,7 @@ test('output split mid-character across reads is decoded whole', async () => {
     })`
   const split = connectStdio({ command: process.execPath, args: ['-e', script], env: {} })
   try {
-    assert.deepEqual(await within(split.raw('anything'), 'the split reply'), { text: 'héllo ✓ 🙂' })
+    assert.deepEqual(await within(rawOn(split, 'anything'), 'the split reply'), { text: 'héllo ✓ 🙂' })
   } finally {
     await split.dispose(500)
   }
@@ -55,10 +56,10 @@ test('output split mid-character across reads is decoded whole', async () => {
 
 test('a request that is never answered ends the connection with its outcome unknown and stops the child', async () => {
   const silent = connectStdio({ command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], env: {}, requestTimeoutMs: 100 })
-  await assert.rejects(silent.raw('turn.send'), (error: ConnectionLostError) => /outcome is unknown/.test(error.message))
+  await assert.rejects(rawOn(silent, 'turn.send'), (error: ConnectionLostError) => /outcome is unknown/.test(error.message))
   const exit = await within(silent.exited, 'the silent child to be stopped')
   assert.ok(exit.signal !== null || exit.code !== null)
-  await assert.rejects(silent.raw('agent.info'), ConnectionLostError)
+  await assert.rejects(rawOn(silent, 'agent.info'), ConnectionLostError)
 })
 
 for (const ending of ['end', 'error'] as const) {
@@ -91,7 +92,7 @@ for (const ending of ['end', 'error'] as const) {
       assert.equal(connection.child.exitCode, null, 'the child is still alive')
       assert.equal(session.view.ended?.reason, 'connection_lost')
       await assert.rejects(session.send('after output loss'), UnsupportedError)
-      await assert.rejects(connection.raw('agent.info'), ConnectionLostError)
+      await assert.rejects(rawOn(connection, 'agent.info'), ConnectionLostError)
       await within(connection.exited, 'the child to be stopped after output loss')
     } finally {
       await connection.dispose(500)
@@ -114,7 +115,7 @@ test('a write the child never reads fails the request at once, not at its deadli
     // Write only after the child reports that its end of the pipe is closed, so the write breaks.
     await within(closed, 'the child to close its input')
     await within(
-      assert.rejects(deaf.raw('turn.send'), (error: ConnectionLostError) => /writing to bravebot-rpc failed/.test(error.message)),
+      assert.rejects(rawOn(deaf, 'turn.send'), (error: ConnectionLostError) => /writing to bravebot-rpc failed/.test(error.message)),
       'the failed write to end the request',
     )
   } finally {
@@ -127,8 +128,8 @@ test('a request after the child input has ended also ends the connection while t
   try {
     idle.endInput()
     await within(once(idle.child.stdin, 'close'), 'the input to close')
-    await assert.rejects(idle.raw('agent.info'), (error: Error) => /not accepting input/.test(error.message))
-    await assert.rejects(idle.raw('agent.info'), ConnectionLostError)
+    await assert.rejects(rawOn(idle, 'agent.info'), (error: Error) => /not accepting input/.test(error.message))
+    await assert.rejects(rawOn(idle, 'agent.info'), ConnectionLostError)
   } finally {
     await idle.dispose(200)
   }

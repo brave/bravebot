@@ -91,7 +91,7 @@ released content.
 - answer startup trust when asked to, after which the question is no longer offered;
 - send, cancel, and close.
 
-`raw` on the stdio connection (and on `RpcAgentClient`) sends any bridge method for diagnostics and tests. The connection's `client` is typed as `AgentClient`, which has no `raw`, and `raw` is not confined to configured workspaces.
+Raw dispatch of arbitrary bridge methods is not part of the package. The entry points export no `raw`, no connection class, and no way to reach the client's connection, because dispatch is not confined to configured workspaces and could answer a question the client never offered. Tests reach it through an internal module that the package's `exports` map does not expose.
 
 `attach`, `takeControl` and `messageStatus` fail locally. A question a turn asks appears in the
 view and can be cancelled, which refuses it. Answering it is not yet supported.

@@ -10,6 +10,7 @@ import {
   type Pending,
 } from '../src/common/index.js'
 import { recording, startRig, until, type Rig } from './support/rig.js'
+import { rawOn } from './support/raw.js'
 import { within } from './support/wait.js'
 
 const rigs: Rig[] = []
@@ -44,7 +45,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
     const info = await made.rpc.client.describe()
     assert.deepEqual(info.sessionView.approvals, ['confirm', 'run', 'fetch', 'ask'])
     assert.equal(info.sessionView.reconnect, false)
-    const raw = (await made.rpc.raw('agent.info')) as Record<string, unknown>
+    const raw = (await rawOn(made.rpc, 'agent.info')) as Record<string, unknown>
     assert.equal(typeof raw.home, 'string', 'the bridge reports its state directory')
     assert.equal(JSON.stringify(info).includes(raw.home as string), false)
   })
@@ -141,7 +142,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
     assert.equal(ended.rows.at(-1)?.kind, 'error')
     // The bridge refuses a late answer to the question that was cancelled.
     await assert.rejects(
-      made.rpc.raw('confirm.reply', { session: session.id, request: question.request, decision: 'approve' }),
+      rawOn(made.rpc, 'confirm.reply', { session: session.id, request: question.request, decision: 'approve' }),
       (error: RpcError) => error.code === 'no_such_request',
     )
     await made.rpc.client.describe()
@@ -177,9 +178,9 @@ describe('a real bravebot-rpc process through the typed client', () => {
   test('the bridge refuses unknown methods, repeated or unsupported view starts, and the client reports them with their code', async () => {
     const made = await rig({})
     const session = await trusted(made)
-    await assert.rejects(made.rpc.raw('session.teleport', { session: session.id }), (e: RpcError) => e.code === 'bad_request')
-    await assert.rejects(made.rpc.raw('session.view.start', { session: session.id, version: 1 }), (e: RpcError) => e.code === 'bad_request')
-    await assert.rejects(made.rpc.raw('session.view.start', { session: session.id, version: 2 }), (e: RpcError) => e.code === 'bad_request')
+    await assert.rejects(rawOn(made.rpc, 'session.teleport', { session: session.id }), (e: RpcError) => e.code === 'bad_request')
+    await assert.rejects(rawOn(made.rpc, 'session.view.start', { session: session.id, version: 1 }), (e: RpcError) => e.code === 'bad_request')
+    await assert.rejects(rawOn(made.rpc, 'session.view.start', { session: session.id, version: 2 }), (e: RpcError) => e.code === 'bad_request')
     assert.equal(session.view.sequence, 1, 'refusals changed nothing in the view')
   })
 
@@ -199,7 +200,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
       }),
       'the bridge to answer the id-only line',
     )
-    assert.ok((await made.rpc.raw('agent.info')) !== undefined, 'a later valid request still works')
+    assert.ok((await rawOn(made.rpc, 'agent.info')) !== undefined, 'a later valid request still works')
   })
 
   test('ending input makes the bridge exit, refuses a pending write, and ends the view as lost', async () => {
@@ -212,7 +213,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
     assert.equal(exit.signal, null)
     assert.equal(session.view.ended?.reason, 'connection_lost')
     assert.equal(existsSync(join(made.project, 'eof.txt')), false, 'ending input refused the pending write')
-    await assert.rejects(made.rpc.raw('agent.info'), ConnectionLostError)
+    await assert.rejects(rawOn(made.rpc, 'agent.info'), ConnectionLostError)
   })
 
   test(
@@ -222,7 +223,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
       const made = await rig({})
       const session = await trusted(made)
       made.rpc.child.kill('SIGSTOP')
-      const inFlight = made.rpc.raw('agent.info')
+      const inFlight = rawOn(made.rpc, 'agent.info')
       inFlight.catch(() => undefined)
       made.rpc.child.kill('SIGKILL')
       await assert.rejects(inFlight, ConnectionLostError)

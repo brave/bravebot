@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { ConnectionLostError, RpcConnection, RpcError, type BridgeEvent } from '../src/common/index.js'
+import {ConnectionLostError, RpcError, type BridgeEvent } from '../src/common/index.js'
+import { RpcConnection } from '../src/common/connection.js'
 
 function harness() {
   const written: { id: number; method: string }[] = []

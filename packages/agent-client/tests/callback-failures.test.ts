@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { CapabilityError, ConnectionLostError, ProtocolError, RpcAgentClient, RpcConnection, RpcError } from '../src/common/index.js'
+import {CapabilityError, ConnectionLostError, ProtocolError, RpcAgentClient, RpcError } from '../src/common/index.js'
+import { RpcConnection } from '../src/common/connection.js'
 import { FIXTURES } from './support/scenario.js'
 
 const contract = JSON.parse(readFileSync(join(FIXTURES, 'wire-contract.json'), 'utf8')) as { capability: unknown }

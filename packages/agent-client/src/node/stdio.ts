@@ -23,10 +23,8 @@ export interface Exit {
 
 /** A client bound to a child process speaking the bridge's newline-delimited JSON on stdio. */
 export interface StdioConnection {
-  /** The operations a caller may use. Raw dispatch is `raw`, below, and is not part of this. */
+  /** The operations a caller may use. */
   readonly client: AgentClient
-  /** Send any bridge method. For diagnostics and refusal tests: not confined to configured workspaces. */
-  raw(method: string, params?: Record<string, unknown>): Promise<unknown>
   readonly child: ChildProcessWithoutNullStreams
   /** What the child wrote to stderr: human-readable, never parsed. */
   stderr(): string
@@ -113,7 +111,6 @@ export function connectStdio(options: StdioOptions): StdioConnection {
   }
   return {
     client,
-    raw: (method, params) => client.raw(method, params),
     child,
     stderr: () => errors,
     exited,

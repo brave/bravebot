@@ -136,8 +136,25 @@ class Session implements AgentSession {
 }
 
 /** The typed client over one connection to a `bravebot-rpc` process. */
+type RawAccess = (client: RpcAgentClient, method: string, params: Record<string, unknown>) => Promise<unknown>
+let rawAccess: RawAccess | undefined
+
+/**
+ * Send any bridge method. This is for tests and diagnostics: it is not confined to configured
+ * workspaces and replies to nothing on a caller's behalf. The package entry points do not export
+ * it, and the client keeps its connection in a private field, so only code inside the package
+ * that imports this module can reach it.
+ */
+export function rawRequest(client: RpcAgentClient, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  return rawAccess!(client, method, params)
+}
+
 export class RpcAgentClient implements AgentClient {
-  private readonly connection: RpcConnection
+  static {
+    rawAccess = (client, method, params) => client.#connection.request(method, params)
+  }
+
+  readonly #connection: RpcConnection
   private readonly sessions = new Map<string, Session>()
   private readonly early = new Map<string, BridgeEvent[]>()
   private capability: Promise<TargetInfo> | null = null
@@ -152,7 +169,7 @@ export class RpcAgentClient implements AgentClient {
   ) {
     this.onDiagnostic = options.onDiagnostic
     this.configured = (options.workspaces ?? []).map((workspace) => ({ ...workspace }))
-    this.connection = new RpcConnection(sink, {
+    this.#connection = new RpcConnection(sink, {
       onEvent: (event) => this.route(event),
       onClosed: (detail) => {
         this.lost(detail)
@@ -164,12 +181,12 @@ export class RpcAgentClient implements AgentClient {
 
   /** Feed text read from the transport. */
   receive(chunk: string): void {
-    this.connection.receive(chunk)
+    this.#connection.receive(chunk)
   }
 
   /** The transport ended. */
   transportClosed(detail: string): void {
-    this.connection.transportClosed(detail)
+    this.#connection.transportClosed(detail)
   }
 
   private route(event: BridgeEvent): void {
@@ -207,11 +224,11 @@ export class RpcAgentClient implements AgentClient {
 
   describe(): Promise<TargetInfo> {
     if (this.capability === null) {
-      const pending = this.connection.request('agent.info').then((info) => this.target(info))
+      const pending = this.#connection.request('agent.info').then((info) => this.target(info))
       this.capability = pending
       // A refusal of the capability or a lost connection is final; any other failure may be retried.
       pending.catch((error: unknown) => {
-        if (this.capability === pending && !(error instanceof CapabilityError) && !this.connection.closed) {
+        if (this.capability === pending && !(error instanceof CapabilityError) && !this.#connection.closed) {
           this.capability = null
         }
       })
@@ -251,7 +268,7 @@ export class RpcAgentClient implements AgentClient {
     let created: Session | null = null
     const opened = (outcome: Outcome): void => {
       if (!('ok' in outcome) || !isRecord(outcome.ok) || typeof outcome.ok.session !== 'string') return
-      const session = new Session(outcome.ok.session, this.connection, (id) => this.sessions.delete(id), (message) => this.report(message))
+      const session = new Session(outcome.ok.session, this.#connection, (id) => this.sessions.delete(id), (message) => this.report(message))
       created = session
       this.sessions.set(session.id, session)
       const held = this.early.get(session.id) ?? []
@@ -260,14 +277,14 @@ export class RpcAgentClient implements AgentClient {
     }
     this.creating++
     try {
-      await this.connection.request('session.new', { directory: workspace.directory }, opened)
+      await this.#connection.request('session.new', { directory: workspace.directory }, opened)
     } finally {
       if (--this.creating === 0) this.early.clear()
     }
     if (created === null) throw new ProtocolError('session.new did not return a session handle')
     const session: Session = created
     try {
-      await this.connection.request(SESSION_VIEW_START, { session: session.id, version: SESSION_VIEW_VERSION })
+      await this.#connection.request(SESSION_VIEW_START, { session: session.id, version: SESSION_VIEW_VERSION })
       if (session.refused !== null || !session.hasView) {
         throw new ProtocolError(session.refused ?? 'the initial view did not arrive before the start response')
       }
@@ -275,18 +292,9 @@ export class RpcAgentClient implements AgentClient {
       this.sessions.delete(session.id)
       // Best effort and unawaited: the caller gets the startup failure now. The request has no deadline,
       // so a silent bridge leaves it pending until the connection ends rather than ending the connection.
-      this.connection.request('session.close', { session: session.id }, undefined, { untimed: true }).catch(() => undefined)
+      this.#connection.request('session.close', { session: session.id }, undefined, { untimed: true }).catch(() => undefined)
       throw error
     }
     return session
-  }
-
-  /**
-   * Send an arbitrary bridge method. Not part of `AgentClient`: it is not confined to configured
-   * workspaces and does not wait for a caller to ask before replying to a question. For
-   * diagnostics and refusal tests only.
-   */
-  raw(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-    return this.connection.request(method, params)
   }
 }
