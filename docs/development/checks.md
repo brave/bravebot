@@ -119,7 +119,11 @@ takes a minute and one that takes twenty, and the reviewer is the person waiting
 
 `make check-spec` checks the mechanical half of the specs: clause numbering, the tests each clause
 names, the paths it governs, the call sites a guarded symbol pins, and the table in
-[../specs/README.md](../specs/README.md). CI runs it too, so a new use of a guarded symbol fails a
+[../specs/README.md](../specs/README.md). It also runs
+[../../contrib/check-issue-posters.py](../../contrib/check-issue-posters.py), which fails when
+[the issue-poster definition](../../agents/agents/issue-poster.md) would not load, writes a label
+[labelling-issues.md](labelling-issues.md) does not describe, or when a skill that files an issue
+does not name it. CI runs it too, so a new use of a guarded symbol fails a
 pull request rather than waiting for somebody to notice it. It also holds
 [../../agents/unverified-clauses.txt](../../agents/unverified-clauses.txt) to the clauses that are
 `verified-by: none`, so giving a clause a test, or setting one to `none`, is a line in a diff

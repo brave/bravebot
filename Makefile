@@ -177,11 +177,18 @@ check-toolchain:
 # The screenshot renderer rides along because it is the other half's tool: the skill pastes what
 # it prints into issue bodies, it is standard library Python like everything else here, and a
 # renderer that is quietly wrong sends a plausible and untrue screen to whoever has to fix the bug.
+#
+# The issue-poster check rides along too: every skill that files an issue has to name
+# agents/agents/issue-poster.md, and the labels that file writes have to be ones labelling-issues.md
+# describes. It is here rather than in `check` because a change to a skill or to docs/ runs no Rust
+# gate, and this one runs on every change.
 .PHONY: check-spec
 check-spec:
 	python3 agents/skills/check-spec/selftest.py
 	python3 agents/skills/check-spec/check-spec.py --mechanical-only
 	@python3 contrib/terminal-screenshot.py --selftest
+	@python3 contrib/check-issue-posters.py --selftest
+	@python3 contrib/check-issue-posters.py
 
 # The deterministic half of the security audit. It answers the questions check-spec cannot: whether
 # two documents agree about how many exceptions to the rule are admitted, whether every crate
