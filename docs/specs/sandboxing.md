@@ -737,8 +737,8 @@ on the stage's behalf: a `cat ~/notes.txt` fails, and a person adds the director
 ([trust-map.md](trust-map.md)). On Linux and macOS a stage reads the machine except the credential
 table ([SANDBOX-12](#SANDBOX-12)), and writes only the session's directories, so what it costs is a
 write outside them and a read of a credential location its plan does not carry. On Linux each
-stage start lists the directories above each refused location, which is measured in the pull
-request that built it. On macOS the refusal of a `.git` write is lifted for these stages
+stage start lists every directory above a refused location, and the time that takes grows with the
+number of entries in those directories, the home directory among them. On macOS the refusal of a `.git` write is lifted for these stages
 ([SANDBOX-14](#SANDBOX-14)), which gives them the reach Linux gives.
 
 `verified-by: bravebot_agent::confine::a_confined_program_cannot_read_a_file_outside_the_session`
