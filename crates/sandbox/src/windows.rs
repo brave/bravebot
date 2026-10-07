@@ -177,6 +177,92 @@ fn paths_that_are_not_there(
     missing
 }
 
+/// The components of a Windows path, lower-cased, or `None` where the path cannot be compared by
+/// its text.
+///
+/// Split on both separators, since the same path is written either way, and lower-cased because
+/// the file system does not tell `Windows` from `WINDOWS`. The `\\?\` prefix a resolved path
+/// carries is dropped. A path with a `.` or `..` component is `None`: its text does not say where
+/// it ends up.
+fn components_of(path: &Path) -> Option<Vec<String>> {
+    let text = path.to_string_lossy();
+    let mut parts: Vec<String> = text
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    if parts.first().is_some_and(|first| first == "?") {
+        parts.remove(0);
+    }
+    if parts.iter().any(|part| part == "." || part == "..") {
+        return None;
+    }
+    Some(parts)
+}
+
+/// Whether every container may already read `path`, because it is at or below one of `roots`.
+///
+/// The machine's own directories, `C:\Windows` and the Program Files directories, carry an entry
+/// for the group every container belongs to. A grant there is an entry only an account allowed to
+/// change the directory's permissions can write, so one asked of an ordinary account fails and
+/// takes the whole program with it, for access the container has. Decided by the path's text and
+/// never by asking the file system, so a link cannot make a directory of the person's own count.
+fn readable_by_every_container(path: &Path, roots: &[PathBuf]) -> bool {
+    let Some(path) = components_of(path) else {
+        return false;
+    };
+    roots.iter().any(|root| {
+        components_of(root).is_some_and(|root| {
+            !root.is_empty()
+                && path.starts_with(&root)
+                && path
+                    .get(root.len())
+                    .is_none_or(|next| !NOT_READABLE_BY_EVERY_CONTAINER.contains(&next.as_str()))
+        })
+    })
+}
+
+/// The directories directly under those roots that carry no such entry: the machine's shared
+/// temporary directory and the packaged applications' store keep their own access lists.
+const NOT_READABLE_BY_EVERY_CONTAINER: [&str; 2] = ["temp", "windowsapps"];
+
+/// The grants of `policy` that need an entry written, given the roots every container reads.
+///
+/// A write grant always needs one, however the path sits: a container is not given the right
+/// to write the machine's directories by default, and a row asking for it is one that fails.
+fn grants_to_write(policy: &SandboxPolicy, readable_roots: &[PathBuf]) -> Vec<(PathBuf, Grant)> {
+    grants_for(policy)
+        .into_iter()
+        .filter(|(path, grant)| {
+            *grant != grant_for_reading() || !readable_by_every_container(path, readable_roots)
+        })
+        .collect()
+}
+
+/// Why this backend will not start `program`, where it will not.
+///
+/// A batch file is run by `cmd.exe`, which reads its own command line again after the one
+/// [`command_line`] wrote, and an argument that was quoted so a program gets it back unchanged
+/// can be read there as an operator. No quoting is right for both readers, so a program that is
+/// one is refused rather than started with arguments that mean something other than what a
+/// person approved.
+pub fn refusal_for_program(program: &str) -> Option<SandboxError> {
+    let is_a_batch_file = Path::new(program)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("bat") || extension.eq_ignore_ascii_case("cmd")
+        });
+    is_a_batch_file.then(|| SandboxError::SetupFailed {
+        mechanism: "appcontainer",
+        detail: format!(
+            "{program} is a batch file, and `cmd.exe` reads its arguments a second time, so \
+             an argument quoted for a program can be read there as a command; refusing rather \
+             than starting it"
+        ),
+    })
+}
+
 /// What an AppContainer enforces here.
 fn capabilities() -> Capabilities {
     Capabilities {
@@ -400,6 +486,108 @@ mod tests {
                 format!("(A;{inheritance};FA;;;OW)"),
                 "the {name} list is not one entry allowing the owner"
             );
+        }
+    }
+
+    fn roots() -> Vec<PathBuf> {
+        vec![
+            PathBuf::from(r"C:\Windows"),
+            PathBuf::from(r"C:\Program Files"),
+            PathBuf::from(r"C:\Program Files (x86)"),
+        ]
+    }
+
+    /// The directories every container reads need no entry, in whatever case and with whichever
+    /// separator and prefix the path was written, so a program installed there starts.
+    #[test]
+    fn what_every_container_reads_is_the_machines_own_directories() {
+        for path in [
+            r"C:\Windows",
+            r"C:\Windows\System32",
+            r"c:\windows\system32\cmd.exe",
+            "C:/Windows/System32",
+            r"\\?\C:\Windows\System32",
+            r"C:\Program Files\Git\cmd",
+            r"C:\Program Files (x86)\Microsoft",
+        ] {
+            assert!(
+                readable_by_every_container(Path::new(path), &roots()),
+                "{path}"
+            );
+        }
+    }
+
+    /// Nothing outside them is, and a path that only starts the same way, a sibling named like a
+    /// root, one that climbs out of a root, or one in the two directories under a root that keep
+    /// their own access lists, is a path whose entry has to be written: skipping it would be a
+    /// program that cannot read what it was granted.
+    #[test]
+    fn nothing_else_is_taken_to_be_readable_by_every_container() {
+        for path in [
+            r"C:\Users\a-person\project",
+            r"C:\WindowsApps",
+            r"C:\Windows.old\Users",
+            r"C:\Program Files Extra\tool",
+            r"C:\Windows\..\Users\a-person",
+            r"C:\Windows\.\System32",
+            r"C:\Windows\Temp",
+            r"c:\windows\TEMP\a-run",
+            r"C:\Program Files\WindowsApps\a.package",
+            r"D:\Windows",
+            r"C:\",
+            "",
+        ] {
+            assert!(
+                !readable_by_every_container(Path::new(path), &roots()),
+                "{path}"
+            );
+        }
+        assert!(!readable_by_every_container(Path::new(r"C:\Windows"), &[]));
+        assert!(!readable_by_every_container(
+            Path::new(r"C:\Windows"),
+            &[PathBuf::from("")]
+        ));
+    }
+
+    /// Only a read grant is spared its entry. A write under the machine's directories is the one
+    /// thing a container does not have there, and dropping the row would be the policy applied
+    /// without it.
+    #[test]
+    fn a_write_grant_under_a_system_directory_still_needs_its_entry() {
+        let policy = a_policy_this_backend_applies()
+            .allow_read(r"C:\Windows\System32")
+            .allow_write(r"C:\Windows\System32\spool");
+
+        let written: Vec<PathBuf> = grants_to_write(&policy, &roots())
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+
+        assert!(written.contains(&PathBuf::from(r"C:\Windows\System32\spool")));
+        assert!(written.contains(&PathBuf::from("/workspace")));
+        assert!(!written.contains(&PathBuf::from(r"C:\Windows\System32")));
+    }
+
+    /// A program that is a batch file is refused whatever case and directory it is spelled in,
+    /// and an executable whose name merely contains the extension is not.
+    #[test]
+    fn a_batch_file_is_refused_and_an_executable_is_not() {
+        for program in [
+            r"C:\tools\build.bat",
+            r"C:\tools\BUILD.CMD",
+            "npm.cmd",
+            r"C:\tools\a.b.Bat",
+        ] {
+            assert!(refusal_for_program(program).is_some(), "{program}");
+        }
+        for program in [
+            r"C:\tools\build.exe",
+            r"C:\tools\bat",
+            r"C:\tools\build.bat.exe",
+            r"C:\bat\build",
+            "git",
+        ] {
+            assert!(refusal_for_program(program).is_none(), "{program}");
         }
     }
 

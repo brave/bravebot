@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 pub enum Prelude {
     Linux,
     MacOs,
+    Windows,
 }
 
 impl Prelude {
@@ -49,7 +50,12 @@ impl Prelude {
             Some(Self::MacOs)
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(windows)]
+        {
+            Some(Self::Windows)
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             None
         }
@@ -60,6 +66,18 @@ impl Prelude {
         match self {
             Self::Linux => LINUX_PRELUDE,
             Self::MacOs => MACOS_PRELUDE,
+            Self::Windows => WINDOWS_PRELUDE,
+        }
+    }
+
+    /// The device a program discards output to, where this platform has one a profile can name.
+    ///
+    /// `NUL` is not a path under any directory, so there is no row to write for it, and a
+    /// program opens it whatever it is granted.
+    fn null_device(self) -> Option<&'static str> {
+        match self {
+            Self::Linux | Self::MacOs => Some(THE_NULL_DEVICE),
+            Self::Windows => None,
         }
     }
 }
@@ -144,6 +162,17 @@ const MACOS_PRELUDE: &[&str] = &[
     "/dev/urandom",
 ];
 
+/// What a Windows program reads before any plan is read: nothing.
+///
+/// A container is granted read and execute on `C:\Windows` and the Program Files directories
+/// by the group every container belongs to, and that is what a program needs to start, so the
+/// system directories are reached without a row. They are left out rather than listed because a
+/// row is an entry written onto the directory, and only an account holding the right to change
+/// a directory's permissions may write one: naming `C:\Windows` would be every program refused
+/// for an entry that adds nothing. Nothing outside those directories is reachable by default,
+/// which is the property the other two preludes get by listing.
+const WINDOWS_PRELUDE: &[&str] = &[];
+
 /// The one path in the prelude a program may write.
 ///
 /// Discarding output is what every pipeline and every build does, and a program that cannot
@@ -203,8 +232,10 @@ pub fn base(
     // regular file standing in for the null device on a machine that somehow lacked it.
     policy = policy
         .allow_read(temporary_directory)
-        .allow_write(temporary_directory)
-        .allow_write(THE_NULL_DEVICE);
+        .allow_write(temporary_directory);
+    if let Some(null_device) = prelude.null_device() {
+        policy = policy.allow_write(null_device);
+    }
 
     if let Some(home) = home {
         for path in git_configuration(home) {
@@ -267,7 +298,7 @@ mod tests {
     const A_HOME: &str = "/home/a-person";
     const THE_SESSIONS_TEMPORARY_DIRECTORY: &str = "/scratch/tmp-of-this-session";
 
-    const BOTH_PLATFORMS: [Prelude; 2] = [Prelude::Linux, Prelude::MacOs];
+    const EVERY_PLATFORM: [Prelude; 3] = [Prelude::Linux, Prelude::MacOs, Prelude::Windows];
 
     /// What `xcode-select -p` prints for an Xcode installed where the platform puts one, which
     /// is the widest developer row a base names.
@@ -329,7 +360,7 @@ mod tests {
     /// key a push signs with and the token a publish uses to a program whose plan named neither.
     #[test]
     fn the_base_reaches_no_credential() {
-        for prelude in BOTH_PLATFORMS {
+        for prelude in EVERY_PLATFORM {
             let policy = a_base(prelude);
             for credential in [
                 "/home/a-person/.ssh/id_rsa",
@@ -355,7 +386,7 @@ mod tests {
     /// carries are what decide which of them a given program reaches.
     #[test]
     fn the_only_rows_under_a_home_directory_are_the_git_configuration() {
-        for prelude in BOTH_PLATFORMS {
+        for prelude in EVERY_PLATFORM {
             let policy = a_base(prelude);
             let under_a_home: Vec<PathBuf> = granted_paths(&policy)
                 .into_iter()
@@ -446,13 +477,14 @@ mod tests {
     /// out of, and the certificates deciding what every TLS client on it trusts.
     #[test]
     fn only_the_temporary_directory_and_the_null_device_are_written() {
-        for prelude in BOTH_PLATFORMS {
+        for prelude in EVERY_PLATFORM {
+            // Windows has no null device to name: `NUL` is opened by name from any directory.
+            let null_device = (prelude != Prelude::Windows).then(|| PathBuf::from("/dev/null"));
+            let mut expected = vec![PathBuf::from(THE_SESSIONS_TEMPORARY_DIRECTORY)];
+            expected.extend(null_device);
             assert_eq!(
                 written_paths(&a_base(prelude)),
-                vec![
-                    PathBuf::from(THE_SESSIONS_TEMPORARY_DIRECTORY),
-                    PathBuf::from("/dev/null"),
-                ],
+                expected,
                 "the {prelude:?} base grants writing somewhere else"
             );
         }
@@ -500,7 +532,7 @@ mod tests {
     /// is the argv somebody endorsed rather than a profile that can only gate egress whole.
     #[test]
     fn the_base_leaves_egress_and_children_to_the_plan() {
-        for prelude in BOTH_PLATFORMS {
+        for prelude in EVERY_PLATFORM {
             let policy = a_base(prelude);
             assert!(policy.allow_network, "the {prelude:?} base closed egress");
             assert!(
@@ -516,7 +548,7 @@ mod tests {
     /// is told is that the program was confined.
     #[test]
     fn the_base_names_no_filesystem_root() {
-        for prelude in BOTH_PLATFORMS {
+        for prelude in EVERY_PLATFORM {
             let policy = a_base(prelude);
             assert!(
                 granted_paths(&policy)
@@ -552,11 +584,33 @@ mod tests {
         assert!(reaches(&macos, "/private/etc/hosts"));
         assert!(!reaches(&macos, "/etc/hosts"));
 
-        for prelude in BOTH_PLATFORMS {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
             let policy = a_base(prelude);
             assert!(reaches(&policy, "/usr/bin/git"), "{prelude:?}");
             assert!(reaches(&policy, "/dev/urandom"), "{prelude:?}");
         }
+    }
+
+    /// A container reads the system directories without a grant, and a grant there is an entry
+    /// only an account allowed to change that directory's permissions can write. A row for one
+    /// is every program refused on a machine whose account is not that, so the Windows base
+    /// holds the session's temporary directory and the git configuration a person keeps, and
+    /// nothing of the machine's.
+    #[test]
+    fn a_windows_base_names_no_system_directory() {
+        let windows = a_base(Prelude::Windows);
+
+        assert!(Prelude::Windows.rows().is_empty());
+        assert_eq!(
+            granted_paths(&windows),
+            vec![
+                PathBuf::from(THE_SESSIONS_TEMPORARY_DIRECTORY),
+                PathBuf::from("/home/a-person/.gitconfig"),
+                PathBuf::from("/home/a-person/.config/git/config"),
+                PathBuf::from(THE_SESSIONS_TEMPORARY_DIRECTORY),
+            ]
+        );
+        assert!(windows.allow_network && windows.allow_subprocesses);
     }
 
     /// Without its configuration file the TLS library macOS ships aborts every program linked
@@ -645,7 +699,7 @@ mod tests {
             "/bin", "/sbin", "/usr", "/lib", "/lib64", "/etc", "/private", "/dev", "/System",
         ];
 
-        for prelude in BOTH_PLATFORMS {
+        for prelude in EVERY_PLATFORM {
             for row in prelude.rows() {
                 assert!(
                     THE_MACHINES_OWN
@@ -665,6 +719,8 @@ mod tests {
             Some(Prelude::Linux)
         } else if cfg!(target_os = "macos") {
             Some(Prelude::MacOs)
+        } else if cfg!(windows) {
+            Some(Prelude::Windows)
         } else {
             None
         };

@@ -62,7 +62,7 @@ use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
 use std::fmt;
 use std::io::{Read, Write};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -649,9 +649,9 @@ impl<'a> Running<'a> {
                     .to_string(),
             ));
         }
-        let mut upstream = match supplied {
-            Some(bytes) => feed(bytes)?,
-            None => Stdio::null(),
+        let mut upstream: Option<Handle> = match supplied {
+            Some(bytes) => Some(feed(bytes)?),
+            None => None,
         };
         let mut tail: Option<Drain> = None;
         let mut draining: Vec<Drain> = Vec::new();
@@ -697,10 +697,9 @@ impl<'a> Running<'a> {
             // Every step, not only the first. A credential is as reachable from the middle of a
             // pipeline as from the front, and one step spared would be the whole of the hole.
             crate::scrub::apply(&mut command);
-            let mut command = match self.confinement {
-                Some(confinement) => confinement.wrap(command, step, self.directory)?,
-                None => command,
-            };
+            // Decided before a redirection's file is opened, so a step the platform will not
+            // confine is refused ahead of every effect its line has.
+            let launching = crate::confine::begin(self.confinement, command, step, self.directory)?;
 
             let mut into = Where::Upstream;
             let mut out = if index == last {
@@ -723,11 +722,11 @@ impl<'a> Running<'a> {
                 }
             }
 
-            command.stdin(match &into {
-                Where::File(path, _) => Stdio::from(for_reading(path)?),
+            let reading_from = match &into {
+                Where::File(path, _) => Handle::from(for_reading(path)?),
                 // Taken rather than moved, so every iteration starts with a stdin of its own.
-                _ => std::mem::replace(&mut upstream, Stdio::null()),
-            });
+                _ => from_upstream(&mut upstream)?,
+            };
 
             // Before the open, never after it. Opening for writing truncates, so a notification
             // that waited for a successful open would leave a window in which the file is empty
@@ -748,9 +747,9 @@ impl<'a> Running<'a> {
                         entering(path)?;
                     }
                     let file = for_writing(path, *append)?;
-                    (Stdio::from(file), None)
+                    (Handle::from(file), None)
                 }
-                Where::Discard => (Stdio::null(), None),
+                Where::Discard => (nowhere()?, None),
                 Where::AsStdout => (
                     duplicate.ok_or_else(|| {
                         ExecError::Io(
@@ -762,21 +761,17 @@ impl<'a> Running<'a> {
                 _ => {
                     let (reader, writer) =
                         std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
-                    (Stdio::from(writer), Some(reader))
+                    (Handle::from(writer), Some(reader))
                 }
             };
-            command.stdout(writing).stderr(erring);
 
-            let child = match command.spawn() {
+            let child = match launch(launching, step, reading_from, writing, erring) {
                 Ok(child) => child,
-                Err(e) => {
+                Err(error) => {
                     // Whatever started already is killed rather than left running behind a
                     // pipeline that will never complete.
                     stop(&mut children);
-                    return Err(ExecError::NotStarted {
-                        program: step.program.clone(),
-                        detail: e.to_string(),
-                    });
+                    return Err(error);
                 }
             };
             children.push(child);
@@ -785,7 +780,7 @@ impl<'a> Running<'a> {
             // more than a pipe holds is being drained while it is still writing. Waiting first and
             // reading afterwards would deadlock on exactly that.
             match (&out, reading) {
-                (Where::Chain, Some(reader)) => upstream = Stdio::from(reader),
+                (Where::Chain, Some(reader)) => upstream = Some(Handle::from(reader)),
                 (_, Some(reader)) => tail = Some(Drain::reading(reader)),
                 (_, None) => {}
             }
@@ -850,7 +845,7 @@ impl<'a> Running<'a> {
     /// waiting, or the time runs out.
     fn wait(
         &mut self,
-        children: &mut [Child],
+        children: &mut [Process],
         handoff: Option<&Handoff>,
     ) -> Result<Ending, ExecError> {
         let mut codes = vec![None; children.len()];
@@ -903,26 +898,123 @@ impl<'a> Running<'a> {
 /// second handle on the same place for `2>&1`.
 fn destination(
     out: &Where,
-) -> Result<(Stdio, Option<std::io::PipeReader>, Option<Stdio>), ExecError> {
+) -> Result<(Handle, Option<std::io::PipeReader>, Option<Handle>), ExecError> {
     match out {
         Where::File(path, append) => {
             let file = for_writing(path, *append)?;
-            let duplicate = file.try_clone().ok().map(Stdio::from);
-            Ok((Stdio::from(file), None, duplicate))
+            let duplicate = file.try_clone().ok().map(Handle::from);
+            Ok((Handle::from(file), None, duplicate))
         }
-        Where::Discard => Ok((Stdio::null(), None, Some(Stdio::null()))),
+        Where::Discard => Ok((nowhere()?, None, Some(nowhere()?))),
         _ => {
             let (reader, writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
-            let duplicate = writer.try_clone().ok().map(Stdio::from);
-            Ok((Stdio::from(writer), Some(reader), duplicate))
+            let duplicate = writer.try_clone().ok().map(Handle::from);
+            Ok((Handle::from(writer), Some(reader), duplicate))
         }
     }
 }
 
+/// What a standard stream is given to refer to: an open descriptor on Unix, an open handle on
+/// Windows. A confined process on Windows is created from handles rather than from a `Command`,
+/// so the streams are held as these until the step starts.
+#[cfg(unix)]
+type Handle = std::os::fd::OwnedFd;
+#[cfg(windows)]
+type Handle = std::os::windows::io::OwnedHandle;
+
+/// The null device, opened for both directions: what a stream with nothing to read or nowhere to
+/// write is attached to.
+fn nowhere() -> Result<Handle, ExecError> {
+    #[cfg(unix)]
+    const NULL: &str = "/dev/null";
+    #[cfg(windows)]
+    const NULL: &str = "NUL";
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(NULL)
+        .map(Handle::from)
+        .map_err(|e| ExecError::Io(e.to_string()))
+}
+
+/// The stream the stage before wrote to, or the null device for the first stage.
+fn from_upstream(upstream: &mut Option<Handle>) -> Result<Handle, ExecError> {
+    match upstream.take() {
+        Some(handle) => Ok(handle),
+        None => nowhere(),
+    }
+}
+
+/// A started step: an ordinary child, or on Windows a process in a container.
+enum Process {
+    Plain(Child),
+    #[cfg(windows)]
+    Contained(crate::confine::Contained),
+}
+
+impl Process {
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        match self {
+            Self::Plain(child) => child.try_wait(),
+            #[cfg(windows)]
+            Self::Contained(contained) => contained.child.try_wait(),
+        }
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Plain(child) => child.kill(),
+            #[cfg(windows)]
+            Self::Contained(contained) => contained.child.kill(),
+        }
+    }
+
+    fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        match self {
+            Self::Plain(child) => child.wait(),
+            #[cfg(windows)]
+            Self::Contained(contained) => contained.child.wait(),
+        }
+    }
+}
+
+/// Start `launching` with its three standard streams.
+fn launch(
+    launching: crate::confine::Launch,
+    step: &Step,
+    stdin: Handle,
+    stdout: Handle,
+    stderr: Handle,
+) -> Result<Process, ExecError> {
+    match launching {
+        crate::confine::Launch::Command(mut command) => {
+            command
+                .stdin(Stdio::from(stdin))
+                .stdout(Stdio::from(stdout))
+                .stderr(Stdio::from(stderr));
+            command
+                .spawn()
+                .map(Process::Plain)
+                .map_err(|e| ExecError::NotStarted {
+                    program: step.program.clone(),
+                    detail: e.to_string(),
+                })
+        }
+        #[cfg(windows)]
+        crate::confine::Launch::Container(container) => container
+            .start(bravebot_sandbox::Attached {
+                stdin,
+                stdout,
+                stderr,
+            })
+            .map(Process::Contained),
+    }
+}
+
 /// Every error after spawning a stage must stop it before its file effects are released.
-struct ForegroundChildren(Vec<Child>);
+struct ForegroundChildren(Vec<Process>);
 impl std::ops::Deref for ForegroundChildren {
-    type Target = Vec<Child>;
+    type Target = Vec<Process>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -969,13 +1061,13 @@ fn for_writing(path: &std::path::Path, append: bool) -> Result<std::fs::File, Ex
 /// given: `head -1` of a long document closes its end, and the write comes back `EPIPE`. That is
 /// the program doing what it was asked to do rather than a failure of the run, and a run that
 /// reported it would report one for every line that filters.
-fn feed(bytes: &str) -> Result<Stdio, ExecError> {
+fn feed(bytes: &str) -> Result<Handle, ExecError> {
     let (reader, mut writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
     let bytes = bytes.as_bytes().to_vec();
     std::thread::spawn(move || {
         let _ = writer.write_all(&bytes);
     });
-    Ok(Stdio::from(reader))
+    Ok(Handle::from(reader))
 }
 
 /// A redirection's source, opened to be read.
@@ -1100,7 +1192,7 @@ pub struct Seen {
 }
 
 /// Kill every stage and reap it, so nothing is left behind.
-fn stop(children: &mut [Child]) {
+fn stop(children: &mut [Process]) {
     for child in children.iter_mut() {
         let _ = child.kill();
         let _ = child.wait();
@@ -1152,7 +1244,7 @@ fn still_approved(steps: &[Step]) -> Result<(), ExecError> {
 /// Dropping this kills the pipeline. A background job outliving the turn that started it would be
 /// an effect nobody is watching and nobody can stop, so the turn owns it and ends it.
 pub struct Background {
-    children: Vec<Child>,
+    children: Vec<Process>,
     stdout: Drain,
     stderr: Vec<Drain>,
     /// The exit code of each step, filled in as they are collected.
@@ -1412,8 +1504,8 @@ pub fn start_steps(
     }
     still_approved(steps)?;
 
-    let mut children: Vec<Child> = Vec::with_capacity(steps.len());
-    let mut upstream = Stdio::null();
+    let mut children: Vec<Process> = Vec::with_capacity(steps.len());
+    let mut upstream: Option<Handle> = None;
     let mut tail: Option<Drain> = None;
     let mut draining: Vec<Drain> = Vec::new();
     let last = steps.len() - 1;
@@ -1443,33 +1535,30 @@ pub fn start_steps(
         // Every step, as in the foreground: a credential is as reachable from the middle of a
         // pipeline as from the front, and one spared would be the whole of the hole.
         crate::scrub::apply(&mut command);
-        let mut command = match confinement {
-            Some(confinement) => match confinement.wrap(command, step, directory) {
-                Ok(command) => command,
-                Err(error) => {
-                    stop(&mut children);
-                    return Err(error);
-                }
-            },
-            None => command,
+        let launching = match crate::confine::begin(confinement, command, step, directory) {
+            Ok(launching) => launching,
+            Err(error) => {
+                stop(&mut children);
+                return Err(error);
+            }
         };
 
         let (out_reader, out_writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
         let (err_reader, err_writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
 
-        command
-            .stdin(std::mem::replace(&mut upstream, Stdio::null()))
-            .stdout(Stdio::from(out_writer))
-            .stderr(Stdio::from(err_writer));
-
-        let child = match command.spawn() {
+        let child = match from_upstream(&mut upstream).and_then(|reading_from| {
+            launch(
+                launching,
+                step,
+                reading_from,
+                Handle::from(out_writer),
+                Handle::from(err_writer),
+            )
+        }) {
             Ok(child) => child,
-            Err(e) => {
+            Err(error) => {
                 stop(&mut children);
-                return Err(ExecError::NotStarted {
-                    program: step.program.clone(),
-                    detail: e.to_string(),
-                });
+                return Err(error);
             }
         };
         children.push(child);
@@ -1477,7 +1566,7 @@ pub fn start_steps(
         if index == last {
             tail = Some(Drain::reading(out_reader));
         } else {
-            upstream = Stdio::from(out_reader);
+            upstream = Some(Handle::from(out_reader));
         }
         draining.push(Drain::reading(err_reader));
     }

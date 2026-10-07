@@ -37,8 +37,7 @@ pub struct Confinement {
 
 impl Confinement {
     /// The confinement for a session on this machine, or `None` where the platform has no base to
-    /// build one on. That is Windows, which the decision carves out, and a step there runs as it
-    /// always has.
+    /// build one on. Every platform the agent runs on has one.
     ///
     /// `roots` are the directories the person opened the session on, each read and written. `home`
     /// is the account's profile directory, which is what `~` means and what no row reaches.
@@ -231,17 +230,17 @@ impl Confinement {
         )
     }
 
-    /// `command`, confined to what its step may reach, or the reason it cannot be.
+    /// What `command` is started as under this confinement, or the reason it cannot be.
     ///
     /// Refused rather than started unconfined where the platform's mechanism is missing or will
     /// not apply the policy: a program a person approved runs under the profile or not at all.
-    pub fn wrap(
+    fn prepared(
         &self,
-        command: Command,
+        command: &Command,
         step: &Step,
         directory: &Path,
-    ) -> Result<Command, ExecError> {
-        let environment = effective_environment(&command);
+    ) -> Result<Prepared, ExecError> {
+        let environment = effective_environment(command);
         let not_confined = |detail: String| ExecError::NotConfined {
             program: step.program.clone(),
             detail,
@@ -267,28 +266,150 @@ impl Confinement {
             .fold(Variables::new(), |held, (name, value)| {
                 held.with(name, value)
             });
-        let args: Vec<String> = command
-            .get_args()
-            .map(|argument| argument.to_string_lossy().into_owned())
-            .collect();
-        #[cfg(unix)]
+        Ok(Prepared {
+            sandbox,
+            program: command.get_program().to_string_lossy().into_owned(),
+            args: command
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect(),
+            policy,
+            variables,
+        })
+    }
+
+    /// `command`, confined to what its step may reach, or the reason it cannot be.
+    #[cfg(unix)]
+    pub fn wrap(
+        &self,
+        command: Command,
+        step: &Step,
+        directory: &Path,
+    ) -> Result<Command, ExecError> {
+        use bravebot_sandbox::Environment;
+
+        let Prepared {
+            sandbox,
+            program,
+            args,
+            policy,
+            variables,
+        } = self.prepared(&command, step, directory)?;
+        sandbox
+            .command(&program, &args, &policy, &Environment::Only(variables))
+            .map_err(|error| ExecError::NotConfined {
+                program: step.program.clone(),
+                detail: error.to_string(),
+            })
+    }
+}
+
+/// A step ready to be started, under this session's confinement where it has one.
+///
+/// Decided before any file a redirection names is opened, so a step the platform will not
+/// confine is refused ahead of every effect the line has. The standard streams are given when it
+/// is started, since a pipeline cannot say where they go until the stage before has.
+pub(crate) enum Launch {
+    /// A command that is confined already, or that nobody asked to confine.
+    Command(Command),
+    /// A step to be started in a container, where confinement is an argument to the call that
+    /// creates the process and so there is no command to hand back.
+    #[cfg(windows)]
+    Container(Box<Container>),
+}
+
+/// What a container step is started with.
+#[cfg(windows)]
+pub(crate) struct Container {
+    step: String,
+    prepared: Prepared,
+}
+
+/// A process started in a container, and the sandbox it is held to.
+///
+/// The sandbox goes with the process because the entries it wrote onto the person's directories
+/// are taken off, and its profile deleted, as it is dropped: dropped before the process was gone,
+/// the process would lose the access it was granted while running. The process is the first field
+/// so it is the first dropped.
+#[cfg(windows)]
+pub(crate) struct Contained {
+    pub(crate) child: bravebot_sandbox::ConfinedChild,
+    _sandbox: Box<dyn bravebot_sandbox::Sandbox>,
+}
+
+/// `command`, ready to start under `confinement`, or the reason it cannot be.
+pub(crate) fn begin(
+    confinement: Option<&Confinement>,
+    command: Command,
+    step: &Step,
+    directory: &Path,
+) -> Result<Launch, ExecError> {
+    let Some(confinement) = confinement else {
+        return Ok(Launch::Command(command));
+    };
+    #[cfg(unix)]
+    {
+        confinement
+            .wrap(command, step, directory)
+            .map(Launch::Command)
+    }
+    #[cfg(windows)]
+    {
+        if let Some(refusal) =
+            bravebot_sandbox::windows::refusal_for_program(&command.get_program().to_string_lossy())
         {
-            use bravebot_sandbox::Environment;
-            sandbox
-                .command(
-                    &command.get_program().to_string_lossy(),
-                    &args,
-                    &policy,
-                    &Environment::Only(variables),
-                )
-                .map_err(|error| not_confined(error.to_string()))
+            return Err(ExecError::NotConfined {
+                program: step.program.clone(),
+                detail: refusal.to_string(),
+            });
         }
-        #[cfg(not(unix))]
-        {
-            let _ = (sandbox, args, policy, variables);
-            Err(not_confined(
-                "this platform hands back no command to confine".to_string(),
-            ))
+        let prepared = confinement.prepared(&command, step, directory)?;
+        Ok(Launch::Container(Box::new(Container {
+            step: step.program.clone(),
+            prepared,
+        })))
+    }
+}
+
+#[cfg(windows)]
+impl Container {
+    /// Start the step on the handles given, or say why it did not start.
+    ///
+    /// A process that could not be created at all is told apart from one the platform would not
+    /// confine, as a spawn failure is on the other platforms.
+    pub(crate) fn start(
+        self,
+        attached: bravebot_sandbox::Attached,
+    ) -> Result<Contained, ExecError> {
+        use bravebot_sandbox::{Environment, SandboxError};
+
+        let Prepared {
+            sandbox,
+            program,
+            args,
+            policy,
+            variables,
+        } = self.prepared;
+        let program_name = self.step;
+        match sandbox.spawn_attached(
+            &program,
+            &args,
+            &policy,
+            attached,
+            Environment::Only(variables),
+        ) {
+            Ok(child) => Ok(Contained {
+                child,
+                _sandbox: sandbox,
+            }),
+            Err(SandboxError::SpawnFailed(error)) => Err(ExecError::NotStarted {
+                program: program_name,
+                detail: error.to_string(),
+            }),
+            Err(other) => Err(ExecError::NotConfined {
+                program: program_name,
+                detail: other.to_string(),
+            }),
         }
     }
 }
@@ -324,12 +445,21 @@ fn stated(confine_runs: bool, prelude: Option<Prelude>) -> Option<&'static str> 
     })
 }
 
+/// What a step is started with, once its policy is decided.
+struct Prepared {
+    sandbox: Box<dyn bravebot_sandbox::Sandbox>,
+    program: String,
+    args: Vec<String>,
+    policy: SandboxPolicy,
+    variables: Variables,
+}
+
 /// The variables `command` will start with: this process's, less the names removed and with the
 /// ones set.
 fn effective_environment(command: &Command) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
     let mut held: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
     for (name, value) in command.get_envs() {
-        held.retain(|(existing, _)| existing != name);
+        held.retain(|(existing, _)| !same_variable(existing, name));
         if let Some(value) = value {
             held.push((name.to_os_string(), value.to_os_string()));
         }
@@ -337,16 +467,51 @@ fn effective_environment(command: &Command) -> Vec<(std::ffi::OsString, std::ffi
     held
 }
 
+/// Whether two names are one variable, which on Windows does not depend on case.
+fn same_variable(left: &std::ffi::OsStr, right: &std::ffi::OsStr) -> bool {
+    if cfg!(windows) {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
+    }
+}
+
 fn variable(environment: &[(String, String)], name: &str) -> Option<String> {
     environment
         .iter()
-        .find(|(held, _)| held == name)
+        .find(|(held, _)| same_variable(held.as_ref(), name.as_ref()))
         .map(|(_, value)| value.clone())
         .filter(|value| !value.is_empty())
 }
 
 fn canonical(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    without_verbatim_prefix(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+}
+
+/// The longest path, in characters, the ordinary spelling of a Windows path can name.
+const MAX_PATH: usize = 260;
+
+/// `path` without the `\\?\` that Windows puts in front of a resolved drive path.
+///
+/// The prefix means "do not interpret this", and the call that writes a grant onto a path is
+/// documented for the ordinary spelling. Left on, a row would also differ in text from the same
+/// directory named by the person or found on `PATH`. A network path keeps its prefix, since
+/// without it the path names something else, and so does a path too long for the ordinary spelling,
+/// which only the prefixed one can name.
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let stripped = path
+        .to_string_lossy()
+        .strip_prefix(r"\\?\")
+        .filter(|rest| {
+            let bytes = rest.as_bytes();
+            bytes.len() >= 3
+                && rest.len() < MAX_PATH
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && bytes[2] == b'\\'
+        })
+        .map(PathBuf::from);
+    stripped.unwrap_or(path)
 }
 
 /// The system temporary directory with its links followed, which is how a backend matches it.
@@ -939,5 +1104,38 @@ mod tests {
             !session.join("late.txt").exists(),
             "the stage before the refused one was left running"
         );
+    }
+
+    /// The `\\?\` form `canonicalize` gives on Windows names a drive path no row can be compared
+    /// with, so it is dropped there; a UNC path keeps it, since without it the path names
+    /// something else.
+    #[test]
+    fn a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does() {
+        let long_verbatim = format!(r"\\?\C:\{}", "a".repeat(MAX_PATH));
+        for (given, expected) in [
+            (r"\\?\C:\Users\a", r"C:\Users\a"),
+            (r"\\?\d:\", r"d:\"),
+            (r"\\?\UNC\server\share\a", r"\\?\UNC\server\share\a"),
+            (r"\\?\C:", r"\\?\C:"),
+            (&long_verbatim, &long_verbatim),
+            (r"C:\Users\a", r"C:\Users\a"),
+            ("/home/a", "/home/a"),
+        ] {
+            assert_eq!(
+                without_verbatim_prefix(PathBuf::from(given)),
+                PathBuf::from(expected),
+                "{given}"
+            );
+        }
+    }
+
+    /// Windows reads `Path` and `PATH` as one variable, so a step setting one must replace the
+    /// other rather than start with both.
+    #[test]
+    fn variable_names_differ_by_case_only_on_windows() {
+        let name = |text: &str| std::ffi::OsString::from(text);
+        assert!(same_variable(&name("PATH"), &name("PATH")));
+        assert!(!same_variable(&name("PATH"), &name("TEMP")));
+        assert_eq!(same_variable(&name("Path"), &name("PATH")), cfg!(windows));
     }
 }
