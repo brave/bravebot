@@ -555,7 +555,11 @@ given `--kubeconfig` or `docker` is given `--config`. A stage reaches its own sc
 No scope names a private key or `~/.ssh` as a directory. The remote scope reads `~/.ssh/config`,
 `~/.ssh/known_hosts`, the public key at each name ssh looks for by default, `~/.gitconfig`,
 `~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`, and writes
-`~/.ssh/known_hosts` alone, as a file. A tool's directory is read and never written. A scope is
+`~/.ssh/known_hosts` alone, as a file. For a `gh` stage the last row is the directory `gh` itself
+would use: `GH_CONFIG_DIR` if the environment the stage starts with sets it, else
+`$XDG_CONFIG_HOME/gh`, else `~/.config/gh`, and it is read and never written. That directory is
+refused, and the stage keeps `~/.config/gh`, where it is relative or holds `..`, is the home or
+above it, is `~/.ssh` or inside it, or is `~/.config`, `~/.cache` or `~/Library`; a link is judged by where it leads. A tool's directory is read and never written. A scope is
 added to the policy it is given and takes nothing from it. `run` adds the scope for each stage it
 starts ([SANDBOX-18](#SANDBOX-18)).
 
@@ -571,7 +575,11 @@ search path, a docker CLI plugin, an `aws` alias beginning `!`, and the credenti
 kubeconfig names, each able to read that tool's directory. A push signs through the agent and ssh
 reads the public half of a key to name an identity to it, so the private half is never needed. A
 write to a tool's directory is a program the person's own shell runs later: a `credential_process`,
-an exec plugin, a `credsStore` helper.
+an exec plugin, a `credsStore` helper. The `gh` directory follows the environment where
+[SANDBOX-15](#SANDBOX-15) does not follow `CARGO_HOME`, because a toolchain cache is a place the
+program writes and this row is the location of a file the person's own tool is about to open. Only
+the environment the stage starts with counts: an assignment written in front of the line removes
+the scope, so a model-written `GH_CONFIG_DIR=` moves nothing.
 
 `verified-by: bravebot_sandbox::scope::an_operation_that_talks_to_a_remote_carries_the_remote_scope`
 `verified-by: bravebot_sandbox::scope::a_git_operation_that_talks_to_no_remote_carries_none`
@@ -587,6 +595,10 @@ an exec plugin, a `credsStore` helper.
 `verified-by: bravebot_sandbox::scope::the_one_row_a_scope_writes_is_the_hosts_ssh_has_verified`
 `verified-by: bravebot_sandbox::scope::the_remote_scope_reaches_both_transports`
 `verified-by: bravebot_sandbox::scope::a_scope_leaves_the_policy_it_is_added_to_as_it_was`
+`verified-by: bravebot_sandbox::scope::gh_reads_the_configuration_directory_its_environment_names`
+`verified-by: bravebot_sandbox::scope::a_gh_directory_that_is_too_wide_or_not_a_path_is_refused`
+`verified-by: bravebot_sandbox::scope::a_gh_directory_that_is_a_link_is_judged_by_where_it_leads`
+`verified-by: bravebot_agent::confine::a_gh_stage_reads_the_configuration_directory_its_environment_names`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_what_ssh_reads_and_never_a_private_key`
 
 <a id="SANDBOX-17"></a>

@@ -14,7 +14,7 @@
 
 use crate::base::under;
 use crate::policy::SandboxPolicy;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 /// A credential scope a stage of a plan carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +75,49 @@ impl Scope {
             Self::Docker => policy.allow_read(under(home, ".docker")),
         }
     }
+}
+
+/// The directory `gh` reads its configuration from where the stage's environment moves it off
+/// `~/.config/gh`, which is the row [`REMOTE`] already holds.
+///
+/// `GH_CONFIG_DIR` if the environment sets it, else `$XDG_CONFIG_HOME/gh`, as `gh` does. It is the
+/// location of a file the person's own tool is going to open, which a toolchain cache is not, so
+/// it is read where the person set it. It is refused, and the stage keeps the default row only,
+/// where it is relative or holds `..`, is the home or above it, is `~/.ssh` or inside it, or is
+/// `~/.config`, `~/.cache` or `~/Library`: places no row of a scope reaches whole.
+pub fn gh_configuration(home: &Path, environment: &[(String, String)]) -> Option<PathBuf> {
+    let set = |name: &str| {
+        environment
+            .iter()
+            .find(|(held, _)| held == name)
+            .map(|(_, value)| value.as_str())
+            .filter(|value| !value.is_empty())
+    };
+    let directory = match set("GH_CONFIG_DIR") {
+        Some(directory) => PathBuf::from(directory),
+        None => Path::new(set("XDG_CONFIG_HOME")?).join("gh"),
+    };
+    if !directory.is_absolute()
+        || directory
+            .components()
+            .any(|part| part == Component::ParentDir)
+    {
+        return None;
+    }
+    // Where it is a link, what it leads to is what a program opens, and both spellings are judged,
+    // against both spellings of the home: a prefix of either may be a link (`/home` on macOS).
+    let resolved = std::fs::canonicalize(&directory).unwrap_or_else(|_| directory.clone());
+    let real_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    let refused = [&directory, &resolved].iter().any(|directory| {
+        [home, real_home.as_path()].iter().any(|home| {
+            home.starts_with(directory)
+                || directory.starts_with(under(home, ".ssh"))
+                || [".config", ".cache", "Library"]
+                    .iter()
+                    .any(|whole| **directory == under(home, whole))
+        })
+    });
+    (!refused).then_some(resolved)
 }
 
 /// The hosts ssh has verified, the one row of the remote scope that is also written.
@@ -242,6 +285,8 @@ mod tests {
     use super::*;
     use crate::base::{Prelude, base};
     use crate::policy::PathKind;
+    #[cfg(unix)]
+    use crate::testutil::scratch_dir;
     use std::path::PathBuf;
 
     const A_HOME: &str = "/home/a-person";
@@ -250,6 +295,17 @@ mod tests {
     const EVERY_SCOPE: [Scope; 4] = [Scope::Remote, Scope::Aws, Scope::Kubernetes, Scope::Docker];
 
     const GIT: &str = "/usr/bin/git";
+
+    fn the_environment(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    fn gh_reads(pairs: &[(&str, &str)]) -> Option<PathBuf> {
+        gh_configuration(Path::new(A_HOME), &the_environment(pairs))
+    }
 
     fn argv(line: &str) -> Vec<String> {
         line.split_whitespace().map(str::to_string).collect()
@@ -693,5 +749,94 @@ mod tests {
                 "{scope:?}"
             );
         }
+    }
+
+    /// A person who keeps a second account's configuration elsewhere has `gh` refused at the
+    /// path before it runs a subcommand. The directory `gh` would use is read, and nothing wider.
+    #[test]
+    fn gh_reads_the_configuration_directory_its_environment_names() {
+        assert_eq!(
+            gh_reads(&[("GH_CONFIG_DIR", "/home/a-person/.config/gh-second")]),
+            Some(PathBuf::from("/home/a-person/.config/gh-second"))
+        );
+        assert_eq!(
+            gh_reads(&[("XDG_CONFIG_HOME", "/home/a-person/xdg")]),
+            Some(PathBuf::from("/home/a-person/xdg/gh"))
+        );
+        assert_eq!(
+            gh_reads(&[
+                ("GH_CONFIG_DIR", "/home/a-person/first"),
+                ("XDG_CONFIG_HOME", "/home/a-person/xdg"),
+            ]),
+            Some(PathBuf::from("/home/a-person/first"))
+        );
+        assert_eq!(gh_reads(&[]), None);
+        assert_eq!(gh_reads(&[("GH_CONFIG_DIR", "")]), None);
+        let policy = SandboxPolicy::strict()
+            .allow_read(gh_reads(&[("GH_CONFIG_DIR", "/home/a-person/second")]).unwrap());
+        assert!(reaches(&policy, "/home/a-person/second/hosts.yml"));
+        assert!(!reaches(&policy, "/home/a-person/.ssh/id_ed25519"));
+    }
+
+    /// A variable the session inherited is the person's own, but a directory that is a whole
+    /// place no scope reaches, or a spelling that moves under the check, is not one `gh` is lent.
+    #[test]
+    fn a_gh_directory_that_is_too_wide_or_not_a_path_is_refused() {
+        for directory in [
+            "relative/gh",
+            "gh",
+            "/home/a-person/../another-person/gh",
+            "/home/a-person",
+            "/home",
+            "/",
+            "/home/a-person/.ssh",
+            "/home/a-person/.ssh/gh",
+            "/home/a-person/.config",
+            "/home/a-person/.cache",
+            "/home/a-person/Library",
+        ] {
+            assert_eq!(
+                gh_reads(&[("GH_CONFIG_DIR", directory)]),
+                None,
+                "{directory}"
+            );
+        }
+        assert_eq!(
+            gh_reads(&[("XDG_CONFIG_HOME", "/home/a-person")]),
+            Some(PathBuf::from("/home/a-person/gh"))
+        );
+        assert_eq!(
+            gh_reads(&[("XDG_CONFIG_HOME", "/home/a-person/.ssh")]),
+            None
+        );
+        assert_eq!(gh_reads(&[("XDG_CONFIG_HOME", "relative")]), None);
+    }
+
+    /// A link is judged by where it leads, so one into `~/.ssh` or to the home is refused though
+    /// its own spelling is neither.
+    #[cfg(unix)]
+    #[test]
+    fn a_gh_directory_that_is_a_link_is_judged_by_where_it_leads() {
+        use std::os::unix::fs::symlink;
+        let home = scratch_dir("gh-configuration-links");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(home.join("second")).unwrap();
+        symlink(home.join(".ssh"), home.join("to-ssh")).unwrap();
+        symlink(&home, home.join("to-home")).unwrap();
+        symlink(home.join("second"), home.join("to-second")).unwrap();
+        let reads = |directory: &Path| {
+            gh_configuration(
+                &home,
+                &the_environment(&[("GH_CONFIG_DIR", directory.to_str().unwrap())]),
+            )
+        };
+        assert_eq!(reads(&home.join("to-ssh")), None);
+        assert_eq!(reads(&home.join("to-home")), None);
+        assert_eq!(
+            reads(&home.join("to-second")),
+            Some(std::fs::canonicalize(home.join("second")).unwrap())
+        );
+        std::fs::remove_dir_all(&home).unwrap();
     }
 }
