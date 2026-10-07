@@ -22,8 +22,9 @@ pub enum Asked {
     List,
     /// Remove the checkout with this number, spelled the way the list spells it.
     Remove(String),
-    /// Bring back the files written in the checkout with this number, spelled the same way.
-    Apply(String),
+    /// Bring back files written in the checkout with this number, spelled the same way: the
+    /// paths typed after it, or every recorded file where there are none.
+    Apply(String, Vec<String>),
     /// Anything else, answered by saying what the command takes.
     Unreadable,
 }
@@ -32,16 +33,17 @@ pub enum Asked {
 ///
 /// A number is taken as the list prints it, `c2`, or bare, `2`. Anything else is unreadable rather
 /// than a guess, since removing the wrong checkout deletes work and applying the wrong one writes
-/// into the working directory.
+/// into the working directory. Paths after an `apply` number are split at white space, so a path
+/// holding a space is not nameable here and can only be brought back with the rest.
 pub fn parse(argument: &str) -> Asked {
     let argument = argument.trim();
     if argument.is_empty() {
         return Asked::List;
     }
-    let Some((word, named)) = argument.split_once(char::is_whitespace) else {
+    let mut words = argument.split_whitespace();
+    let (Some(word), Some(named)) = (words.next(), words.next()) else {
         return Asked::Unreadable;
     };
-    let named = named.trim();
     let digits = named.strip_prefix('c').unwrap_or(named);
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return Asked::Unreadable;
@@ -49,9 +51,10 @@ pub fn parse(argument: &str) -> Asked {
     let Ok(number) = digits.parse::<u64>() else {
         return Asked::Unreadable;
     };
+    let rest: Vec<String> = words.map(str::to_owned).collect();
     match word {
-        REMOVE => Asked::Remove(format!("c{number}")),
-        APPLY => Asked::Apply(format!("c{number}")),
+        REMOVE if rest.is_empty() => Asked::Remove(format!("c{number}")),
+        APPLY => Asked::Apply(format!("c{number}"), rest),
         _ => Asked::Unreadable,
     }
 }
@@ -340,10 +343,25 @@ mod tests {
 
     #[test]
     fn apply_and_a_number_brings_back_that_checkouts_files() {
-        assert_eq!(parse("apply c3"), Asked::Apply("c3".to_string()));
-        assert_eq!(parse("apply 12"), Asked::Apply("c12".to_string()));
+        assert_eq!(parse("apply c3"), Asked::Apply("c3".to_string(), vec![]));
+        assert_eq!(parse("apply 12"), Asked::Apply("c12".to_string(), vec![]));
         assert_eq!(parse("apply"), Asked::Unreadable);
         assert_eq!(parse("apply all"), Asked::Unreadable);
+    }
+
+    #[test]
+    fn apply_a_number_and_paths_brings_back_only_those_paths() {
+        assert_eq!(
+            parse("apply c3 src/a.rs  b.txt"),
+            Asked::Apply(
+                "c3".to_string(),
+                vec!["src/a.rs".to_string(), "b.txt".to_string()]
+            )
+        );
+        assert_eq!(
+            parse("apply 3 c4"),
+            Asked::Apply("c3".to_string(), vec!["c4".to_string()])
+        );
     }
 
     #[test]

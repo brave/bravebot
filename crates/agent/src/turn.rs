@@ -1893,9 +1893,10 @@ pub struct CheckoutApplied {
 
 /// Bring back what the session's kept checkout `id` holds, outside any turn (CHECKOUT-14).
 ///
-/// What `/checkouts apply` runs. Its routing is the number the person typed, their own words in
-/// the sense a prompt is, so there is no planner here and no conversation: the policy is a fresh
-/// one whose only context is that request. The bytes brought back keep the label the checkout's
+/// What `/checkouts apply` runs. Its routing is the number the person typed, and the paths if they
+/// typed any (all of the checkout's recorded files if not): their own words in the sense a prompt
+/// is, so there is no planner here and no conversation. The policy is a fresh one whose only
+/// context is that request. The bytes brought back keep the label the checkout's
 /// path gives them, which is carried with them and not read, so a file a program in the checkout
 /// wrote untrusted is untrusted once it is in the working directory. Each file is put to the
 /// person through `confirmer` whatever the trust map would have said.
@@ -1906,6 +1907,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
     workspace: &Workspace,
     task: &Task,
     id: &str,
+    paths: &[String],
     confirmer: &mut C,
     sink: &mut S,
     trust: TrustStore,
@@ -1967,6 +1969,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
         },
         confirmer,
         id,
+        paths.to_vec(),
     );
     let trust = policy.trust();
     policy.finish();

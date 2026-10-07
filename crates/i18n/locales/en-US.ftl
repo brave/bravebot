@@ -2461,8 +2461,9 @@ checkouts-none =
     this session keeps no checkout. A delegate given one keeps it when something was done in it
 checkouts-no-such = this session keeps no checkout { $id }. /checkouts lists the ones it keeps
 checkouts-command-takes =
-    /checkouts lists the checkouts this session keeps, /checkouts apply <n> brings back the files
-    written in the one with that number, and /checkouts remove <n> removes it
+    /checkouts lists the checkouts this session keeps, /checkouts apply <n> [path ...] brings back
+    the files written in the one with that number, or only the paths named, and /checkouts remove <n>
+    removes it
 # Followed by a line for each file, as the write gate worded it.
 checkouts-applied = files from checkout { $id } were brought back:
 checkouts-not-applied = nothing from checkout { $id } was brought back:
