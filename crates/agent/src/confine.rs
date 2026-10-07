@@ -1,9 +1,12 @@
 //! The profile a program a person asked for runs under.
 //!
-//! `run` starts the programs a plan names. Each step is held to the platform's base, the list its
-//! resolved binary brings, the credential scope its argv names, the places its binary is installed,
-//! and the directories the session was opened on, and to nothing else a person's account can
-//! reach. `docs/specs/sandboxing.md` decides every row; this composes them for one step.
+//! `run` starts the programs a plan names. On Linux and macOS each step reads the machine except the
+//! locations that hold a credential, writes the directories the session was opened on, its scratch
+//! directory, the temporary directory and the toolchain caches, and reads a credential directory
+//! only where the scope its argv names says so. On Windows a step is held to the platform's base,
+//! the list its resolved binary brings, the scope its argv names, the places its binary is
+//! installed and the session's directories, and to nothing else a person's account can reach.
+//! `docs/specs/sandboxing.md` decides every row; this composes them for one step.
 //!
 //! Nothing a program printed, and no value the model supplied, reaches a row. The inputs are the
 //! compiled [`Step`], which a person read, and the session's own directories.
@@ -12,7 +15,7 @@ use crate::confirm::{Carried, Confined};
 use crate::exec::ExecError;
 use bravebot_core::command::Step;
 use bravebot_sandbox::Variables;
-use bravebot_sandbox::base::{Prelude, base};
+use bravebot_sandbox::base::{Prelude, base, run_base};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::scope::{Reach, Scope, environment_reach};
 use bravebot_sandbox::toolchain::Toolchain;
@@ -25,7 +28,6 @@ use std::process::Command;
 pub struct Confinement {
     prelude: Prelude,
     temporary: PathBuf,
-    developer: Option<PathBuf>,
     home: Option<PathBuf>,
     roots: Vec<PathBuf>,
     scratch: Option<PathBuf>,
@@ -46,7 +48,6 @@ impl Confinement {
         Some(Self::new(
             prelude,
             canonical(&temporary_directory()),
-            developer_directory(),
             home,
             roots,
             scratch,
@@ -58,7 +59,6 @@ impl Confinement {
     pub fn new(
         prelude: Prelude,
         temporary: PathBuf,
-        developer: Option<PathBuf>,
         home: Option<&Path>,
         roots: Vec<PathBuf>,
         scratch: Option<&Path>,
@@ -66,7 +66,6 @@ impl Confinement {
         Self {
             prelude,
             temporary,
-            developer,
             home: home.map(canonical),
             roots: roots.iter().map(|root| canonical(root)).collect(),
             scratch: scratch.map(canonical),
@@ -83,17 +82,28 @@ impl Confinement {
         self
     }
 
+    /// Whether a step reads the machine except the credential locations, which is every step where
+    /// the platform has a mechanism that can subtract from a read and the session names a home
+    /// directory to find them under. With no home the credential rows cannot be built, and a read
+    /// of the whole machine with no refusal is the one thing this must not grant, so the step is
+    /// held to the listed rows instead.
+    fn reads_the_machine(&self) -> bool {
+        self.prelude != Prelude::Windows && self.home.is_some()
+    }
+
     /// The toolchain list and the credential scope a step brings to its profile.
     ///
     /// The one place either is decided, read by [`Confinement::policy`] to build the rows and by
     /// [`Confinement::describe`] and [`Confinement::profile`] to say which rows there are. Neither
-    /// is brought where the session names no home directory, since both are rows under it.
+    /// is brought where the session names no home directory, since both are rows under it. Where
+    /// the machine is read no step brings a toolchain list: the installs are readable already and
+    /// every cache is written by every step.
     fn carries(&self, step: &Step) -> (Option<Toolchain>, Option<Scope>) {
         if self.home.is_none() {
             return (None, None);
         }
         (
-            Toolchain::of(&step.resolved),
+            Toolchain::of(&step.resolved).filter(|_| !self.reads_the_machine()),
             Scope::of(&step.resolved, &step.args, &step.environment),
         )
     }
@@ -107,6 +117,7 @@ impl Confinement {
     /// [`Confinement::describe`] for a stage that starts with `environment`.
     fn describe_in(&self, steps: &[&Step], environment: &[(String, String)]) -> Confined {
         Confined {
+            reads_the_machine: self.reads_the_machine(),
             directories: self
                 .roots
                 .iter()
@@ -154,23 +165,27 @@ impl Confinement {
             environment: _,
             routes: _,
         } = step;
-        let mut policy = base(
-            self.prelude,
-            &self.temporary,
-            self.developer.as_deref(),
-            self.home.as_deref(),
-        )
+        let mut policy = if self.reads_the_machine() {
+            run_base(self.prelude, &self.temporary, self.home.as_deref())
+        } else {
+            base(self.prelude, &self.temporary, None, self.home.as_deref())
+        }
         .allow_git_directory_writes();
 
         if let Some(home) = self.home.as_deref() {
+            if self.reads_the_machine() {
+                policy = Toolchain::grant_every_cache(policy, self.prelude, home);
+            }
             let (toolchain, scope) = self.carries(step);
             if let Some(toolchain) = toolchain {
                 policy = toolchain.grant(policy, self.prelude, home);
             }
             if let Some(scope) = scope {
                 policy = scope.grant(policy, home);
-                for reach in reaches(resolved, scope, home, environment) {
-                    policy = policy.allow_read(reach.path);
+                if !self.reads_the_machine() {
+                    for reach in reaches(resolved, scope, home, environment) {
+                        policy = policy.allow_read(reach.path);
+                    }
                 }
                 if scope == Scope::Remote
                     && let Some(socket) = variable(environment, "SSH_AUTH_SOCK")
@@ -180,17 +195,19 @@ impl Confinement {
             }
         }
 
-        let searched: Vec<PathBuf> = variable(environment, "PATH")
-            .map(|path| std::env::split_paths(&path).collect())
-            .unwrap_or_default();
-        for path in program_reads(resolved, &searched, self.home.as_deref()) {
-            policy = policy.allow_read(path);
-        }
-        // The two files the step starts, as files: a program installed inside the home is in no
-        // directory row, and a person read exactly these two.
-        policy = policy.allow_read(canonical(resolved));
-        if started_as != resolved {
-            policy = policy.allow_read(started_as);
+        if !self.reads_the_machine() {
+            let searched: Vec<PathBuf> = variable(environment, "PATH")
+                .map(|path| std::env::split_paths(&path).collect())
+                .unwrap_or_default();
+            for path in program_reads(resolved, &searched, self.home.as_deref()) {
+                policy = policy.allow_read(path);
+            }
+            // The two files the step starts, as files: a program installed inside the home is in
+            // no directory row, and a person read exactly these two.
+            policy = policy.allow_read(canonical(resolved));
+            if started_as != resolved {
+                policy = policy.allow_read(started_as);
+            }
         }
 
         for root in &self.roots {
@@ -228,6 +245,17 @@ impl Confinement {
             true => "none".to_string(),
             false => names.into_iter().collect::<Vec<_>>().join(", "),
         };
+        if self.reads_the_machine() {
+            return format!(
+                "Confinement: programs could read this machine except the places that hold a \
+                 credential, and write {} and the temporary directory and the toolchain caches; \
+                 a place that holds a credential was read only where a credential scope added it \
+                 for the steps that named one (credential scopes: {}). Any other path is refused \
+                 by the operating system as `Operation not permitted` or `Permission denied`.",
+                directories.join(", "),
+                named(scopes),
+            );
+        }
         format!(
             "Confinement: programs could read and write {} and the temporary directory, and read \
              the system and program directories and git's configuration files; beyond those \
@@ -439,7 +467,7 @@ fn stated(confine_runs: bool, prelude: Option<Prelude>) -> Option<&'static str> 
         return None;
     }
     Some(match prelude {
-        Some(_) => {
+        Some(Prelude::Windows) => {
             "Programs this tool starts are confined. Each may reach only the directories the \
              session was opened on, the scratch directory and the temporary directory, all read \
              and written, the system and program directories and git's configuration files, \
@@ -448,6 +476,17 @@ fn stated(confine_runs: bool, prelude: Option<Prelude>) -> Option<&'static str> 
              `Operation not permitted` or `Permission denied`, so a program that reports either \
              for such a path was stopped by the sandbox and not by a fault in the machine. Only \
              the person widens it (`/add-dir`, `--add-dir`); a command cannot ask for more."
+        }
+        Some(Prelude::Linux | Prelude::MacOs) => {
+            "Programs this tool starts are confined. Each may read this machine except the places \
+             that hold a credential: ssh private keys, cloud and container logins, keychains, \
+             browser profiles and password stores. It may write only the directories the session \
+             was opened on, the scratch directory, the temporary directory and the toolchain \
+             caches, and reads a credential directory only where the command's scope names it. \
+             A path outside those is refused by the operating system as `Operation not \
+             permitted` or `Permission denied`, so a program that reports either for such a path \
+             was stopped by the sandbox and not by a fault in the machine. Only the person \
+             widens it (`/add-dir`, `--add-dir`); a command cannot ask for more."
         }
         None => {
             "Programs this tool starts are not confined on this platform: they run with the \
@@ -567,30 +606,6 @@ fn temporary_directory() -> PathBuf {
     std::env::temp_dir()
 }
 
-/// What `xcode-select -p` names, resolved once, where this is macOS.
-///
-/// The `/usr/bin` developer shims run the real program out of it. Resolved from the machine and
-/// never from a step's own `DEVELOPER_DIR=`, so a line cannot choose which directory is granted.
-fn developer_directory() -> Option<PathBuf> {
-    static SELECTED: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
-    SELECTED
-        .get_or_init(|| {
-            if !cfg!(target_os = "macos") {
-                return None;
-            }
-            let selected = Command::new("/usr/bin/xcode-select")
-                .arg("-p")
-                .output()
-                .ok()
-                .filter(|output| output.status.success())?;
-            let named = String::from_utf8_lossy(&selected.stdout).trim().to_string();
-            (!named.is_empty())
-                .then(|| canonical(Path::new(&named)))
-                .filter(|path| path.is_dir())
-        })
-        .clone()
-}
-
 /// The directories a program and the tools it starts are read from.
 ///
 /// The directories `searched` names and the one `program` resolved into, each with its links
@@ -665,15 +680,38 @@ mod tests {
         }
     }
 
+    /// A confinement on a platform that lists what a step reaches, where a toolchain brings a list
+    /// and the base reads nothing of the home.
     fn confinement(roots: &[&str]) -> Confinement {
         Confinement::new(
-            Prelude::Linux,
+            Prelude::Windows,
             PathBuf::from("/tmp"),
-            None,
             Some(Path::new(HOME)),
             roots.iter().map(PathBuf::from).collect(),
             Some(Path::new("/var/scratch")),
         )
+    }
+
+    /// A confinement on a platform that reads the machine except the credential locations.
+    fn reading_confinement(prelude: Prelude, roots: &[&str]) -> Confinement {
+        Confinement::new(
+            prelude,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            roots.iter().map(PathBuf::from).collect(),
+            Some(Path::new("/var/scratch")),
+        )
+    }
+
+    fn refuses(policy: &SandboxPolicy, path: &str) -> bool {
+        policy
+            .unreadable
+            .iter()
+            .any(|row| Path::new(path).starts_with(row))
+            && !policy
+                .readable
+                .iter()
+                .any(|row| Path::new(path).starts_with(row) && row != Path::new("/"))
     }
 
     fn reads(policy: &SandboxPolicy, path: &str) -> bool {
@@ -778,13 +816,176 @@ mod tests {
         assert!(!reads(&policy(&status), &format!("{HOME}/.config/gh")));
     }
 
+    /// A script that starts `gh`, `git` or `cargo` is no program the plan resolved to a toolchain,
+    /// so the stage reads the machine and holds back only the credential locations: its reads are
+    /// the root and the lifts, and its refusals are the table.
+    #[test]
+    fn a_stage_reads_the_machine_and_is_refused_the_credential_locations() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let policy = reading_confinement(prelude, &["/work/project"]).policy(
+                &step("/bin/sh", &["-c", "gh pr list"]),
+                Path::new("/work/project"),
+                &[],
+            );
+
+            assert!(reads(&policy, "/"), "{prelude:?}");
+            for held_back in [
+                format!("{HOME}/.ssh/id_ed25519"),
+                format!("{HOME}/.aws/credentials"),
+                format!("{HOME}/.kube/config"),
+                format!("{HOME}/.docker/config.json"),
+                format!("{HOME}/.azure/accessTokens.json"),
+                format!("{HOME}/.config/gcloud/credentials.db"),
+                format!("{HOME}/.gnupg/private-keys-v1.d/key"),
+            ] {
+                assert!(refuses(&policy, &held_back), "{prelude:?} {held_back}");
+            }
+            for read in [
+                format!("{HOME}/.ssh/config"),
+                format!("{HOME}/.ssh/known_hosts"),
+                format!("{HOME}/.ssh/id_ed25519.pub"),
+                format!("{HOME}/.config/gh/hosts.yml"),
+                format!("{HOME}/.gitconfig"),
+                format!("{HOME}/.npmrc"),
+            ] {
+                assert!(!refuses(&policy, &read), "{prelude:?} {read}");
+            }
+        }
+    }
+
+    /// Writes stay with the session: the directories it was opened on, the scratch directory, the
+    /// temporary directory and the null device, and the caches. Nothing of the person's home
+    /// outside those is written, whatever program the stage runs.
+    #[test]
+    fn a_stage_writes_only_the_session_the_temporary_directory_and_the_caches() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let confined = reading_confinement(prelude, &["/work/project", "/work/added"]);
+            let policy = confined.policy(&step("/usr/bin/make", &[]), Path::new("/work"), &[]);
+
+            let mut written: Vec<_> = policy
+                .writable
+                .iter()
+                .map(|row| row.path.to_string_lossy().into_owned())
+                .collect();
+            written.sort();
+            let caches: Vec<_> = written
+                .iter()
+                .filter(|path| path.starts_with(HOME))
+                .collect();
+            for session in ["/work/project", "/work/added", "/var/scratch", "/tmp"] {
+                assert!(written.iter().any(|path| path == session), "{session}");
+            }
+            for path in &caches {
+                assert!(
+                    [
+                        ".cargo/registry",
+                        ".cargo/git",
+                        ".cargo/.package-cache",
+                        ".npm/_cacache",
+                        "pip",
+                        "go-build",
+                        "go/pkg/mod",
+                        "go/pkg/sumdb",
+                        ".m2/repository",
+                        ".gradle/caches",
+                        ".gradle/wrapper",
+                        ".gradle/native",
+                    ]
+                    .iter()
+                    .any(|cache| path.ends_with(cache)),
+                    "{prelude:?} writes {path}"
+                );
+            }
+            assert!(
+                written.iter().all(|path| !path.ends_with(".cargo")
+                    && !path.ends_with(".npm")
+                    && *path != HOME),
+                "{written:?}"
+            );
+        }
+    }
+
+    /// A tool's own scope lifts its own directory and no other, and a stage that names none keeps
+    /// all three refused. The prompt, the profile line and the policy are one table.
+    #[test]
+    fn the_prompt_the_line_and_the_policy_agree_on_which_credential_a_stage_lifts() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let confined = reading_confinement(prelude, &["/work/project"]);
+            for (program, args, lifted) in [
+                ("/usr/bin/aws", vec!["s3", "ls"], Some((".aws", "aws"))),
+                (
+                    "/usr/bin/kubectl",
+                    vec!["get", "pods"],
+                    Some((".kube", "kubernetes")),
+                ),
+                ("/usr/bin/docker", vec!["ps"], Some((".docker", "docker"))),
+                ("/usr/bin/make", vec!["check"], None),
+                ("/usr/bin/git", vec!["status"], None),
+            ] {
+                let step = step(program, &args);
+                let policy = confined.policy(&step, Path::new("/work"), &[]);
+                let line = confined.profile(&[&step]);
+                let described = confined.describe(&[&step]);
+
+                for directory in [".aws", ".kube", ".docker"] {
+                    let path = format!("{HOME}/{directory}/credentials");
+                    let expected = lifted.is_some_and(|(own, _)| own == directory);
+                    assert_eq!(
+                        !refuses(&policy, &path),
+                        expected,
+                        "{prelude:?} {program} {directory}"
+                    );
+                }
+                match lifted {
+                    Some((_, scope)) => {
+                        assert!(line.contains(&format!("scopes: {scope})")), "{line}");
+                        assert_eq!(described.carried.len(), 1);
+                    }
+                    None => {
+                        assert!(line.contains("scopes: none)"), "{line}");
+                        assert!(described.carried.is_empty());
+                    }
+                }
+                assert!(described.reads_the_machine);
+                assert!(
+                    described
+                        .carried
+                        .iter()
+                        .all(|stage| stage.toolchain.is_none())
+                );
+            }
+        }
+    }
+
+    /// The platform that lists is described as it always was, and the others are not: the heading
+    /// and the planner's sentence differ, so neither platform is told the other's boundary.
+    #[test]
+    fn the_description_follows_the_platform_it_describes() {
+        let machine = reading_confinement(Prelude::Linux, &["/work/project"]);
+        let listed = confinement(&["/work/project"]);
+
+        assert!(machine.describe(&[]).reads_the_machine);
+        assert!(!listed.describe(&[]).reads_the_machine);
+        assert_ne!(
+            stated(true, Some(Prelude::Linux)),
+            stated(true, Some(Prelude::Windows))
+        );
+        assert_eq!(
+            stated(true, Some(Prelude::Linux)),
+            stated(true, Some(Prelude::MacOs))
+        );
+        assert!(
+            stated(true, Some(Prelude::Linux))
+                .is_some_and(|said| said.contains("except the places that hold a credential"))
+        );
+    }
+
     /// A session that names no home directory grants no row under it, so it describes none.
     #[test]
     fn a_session_with_no_home_describes_no_toolchain_and_no_scope() {
         let confined = Confinement::new(
             Prelude::Linux,
             PathBuf::from("/tmp"),
-            None,
             None,
             vec![PathBuf::from("/work/project")],
             None,
@@ -797,6 +998,31 @@ mod tests {
 
         assert!(described.carried.is_empty());
         assert_eq!(described.directories, [PathBuf::from("/work/project")]);
+    }
+
+    /// The regression it rejects: a session with no home directory granted a read of the machine
+    /// with no credential row to subtract, which is every credential on it read by absolute path.
+    #[test]
+    fn a_session_with_no_home_is_not_granted_the_machine() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let confined = Confinement::new(
+                prelude,
+                PathBuf::from("/tmp"),
+                None,
+                vec![PathBuf::from("/work/project")],
+                None,
+            );
+
+            let policy =
+                confined.policy(&step("/usr/bin/make", &["check"]), Path::new("/work"), &[]);
+
+            assert!(
+                !policy.readable.iter().any(|row| row == Path::new("/")),
+                "{prelude:?} read the machine with no home: {:?}",
+                policy.readable
+            );
+            assert!(!confined.describe(&[]).reads_the_machine);
+        }
     }
 
     /// The list a toolchain brings follows the binary the step resolved to, so a `cargo` stage
@@ -1157,7 +1383,6 @@ mod tests {
         let confinement = Confinement::new(
             Prelude::current().expect("a platform with a base"),
             canonical(&temporary_directory()),
-            developer_directory(),
             None,
             vec![session.clone()],
             None,

@@ -256,6 +256,9 @@ pub struct RunRequest {
 /// model supplied beyond the plan a person is reading.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Confined {
+    /// Whether a stage reads the machine except the places that hold a credential, which is every
+    /// stage on Linux and macOS, rather than the system directories and what its lists add.
+    pub reads_the_machine: bool,
     /// The directories every stage reads and writes: those the session was opened on and its
     /// scratch directory.
     pub directories: Vec<std::path::PathBuf>,
@@ -280,7 +283,10 @@ pub struct Carried {
 impl Confined {
     /// The sentence that introduces the directories, for a front end to draw above them.
     pub fn heading(&self) -> String {
-        t!(run_confined).to_string()
+        match self.reads_the_machine {
+            true => t!(run_confined_machine).to_string(),
+            false => t!(run_confined).to_string(),
+        }
     }
 
     /// One sentence for each toolchain list and each credential scope a stage brings, in step
@@ -303,6 +309,9 @@ impl Confined {
             if let Some(scope) = stage.scope {
                 sentences.push(
                     match scope {
+                        Scope::Remote if self.reads_the_machine => {
+                            t!(run_carries_known_hosts, program = program)
+                        }
                         Scope::Remote => t!(run_carries_remote, program = program),
                         Scope::Aws => t!(run_carries_aws, program = program),
                         Scope::Kubernetes => t!(run_carries_kubernetes, program = program),
@@ -2287,6 +2296,7 @@ mod tests {
             reaches: Vec::new(),
         };
         let confined = Confined {
+            reads_the_machine: false,
             directories: Vec::new(),
             carried: vec![
                 carried("aws", Scope::Aws),
@@ -2315,6 +2325,41 @@ mod tests {
             assert!(sentence.starts_with(program), "{sentence}");
             assert!(sentence.contains(reached), "{sentence}");
         }
+    }
+
+    /// Where the machine is read, `gh` reads nothing it did not already, so its sentence says what
+    /// the scope does add and does not claim a read of the logins and keys every stage has.
+    #[test]
+    fn where_the_machine_is_read_the_remote_scope_names_only_what_it_adds() {
+        use bravebot_sandbox::scope::Scope;
+        let confined = Confined {
+            reads_the_machine: true,
+            directories: Vec::new(),
+            carried: vec![Carried {
+                program: "git".into(),
+                toolchain: None,
+                scope: Some(Scope::Remote),
+                reaches: Vec::new(),
+            }],
+        };
+
+        let sentences = confined.sentences();
+
+        assert_eq!(sentences.len(), 1);
+        assert!(sentences[0].contains("known hosts"), "{}", sentences[0]);
+        assert!(
+            !sentences[0].contains("never a private key"),
+            "{}",
+            sentences[0]
+        );
+        assert_ne!(
+            confined.heading(),
+            Confined {
+                reads_the_machine: false,
+                ..confined.clone()
+            }
+            .heading()
+        );
     }
 
     fn a_run() -> RunRequest {

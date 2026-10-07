@@ -139,6 +139,16 @@ fn refusal_for(policy: &SandboxPolicy) -> Option<SandboxError> {
         return Some(SandboxError::PolicyTooPermissive);
     }
 
+    if !policy.unreadable.is_empty() {
+        return Some(SandboxError::SetupFailed {
+            mechanism: "appcontainer",
+            detail: "a container is granted the paths it is given and reaches nothing else, so a \
+                     read refusal subtracts from nothing here; refusing rather than reporting a \
+                     credential held back that was never reachable"
+                .into(),
+        });
+    }
+
     if !policy.allow_subprocesses {
         return Some(SandboxError::SetupFailed {
             mechanism: "appcontainer",
@@ -711,6 +721,19 @@ mod tests {
             refusal_for(&policy),
             Some(SandboxError::PolicyTooPermissive)
         ));
+    }
+
+    /// A container reaches only the paths it is granted, so a refusal subtracts from nothing
+    /// and applying one would record a credential as held back that was never reachable. The
+    /// policy is otherwise one this backend applies, so the refusal is the only reason.
+    #[test]
+    fn a_policy_refusing_a_read_is_refused_rather_than_applied() {
+        let policy = a_policy_this_backend_applies().deny_read("/workspace/credentials");
+
+        let refusal = refusal_for(&policy).expect("a read refusal is not enforceable here");
+
+        assert!(matches!(refusal, SandboxError::SetupFailed { .. }));
+        assert!(refusal.to_string().contains("refusing"));
     }
 
     /// A container does not stop a process creating children, so a policy asking for that

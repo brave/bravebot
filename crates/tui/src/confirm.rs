@@ -4142,6 +4142,7 @@ mod tests {
     fn a_run_prompt_says_what_a_confined_run_is_held_to() {
         let mut request = a_run(false);
         request.confined = Some(bravebot_agent::Confined {
+            reads_the_machine: false,
             directories: vec![
                 "/home/someone/project".into(),
                 "/var/scratch/session".into(),

@@ -2259,6 +2259,7 @@ mod tests {
                     path: "/home/someone/docker-work".into(),
                 }],
             }],
+            reads_the_machine: false,
         });
 
         let confined = program(&request).join("\n");

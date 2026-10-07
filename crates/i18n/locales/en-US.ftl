@@ -1376,6 +1376,8 @@ run-not-sandboxed = this is not sandboxed: it runs with the access your own shel
 # Said instead of the line above where the turn confines what a run starts, and followed by the
 # directories it is held to and by one sentence for each toolchain and credential a stage brings.
 run-confined = its files are confined to these directories, the system temporary directory and the system files every program needs:
+run-confined-machine = it can read this machine except the places that hold a credential, and write only these directories, the system temporary directory and the toolchain caches:
+run-carries-known-hosts = { $program } also adds to your ssh known hosts and can reach your ssh agent
 run-carries-toolchain = { $program } also reaches the install and the cache of the { $toolchain } toolchain
 run-carries-remote = { $program } also reads your git and gh logins, your ssh configuration and public keys, never a private key, and adds to your ssh known hosts
 run-carries-aws = { $program } also reads your aws credentials in ~/.aws

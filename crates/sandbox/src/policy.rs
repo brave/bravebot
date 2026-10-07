@@ -14,6 +14,14 @@ pub struct SandboxPolicy {
     /// Paths the process may read: a directory with everything under it, or one file.
     /// Empty means no filesystem reads.
     pub readable: Vec<PathBuf>,
+    /// Paths the process may not read although a read row above them grants it: a directory with
+    /// everything under it, or one file.
+    ///
+    /// A read row at or beneath one of these lifts it for that row alone, so a credential
+    /// directory is held back from every program except the one whose plan names it. A row that
+    /// lies beneath no read row refuses nothing, and a backend refuses the policy for holding it
+    /// ([`SandboxPolicy::denial_without_a_grant`]).
+    pub unreadable: Vec<PathBuf>,
     /// Paths the process may write, each saying what it is where the caller means the
     /// program to create it. Empty means no filesystem writes.
     pub writable: Vec<WriteGrant>,
@@ -43,6 +51,7 @@ impl SandboxPolicy {
     pub fn strict() -> Self {
         Self {
             readable: Vec::new(),
+            unreadable: Vec::new(),
             writable: Vec::new(),
             allow_network: false,
             allow_subprocesses: false,
@@ -53,6 +62,16 @@ impl SandboxPolicy {
 
     pub fn allow_read(mut self, path: impl Into<PathBuf>) -> Self {
         self.readable.push(path.into());
+        self
+    }
+
+    /// Refuse reading a path that a read row above it grants.
+    ///
+    /// Named for what it does to a broad grant: `allow_read("/")` followed by a row for each
+    /// location that holds a credential is a program that reads the machine and not the keys. A
+    /// read row at or beneath the path lifts the refusal for that row.
+    pub fn deny_read(mut self, path: impl Into<PathBuf>) -> Self {
+        self.unreadable.push(path.into());
         self
     }
 
@@ -151,6 +170,7 @@ impl SandboxPolicy {
         Resolution {
             policy: Self {
                 readable,
+                unreadable: self.unreadable.clone(),
                 writable,
                 allow_network: self.allow_network,
                 allow_subprocesses: self.allow_subprocesses,
@@ -220,19 +240,98 @@ impl SandboxPolicy {
         created
     }
 
+    /// The first refusal of a read that no read row grants, or that is not a path to refuse.
+    ///
+    /// A refusal is a subtraction, so one with nothing above it to subtract from reads as
+    /// protection and protects nothing: the policy would look as though it held a credential back
+    /// while the program never had it. A row counts as granted by one that is strictly above it, so
+    /// a row equal to a refusal is the lift of it and not the grant it narrows. A relative row
+    /// names whatever the process's directory is, which is no place a policy can mean.
+    pub fn denial_without_a_grant(&self) -> Option<&Path> {
+        self.unreadable
+            .iter()
+            .find(|denied| {
+                !denied.is_absolute()
+                    || !self
+                        .readable
+                        .iter()
+                        .any(|row| denied.starts_with(row) && *denied != row)
+            })
+            .map(PathBuf::as_path)
+    }
+
+    /// The read rows a backend that cannot hold back a subdirectory grants instead of
+    /// [`SandboxPolicy::readable`].
+    ///
+    /// Such a backend grants a directory with everything beneath it, so "the machine except this
+    /// directory" has to be said as the entries of every directory above the refusal, one row
+    /// each, with the refused one left out. A row equal to or beneath a refusal is a lift, and
+    /// is kept whole because no refusal lies beneath it. A row with no refusal beneath it is kept
+    /// whole.
+    ///
+    /// What is compared is names against the policy's fixed list and where a link leads, never
+    /// what a file holds. A link is not followed and is not granted: a link is judged by the path
+    /// it leads to, which is granted or not on its own account, so one that leads into a refused
+    /// directory reaches nothing. A refused path that is itself a link is refused where it leads
+    /// as well. A refusal that is not on disk still shapes the rows, so a directory made there
+    /// during the run is outside every grant.
+    ///
+    /// Without a refusal this is [`SandboxPolicy::readable`].
+    pub fn readable_by_enumeration(&self) -> Vec<PathBuf> {
+        if self.unreadable.is_empty() {
+            return self.readable.clone();
+        }
+        self.around_the_refusals(self.readable.iter())
+    }
+
+    /// The write rows a backend that cannot hold back a subdirectory grants instead of
+    /// [`SandboxPolicy::writable`].
+    ///
+    /// A write grant on such a backend carries the right to read beneath it, so a writable
+    /// directory above a refusal would hand back what the read rows hold out. It is spread around
+    /// the refusals the way [`SandboxPolicy::readable_by_enumeration`] spreads a read row, which
+    /// leaves the directory itself without the right to make an entry directly in it.
+    ///
+    /// Without a refusal this is the path of each row of [`SandboxPolicy::writable`].
+    pub fn writable_by_enumeration(&self) -> Vec<PathBuf> {
+        if self.unreadable.is_empty() {
+            return self.writable.iter().map(|row| row.path.clone()).collect();
+        }
+        self.around_the_refusals(self.writable.iter().map(|row| &row.path))
+    }
+
+    fn around_the_refusals<'a>(&self, rows: impl Iterator<Item = &'a PathBuf>) -> Vec<PathBuf> {
+        let mut refused = self.unreadable.clone();
+        refused.extend(
+            self.unreadable
+                .iter()
+                .filter_map(|path| fs::canonicalize(path).ok()),
+        );
+
+        let mut granted: Vec<PathBuf> = Vec::new();
+        for row in rows {
+            spread_around(row, &refused, &mut granted);
+        }
+        granted.sort();
+        granted.dedup();
+        granted
+    }
+
     /// Whether this policy would confine anything at all.
     ///
     /// A policy granting network, subprocesses, and write access to the root of a
     /// filesystem is not confinement; treating it as such would be the sort of accident
     /// that makes a sandbox decorative. A row counts as the root by where it resolves,
-    /// so `/..` and `/tmp/..` are the root as much as `/` is.
+    /// so `/..` and `/tmp/..` are the root as much as `/` is. A refusal of a read that nothing
+    /// grants is not confinement either ([`SandboxPolicy::denial_without_a_grant`]).
     pub fn is_meaningful(&self) -> bool {
-        !self.allow_network
-            || !self.allow_subprocesses
-            || !self
-                .writable
-                .iter()
-                .any(|row| names_a_filesystem_root(&row.path))
+        self.denial_without_a_grant().is_none()
+            && (!self.allow_network
+                || !self.allow_subprocesses
+                || !self
+                    .writable
+                    .iter()
+                    .any(|row| names_a_filesystem_root(&row.path)))
     }
 }
 
@@ -298,6 +397,33 @@ pub struct Resolution {
 ///
 /// Existence is read through the symlink, since a grant is installed on what a path opens
 /// and a dangling one opens nothing.
+/// `path` as the rows that reach all of it except the refused paths beneath it.
+///
+/// A directory with no refusal beneath it is one row. One with a refusal beneath it, present or
+/// not, is each of its entries, descended into the same way, so only the entries on the way to a
+/// refusal are listed. A directory this cannot list contributes nothing, since a process that
+/// could not list it has no entries to name.
+fn spread_around(path: &Path, refused: &[PathBuf], granted: &mut Vec<PathBuf>) {
+    if !refused
+        .iter()
+        .any(|refusal| refusal.starts_with(path) && refusal != path)
+    {
+        granted.push(path.to_path_buf());
+        return;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let child = entry.path();
+        let is_a_link = entry.file_type().is_ok_and(|kind| kind.is_symlink());
+        if is_a_link || refused.contains(&child) {
+            continue;
+        }
+        spread_around(&child, refused, granted);
+    }
+}
+
 fn keep_the_paths_that_are_there(paths: &[PathBuf], omitted: &mut Vec<PathBuf>) -> Vec<PathBuf> {
     let mut kept = Vec::with_capacity(paths.len());
     for path in paths {
@@ -950,6 +1076,215 @@ mod tests {
         );
         assert!(resolved.policy.writable.is_empty());
         assert_eq!(resolved.omitted, vec![wanted]);
+    }
+
+    /// A machine laid out as `top/{bin,home/{.ssh,.aws,docs},etc}`, with a link beside the
+    /// directories and `top` as the single read row.
+    fn a_machine_with_a_home(name: &str) -> PathBuf {
+        let top = a_directory_of_this_tests_own(name);
+        for directory in ["bin", "home/.ssh", "home/.aws", "home/docs", "etc"] {
+            fs::create_dir_all(top.join(directory)).expect("a directory of the machine");
+        }
+        fs::write(top.join("home/.ssh/id_ed25519"), "key").expect("a key");
+        fs::write(top.join("home/.ssh/config"), "config").expect("a configuration");
+        fs::write(top.join("home/docs/notes"), "notes").expect("a note");
+        top
+    }
+
+    #[test]
+    fn a_refusal_is_recorded_and_changes_nothing_else() {
+        let policy = SandboxPolicy::strict()
+            .allow_read("/")
+            .deny_read("/home/a-person/.aws");
+
+        assert_eq!(
+            policy.unreadable,
+            vec![PathBuf::from("/home/a-person/.aws")]
+        );
+        assert_eq!(policy.readable, vec![PathBuf::from("/")]);
+        assert!(SandboxPolicy::strict().unreadable.is_empty());
+    }
+
+    /// The regression it rejects: a backend handed a policy that lost its refusals on the way,
+    /// which reads the machine with nothing held back.
+    #[test]
+    fn a_policy_made_nameable_keeps_its_refusals() {
+        let policy = SandboxPolicy::strict()
+            .allow_read("/")
+            .deny_read("/no/such/credential");
+
+        let resolved = policy.nameable_under(&capabilities(false));
+
+        assert_eq!(resolved.policy.unreadable, policy.unreadable);
+        assert_eq!(resolved.omitted, Vec::<PathBuf>::new());
+    }
+
+    /// The regression it rejects: a refusal with nothing above it to subtract from, which reads
+    /// as protection and protects nothing; or a lift mistaken for the grant it narrows.
+    #[test]
+    fn a_refusal_nothing_grants_is_not_meaningful() {
+        let alone = SandboxPolicy::strict().deny_read("/home/a-person/.aws");
+        let beside = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .deny_read("/home/a-person/.aws");
+        let lifted_only = SandboxPolicy::strict()
+            .allow_read("/home/a-person/.aws")
+            .deny_read("/home/a-person/.aws");
+        let relative = SandboxPolicy::strict().allow_read("/").deny_read("secrets");
+        let held = SandboxPolicy::strict()
+            .allow_read("/")
+            .deny_read("/home/a-person/.aws");
+
+        assert_eq!(
+            alone.denial_without_a_grant(),
+            Some(Path::new("/home/a-person/.aws"))
+        );
+        assert!(!alone.is_meaningful());
+        assert!(!beside.is_meaningful());
+        assert!(!lifted_only.is_meaningful());
+        assert!(!relative.is_meaningful());
+        assert_eq!(held.denial_without_a_grant(), None);
+        assert!(held.is_meaningful());
+    }
+
+    #[test]
+    fn without_a_refusal_the_enumeration_is_the_read_rows() {
+        let policy = SandboxPolicy::strict().allow_read("/").allow_read("/usr");
+
+        assert_eq!(
+            policy.readable_by_enumeration(),
+            vec![PathBuf::from("/"), PathBuf::from("/usr")]
+        );
+    }
+
+    /// The regression it rejects: a backend that grants a directory with everything beneath it
+    /// handed `/` and a refusal beneath it, which grants the refused directory too; or an
+    /// enumeration that drops a sibling of the way to the refusal.
+    #[test]
+    fn the_entries_above_a_refusal_are_each_a_row_and_the_refusal_is_not() {
+        let top = a_machine_with_a_home("sandbox-policy-enumerate");
+        let policy = SandboxPolicy::strict()
+            .allow_read(&top)
+            .deny_read(top.join("home/.aws"));
+
+        let rows = policy.readable_by_enumeration();
+
+        let mut expected = vec![
+            top.join("bin"),
+            top.join("etc"),
+            top.join("home/.ssh"),
+            top.join("home/docs"),
+        ];
+        expected.sort();
+        assert_eq!(rows, expected);
+    }
+
+    /// The regression it rejects: a lift dropped, which is a public key and a configuration
+    /// refused beside the private key they are lifted out of.
+    #[test]
+    fn a_row_beneath_a_refusal_is_kept_as_a_lift() {
+        let top = a_machine_with_a_home("sandbox-policy-lift");
+        let policy = SandboxPolicy::strict()
+            .allow_read(&top)
+            .deny_read(top.join("home/.ssh"))
+            .allow_read(top.join("home/.ssh/config"));
+
+        let rows = policy.readable_by_enumeration();
+
+        assert!(rows.contains(&top.join("home/.ssh/config")), "{rows:?}");
+        assert!(!rows.contains(&top.join("home/.ssh")), "{rows:?}");
+        assert!(
+            !rows.contains(&top.join("home/.ssh/id_ed25519")),
+            "{rows:?}"
+        );
+        assert!(rows.contains(&top.join("home/docs")), "{rows:?}");
+    }
+
+    /// The regression it rejects: a link followed or granted, so a link to a refused directory
+    /// from a readable one reaches it. A link is judged by where it leads, which is granted or
+    /// not on its own account.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_is_not_granted() {
+        let top = a_machine_with_a_home("sandbox-policy-link");
+        std::os::unix::fs::symlink(top.join("home/.aws"), top.join("home/docs/to-aws"))
+            .expect("a link");
+        std::os::unix::fs::symlink(top.join("home/.aws"), top.join("home/leads-to-aws"))
+            .expect("a link");
+        let policy = SandboxPolicy::strict()
+            .allow_read(&top)
+            .deny_read(top.join("home/.aws"));
+
+        let rows = policy.readable_by_enumeration();
+
+        assert!(!rows.contains(&top.join("home/leads-to-aws")), "{rows:?}");
+        assert!(rows.contains(&top.join("home/docs")), "{rows:?}");
+    }
+
+    /// The regression it rejects: a refusal that is itself a link, judged only where it stands,
+    /// so the directory it leads to stays granted under its real name.
+    #[cfg(unix)]
+    #[test]
+    fn a_refusal_that_is_a_link_is_refused_where_it_leads_as_well() {
+        let top = a_machine_with_a_home("sandbox-policy-refused-link");
+        std::os::unix::fs::symlink(top.join("home/.aws"), top.join("etc/aws")).expect("a link");
+        let policy = SandboxPolicy::strict()
+            .allow_read(&top)
+            .deny_read(top.join("etc/aws"));
+
+        let rows = policy.readable_by_enumeration();
+
+        assert!(!rows.contains(&top.join("home/.aws")), "{rows:?}");
+        assert!(!rows.contains(&top.join("home")), "{rows:?}");
+    }
+
+    /// The regression it rejects: a refusal skipped because nothing is at it yet, which leaves a
+    /// directory made there during the run inside the grant.
+    #[test]
+    fn a_refusal_that_is_not_on_disk_still_shapes_the_rows() {
+        let top = a_machine_with_a_home("sandbox-policy-absent");
+        let policy = SandboxPolicy::strict()
+            .allow_read(&top)
+            .deny_read(top.join("home/.kube"));
+
+        let rows = policy.readable_by_enumeration();
+
+        assert!(!rows.contains(&top.join("home")), "{rows:?}");
+        assert!(rows.contains(&top.join("home/.aws")), "{rows:?}");
+        assert!(!rows.contains(&top.join("home/.kube")), "{rows:?}");
+    }
+
+    /// The regression it rejects: a write row left whole above a refusal, which on a backend that
+    /// grants a directory with everything beneath it, reads included, hands back the credential
+    /// directory the read rows hold out.
+    #[test]
+    fn a_write_row_above_a_refusal_is_spread_around_it() {
+        let top = a_machine_with_a_home("sandbox-policy-writable");
+        let policy = SandboxPolicy::strict()
+            .allow_read(&top)
+            .allow_write(top.join("home"))
+            .allow_write(top.join("etc"))
+            .deny_read(top.join("home/.aws"));
+
+        let rows = policy.writable_by_enumeration();
+
+        assert!(!rows.contains(&top.join("home")), "{rows:?}");
+        assert!(!rows.contains(&top.join("home/.aws")), "{rows:?}");
+        assert!(rows.contains(&top.join("home/docs")), "{rows:?}");
+        assert!(rows.contains(&top.join("home/.ssh")), "{rows:?}");
+        assert!(rows.contains(&top.join("etc")), "{rows:?}");
+    }
+
+    #[test]
+    fn without_a_refusal_the_write_enumeration_is_the_write_rows() {
+        let policy = SandboxPolicy::strict()
+            .allow_write("/tmp")
+            .allow_write("/work");
+
+        assert_eq!(
+            policy.writable_by_enumeration(),
+            vec![PathBuf::from("/tmp"), PathBuf::from("/work")]
+        );
     }
 
     #[test]
