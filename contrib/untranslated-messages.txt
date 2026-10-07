@@ -45,6 +45,7 @@ fr:cli-usage-attach
 fr:cli-usage-bg
 fr:cli-usage-reply
 fr:cli-usage-sessions
+fr:cli-usage-sessions-import
 fr:cli-usage-sessions-stop
 fr:command-branch
 fr:command-caffeinate
@@ -74,6 +75,19 @@ fr:sessions-held-server
 fr:sessions-held-tools
 fr:sessions-held-vouch
 fr:sessions-held-write
+fr:sessions-import-ambiguous
+fr:sessions-import-copied
+fr:sessions-import-failed
+fr:sessions-import-how
+fr:sessions-import-missing
+fr:sessions-import-no-project
+fr:sessions-import-no-source
+fr:sessions-import-none
+fr:sessions-import-opencode
+fr:sessions-import-row
+fr:sessions-import-row-there
+fr:sessions-import-there
+fr:sessions-import-usage
 fr:sessions-missing
 fr:sessions-no-home
 fr:sessions-none

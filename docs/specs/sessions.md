@@ -4,6 +4,8 @@ title: Sessions and history
 status: normative
 governs:
   - crates/session/src/sessions.rs
+  - crates/session/src/import.rs
+  - crates/cli/src/session_import.rs
   - crates/tui/src/state.rs
   - crates/tui/src/history.rs
   - crates/session/src/store.rs
@@ -67,6 +69,9 @@ turn vouched for the path and the backup records trusted capture provenance. A s
 grant alone cannot authorize bytes captured after another writer changed them. What a file nobody
 vouched for held is written down as contents this session did not keep, and a resumed session says that path did not
 go back rather than putting it back.
+
+The one record that holds words this session's planner did not hold is a copy of another program's
+session, which [SESSION-32](#SESSION-32) keeps out of every request.
 
 **Why.** A record is read back into a later turn's context. Anything written that the planner could
 not have held would enter that context on the next resume, which is the laundering route the whole
@@ -1077,6 +1082,67 @@ into a conversation it was not started in.
 `verified-by: bravebot_tui::app::the_branch_command_carries_its_name`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_branch_command_is_still_a_prompt`
 
+<a id="SESSION-32"></a>
+### SESSION-32: another program's session is copied as words to read, and never as a request
+
+`bravebot sessions import claude-code [--project <dir>]` lists the sessions Claude Code kept for the
+workspace (the current directory, or `--project`), newest first, and copies none. Naming sessions by
+the start of their ids, or `--all`, copies them. Nothing is copied unless a person ran the command,
+and a session never runs it.
+
+A session is the workspace's when the directory Claude Code recorded inside it is that workspace,
+resolved as paths are everywhere else. The name of the directory it sits in is not consulted, since
+it is lossy ([Known costs](#known-costs)). A session that records no directory is skipped, as is one
+in which nobody said anything in words.
+
+What is taken is what a person typed and what the model answered in prose. Tool calls and their
+results, the model's reasoning, pictures, summaries and the other program's own notes to itself are
+not, nor is a prompt it composed rather than a person typing it, nor is a side conversation.
+Control characters and the characters that reorder text are stripped from what is taken.
+
+The copy is one record under the workspace, named `claude-code-` and the other program's session id.
+It holds the words in the archive, which a resume draws and no request is built from
+([SESSION-25](#SESSION-25)), tagged as imported; the messages a request is built from are empty. It
+is written `untrusted` and `private`, as the least that may be claimed of words from a context this
+program never saw. It holds no trust map, so a resume asks about the directory as a new session
+does ([TRUST-6](trust-map.md#TRUST-6)), and no vouched program, extra directory, rewind point or
+checkout. Nothing in it grants anything, and nothing it contains changes a permission or a route.
+It is written as every record is ([SESSION-16](#SESSION-16)).
+
+Where the record already exists the copy is a no-op that says so, whatever has changed in the other
+program's files since, and the file is not rewritten. The other program's files are read when the
+command runs and not again.
+
+Imported words are never moved into a request. A desktop fork cut inside the archive would put the
+archived words back into the child's messages, so the desktop app refuses to fork a session whose
+archive holds imported words, and says why. `/branch` copies the record whole and keeps them as the
+archive they are.
+
+opencode is accepted as a name and refused with a line saying why: its sessions are rows in a
+database file, and no reader for one is built.
+
+**Why.** A person arriving from another tool has history there they want to refer to. Reading it
+back into a later turn is the route [SESSION-2](#SESSION-2) closes, so it is shown and never sent;
+what they would otherwise do is paste it, a prompt at a time. The deterministic name makes the
+second copy a no-op without a field in the record that every earlier build would have to carry.
+
+`verified-by: bravebot_session::import::only_what_was_said_in_words_is_taken`
+`verified-by: bravebot_session::import::the_programs_own_bookkeeping_is_not_a_prompt`
+`verified-by: bravebot_session::import::a_session_without_a_workspace_or_from_another_one_is_skipped`
+`verified-by: bravebot_session::import::a_session_nobody_spoke_in_is_skipped`
+`verified-by: bravebot_session::import::nothing_that_draws_or_reorders_survives`
+`verified-by: bravebot_session::import::a_line_that_is_not_text_does_not_end_the_reading`
+`verified-by: bravebot_session::import::times_are_read_as_utc`
+`verified-by: bravebot_session::import::a_typed_name_picks_one_session_or_says_why_not`
+`verified-by: bravebot_session::import::claude_names_a_workspace_by_dashing_everything_that_is_not_alphanumeric`
+`verified-by: bravebot_session::import::a_copy_holds_the_words_beside_the_conversation_and_grants_nothing`
+`verified-by: bravebot_session::import::a_second_copy_changes_nothing`
+`verified-by: bravebot_session::import::a_session_whose_name_cannot_be_a_record_name_is_skipped`
+`verified-by: bravebot_cli::session_import::the_words_after_the_tool_say_what_to_copy`
+`verified-by: bravebot_cli::session_import::a_muddled_request_is_refused_rather_than_guessed_at`
+`verified-by: bravebot_cli::running::a_claude_code_session_is_copied_once_and_only_when_asked`
+`verified-by: bravebot_ui_bridge::fork::a_fork_never_moves_copied_words_into_the_request`
+
 ## Known costs
 
 - **Two working directories can share a session store.** The directory name is derived by mapping
@@ -1144,3 +1210,18 @@ into a conversation it was not started in.
   and it cannot be read as a bill. Keeping the split would mean a resumed session reporting a cache
   it never used; the figures are on the status panel for the turn that just ran, where they are a
   measurement rather than a history.
+
+- **An imported session is read and not continued from.** Its words are drawn on a resume and are
+  not in any request, so a prompt that refers back to the old session is answered by a model that
+  was not told. Putting them in the request would make another program's model output, and anything it
+  quoted from a file or a page, part of what the planner reads ([SESSION-32](#SESSION-32)). That
+  is the rule's answer, and moving it is the owner's decision. A desktop fork of a session holding
+  imported words is refused for the same reason.
+- **An imported session has no turn boundaries.** The other program's files do not say where a turn
+  ended ([SESSION-25](#SESSION-25)), so a resume draws the words in order with no turn markers and
+  no per-turn spend.
+- **Records tagged as imported are not read by an earlier build.** The tag is a new word in the
+  record, and a build that has not heard of it refuses the record rather than reading it as
+  something it is not.
+- **Only Claude Code is read.** opencode keeps its sessions in a database file and no reader for
+  one is built.

@@ -563,6 +563,14 @@ impl Bridge {
             )
         };
 
+        if crate::fork::imported_in(&snapshot.archive)
+            && ordinal < crate::fork::prompts(&said).len()
+        {
+            return Err(Failure::bad_request(
+                "this session holds words copied from another program, \
+                 which a fork does not carry into a request",
+            ));
+        }
         let cut = crate::fork::cut(&snapshot, &said, ordinal).ok_or_else(|| {
             Failure::bad_request(format!("no prompt {ordinal} to fork in front of"))
         })?;

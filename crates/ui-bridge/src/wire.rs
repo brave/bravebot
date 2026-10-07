@@ -275,7 +275,7 @@ fn said(said: &Said) -> Value {
         // Written for the planner and left out of a projection by `Conversation::recounted`, so
         // none reaches here. A tag added without a row is drawn as its words, never dropped.
         Said::Composed {
-            why: Composed::ToolResult | Composed::Resumed | Composed::Summary,
+            why: Composed::ToolResult | Composed::Resumed | Composed::Summary | Composed::Imported,
             text,
         } => json!({ "kind": "user", "text": text }),
     }

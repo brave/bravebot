@@ -8,6 +8,7 @@ governs:
   - crates/cli/src/import.rs
   - crates/cli/src/main.rs
   - crates/cli/src/plain.rs
+  - crates/cli/src/session_import.rs
 documented-by: docs/website/docs/customize/configuration.md
 ---
 
@@ -26,6 +27,9 @@ It covers model services only: the Bedrock account and the OpenAI-compatible gat
 It never makes bravebot read another tool's files or setting names at run time. An import is a
 one-time copy a person approved, written in bravebot's own spelling. After it, the other tool's
 files are not read again, and Ollama is asked only for its roster, as any gateway is.
+
+It also covers the one other thing copied from these tools: a session's words, when a person runs
+`bravebot sessions import` ([IMPORT-11](#IMPORT-11)).
 
 Out of scope: permissions, hooks, MCP servers, instructions, skills, and the desktop app's first
 run.
@@ -461,6 +465,29 @@ list every model twice in the model picker.
 `verified-by: bravebot_cli::running::a_first_run_with_nothing_listening_refuses_as_before`
 `verified-by: bravebot_cli::running::a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_once`
 
+<a id="IMPORT-11"></a>
+### IMPORT-11: a session is copied only when a person runs the command, and only as words to read
+
+`bravebot sessions import claude-code` reads the transcripts Claude Code keeps under its directory
+([IMPORT-2](#IMPORT-2) names which: `$CLAUDE_CONFIG_DIR`, or `~/.claude`) for one workspace.
+[SESSION-32](#SESSION-32) governs what it takes and what the copy holds. Here is the boundary
+with the rest of the import:
+
+- It runs when a person types it, and at no start, no resume and no turn. Nothing offers it.
+- It reads that one program's transcript files for that workspace and nothing else in the
+  directory: not the settings, not `.credentials.json`.
+- It is a one-time copy. After it, the other program's files are not read again, so a session
+  edited or deleted there is not followed.
+- It changes no configuration, permission, trust or route.
+
+`bravebot sessions import opencode` is refused with a line saying its sessions are not readable.
+
+**Why.** A person leaving a tool keeps the history they wanted to refer to, and a copy that
+followed the other tool would be a fallback to another program's data under another name.
+
+`verified-by: bravebot_cli::running::a_claude_code_session_is_copied_once_and_only_when_asked`
+`verified-by: bravebot_session::import::a_second_copy_changes_nothing`
+
 ## Where this stands against the rule
 
 No model runs during an import. Nothing it reads reaches the planner, a turn, a session record or a
@@ -475,6 +502,10 @@ and which model to show. Both are decided before any session exists and reach no
 the case [reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md) calls the inverse
 mistake to flag. The only fetched value written to disk is a model name the person approved on
 sight.
+
+A session import runs no model either, and its words reach no request: they are stored as the
+archive, which is drawn and never sent ([SESSION-32](#SESSION-32)). Putting them in a request is
+the owner's decision.
 
 ## Known costs
 
@@ -496,3 +527,5 @@ sight.
   the address `OLLAMA_HOST` or the default names, and the name is shown before it is written.
 - **One loopback connection per refused start**, and per `doctor` or `--json` run, where no service
   is configured and a settings file could be written.
+- **opencode sessions are not importable.** They are rows in a database file, and reading one
+  needs a dependency nobody has agreed to.

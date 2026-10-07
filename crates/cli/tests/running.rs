@@ -6538,6 +6538,109 @@ fn sessions_stop_marks_a_dead_entry_stopped_and_refuses_an_unknown_id() {
     assert!(said(&output).1.contains("sessions takes"));
 }
 
+/// SESSION-32: a person copies a Claude Code session of a workspace in. Listing writes nothing, the
+/// named session is written once and a second run leaves it alone, and opencode's, which this build
+/// cannot read, is refused by name without touching the state directory.
+#[test]
+fn a_claude_code_session_is_copied_once_and_only_when_asked() {
+    const CLAUDE_SESSION: &str = "6b1d3f5a-0000-4000-8000-000000000042";
+    let home = Scratch::new("sessions-import");
+    let work = home.path.join("work");
+    std::fs::create_dir_all(&work).expect("create the workspace");
+    let work = work.canonicalize().expect("canonical workspace");
+    let key: String = work
+        .display()
+        .to_string()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let cwd = work.to_str().expect("utf-8");
+    let lines = [
+        serde_json::json!({"type": "user", "cwd": cwd, "timestamp": "2026-10-06T12:00:01.000Z",
+            "message": {"role": "user", "content": "rename the parser"}}),
+        serde_json::json!({"type": "assistant", "cwd": cwd, "timestamp": "2026-10-06T12:00:02.000Z",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "Renamed."}]}}),
+    ];
+    let body = lines.map(|line| line.to_string()).join("\n");
+    let home = home.with_file(
+        &format!(".claude/projects/{key}/{CLAUDE_SESSION}.jsonl"),
+        &body,
+    );
+    let project = work.to_str().expect("utf-8");
+    let records = || {
+        let directory = home.path.join(".bravebot/sessions").join(
+            project
+                .chars()
+                .map(|c| match c {
+                    'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' => c,
+                    _ => '-',
+                })
+                .collect::<String>(),
+        );
+        std::fs::read_dir(directory).map_or(0, |entries| entries.count())
+    };
+
+    let output = bravebot(
+        &home.path,
+        &[],
+        &["sessions", "import", "claude-code", "--project", project],
+    );
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    assert!(
+        out.contains("6b1d3f5a") && out.contains("rename the parser"),
+        "{out}"
+    );
+    assert!(!out.contains("already copied"), "{out}");
+    assert_eq!(records(), 0, "a listing wrote a record");
+
+    let copy = [
+        "sessions",
+        "import",
+        "claude-code",
+        "--project",
+        project,
+        "6b1d3f5a",
+    ];
+    let (out, err) = said(&bravebot(&home.path, &[], &copy));
+    assert!(
+        out.contains("Copied") && out.contains(&format!("claude-code-{CLAUDE_SESSION}")),
+        "{out} {err}"
+    );
+    assert_eq!(records(), 1);
+
+    let (out, _) = said(&bravebot(&home.path, &[], &copy));
+    assert!(out.contains("already here"), "{out}");
+    assert_eq!(records(), 1, "a second copy wrote another record");
+
+    let (out, _) = said(&bravebot(
+        &home.path,
+        &[],
+        &["sessions", "import", "claude-code", "--project", project],
+    ));
+    assert!(out.contains("(already copied)"), "{out}");
+
+    let output = bravebot(&home.path, &[], &["sessions", "import", "opencode"]);
+    assert!(!output.status.success());
+    assert!(said(&output).1.contains("database"), "{}", said(&output).1);
+    assert_eq!(records(), 1);
+
+    let output = bravebot(
+        &home.path,
+        &[],
+        &[
+            "sessions",
+            "import",
+            "claude-code",
+            "--project",
+            project,
+            "ffffffff",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(said(&output).1.contains("No Claude Code session"));
+}
+
 /// BG-2: `--bg` cannot start with a flag that would not reach the session it starts, with bypass,
 /// or from anything but a terminal, and each refusal leaves nothing in the roster.
 #[test]

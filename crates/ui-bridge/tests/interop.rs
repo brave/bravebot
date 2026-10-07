@@ -425,6 +425,93 @@ fn forking_a_stored_session_leaves_the_parent_record_untouched() {
     );
 }
 
+/// SESSION-32: words copied from another program are never put in a request, and a fork would
+/// put them there, so the bridge refuses at any prompt of such a session.
+#[test]
+fn a_session_holding_imported_words_is_not_forked() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    let project = scratch("fork-imported-refused");
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.push(Message::user("a prompt typed here"));
+    conversation.push(Message::assistant("an answer given here"));
+    let mut snapshot = conversation.snapshot();
+    snapshot.archive = vec![
+        bravebot_agent::conversation::Stored {
+            message: Message::user("a prompt typed elsewhere"),
+            composed: Some(bravebot_agent::conversation::Composed::Imported),
+        },
+        bravebot_agent::conversation::Stored {
+            message: Message::assistant("an answer given elsewhere"),
+            composed: Some(bravebot_agent::conversation::Composed::Imported),
+        },
+    ];
+    let mut handle = Handle::begin(
+        &project,
+        bravebot_ui_bridge::FRONT,
+        bravebot_ui_bridge::agent_build(),
+    );
+    let trust = TrustStore::new(&project);
+    handle.save(
+        "a prompt typed elsewhere",
+        Standing {
+            history: None,
+            rewind: &[],
+            checkouts: &[],
+            asides: &[],
+            conversation: &snapshot,
+            turns: 1,
+            tokens: 10,
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            trust: &trust,
+            programs: &TrustedPrograms::new(),
+            directories: &[],
+            manifest: None,
+        },
+    );
+    let parent = handle.id().to_string();
+
+    let (mut bridge, _) = harness();
+    let opened = call(
+        &mut bridge,
+        "session.open",
+        serde_json::json!({ "directory": project.display().to_string(), "id": &parent }),
+    );
+    let session = opened["session"].as_str().expect("a handle");
+
+    for (ordinal, text) in [(0, "a prompt typed elsewhere"), (1, "a prompt typed here")] {
+        let line = serde_json::json!({
+            "id": 1,
+            "method": "session.fork",
+            "params": { "session": session, "prompt": ordinal, "text": text },
+        })
+        .to_string();
+        let request = bravebot_ui_bridge::protocol::Request::parse(&line).expect("well formed");
+        let refused = bridge
+            .dispatch(&request)
+            .expect_err("a fork of imported words is refused");
+        assert_eq!(
+            refused.code,
+            bravebot_ui_bridge::protocol::ErrorCode::BadRequest,
+            "a fork at {ordinal}"
+        );
+        assert!(
+            refused.message.contains("copied from another program"),
+            "a fork at {ordinal} said: {}",
+            refused.message
+        );
+    }
+    assert_eq!(
+        sessions::list(&project).len(),
+        1,
+        "the refusal reserves no session"
+    );
+}
+
 #[test]
 fn a_fork_writes_nothing_until_it_has_something_to_say() {
     if !profile::in_isolated_profile() {

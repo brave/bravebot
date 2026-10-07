@@ -97,6 +97,12 @@ pub enum Composed {
     /// House-keeping for the planner: the archive already holds what it stands in for, so a
     /// transcript drawing it would show the session twice.
     Summary,
+    /// Words another program kept, copied into the archive by `sessions import` (SESSION-32).
+    ///
+    /// Said by somebody, so a transcript draws it as the prompt or the answer it was. The tag is
+    /// for the one thing that must not happen to it: it is never moved into the request, since
+    /// nothing in a copy was written by this session's own planner or checked by its driver.
+    Imported,
 }
 
 impl Composed {
@@ -784,7 +790,11 @@ impl Conversation {
         // The archive first: what compaction took out of the request is still the person's
         // session, and they are the one reading this.
         for stored in self.archive.iter().chain(self.messages.iter()) {
-            if let Some(why) = &stored.composed {
+            if let Some(why) = stored
+                .composed
+                .as_ref()
+                .filter(|why| **why != Composed::Imported)
+            {
                 // Written for the planner and said by no one: a prose tool result, the resume
                 // note, and the summary standing in for what the archive above already holds.
                 // Drawn as a prompt any of them would look like something the user typed.
