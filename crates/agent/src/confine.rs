@@ -8,6 +8,7 @@
 //! Nothing a program printed, and no value the model supplied, reaches a row. The inputs are the
 //! compiled [`Step`], which a person read, and the session's own directories.
 
+use crate::confirm::{Carried, Confined};
 use crate::exec::ExecError;
 use bravebot_core::command::Step;
 use bravebot_sandbox::Variables;
@@ -83,6 +84,45 @@ impl Confinement {
         self
     }
 
+    /// The toolchain list and the credential scope a step brings to its profile.
+    ///
+    /// The one place either is decided, read by [`Confinement::policy`] to build the rows and by
+    /// [`Confinement::describe`] to tell a person which rows there are. Neither is brought where
+    /// the session names no home directory, since both are rows under it.
+    fn carries(&self, step: &Step) -> (Option<Toolchain>, Option<Scope>) {
+        if self.home.is_none() {
+            return (None, None);
+        }
+        (
+            Toolchain::of(&step.resolved),
+            Scope::of(&step.resolved, &step.args, &step.environment),
+        )
+    }
+
+    /// What the profile of each step of `steps` holds beyond the base and the places its programs
+    /// are installed, for the prompt a person approves from.
+    pub fn describe(&self, steps: &[&Step]) -> Confined {
+        Confined {
+            directories: self
+                .roots
+                .iter()
+                .chain(self.scratch.iter())
+                .cloned()
+                .collect(),
+            carried: steps
+                .iter()
+                .filter_map(|step| {
+                    let (toolchain, scope) = self.carries(step);
+                    (toolchain.is_some() || scope.is_some()).then(|| Carried {
+                        program: step.program.clone(),
+                        toolchain,
+                        scope,
+                    })
+                })
+                .collect(),
+        }
+    }
+
     /// The policy one step runs under, started in `directory`.
     ///
     /// `environment` is the step's own, after the session's variables and the step's assignments
@@ -97,8 +137,8 @@ impl Confinement {
             program: _,
             resolved,
             started_as,
-            args,
-            environment: assigned,
+            args: _,
+            environment: _,
             routes: _,
         } = step;
         let mut policy = base(
@@ -110,10 +150,11 @@ impl Confinement {
         .allow_git_directory_writes();
 
         if let Some(home) = self.home.as_deref() {
-            if let Some(toolchain) = Toolchain::of(resolved) {
+            let (toolchain, scope) = self.carries(step);
+            if let Some(toolchain) = toolchain {
                 policy = toolchain.grant(policy, self.prelude, home);
             }
-            if let Some(scope) = Scope::of(resolved, args, assigned) {
+            if let Some(scope) = scope {
                 policy = scope.grant(policy, home);
                 if scope == Scope::Remote
                     && let Some(socket) = variable(environment, "SSH_AUTH_SOCK")
@@ -406,6 +447,69 @@ mod tests {
                 "`{program} {args:?}` reached {reached:?}"
             );
         }
+    }
+
+    /// What the prompt is told a stage carries is what the profile grants it: the stage the
+    /// profile gives a registry and a remote is the stage described as bringing them, and a stage
+    /// that brings neither is absent. A description built from a second reading of the step could
+    /// disagree with the profile in either direction.
+    #[test]
+    fn what_a_prompt_says_a_stage_carries_is_what_its_profile_grants() {
+        let confined = confinement(&["/work/project", "/work/added"]);
+        let cargo = step("/usr/bin/cargo", &["build"]);
+        let push = step("/usr/bin/git", &["push"]);
+        let status = step("/usr/bin/git", &["status"]);
+        let make = step("/usr/bin/make", &["check"]);
+
+        let described = confined.describe(&[&cargo, &push, &status, &make]);
+
+        assert_eq!(
+            described.directories,
+            [
+                PathBuf::from("/work/project"),
+                PathBuf::from("/work/added"),
+                PathBuf::from("/var/scratch")
+            ]
+        );
+        let carried: Vec<_> = described
+            .carried
+            .iter()
+            .map(|stage| (stage.program.as_str(), stage.toolchain, stage.scope))
+            .collect();
+        assert_eq!(
+            carried,
+            [
+                ("cargo", Some(Toolchain::Cargo), None),
+                ("git", None, Some(Scope::Remote)),
+            ]
+        );
+        let registry = format!("{HOME}/.cargo/registry");
+        let policy = |step: &Step| confined.policy(step, Path::new("/work/project"), &[]);
+        assert!(writes(&policy(&cargo), &registry));
+        assert!(!writes(&policy(&make), &registry));
+        assert!(reads(&policy(&push), &format!("{HOME}/.config/gh")));
+        assert!(!reads(&policy(&status), &format!("{HOME}/.config/gh")));
+    }
+
+    /// A session that names no home directory grants no row under it, so it describes none.
+    #[test]
+    fn a_session_with_no_home_describes_no_toolchain_and_no_scope() {
+        let confined = Confinement::new(
+            Prelude::Linux,
+            PathBuf::from("/tmp"),
+            None,
+            None,
+            vec![PathBuf::from("/work/project")],
+            None,
+        );
+
+        let described = confined.describe(&[
+            &step("/usr/bin/cargo", &["build"]),
+            &step("/usr/bin/git", &["push"]),
+        ]);
+
+        assert!(described.carried.is_empty());
+        assert_eq!(described.directories, [PathBuf::from("/work/project")]);
     }
 
     /// The list a toolchain brings follows the binary the step resolved to, so a `cargo` stage

@@ -71,8 +71,12 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 <a id="PROMPT-2"></a>
 ### PROMPT-2: a prompt says what approving does, and what it does not
 
-The run prompt says it is not sandboxed, asks for the side effects and the output together, and
-names the exact command it would vouch for. The output prompt says
+The run prompt says what the programs are held to: where the turn confines them
+([SANDBOX-17](#SANDBOX-17)), the directories they are confined to and the toolchain lists and
+credential scopes each stage brings beyond them ([SANDBOX-18](#SANDBOX-18)), and where it does not,
+that they are not sandboxed. Which of the two it says is decided by the confinement the executor
+starts the stages under, so it cannot disagree with what runs. It asks for the side effects and the
+output together, and names the exact command it would vouch for. The output prompt says
 what approving does. The vetting prompt says what approving does and, because nothing else on the
 screen would, what it does not: no path is vouched for, so the same thing read again asks again. The trust prompt explains the consequence and names both answers. The prompt
 about a directory a settings file asked for says that opening it grants reach and trust, and that a
@@ -87,7 +91,11 @@ direction: without the question saying where the name came from, the box is unex
 the same problem at its largest, since a reader has no way to tell from a step list how much of the
 run one keypress settles.
 
-`verified-by: bravebot_tui::confirm::a_run_prompt_says_it_is_not_sandboxed`
+`verified-by: bravebot_tui::confirm::a_run_prompt_says_it_is_not_sandboxed_where_the_turn_does_not_confine`
+`verified-by: bravebot_tui::confirm::a_run_prompt_says_what_a_confined_run_is_held_to`
+`verified-by: bravebot_cli::plain::a_run_is_asked_about_as_confined_only_where_the_turn_confines`
+`verified-by: bravebot_agent::confine::what_a_prompt_says_a_stage_carries_is_what_its_profile_grants`
+`verified-by: bravebot_agent::turn::a_run_prompt_describes_the_confinement_only_where_the_turn_confines`
 `verified-by: bravebot_tui::confirm::a_run_prompt_asks_for_the_side_effects_and_the_output_together`
 `verified-by: bravebot_tui::confirm::a_run_prompt_names_the_exact_command_it_would_vouch_for`
 `verified-by: bravebot_tui::confirm::the_output_prompt_says_what_approving_does`

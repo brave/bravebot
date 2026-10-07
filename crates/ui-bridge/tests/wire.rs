@@ -701,6 +701,7 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
         }],
     };
     let request = RunRequest {
+        confined: None,
         record: None,
         pattern: None,
         stdin: Some("ref:3".into()),
@@ -749,6 +750,7 @@ fn a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_t
     use bravebot_agent::confirm::RunRequest;
     use bravebot_core::command::{Plan, Step, Steps};
     let request = RunRequest {
+        confined: None,
         record: None,
         pattern: None,
         stdin: None,
@@ -787,6 +789,7 @@ fn a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field
     use bravebot_agent::confirm::RunRequest;
     use bravebot_core::command::{Plan, Step, Steps};
     let request = RunRequest {
+        confined: None,
         record: None,
         pattern: None,
         stdin: None,

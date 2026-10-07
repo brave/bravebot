@@ -1183,6 +1183,12 @@ run-writes = il écrit ces fichiers :
 run-is-fed = le contenu de ceci lui est fourni :
 run-not-sandboxed =
     ceci n'est pas isolé : l'exécution a les mêmes accès que votre propre shell
+run-confined = ses fichiers sont confinés à ces répertoires, au répertoire temporaire du système et aux fichiers système dont tout programme a besoin :
+run-carries-toolchain = { $program } atteint aussi l'installation et le cache de la chaîne d'outils { $toolchain }
+run-carries-remote = { $program } lit aussi vos identifiants git et gh, votre configuration ssh et vos clés publiques, jamais une clé privée, et ajoute à vos hôtes ssh connus
+run-carries-aws = { $program } lit aussi vos identifiants aws dans ~/.aws
+run-carries-kubernetes = { $program } lit aussi vos identifiants kubernetes dans ~/.kube
+run-carries-docker = { $program } lit aussi vos identifiants docker dans ~/.docker
 run-spends-authority =
     elle dépense aussi des accès qui sont déjà les vôtres ailleurs, que personne ne redemande et que rien ici ne reprend :
 run-authority-container = { $named } : le démon de conteneurs, qui exécute n'importe quoi en root sur cette machine

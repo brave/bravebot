@@ -47,6 +47,18 @@ impl Toolchain {
         }
     }
 
+    /// The name a person knows this toolchain by, for a prompt to show.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Cargo => "cargo",
+            Self::Node => "node",
+            Self::Python => "python",
+            Self::Go => "go",
+            Self::Maven => "maven",
+            Self::Gradle => "gradle",
+        }
+    }
+
     /// `policy` with this toolchain's list added to it, for the account whose home is `home`.
     ///
     /// An install is read and never written: a confined stage able to replace the `cargo` or the

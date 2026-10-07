@@ -992,13 +992,37 @@ fn draw_run(
 
     lines.push(Line::raw(""));
 
-    // Said every time, because it is true every time and it is the thing a reviewer is most likely
-    // to assume otherwise. A program here is not sandboxed and runs with the access the user's own
-    // shell would give it.
-    lines.push(Line::from(Span::styled(
-        format!("  {}", t!(run_not_sandboxed)),
-        Style::default().fg(theme::running()),
-    )));
+    // Said every time, because it is the thing a reviewer is most likely to assume otherwise. Where
+    // the turn confines what it starts, the programs are held to the directories listed and to what
+    // each stage brings; where it does not, they run with the access the user's own shell has.
+    match &request.confined {
+        Some(confined) => {
+            lines.extend(indented(
+                confined.heading(),
+                Style::default().fg(theme::running()),
+                inside.width as usize,
+            ));
+            for directory in &confined.directories {
+                lines.push(Line::from(Span::styled(
+                    format!("       {}", directory.display()),
+                    Style::default()
+                        .fg(theme::text())
+                        .add_modifier(Modifier::BOLD),
+                )));
+            }
+            for sentence in confined.sentences() {
+                lines.extend(indented(
+                    sentence,
+                    Style::default().fg(theme::running()),
+                    inside.width as usize,
+                ));
+            }
+        }
+        None => lines.push(Line::from(Span::styled(
+            format!("  {}", t!(run_not_sandboxed)),
+            Style::default().fg(theme::running()),
+        ))),
+    }
 
     // Which access in particular a yes hands over, where the line reaches one nothing here holds:
     // a container daemon, a tool already logged in, the ssh agent, the metadata service. The line
@@ -3618,6 +3642,7 @@ mod tests {
             append: false,
         }];
         RunRequest {
+            confined: None,
             stdin: None,
             // A line naming a file to write is asked about however it was answered, so the prompt
             // offers no key that would outlive the session.
@@ -4087,11 +4112,54 @@ mod tests {
         );
     }
 
-    /// Said every time, because it is true every time and it is the thing a reviewer is most
-    /// likely to assume otherwise.
+    /// A run the turn starts unconfined, as on Windows, is said to be unconfined, and says nothing
+    /// of the directories or the credentials a confined one does.
     #[test]
-    fn a_run_prompt_says_it_is_not_sandboxed() {
-        assert!(rendered_run(&a_run(false)).contains("not sandboxed"));
+    fn a_run_prompt_says_it_is_not_sandboxed_where_the_turn_does_not_confine() {
+        let drawn = rendered_run(&a_run(false));
+        assert!(drawn.contains("not sandboxed"), "{drawn}");
+        assert!(!drawn.contains("confined to"), "{drawn}");
+    }
+
+    /// A run the turn confines is not said to be unsandboxed, and says what it is held to: the
+    /// directories, and what each stage brings beyond them. A person who then meets a refusal from
+    /// the kernel has been told a profile is in force.
+    #[test]
+    fn a_run_prompt_says_what_a_confined_run_is_held_to() {
+        let mut request = a_run(false);
+        request.confined = Some(bravebot_agent::Confined {
+            directories: vec![
+                "/home/someone/project".into(),
+                "/var/scratch/session".into(),
+            ],
+            carried: vec![
+                bravebot_agent::Carried {
+                    program: "git".into(),
+                    toolchain: None,
+                    scope: Some(bravebot_sandbox::scope::Scope::Remote),
+                },
+                bravebot_agent::Carried {
+                    program: "sed".into(),
+                    toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Cargo),
+                    scope: None,
+                },
+            ],
+        });
+
+        let drawn = rendered_run(&request);
+
+        assert!(!drawn.contains("not sandboxed"), "{drawn}");
+        assert!(drawn.contains("confined to these directories"), "{drawn}");
+        assert!(drawn.contains("/var/scratch/session"), "{drawn}");
+        assert!(
+            drawn.contains("git also reads your git and gh logins"),
+            "{drawn}"
+        );
+        assert!(drawn.contains("never a private key"), "{drawn}");
+        assert!(
+            drawn.contains("sed also reaches the install and the cache of the cargo toolchain"),
+            "{drawn}"
+        );
     }
 
     /// A line that reaches an authority nothing here holds says which one, beside the line about
@@ -4442,6 +4510,7 @@ mod tests {
             }],
         };
         RunRequest {
+            confined: None,
             stdin: None,
             // Private input is asked about every time, so neither standing key is offered.
             record: None,
@@ -4521,6 +4590,7 @@ mod tests {
             routes: Vec::new(),
         };
         RunRequest {
+            confined: None,
             stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "LD_PRELOAD=./evil.so git log".to_string(),
@@ -4587,6 +4657,7 @@ mod tests {
             }],
         };
         RunRequest {
+            confined: None,
             stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "sh check.sh > out.txt".to_string(),

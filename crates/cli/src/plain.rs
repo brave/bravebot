@@ -1265,9 +1265,18 @@ fn program(request: &RunRequest) -> Vec<String> {
             lines.push(format!("  {}", shown(&path.to_string_lossy())));
         }
     }
-    // Said every time, because it is true every time and is the thing a person is likeliest to
-    // assume otherwise.
-    lines.push(t!(run_not_sandboxed).to_string());
+    // Said every time, because it is the thing a person is likeliest to assume otherwise: what the
+    // programs are confined to where the turn confines them, and that they are not where it does not.
+    match &request.confined {
+        Some(confined) => {
+            lines.push(confined.heading());
+            for directory in &confined.directories {
+                lines.push(format!("  {}", shown(&directory.to_string_lossy())));
+            }
+            lines.extend(confined.sentences());
+        }
+        None => lines.push(t!(run_not_sandboxed).to_string()),
+    }
     // Which access in particular a yes hands over, where the line reaches one nothing here holds.
     // The line above says what confinement there is and is said every time; this says what is
     // being granted, and is said only where there is something to name.
@@ -2158,6 +2167,47 @@ mod tests {
         assert!(
             !lines.contains(t!(run_spends_authority)),
             "a line reaching no ambient authority was said to spend one: {lines}"
+        );
+    }
+
+    /// The plain question tells the same two stories as the panel: a run the turn confines is
+    /// asked about as confined, with its directories and what each stage brings, and one it does
+    /// not is asked about as not sandboxed.
+    #[test]
+    fn a_run_is_asked_about_as_confined_only_where_the_turn_confines() {
+        let pipeline =
+            bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+                "docker",
+                vec!["ps".to_string()],
+            )]);
+        let mut request =
+            RunRequest::from_pipeline(&pipeline, &["/usr/bin/docker".to_string()], "/work");
+        let unconfined = program(&request).join("\n");
+        request.confined = Some(bravebot_agent::Confined {
+            directories: vec!["/work".into(), "/var/scratch/session".into()],
+            carried: vec![bravebot_agent::Carried {
+                program: "docker".into(),
+                toolchain: None,
+                scope: Some(bravebot_sandbox::scope::Scope::Docker),
+            }],
+        });
+
+        let confined = program(&request).join("\n");
+
+        assert!(unconfined.contains(t!(run_not_sandboxed)), "{unconfined}");
+        assert!(!confined.contains(t!(run_not_sandboxed)), "{confined}");
+        assert!(
+            confined.contains("confined to these directories"),
+            "{confined}"
+        );
+        assert!(confined.contains("/var/scratch/session"), "{confined}");
+        assert!(
+            confined.contains("docker also reads your docker credentials in ~/.docker"),
+            "{confined}"
+        );
+        assert!(
+            confined.contains("container daemon"),
+            "the access the profile does not narrow was dropped: {confined}"
         );
     }
 

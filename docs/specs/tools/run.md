@@ -524,8 +524,9 @@ this agent.
 **The rest of the environment stays, and that is not an oversight.** `run aws s3 ls` and `run gh pr
 list` are ordinary requests, and no rule matching variable names can tell one of those from an
 exfiltration. Withholding by guesswork would trade a claim that holds exactly for one that mostly
-holds. What a person is told is the truth about the remainder: a run has the access their own shell
-has, which is what the prompt says every time. A person who wants a name of their own withheld may
+holds. What a person is told is the truth about the remainder: a profile bounds files and not the
+environment ([SANDBOX-16](#SANDBOX-16)), and the prompt says what the profile is where the turn
+confines a run and that there is none where it does not. A person who wants a name of their own withheld may
 list it, and a list of names can only ever take something away. That list is read once when the
 process starts, so editing it applies to the next session rather than to a run already in flight.
 
