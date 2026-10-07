@@ -737,6 +737,19 @@ CLI resolving the credential it is being run for.
 credential in front of every command the agent starts. The list is read when the process starts, so
 editing it describes your next session.
 
+**An entry may be a pattern.** `*` stands for any run of characters and `?` for exactly one, matched
+against the whole of a variable name and ignoring case, so `AWS_*` withholds `AWS_PROFILE` and
+`aws_region` and leaves `PATH` and `MY_AWS_KEY`. `*` and `?` are the whole of the syntax. A pattern
+matching nothing withholds nothing; an exact name is withheld whether you have that variable set or
+not.
+
+```json
+{ "run": { "scrubEnv": ["AWS_*", "*_TOKEN", "MY_SECRET"] } }
+```
+
+Nothing is withheld by a pattern you did not write. bravebot adds none of its own, because a rule
+matching variable names cannot tell `run aws s3 ls` from an exfiltration.
+
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB=0` turns the withholding off entirely. Only that exact spelling does
 it: `false`, `no` and `off` change nothing, because a credential reaching every subprocess is not a
 thing to switch off by near-miss.

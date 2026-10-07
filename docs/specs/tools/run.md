@@ -552,7 +552,8 @@ holds. What a person is told is the truth about the remainder: a profile bounds 
 environment ([SANDBOX-16](#SANDBOX-16)), and the prompt says what the profile is where the turn
 confines a run and that there is none where it does not. A person who wants a name of their own withheld may
 list it, and a list of names can only ever take something away. That list is read once when the
-process starts, so editing it applies to the next session rather than to a run already in flight.
+process starts, so editing it applies to the next session rather than to a run already in flight. An
+entry in it may be a pattern over variable names ([RUN-28](#RUN-28)).
 
 **Not a confinement mechanism, and it must not be read as one.** A program that reaches the network
 is unpoliced, so it can send anything it can read, which is what its profile
@@ -1635,6 +1636,45 @@ the wrong target, could only stop the whole turn and lose the rest of its work.
 `verified-by: bravebot_tui::state::a_stop_reaches_the_job_of_the_delegate_it_names_and_no_other`
 `verified-by: bravebot_tui::state::a_stop_of_a_job_that_is_not_running_says_so_and_sets_nothing`
 `verified-by: bravebot_tui::app::jobs_stop_typed_mid_turn_sets_the_token_of_the_job_it_names`
+
+<a id="RUN-28"></a>
+### RUN-28: an entry in a person's list may be a pattern over variable names
+
+An entry in `run.scrubEnv` may hold `*`, standing for any run of characters including none, and
+`?`, standing for exactly one. It is matched against the whole of a variable name, ignoring case, so
+`AWS_*` withholds `AWS_PROFILE` and `aws_region` and leaves `PATH`, and `MY_AWS_KEY` is not matched
+by it. An entry holding neither character is an exact name and is compared as one. A pattern
+matching a variable already withheld leaves it withheld once. A pattern matching nothing withholds
+nothing, while an exact name is withheld whether this process holds the variable or not. `*` and `?`
+are the whole of the syntax: there is no character class and no brace group.
+
+What a pattern selects is read from the names this process holds when a stage is built, since a
+pattern is a way of naming variables and the names it stands for are not known until there are
+names. The list is still read once when the process starts
+([RUN-12](#RUN-12)).
+
+**Nothing is withheld that the person did not write.** No pattern is built in and none is
+defaulted, so the set this agent withholds with no configuration is exactly the exact names
+[RUN-12](#RUN-12) states and the position that a name filter cannot tell `run aws s3 ls` from an
+exfiltration is unchanged. A pattern is held to the same bound as a name: it is read for a program
+the person asked for and not for a program this agent starts for itself, so `AWS_*` cannot stop the
+`aws` CLI resolving the credential it is run to resolve.
+
+**What is matched is a variable name.** The patterns are the person's own settings file and the
+names are what they or the host set in the environment, so nothing a tool returned decides anything
+here.
+
+**Why.** Withholding a family meant listing each member and adding new ones as they appeared, so a
+person who wanted every `AWS_*` or `*_TOKEN` kept from the programs a turn starts had a list that
+went out of date without saying so.
+
+`verified-by: bravebot_config::scrub::a_pattern_withholds_the_family_it_names_whatever_the_case`
+`verified-by: bravebot_config::scrub::a_pattern_covers_the_whole_name_and_a_question_mark_one_character`
+`verified-by: bravebot_config::scrub::a_pattern_matching_a_built_in_credential_does_not_list_it_twice`
+`verified-by: bravebot_config::scrub::a_pattern_naming_no_variable_adds_nothing_and_an_exact_name_still_does`
+`verified-by: bravebot_config::scrub::a_pattern_is_not_one_of_this_agents_own`
+`verified-by: bravebot_config::scrub::a_star_spans_any_run_of_characters_and_a_plain_name_matches_only_itself`
+`verified-by: bravebot_config::scrub::a_pattern_is_matched_against_this_processes_own_environment`
 
 ## Open questions
 
