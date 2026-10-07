@@ -23,7 +23,7 @@ documented-by: docs/website/docs/security/permissions.md
 ## Scope
 
 A standing answer to the questions a person is otherwise asked one at a time. Four modes: asking,
-accepting edits, planning, and bypassing every check. One key cycles them, and `/plan` sets planning and the mode in force is
+accepting edits, planning, and bypassing every check. One key cycles them, and `/plan` sets planning. The mode in force is
 drawn under the input box for as long as it holds.
 
 What each of those questions *is*, and what a prompt owes its reader, is
