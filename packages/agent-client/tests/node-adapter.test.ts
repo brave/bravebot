@@ -15,6 +15,11 @@ test('a runtime without the session view is refused before any session is create
     await assert.rejects(legacy.client.createSession({ workspace: 'work' }), CapabilityError)
     await assert.rejects(legacy.client.describe(), CapabilityError)
     await rawOn(legacy, 'agent.info')
+    // The runtime logs on stderr, a separate pipe from the reply, so the second line can arrive after rawOn resolves.
+    await within(new Promise<void>((resolve) => {
+      const watch = (): void => { if (legacy.stderr().split('\n').length > 2) resolve(); else legacy.child.stderr.once('data', watch) }
+      watch()
+    }), 'the runtime to log both requests')
     const requests = legacy.stderr().split('\n').filter(Boolean).map((line) => (JSON.parse(line.slice('request '.length)) as { method: string }).method)
     assert.deepEqual(requests, ['agent.info', 'agent.info'], 'no session.new was sent to the old runtime')
   } finally {
