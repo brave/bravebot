@@ -9,3 +9,8 @@ async function use(): Promise<ViewState> {
   return session.view
 }
 void use().catch((error: unknown) => error instanceof CapabilityError)
+
+// Raw dispatch is on the connection for diagnostics, not on the client a caller is given.
+// @ts-expect-error `client` is typed as `AgentClient`, which has no `raw`.
+void connection.client.raw
+void connection.raw

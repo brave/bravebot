@@ -83,29 +83,53 @@ their session, the in-memory copy of rows and status, and sequence-gap detection
 second session reducer: it does not derive busy state, approval state or turn outcomes. It reads no
 released content.
 
-**Operations in this increment.** Describe the target (state-directory path dropped), list the
-configured workspaces by id and name, create a fresh session in one of them with the view started
-(a path is never accepted), fail `attach`, `takeControl` and `messageStatus` locally, answer startup
-trust when asked to, send, cancel, and close. A question a turn asks appears in the view and can be
-cancelled, which refuses it; answering it is not yet supported. A runtime without version 1 of the
-capability is refused before any session is created. A close reports the view as detached and worker
-termination and save success as unknown. A failed close keeps the session subscribed to view
-updates and connection loss. A request unanswered past its deadline (30 seconds by default) ends
-the connection and stops the child, since its outcome cannot be known; nothing is retried. Stdout
-EOF or a read error ends the connection immediately, even if the child is still alive. A view listener that throws is reported through the diagnostic hook and
-affects neither other listeners, other sessions nor shutdown.
+**Operations in this increment.** The client can:
 
-**Evidence.** The scenarios run under four read-chunkings against a scripted server (split and
-combined frames, early events, interleaved sessions, out-of-order responses, gaps, malformed input,
-labelled rows carried whole, connection loss, an unknown method and a question of an unsupported
-kind). The real-process tests use a model service of the test's own, an empty home and a scratch
-project, and show: trust deciding whether a write is asked about; a cancelled write not landing and
-its late approval refused; close, EOF, a killed process and unreadable input.
+- describe the target, with the state-directory path dropped;
+- list the configured workspaces by id and name;
+- create a fresh session in one of them with the view started (`createSession` never accepts a path);
+- answer startup trust when asked to, after which the question is no longer offered;
+- send, cancel, and close.
+
+`raw` on the stdio connection (and on `RpcAgentClient`) sends any bridge method for diagnostics and tests. The connection's `client` is typed as `AgentClient`, which has no `raw`, and `raw` is not confined to configured workspaces.
+
+`attach`, `takeControl` and `messageStatus` fail locally. A question a turn asks appears in the
+view and can be cancelled, which refuses it. Answering it is not yet supported.
+
+A runtime without version 1 of the capability is refused before any session is created. A close
+reports the view as detached, and worker termination and save success as unknown. A failed close
+keeps the session subscribed to view updates and connection loss, unless the bridge answers that the session no longer exists.
+
+A request unanswered past its deadline (30 seconds by default) ends the connection and stops the
+child, since its outcome cannot be known. Nothing is retried. The cleanup request sent after a
+failed session startup has no deadline, so a silent bridge cannot end the connection. Stdout EOF,
+a read error, or a failed write to the child also ends the connection immediately, even if the
+child is still alive.
+
+A view listener, event handler, response handler, diagnostic hook or close callback that throws or
+rejects is reported through the diagnostic hook where one is set. It does not affect other
+listeners, other sessions, the rest of the data being read, the request it belongs to, or
+shutdown. A diagnostic hook that throws does not lose the message being read.
+
+A startup that breaks the protocol (a malformed or out-of-order initial view, a repeated row id)
+refuses the session for good, even if a valid initial view follows. Startup trust questions are
+held only while a session is being created, and at most 64 sessions' worth are held, earliest first.
+
+**Evidence.** The scenarios run under four read-chunkings against a scripted server: split and
+combined frames, early events, interleaved sessions, out-of-order responses, gaps, malformed
+input, labelled rows carried whole, connection loss, an unknown method and a question of an
+unsupported kind. The real-process tests use a model service of the test's own, an empty home and
+a scratch project. They show:
+
+- trust deciding whether a write is asked about;
+- two sessions with turns in flight together keeping their own rows;
+- a cancelled write not landing, and its late approval refused;
+- close, EOF, a killed process and unreadable input.
 
 **Not established.** Answering questions, a local program, real-process evidence for labelled
 released content, native rendering, remote security, reconnect and recovery, send deduplication,
 controller ownership, a stronger stale-action guarantee than the bridge's, a persistent host, and
-any platform other than the macOS host the tests ran on.
+operating systems other than macOS.
 
 ## Common interface
 

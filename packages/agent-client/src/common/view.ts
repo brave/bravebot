@@ -27,7 +27,10 @@ export interface ViewState {
 /** The state a `session.view.initial` event starts from. Sequence 0 is the only valid start. */
 export function startView(initial: ViewUpdate): ViewState {
   if (initial.sequence !== 0) throw new ProtocolError(`the initial view has sequence ${initial.sequence}, not 0`)
-  return { sequence: 0, turn: initial.turn, status: initial.status, pending: initial.pending, rows: [...initial.rows], ended: null }
+  const ids = new Set(initial.rows.map((row) => row.id))
+  if (ids.size !== initial.rows.length) throw new ProtocolError('the initial view repeats a row id')
+  const view: ViewState = { sequence: 0, turn: initial.turn, status: initial.status, pending: initial.pending, rows: [...initial.rows], ended: null }
+  return initial.status === 'detached' ? endView(view, 'detached', 'the session was closed') : view
 }
 
 /**

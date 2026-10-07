@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { RpcAgentClient, type Workspace } from '../common/client.js'
+import type { AgentClient } from '../common/index.js'
 
 export interface StdioOptions {
   /** Absolute path of the `bravebot-rpc` binary. */
@@ -22,7 +23,10 @@ export interface Exit {
 
 /** A client bound to a child process speaking the bridge's newline-delimited JSON on stdio. */
 export interface StdioConnection {
-  readonly client: RpcAgentClient
+  /** The operations a caller may use. Raw dispatch is `raw`, below, and is not part of this. */
+  readonly client: AgentClient
+  /** Send any bridge method. For diagnostics and refusal tests: not confined to configured workspaces. */
+  raw(method: string, params?: Record<string, unknown>): Promise<unknown>
   readonly child: ChildProcessWithoutNullStreams
   /** What the child wrote to stderr: human-readable, never parsed. */
   stderr(): string
@@ -44,8 +48,15 @@ export function connectStdio(options: StdioOptions): StdioConnection {
   const client = new RpcAgentClient(
     {
       write(line) {
-        if (!child.stdin.writable) throw new Error('the bridge is not accepting input')
-        child.stdin.write(line)
+        if (!child.stdin.writable) {
+          // Nothing more can reach the bridge, so the connection ends as it does for a failed flush.
+          client.transportClosed('bravebot-rpc is not accepting input')
+          throw new Error('the bridge is not accepting input')
+        }
+        child.stdin.write(line, (error) => {
+          // A failed flush means the request never reached the bridge or its outcome is unknown.
+          if (error) client.transportClosed(`writing to bravebot-rpc failed: ${error.message}`)
+        })
       },
     },
     {
@@ -71,7 +82,7 @@ export function connectStdio(options: StdioOptions): StdioConnection {
   child.stderr.on('data', (chunk: string) => {
     errors = (errors + chunk).slice(-64 * 1024)
   })
-  // A write to a child that has gone is reported by its exit, which follows.
+  // Failed writes are reported through their own callback; this keeps the error event from throwing.
   child.stdin.on('error', () => undefined)
 
   const exited = new Promise<Exit>((resolve) => {
@@ -102,6 +113,7 @@ export function connectStdio(options: StdioOptions): StdioConnection {
   }
   return {
     client,
+    raw: (method, params) => client.raw(method, params),
     child,
     stderr: () => errors,
     exited,

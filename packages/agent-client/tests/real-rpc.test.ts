@@ -44,7 +44,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
     const info = await made.rpc.client.describe()
     assert.deepEqual(info.sessionView.approvals, ['confirm', 'run', 'fetch', 'ask'])
     assert.equal(info.sessionView.reconnect, false)
-    const raw = (await made.rpc.client.raw('agent.info')) as Record<string, unknown>
+    const raw = (await made.rpc.raw('agent.info')) as Record<string, unknown>
     assert.equal(typeof raw.home, 'string', 'the bridge reports its state directory')
     assert.equal(JSON.stringify(info).includes(raw.home as string), false)
   })
@@ -105,6 +105,30 @@ describe('a real bravebot-rpc process through the typed client', () => {
     assert.equal(existsSync(join(made.project, 'declined.txt')), false)
   })
 
+  test('two sessions with turns running at once keep their own rows and finish in the order the model releases them', async () => {
+    const made = await rig({
+      'plan:first': [{ say: 'first reply', hold: 'first' }],
+      'plan:second': [{ say: 'second reply', hold: 'second' }],
+    })
+    const a = await trusted(made)
+    const b = await trusted(made)
+    await a.send('plan:first')
+    await b.send('plan:second')
+    await made.stub.reached('first')
+    await made.stub.reached('second')
+    assert.deepEqual([a.view.status, b.view.status], ['running', 'running'], 'both turns are in flight together')
+    made.stub.release('second')
+    const bDone = await until(b, 'the second session to finish', (view) => view.status === 'completed')
+    assert.equal(a.view.status, 'running', 'the first session is unaffected by the second finishing')
+    made.stub.release('first')
+    const aDone = await until(a, 'the first session to finish', (view) => view.status === 'completed')
+    for (const [done, prompt, reply] of [[aDone, 'plan:first', 'first reply'], [bDone, 'plan:second', 'second reply']] as const) {
+      assert.deepEqual(done.rows.map((row) => row.kind), ['prompt', 'reply'])
+      assert.equal((done.rows[0]?.data as { text: string }).text, prompt)
+      assert.equal((done.rows[1]?.data as { reply: string }).reply, reply)
+    }
+  })
+
   test('cancelling a waiting turn grants nothing, resolves the question, and a late approval is refused', async () => {
     const made = await rig({ 'plan:cancel': write('cancelled.txt', 'must not be written') })
     const session = await trusted(made, false)
@@ -117,7 +141,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
     assert.equal(ended.rows.at(-1)?.kind, 'error')
     // The bridge refuses a late answer to the question that was cancelled.
     await assert.rejects(
-      made.rpc.client.raw('confirm.reply', { session: session.id, request: question.request, decision: 'approve' }),
+      made.rpc.raw('confirm.reply', { session: session.id, request: question.request, decision: 'approve' }),
       (error: RpcError) => error.code === 'no_such_request',
     )
     await made.rpc.client.describe()
@@ -153,9 +177,9 @@ describe('a real bravebot-rpc process through the typed client', () => {
   test('the bridge refuses unknown methods, repeated or unsupported view starts, and the client reports them with their code', async () => {
     const made = await rig({})
     const session = await trusted(made)
-    await assert.rejects(made.rpc.client.raw('session.teleport', { session: session.id }), (e: RpcError) => e.code === 'bad_request')
-    await assert.rejects(made.rpc.client.raw('session.view.start', { session: session.id, version: 1 }), (e: RpcError) => e.code === 'bad_request')
-    await assert.rejects(made.rpc.client.raw('session.view.start', { session: session.id, version: 2 }), (e: RpcError) => e.code === 'bad_request')
+    await assert.rejects(made.rpc.raw('session.teleport', { session: session.id }), (e: RpcError) => e.code === 'bad_request')
+    await assert.rejects(made.rpc.raw('session.view.start', { session: session.id, version: 1 }), (e: RpcError) => e.code === 'bad_request')
+    await assert.rejects(made.rpc.raw('session.view.start', { session: session.id, version: 2 }), (e: RpcError) => e.code === 'bad_request')
     assert.equal(session.view.sequence, 1, 'refusals changed nothing in the view')
   })
 
@@ -175,7 +199,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
       }),
       'the bridge to answer the id-only line',
     )
-    assert.ok((await made.rpc.client.raw('agent.info')) !== undefined, 'a later valid request still works')
+    assert.ok((await made.rpc.raw('agent.info')) !== undefined, 'a later valid request still works')
   })
 
   test('ending input makes the bridge exit, refuses a pending write, and ends the view as lost', async () => {
@@ -188,7 +212,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
     assert.equal(exit.signal, null)
     assert.equal(session.view.ended?.reason, 'connection_lost')
     assert.equal(existsSync(join(made.project, 'eof.txt')), false, 'ending input refused the pending write')
-    await assert.rejects(made.rpc.client.raw('agent.info'), ConnectionLostError)
+    await assert.rejects(made.rpc.raw('agent.info'), ConnectionLostError)
   })
 
   test(
@@ -198,7 +222,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
       const made = await rig({})
       const session = await trusted(made)
       made.rpc.child.kill('SIGSTOP')
-      const inFlight = made.rpc.client.raw('agent.info')
+      const inFlight = made.rpc.raw('agent.info')
       inFlight.catch(() => undefined)
       made.rpc.child.kill('SIGKILL')
       await assert.rejects(inFlight, ConnectionLostError)

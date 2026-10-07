@@ -127,11 +127,11 @@ It applies each update by replacing the listed rows at their positions and repla
 field. A sequence that is not the next one, a malformed update, or the end of the connection ends
 that view at its last received state; it claims no recovery. It reports a close as a detached view
 with worker termination and save success unknown. A failed close keeps the session registered for
-view updates and connection-loss reporting. Sessions open only in configured workspace ids, and a
+view updates and connection-loss reporting, unless the bridge reports that the session is gone. Sessions open only in configured workspace ids, and a
 request unanswered past its deadline ends the connection with its outcome unknown. Startup trust is
 sent only when a caller asks. The client holds released payloads as received and branches on none of
 them. Rust still decides every transition. This version does not answer questions: a pending
 question stays in the view until the turn is cancelled.
 
 `verified-by: bravebot_ui_bridge::view::the_client_wire_contract_matches_the_rust_types`
-`verified-by: by-construction (packages/agent-client/tests runs the shared scenarios under four chunkings, and drives a real bravebot-rpc against a model service of its own for accepted turns, trust deciding whether a write is asked about, cancellation, interleaved sessions, close, EOF and malformed input, with labelled rows carried whole in the scenarios; make check-agent-client runs it, and the Front end CI job runs that target)`
+`verified-by: by-construction (packages/agent-client/tests runs the shared scenarios under four chunkings, and drives a real bravebot-rpc against a model service of its own for accepted turns, trust deciding whether a write is asked about, cancellation, interleaved sessions, close, EOF, malformed input and failing callbacks, with labelled rows carried whole in the scenarios; make check-agent-client runs it, and the Front end CI job runs that target)`

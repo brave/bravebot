@@ -25,6 +25,7 @@ export interface CloseOutcome {
   saved: 'unknown'
 }
 
+/** A listener may be async; a thrown error or rejection is reported and goes no further. */
 export type ViewListener = (view: ViewState) => void
 
 /** One fresh session with a view. Every method addresses exactly this session. */
@@ -32,7 +33,7 @@ export interface AgentSession {
   readonly id: string
   /** The latest view. Replaced, never mutated, so a held value stays consistent. */
   readonly view: ViewState
-  /** The startup trust question as the bridge sent it, or null if none was asked. Opaque. */
+  /** The startup trust question as the bridge sent it, or null if none was asked or it has been answered. Opaque. */
   readonly startupTrust: JsonValue | null
   /** Called on every change, including when the view ends. Returns an unsubscribe function. */
   subscribe(listener: ViewListener): () => void
@@ -53,6 +54,4 @@ export interface AgentClient {
   createSession(options: { workspace: string }): Promise<AgentSession>
   /** Operations a later stage adds. They fail locally and send nothing. */
   unsupported(operation: 'attach' | 'takeControl' | 'messageStatus'): Promise<never>
-  /** Send an arbitrary bridge method. For diagnostics and refusal tests, not for session control. */
-  raw(method: string, params?: Record<string, unknown>): Promise<unknown>
 }

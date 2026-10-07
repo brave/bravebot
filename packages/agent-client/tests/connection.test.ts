@@ -102,3 +102,24 @@ test('a request whose write failed leaves no deadline behind to close the connec
   assert.equal(fires.length, 1, 'only the live request has a deadline')
   assert.deepEqual(closed, [])
 })
+
+test('a diagnostic hook that throws cannot discard the responses and events that follow in the same chunk', async () => {
+  const written: { id: number }[] = []
+  const events: string[] = []
+  const connection = new RpcConnection(
+    { write: (line) => written.push(JSON.parse(line) as { id: number }) },
+    {
+      onEvent: (event) => events.push(event.event),
+      onClosed: () => undefined,
+      onDiagnostic: () => { throw new Error('hook failure') },
+    },
+  )
+  const pending = connection.request('agent.info')
+  connection.receive(
+    'not json\n{"id": 999, "ok": 1}\n[1]\n' +
+      JSON.stringify({ id: written[0]!.id, ok: 'answered' }) + '\n' +
+      JSON.stringify({ event: 'agent.ready', data: {} }) + '\n',
+  )
+  assert.equal(await pending, 'answered')
+  assert.deepEqual(events, ['agent.ready'])
+})

@@ -1,3 +1,4 @@
+import { describeThrown, isolate } from './isolate.js'
 import { CapabilityError, ProtocolError, RpcError, UnsupportedError } from './errors.js'
 import { RpcConnection, type Deadlines, type LineSink, type Outcome } from './connection.js'
 import type { AgentClient, AgentSession, CloseOutcome, SendResult, TargetInfo, ViewListener } from './interface.js'
@@ -60,6 +61,8 @@ class Session implements AgentSession {
 
   /** Apply one event addressed to this session. Anything that is not view state is ignored. */
   handle(event: BridgeEvent): void {
+    // A startup that broke the protocol stays broken; a later valid-looking event cannot repair it.
+    if (this.refused !== null) return
     try {
       if (event.event === 'trust.request') {
         this.trust = event.data as JsonValue
@@ -86,21 +89,7 @@ class Session implements AgentSession {
     this.current = next
     for (const listener of [...this.listeners]) {
       // A listener's failure is the listener's own; it must not stop other listeners or shutdown.
-      try {
-        listener(next)
-      } catch (error) {
-        let message = 'a view listener threw'
-        try {
-          message += `: ${error instanceof Error ? error.message : String(error)}`
-        } catch {
-          // Thrown values need not support conversion to text.
-        }
-        try {
-          this.report(message)
-        } catch {
-          // Diagnostic callbacks cannot interrupt view delivery or shutdown either.
-        }
-      }
+      isolate(() => listener(next), (error) => this.report(describeThrown('a view listener threw', error)))
     }
   }
 
@@ -116,7 +105,10 @@ class Session implements AgentSession {
 
   async answerTrust(trusted: boolean): Promise<void> {
     this.live('answer trust')
+    const asked = this.trust
     await this.connection.request('trust.reply', this.params({ trusted }))
+    // Answered questions are not offered again; a newer question that arrived meanwhile stays.
+    if (this.trust === asked) this.trust = null
   }
 
   async send(text: string): Promise<SendResult> {
@@ -131,7 +123,13 @@ class Session implements AgentSession {
   }
 
   async close(): Promise<CloseOutcome> {
-    await this.connection.request('session.close', this.params())
+    try {
+      await this.connection.request('session.close', this.params())
+    } catch (error) {
+      // The bridge says the session is already gone, so there is nothing left to keep registered.
+      if (error instanceof RpcError && error.code === 'no_such_session') this.forget(this.id)
+      throw error
+    }
     this.forget(this.id)
     return { viewDetached: this.current?.ended?.reason === 'detached', workerTerminated: 'unknown', saved: 'unknown' }
   }
@@ -143,6 +141,8 @@ export class RpcAgentClient implements AgentClient {
   private readonly sessions = new Map<string, Session>()
   private readonly early = new Map<string, BridgeEvent[]>()
   private capability: Promise<TargetInfo> | null = null
+  /** How many `session.new` requests are in flight. Startup trust is held only while one is. */
+  private creating = 0
   private readonly configured: readonly Workspace[]
   private readonly onDiagnostic: ((message: string) => void) | undefined
 
@@ -156,7 +156,7 @@ export class RpcAgentClient implements AgentClient {
       onEvent: (event) => this.route(event),
       onClosed: (detail) => {
         this.lost(detail)
-        options.onClosed?.(detail)
+        isolate(() => options.onClosed?.(detail), (error) => this.report(describeThrown('the close callback threw', error)))
       },
       onDiagnostic: options.onDiagnostic,
     }, options.deadlines)
@@ -179,28 +179,42 @@ export class RpcAgentClient implements AgentClient {
       session.handle(event)
       return
     }
-    // Only startup trust can precede the response that registers a session. Other events
-    // may come from workers whose sessions have already closed.
-    if (event.event !== 'trust.request') return
+    // Only startup trust can precede the response that registers a session, so nothing is held
+    // unless a creation is waiting for one. Other events may come from workers whose sessions
+    // have already closed.
+    if (event.event !== 'trust.request' || this.creating === 0) return
     const held = this.early.get(event.session)
     if (held) {
       if (held.length < MAX_EARLY_PER_SESSION) held.push(event)
     } else if (this.early.size < MAX_EARLY_SESSIONS) {
+      // Entries nobody claims (raw sessions, closed sessions) live only until the last creation
+      // in flight finishes. When a flood fills the map, the earliest entries are kept: they
+      // belong to the creation most likely still waiting.
       this.early.set(event.session, [event])
     }
   }
 
   private report(message: string): void {
-    this.onDiagnostic?.(message)
+    isolate(() => this.onDiagnostic?.(message), () => undefined)
   }
 
   private lost(detail: string): void {
+    this.early.clear()
     for (const session of this.sessions.values()) session.end('connection_lost', detail)
+    // No event can arrive on a closed connection, so nothing is left to route to.
+    this.sessions.clear()
   }
 
   describe(): Promise<TargetInfo> {
     if (this.capability === null) {
-      this.capability = this.connection.request('agent.info').then((info) => this.target(info))
+      const pending = this.connection.request('agent.info').then((info) => this.target(info))
+      this.capability = pending
+      // A refusal of the capability or a lost connection is final; any other failure may be retried.
+      pending.catch((error: unknown) => {
+        if (this.capability === pending && !(error instanceof CapabilityError) && !this.connection.closed) {
+          this.capability = null
+        }
+      })
     }
     return this.capability
   }
@@ -244,22 +258,34 @@ export class RpcAgentClient implements AgentClient {
       this.early.delete(session.id)
       for (const event of held) session.handle(event)
     }
-    await this.connection.request('session.new', { directory: workspace.directory }, opened)
+    this.creating++
+    try {
+      await this.connection.request('session.new', { directory: workspace.directory }, opened)
+    } finally {
+      if (--this.creating === 0) this.early.clear()
+    }
     if (created === null) throw new ProtocolError('session.new did not return a session handle')
     const session: Session = created
     try {
       await this.connection.request(SESSION_VIEW_START, { session: session.id, version: SESSION_VIEW_VERSION })
-      if (!session.hasView) {
+      if (session.refused !== null || !session.hasView) {
         throw new ProtocolError(session.refused ?? 'the initial view did not arrive before the start response')
       }
     } catch (error) {
       this.sessions.delete(session.id)
-      await this.connection.request('session.close', { session: session.id }).catch(() => undefined)
+      // Best effort and unawaited: the caller gets the startup failure now. The request has no deadline,
+      // so a silent bridge leaves it pending until the connection ends rather than ending the connection.
+      this.connection.request('session.close', { session: session.id }, undefined, { untimed: true }).catch(() => undefined)
       throw error
     }
     return session
   }
 
+  /**
+   * Send an arbitrary bridge method. Not part of `AgentClient`: it is not confined to configured
+   * workspaces and does not wait for a caller to ask before replying to a question. For
+   * diagnostics and refusal tests only.
+   */
   raw(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
     return this.connection.request(method, params)
   }
