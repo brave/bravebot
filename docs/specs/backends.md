@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/backend.rs
   - crates/agent/src/outcome.rs
+  - crates/agent/src/turn.rs
   - crates/agent/src/subscription.rs
   - crates/cli/src/import.rs
   - crates/cli/src/main.rs
@@ -2269,7 +2270,56 @@ strict one, refuses the request, and a conversation can change service between t
 `verified-by: bravebot_aichat::protocol::extra_content_is_taken_from_every_call_in_a_body_and_the_call_stays`
 `verified-by: bravebot_aichat::lib::extra_content_reaches_only_a_google_vertex_service`
 
+<a id="BACKEND-53"></a>
+### BACKEND-53: a turn whose model keeps failing moves to the fallback model a person named
+
+The `fallbackModel` setting holds one model name. It is read from the person's own settings file and
+from the file `--settings` names, and from no project or local layer ([BACKEND-24](#BACKEND-24)):
+a layer that names it is dropped and `doctor` names the file. A tier word in it resolves as it does
+for `model`. A model the managed layer refuses ([BACKEND-48](#BACKEND-48)) is not a fallback.
+
+A request in the turn's own rounds that fails with the category `rate-limited` or `unavailable`
+([BACKEND-37](#BACKEND-37)) is sent once more with the fallback model, and the rest of that turn
+runs on it. The client has already made its attempts at the first model, so the fallback is the
+request after them. The decision reads the category, which is derived from the status the service
+answered with, and nothing the reply said. Every other category ends the turn as before.
+
+The fallback is used only where the same service answers for both models: the same AWS account, the
+same gateway, or the aichat endpoint. A fallback another service would answer is not used and the
+failure ends the turn, because naming a model is the person's agreement to send the conversation
+to the service that serves it ([BACKEND-3](#BACKEND-3)), and nothing here agreed to the first
+model's service handing it on. A turn does not move from the fallback model, which is the model it is asked: a failure of that
+model ends the turn.
+A delegate, and a turn running on the model a definition named ([DELEGATE-22](delegation.md#DELEGATE-22)),
+do not fall back: that model is a boundary its file drew.
+
+The person is told which model failed and which one the turn moved to, and the trail records both
+names with the category. The model that answered is not then reported as a substitution for the
+session's own: it is the model the person named for this case.
+
+**Why.** A person running a long turn against a busy model has to notice the failure and switch by
+hand. The name is configuration, so naming it is the endorsement for the request field it lands in,
+as the `model` key is, and the switch is decided by a category the driver derived itself.
+
+`verified-by: bravebot_agent::turn::a_turn_whose_model_keeps_failing_moves_to_the_fallback_model`
+`verified-by: bravebot_agent::turn::a_model_the_service_keeps_failing_is_followed_by_a_request_naming_the_fallback`
+`verified-by: bravebot_agent::turn::a_fallback_that_is_the_model_that_failed_is_not_asked_again`
+`verified-by: bravebot_agent::turn::a_failure_that_is_not_an_overload_does_not_move_the_turn_to_the_fallback`
+`verified-by: bravebot_agent::turn::a_fallback_another_service_would_answer_is_not_used`
+`verified-by: bravebot_agent::turn::a_turn_moves_to_the_fallback_once`
+`verified-by: bravebot_agent::turn::a_delegate_does_not_fall_back`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_fallback_model`
+`verified-by: bravebot_config::lib::a_fallback_the_managed_layer_refuses_is_not_used`
+`verified-by: bravebot_agent::backend::two_models_share_a_service_only_where_one_account_answers_for_both`
+`verified-by: bravebot_cli::running::doctor_says_a_checkouts_fallback_model_is_not_obeyed`
+
 ## Known costs
+
+- **A fallback no service offers is tried anyway.** Where the name belongs to no gateway and no AWS
+  account, the aichat endpoint is the service that would answer for it, as it is for any such name
+  (BACKEND-3), so a mistyped `fallbackModel` passes BACKEND-53's same-service test. The turn moves to
+  it, the endpoint refuses it, and the failure that ends the turn is that refusal rather than the
+  overload that preceded it.
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**
   BACKEND-39 is asked once, before a session opens, so somebody who opens on a configured model and

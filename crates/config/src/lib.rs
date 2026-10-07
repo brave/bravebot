@@ -1013,6 +1013,12 @@ pub struct Config {
     ///
     /// `None` offers no advisor. [`Config::advisor`] resolves a tier word in it.
     pub advisor_model: Option<String>,
+    /// The model the settings in force name for a turn to move to when its own keeps failing, as
+    /// the file spelled it.
+    ///
+    /// `None` names none. [`Config::fallback`] resolves a tier word in it and applies the
+    /// machine-level lists.
+    pub fallback_model: Option<String>,
     /// The cache lifetime the settings in force chose for requests to a gateway, if they chose one.
     ///
     /// `None` sends no lifetime, so every service keeps its own default. Bedrock accounts carry the
@@ -1252,6 +1258,7 @@ impl Config {
         // (BACKEND-48).
         config.models = managed.models().clone();
         config.advisor_model = settings.advisor_model().map(str::to_string);
+        config.fallback_model = settings.fallback_model().map(str::to_string);
         let ttl = settings.prompt_cache_ttl();
         config.prompt_cache_ttl = ttl;
         config.bedrock = config.bedrock.map(|account| account.with_cache_ttl(ttl));
@@ -1378,6 +1385,7 @@ impl Config {
             premium_endpoint,
             default_model,
             advisor_model: None,
+            fallback_model: None,
             prompt_cache_ttl: None,
             context_budget,
             budget_was_chosen,
@@ -1567,6 +1575,15 @@ impl Config {
         self.advisor_model
             .as_deref()
             .map(|name| self.model_named(name))
+    }
+
+    /// The model a turn moves to when its own keeps failing, resolved like `--model` (BACKEND-53).
+    ///
+    /// `None` where the settings name none, and where the machine-level layer refuses the one they
+    /// name: a model that layer excludes is requested by no route (BACKEND-48), and this is one.
+    pub fn fallback(&self) -> Option<String> {
+        let resolved = self.model_named(self.fallback_model.as_deref()?);
+        self.model_refused(&resolved).is_none().then_some(resolved)
     }
 
     /// Why the machine-level layer refuses `name`, and the file that refuses it (BACKEND-48).
@@ -3050,6 +3067,27 @@ mod tests {
     /// against the written word refuses a tier it was meant to allow, and a deny list matched that
     /// way allows a tier it was meant to refuse. Only the second is dangerous and only a deny entry
     /// shows it.
+    /// BACKEND-53: a model the managed layer refuses is requested by no route, and the fallback is one.
+    #[test]
+    fn a_fallback_the_managed_layer_refuses_is_not_used() {
+        let managed = managed::scratch(
+            "fallback-refused",
+            r#"{"models": {"deny": ["refused-fallback"]}}"#,
+        );
+        for (named, used) in [
+            ("refused-fallback", None),
+            ("allowed-fallback", Some("allowed-fallback")),
+        ] {
+            let settings = Settings::parse(&format!(r#"{{"fallbackModel": "{named}"}}"#));
+            let config =
+                resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
+            assert_eq!(config.fallback().as_deref(), used, "{named}");
+        }
+        let nothing = resolved_under(&managed, &Settings::parse("{}"), |_| None, complete_env)
+            .expect("configured");
+        assert_eq!(nothing.fallback(), None);
+    }
+
     #[test]
     fn a_tier_word_is_checked_as_the_model_it_names() {
         let managed = managed::scratch(

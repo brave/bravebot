@@ -215,6 +215,25 @@ impl BackendError {
     }
 }
 
+/// The model a turn on `model` moves to after `error`, and the category that decided it (BACKEND-53).
+///
+/// Decided from the diagnosis, which is the category the driver derived from the status the service
+/// answered with, so nothing a reply said reaches the choice. `None` where the failure is of another
+/// kind, where no fallback is named or one is refused, where it is the model that just failed, and
+/// where another service would have to answer for it.
+pub(crate) fn fallback_after(
+    config: &Config,
+    model: &str,
+    error: &BackendError,
+) -> Option<(String, Category)> {
+    let category = error.diagnosis().category;
+    if !matches!(category, Category::RateLimited | Category::Unavailable) {
+        return None;
+    }
+    let to = config.fallback()?;
+    (to != model && Backend::serves_both(config, model, &to)).then_some((to, category))
+}
+
 /// Replies a unit test scripted for whatever asks on its thread, answered in order before any
 /// backend is reached.
 ///
@@ -680,6 +699,26 @@ impl<'a> Backend<'a> {
         }
     }
 
+    /// Whether one service answers for both models: the same AWS account, the same gateway, or the
+    /// aichat endpoint (BACKEND-53).
+    ///
+    /// Asked of the names rather than of two selections, because the question is which service a
+    /// name reaches and [`Backend::select`] is where that is decided. Compared by the account or
+    /// the gateway's id and not by the variant, since two gateways are two providers of the
+    /// conversation.
+    pub fn serves_both(config: &Config, one: &str, other: &str) -> bool {
+        match (config.bedrock_for(one), config.bedrock_for(other)) {
+            (Some(one), Some(other)) => return std::ptr::eq(one, other),
+            (None, None) => {}
+            _ => return false,
+        }
+        match (config.provider_for(one), config.provider_for(other)) {
+            (Some((one, _)), Some((other, _))) => one.id == other.id,
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
     /// Whether [`Backend::sign_in_if_needed`] would do anything, without doing it.
     ///
     /// For an interface deciding whether to say something first. Asking separately rather than
@@ -949,6 +988,46 @@ mod tests {
                 "models": {"z-ai/glm-4.6": {}, "anthropic/claude-sonnet-4.5": {}}
             }}}"#,
         )
+    }
+
+    /// BACKEND-53: a conversation moves only to a model the same service answers for, so naming a
+    /// model is not an agreement to send it to a second one.
+    #[test]
+    fn two_models_share_a_service_only_where_one_account_answers_for_both() {
+        let config = with_providers(
+            r#"{"provider": {
+                "openrouter": {
+                    "env": ["A_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}, "anthropic/claude-sonnet-4.5": {}}
+                },
+                "elsewhere": {
+                    "env": ["ANOTHER_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://elsewhere.example.invalid/v1"},
+                    "models": {"some-model": {}}
+                }
+            }}"#,
+        );
+        for (one, other, shared) in [
+            (DEFAULT_MODEL, "another-brave-model", true),
+            ("opus-arn", "opus-arn", true),
+            ("z-ai/glm-4.6", "anthropic/claude-sonnet-4.5", true),
+            ("z-ai/glm-4.6", "some-model", false),
+            (DEFAULT_MODEL, "z-ai/glm-4.6", false),
+            (DEFAULT_MODEL, "opus-arn", false),
+            ("opus-arn", "z-ai/glm-4.6", false),
+        ] {
+            assert_eq!(
+                Backend::serves_both(&config, one, other),
+                shared,
+                "{one} and {other}"
+            );
+            assert_eq!(
+                Backend::serves_both(&config, other, one),
+                shared,
+                "{other} and {one}"
+            );
+        }
     }
 
     /// A gateway in the shape a local Ollama is configured with: an endpoint, a name to show, and

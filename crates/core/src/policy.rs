@@ -2328,6 +2328,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Put a turn's move to its fallback model in the trail (BACKEND-53).
+    ///
+    /// Both names are configuration: the person's own settings and the model the turn was on. The
+    /// category is a fixed word the driver derived from the status, so the line carries nothing a
+    /// service wrote.
+    pub fn record_model_fallback(&mut self, round: usize, from: &str, to: &str, category: &str) {
+        self.allow(
+            "model-fallback",
+            format!("round {round}: {from} failed as {category}; the turn moved to {to}"),
+        );
+    }
+
     /// The label a read of `path` would carry: what the trust map says about the path, and
     /// private as workspace content is.
     ///

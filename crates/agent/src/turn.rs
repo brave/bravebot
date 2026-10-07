@@ -1555,10 +1555,11 @@ impl Outcome {
     /// Whether the turn's last round was asked of the session's own model, so that a front end
     /// may compare [`Outcome::model`] with it.
     ///
-    /// False where an addressed definition's model was asked for or a loaded skill named the
-    /// model. The turn has already compared that model with the one that answered (ADDRESS-11,
-    /// SKILL-15), and a comparison with the session's would report a substitution that did not
-    /// happen. True for a definition whose model the command line's outranked, since the
+    /// False where an addressed definition's model was asked for, a loaded skill named the
+    /// model, or the turn moved to the fallback model (BACKEND-53). The first two have already been
+    /// compared with the one that answered (ADDRESS-11, SKILL-15), and a comparison with the
+    /// session's would report a substitution that did not happen. The fallback is the model the
+    /// person named for the turn to move to, and the session's is the one that failed. True for a definition whose model the command line's outranked, since the
     /// command line's is what was asked for.
     pub fn ran_on_the_sessions_model(&self) -> bool {
         !self.compared_the_model_itself
@@ -3732,6 +3733,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         let mut asked_after_an_empty_reply = false;
         // Whether it went out because the one before it reached the output ceiling (TURN-7).
         let mut asked_after_a_ceiling_stop = false;
+        // A delegate and a turn on a definition's model do not move to the fallback model
+        // (BACKEND-53): that model is a boundary its file drew.
+        let may_fall_back = task.delegate.is_none() && pinned_by.is_none();
+        // Whether it has, so the model that answered is not compared with the session's.
+        let mut fell_back = false;
         // When the planner asked for the next tick, where this turn is one and it asked at all.
         let mut wakeup = None;
         // Every watch the turn armed, in the order it asked for them, for whoever holds the session
@@ -3989,6 +3995,25 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             context_tokens = measured;
                             conversation.measured(context_tokens);
                         }
+                    }
+                    // A failure the person's fallback model may answer for: the same request goes to it
+                    // and the rest of the turn runs on it (BACKEND-53). Decided from the category the
+                    // driver derived from the status, which no reply wrote.
+                    if let Err(error) = &completion
+                        && may_fall_back
+                        && let Some((to, category)) =
+                            crate::backend::fallback_after(config, model, error)
+                    {
+                        policy.record_model_fallback(steps, model, &to, category.name());
+                        reporter.narration(t!(
+                            fallback_model_in_use,
+                            from = model,
+                            to = to.as_str(),
+                            category = category.name()
+                        ));
+                        turn_model = Some(to);
+                        fell_back = true;
+                        continue;
                     }
                     // An empty reply is the planner's own output saying nothing, so deciding on it
                     // reads nothing untrusted. The same request sent again tends to stay empty, so the
@@ -5339,7 +5364,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             notices: notices.into_iter().map(|n| n.message).collect(),
             attempt: None,
             addressed,
-            compared_the_model_itself: definition_model.is_some() || switched_by.is_some(),
+            compared_the_model_itself: definition_model.is_some()
+                || switched_by.is_some()
+                || fell_back,
         })
     })();
     let decisions = Decisions {
@@ -5673,6 +5700,246 @@ mod tests {
                 _ => &[],
             };
             assert_eq!(servers, expected, "a {kind}'s server grants");
+        }
+    }
+
+    /// BACKEND-53: a turn whose model keeps failing moves to the fallback model the person named.
+    mod fallback {
+        use super::ceiling::said;
+        use super::*;
+        use crate::backend::{BackendError, scripted};
+        use bravebot_aichat::{ChatError, Completion};
+
+        const PRIMARY: &str = "primary-model";
+        const FALLBACK: &str = "fallback-model";
+
+        /// What the backend hands the turn once its own attempts at a request are spent.
+        fn failed_with(status: u16) -> Result<Completion, BackendError> {
+            Err(
+                BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
+                    url: "https://example.invalid/".into(),
+                    status,
+                }))
+                .counted(3, None, None),
+            )
+        }
+
+        fn configured(fallback: Option<&str>) -> Config {
+            let mut config = Config::from_lookup(|key| match key {
+                "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+                "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+                "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+                _ => None,
+            })
+            .unwrap();
+            config.fallback_model = fallback.map(str::to_string);
+            config
+        }
+
+        struct Taken {
+            outcome: Result<Outcome, TurnError>,
+            reporter: crate::report::RecordingReporter,
+            /// The body of each request that was sent, in order.
+            sent: Vec<String>,
+            /// Every line the trail recorded about a move to the fallback.
+            moves: Vec<String>,
+        }
+
+        fn take(
+            name: &str,
+            config: &Config,
+            task: Task,
+            replies: Vec<Result<Completion, BackendError>>,
+        ) -> Taken {
+            let scratch = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            scripted::script(replies);
+            let outcome = resume(
+                config,
+                &Egress::new(),
+                &workspace,
+                &task,
+                &mut Conversation::new(),
+                &mut crate::confirm::ApproveWrites,
+                &mut reporter,
+                &mut sink,
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome;
+            let sent = scripted::asked();
+            scripted::clear();
+            let moves = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    bravebot_core::event::Event::GatePassed { gate, detail }
+                        if *gate == "model-fallback" =>
+                    {
+                        Some(detail.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            Taken {
+                outcome,
+                reporter,
+                sent,
+                moves,
+            }
+        }
+
+        fn on_primary() -> Task {
+            Task::new("look it up").with_model(Some(PRIMARY.into()))
+        }
+
+        fn named_in(body: &str) -> serde_json::Value {
+            serde_json::from_str::<serde_json::Value>(body).unwrap()["model"].clone()
+        }
+
+        #[test]
+        fn a_turn_whose_model_keeps_failing_moves_to_the_fallback_model() {
+            for status in [529, 503, 429] {
+                let taken = take(
+                    "fallback-moves",
+                    &configured(Some(FALLBACK)),
+                    on_primary(),
+                    vec![
+                        failed_with(status),
+                        said("", &[("read_file", r#"{"path":"absent.txt"}"#)], None),
+                        said("done", &[], None),
+                    ],
+                );
+                let outcome = taken.outcome.as_ref().expect("the fallback answered");
+                assert!(
+                    !outcome.ran_on_the_sessions_model(),
+                    "{status}: a front end would compare the fallback's answer with the model that failed"
+                );
+                let named: Vec<_> = taken.sent.iter().map(|body| named_in(body)).collect();
+                assert_eq!(
+                    named,
+                    [PRIMARY, FALLBACK, FALLBACK],
+                    "{status}: the round after the failure, and the rest of the turn, \
+                     name the fallback"
+                );
+                let told = taken.reporter.narration.join("\n");
+                assert!(
+                    told.contains(PRIMARY) && told.contains(FALLBACK),
+                    "{status}: {told}"
+                );
+                assert_eq!(taken.moves.len(), 1, "{status}: {:?}", taken.moves);
+                assert!(
+                    taken.moves[0].contains(PRIMARY) && taken.moves[0].contains(FALLBACK),
+                    "{status}: {:?}",
+                    taken.moves
+                );
+            }
+        }
+
+        #[test]
+        fn a_failure_that_is_not_an_overload_does_not_move_the_turn_to_the_fallback() {
+            for status in [401, 400, 404] {
+                let taken = take(
+                    "fallback-other-failure",
+                    &configured(Some(FALLBACK)),
+                    on_primary(),
+                    vec![failed_with(status)],
+                );
+                taken.outcome.expect_err("the failure ends the turn");
+                assert_eq!(taken.sent.len(), 1, "{status}");
+                assert_eq!(named_in(&taken.sent[0]), PRIMARY, "{status}");
+                assert!(taken.moves.is_empty(), "{status}");
+            }
+        }
+
+        #[test]
+        fn a_turn_with_no_fallback_named_ends_on_the_failure() {
+            let taken = take(
+                "fallback-none-named",
+                &configured(None),
+                on_primary(),
+                vec![failed_with(529)],
+            );
+            taken.outcome.expect_err("nothing to move to");
+            assert_eq!(taken.sent.len(), 1);
+        }
+
+        #[test]
+        fn a_fallback_another_service_would_answer_is_not_used() {
+            let mut config = configured(Some("elsewhere/other-model"));
+            let root = serde_json::json!({"provider": {"elsewhere": {
+                "options": {"baseURL": "https://elsewhere.example.invalid/v1", "apiKey": "x"},
+                "models": {"other-model": {}}
+            }}});
+            config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+            let taken = take(
+                "fallback-other-service",
+                &config,
+                on_primary(),
+                vec![failed_with(529)],
+            );
+            taken
+                .outcome
+                .expect_err("the conversation stays with its own service");
+            assert_eq!(taken.sent.len(), 1);
+            assert!(taken.moves.is_empty());
+        }
+
+        #[test]
+        fn a_turn_moves_to_the_fallback_once() {
+            let taken = take(
+                "fallback-once",
+                &configured(Some(FALLBACK)),
+                on_primary(),
+                vec![failed_with(529), failed_with(503)],
+            );
+            let why = taken.outcome.expect_err("the fallback failed too");
+            match why.ending() {
+                crate::outcome::Ending::Failed(diagnosis) => {
+                    assert_eq!(diagnosis.status, Some(503));
+                }
+                other => panic!("the turn did not fail: {other:?}"),
+            }
+            assert_eq!(taken.sent.len(), 2, "no third request");
+            assert_eq!(taken.moves.len(), 1);
+        }
+
+        #[test]
+        fn a_fallback_that_is_the_model_that_failed_is_not_asked_again() {
+            let taken = take(
+                "fallback-same-model",
+                &configured(Some(PRIMARY)),
+                on_primary(),
+                vec![failed_with(529)],
+            );
+            taken
+                .outcome
+                .expect_err("the same model would fail the same way");
+            assert_eq!(taken.sent.len(), 1);
+        }
+
+        #[test]
+        fn a_delegate_does_not_fall_back() {
+            let spec = a_delegate_spec("worker", held(&Task::new("")));
+            let taken = take(
+                "fallback-delegate",
+                &configured(Some(FALLBACK)),
+                Task::delegated(spec).with_model(Some(PRIMARY.into())),
+                vec![failed_with(529)],
+            );
+            taken
+                .outcome
+                .expect_err("a delegate refuses rather than falls back");
+            assert_eq!(taken.sent.len(), 1);
+            assert!(taken.moves.is_empty());
         }
     }
 

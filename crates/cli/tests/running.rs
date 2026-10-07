@@ -2884,6 +2884,31 @@ fn doctor_says_a_checkouts_advisor_model_is_not_obeyed() {
     );
 }
 
+/// A checkout's `fallbackModel` is dropped and `doctor` says so, for the reason its `advisorModel` is
+/// (BACKEND-53).
+#[test]
+fn doctor_says_a_checkouts_fallback_model_is_not_obeyed() {
+    let scratch = Scratch::new("cli-running-doctor-fallback-checkout");
+    let cwd = a_checkout_saying(&scratch, r#"{"fallbackModel": "attacker-chosen-model"}"#);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("fallbackModel in") && stdout.contains("is not obeyed"),
+        "{stdout}{stderr}"
+    );
+}
+
 /// A one-shot run takes one turn and exits, so nothing is left holding the line to send it again:
 /// a tool for arranging a later look is not offered here (SCHED-6).
 ///
