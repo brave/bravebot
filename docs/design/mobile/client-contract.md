@@ -97,7 +97,8 @@ Raw dispatch of arbitrary bridge methods is not part of the package. The entry p
 view and can be cancelled, which refuses it. Answering it is not yet supported.
 
 A runtime without version 1 of the capability is refused before any session is created. A close
-reports the view as detached, and worker termination and save success as unknown. A failed close
+reports the view as detached, ending it on the bridge's response even if the detach update has
+not arrived, and worker termination and save success as unknown. A failed close
 keeps the session subscribed to view updates and connection loss, unless the bridge answers that the session no longer exists.
 
 A request unanswered past its deadline (30 seconds by default) ends the connection and stops the
