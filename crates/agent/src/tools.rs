@@ -4880,23 +4880,36 @@ fn apply_checkout<S: Sink, C: Confirmer>(
                     None => return Produced::problem("error: 'paths' holds only strings"),
                 }
             }
-            if let Some(unlisted) = given
-                .iter()
-                .find(|path| !kept.candidates.named.contains(*path))
-            {
-                return Produced::problem(format!(
-                    "refused: the driver recorded no write to {unlisted} in checkout {id}, and \
-                     only a path it recorded can be brought back. Nothing was written."
-                ));
+            match only_recorded(&id, &kept, given) {
+                Ok(paths) => paths,
+                Err(refusal) => return Produced::problem(refusal),
             }
-            // Once each, so a path named twice is not put to the person twice.
-            let mut seen = std::collections::BTreeSet::new();
-            given.retain(|path| seen.insert(path.clone()));
-            given
         }
         Some(_) => return Produced::problem("error: 'paths' is a list of paths"),
     };
     bring_back(policy, tools, confirmer, &id, &kept, paths)
+}
+
+/// `given`, each path once, if every one is a candidate the driver recorded for the kept checkout
+/// `id`; otherwise the refusal naming the first that is not. Nothing is written either way.
+fn only_recorded(
+    id: &str,
+    kept: &crate::workspace::SessionCheckout,
+    mut given: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if let Some(unlisted) = given
+        .iter()
+        .find(|path| !kept.candidates.named.contains(*path))
+    {
+        return Err(format!(
+            "refused: the driver recorded no write to {unlisted} in checkout {id}, and only a \
+             path it recorded can be brought back. Nothing was written."
+        ));
+    }
+    // Once each, so a path named twice is not put to the person twice.
+    let mut seen = std::collections::BTreeSet::new();
+    given.retain(|path| seen.insert(path.clone()));
+    Ok(given)
 }
 
 /// What `/checkouts apply` brought back: the driver's own account of each file, and whether any
@@ -4907,16 +4920,19 @@ pub(crate) struct Brought {
     pub applied: bool,
 }
 
-/// Bring back every candidate of the session's kept checkout `id`, on a person's typed request
-/// rather than a planner's call (CHECKOUT-14).
+/// Bring back the files of the session's kept checkout `id`, on a person's typed request rather
+/// than a planner's call (CHECKOUT-14): every candidate where `paths` is empty, otherwise the
+/// candidates it names, and nothing at all if one of them is not a candidate.
 ///
-/// The number is the person's own, so no argument gate stands in front of it: what follows is
-/// `apply_checkout`'s own loop, which puts each file to the person whatever the trust map says.
+/// The number and the paths are the person's own, so no argument gate stands in front of them:
+/// what follows is `apply_checkout`'s own loop, which puts each file to the person whatever the
+/// trust map says.
 pub(crate) fn apply_kept_checkout<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     confirmer: &mut C,
     id: &str,
+    paths: Vec<String>,
 ) -> Result<Brought, String> {
     let Some(kept) = tools
         .workspace
@@ -4926,7 +4942,10 @@ pub(crate) fn apply_kept_checkout<S: Sink, C: Confirmer>(
     else {
         return Err(format!("the session keeps no checkout {id}"));
     };
-    let paths = kept.candidates.named.iter().cloned().collect();
+    let paths = match paths.is_empty() {
+        true => kept.candidates.named.iter().cloned().collect(),
+        false => only_recorded(id, &kept, paths)?,
+    };
     let produced = bring_back(policy, tools, confirmer, id, &kept, paths);
     let applied = produced.changed_a_file;
     // The driver's own sentences, which carry no byte of any file.

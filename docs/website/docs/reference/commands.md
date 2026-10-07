@@ -517,6 +517,7 @@ Lists the checkouts this session keeps for its delegates, brings the files writt
 ```
 /checkouts            # each kept checkout, numbered, with what was written in it
 /checkouts apply 2    # bring back the files written in checkout c2, one question each
+/checkouts apply 2 src/a.rs notes.md   # bring back only these two
 /checkouts remove 2   # delete checkout c2, and its entry in your repository's .git
 ```
 
@@ -529,6 +530,10 @@ changed there is not named.
 time, whatever your trust map would have said, and shows the difference between your file as it is
 now and the checkout's. It is the same operation as the `apply_checkout` tool and asks the same
 questions. A file a program wrote there, or wrote through a reference, is not among them.
+
+**Paths after the number bring back only those files.** Each has to be a path the driver recorded
+for that checkout, spelled as `/checkouts` lists it. If one is not, nothing is brought back. Paths
+are split at spaces, so a path containing a space can only be brought back with the whole checkout.
 
 **Removing one something was done in asks first**, since removing it deletes that work. `y` removes it; `n`, Esc and ctrl-c keep it. `2` and `c2` name
 the same checkout. The rules copied for it go with it, except one marking a file there untrusted,

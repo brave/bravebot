@@ -26175,11 +26175,12 @@ fn a_kept_checkouts_file_comes_back_through_a_question_the_table_would_not_ask()
     );
 }
 
-/// A worker given a checkout writes `out.txt` there and the turn ends. Returns the workspace that
-/// keeps the checkout, the working directory, the home and the trust map the turn handed back,
-/// which holds the rules copied for the checkout.
+/// A worker given a checkout writes each of `files` (path and contents) there and the turn ends.
+/// Returns the workspace that keeps the checkout, the working directory, the home and the trust
+/// map the turn handed back, which holds the rules copied for the checkout.
 fn a_checkout_kept_after_a_worker_wrote(
     tag: &str,
+    files: &[(&str, &str)],
 ) -> (
     Workspace,
     Scratch,
@@ -26204,13 +26205,16 @@ fn a_checkout_kept_after_a_worker_wrote(
         ),
         (
             "WRITE-OUT-TO-APPLY",
-            vec![
-                tool_request(
-                    "write_file",
-                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
-                ),
-                reply_with("wrote it"),
-            ],
+            files
+                .iter()
+                .map(|(path, contents)| {
+                    tool_request(
+                        "write_file",
+                        &format!(r#"{{"path":"{path}","contents":"{contents}"}}"#),
+                    )
+                })
+                .chain([reply_with("wrote it")])
+                .collect(),
         ),
     ]);
     let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
@@ -26234,8 +26238,10 @@ fn a_checkout_kept_after_a_worker_wrote(
 /// and a checkout the session does not keep asks nobody.
 #[test]
 fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
-    let (workspace, scratch, home, trust) =
-        a_checkout_kept_after_a_worker_wrote("checkout-typed-apply");
+    let (workspace, scratch, home, trust) = a_checkout_kept_after_a_worker_wrote(
+        "checkout-typed-apply",
+        &[("out.txt", "from the delegate")],
+    );
     let config = config_for("http://127.0.0.1:1");
     let egress = bravebot_net::Egress::new();
     let task = Task::new("/checkouts apply c1").with_home(Some(home.path.clone()));
@@ -26248,6 +26254,7 @@ fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
         &workspace,
         &task,
         "c1",
+        &[],
         &mut declining,
         &mut sink,
         trust.clone(),
@@ -26274,6 +26281,7 @@ fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
         &workspace,
         &task,
         "c1",
+        &[],
         &mut approving,
         &mut sink,
         trust.clone(),
@@ -26300,12 +26308,74 @@ fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
         &workspace,
         &task,
         "c7",
+        &[],
         &mut asked_nobody,
         &mut RecordingSink::new(),
         trust,
     );
     assert!(missing.is_err(), "a checkout the session does not keep");
     assert!(asked_nobody.seen.is_empty());
+}
+
+/// CHECKOUT-14. `/checkouts apply <n> <path>` puts only the paths typed to the person and brings
+/// back only those; a path the driver recorded no write to refuses the whole command before
+/// anything is asked, even beside one that is recorded; a path typed twice is asked about once.
+#[test]
+fn a_typed_checkouts_apply_with_paths_asks_only_about_those_paths() {
+    let (workspace, scratch, home, trust) = a_checkout_kept_after_a_worker_wrote(
+        "checkout-typed-apply-paths",
+        &[("first.txt", "one"), ("second.txt", "two")],
+    );
+    let config = config_for("http://127.0.0.1:1");
+    let egress = bravebot_net::Egress::new();
+    let task = Task::new("/checkouts apply c1 second.txt").with_home(Some(home.path.clone()));
+    let apply = |paths: &[&str], confirmer: &mut RecordingConfirmer| {
+        let paths: Vec<String> = paths.iter().map(|path| path.to_string()).collect();
+        turn::apply_checkout_asked_for(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            "c1",
+            &paths,
+            confirmer,
+            &mut RecordingSink::new(),
+            trust.clone(),
+        )
+    };
+
+    let mut refused = RecordingConfirmer::approving();
+    let unlisted = apply(&["second.txt", "README"], &mut refused);
+    assert!(
+        unlisted.is_err_and(|why| why.contains("README")),
+        "a path the driver recorded no write to was not refused by name"
+    );
+    assert!(refused.seen.is_empty(), "a refused apply asked");
+    assert!(
+        !scratch.path.join("second.txt").exists(),
+        "the recorded path beside an unrecorded one was brought back"
+    );
+
+    let mut approving = RecordingConfirmer::approving();
+    let done = apply(&["second.txt", "second.txt"], &mut approving).expect("a recorded path");
+    assert_eq!(
+        approving
+            .seen
+            .iter()
+            .map(|r| r.path.as_str())
+            .collect::<Vec<_>>(),
+        ["second.txt"],
+        "the person was asked about a path not typed, or twice about one"
+    );
+    assert!(done.applied);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("second.txt")).expect("brought back"),
+        "two"
+    );
+    assert!(
+        !scratch.path.join("first.txt").exists(),
+        "a path that was not typed was brought back"
+    );
 }
 
 /// CHECKOUT-14. A person who declines the question leaves the working directory as it was, and the

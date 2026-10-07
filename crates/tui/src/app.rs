@@ -673,9 +673,9 @@ pub enum Action {
     /// Remove the checkout with this number. Needs the workspace, the trust map and the terminal
     /// to ask on, which the loop owns.
     RemoveCheckout(String),
-    /// Bring back the files written in the checkout with this number. Needs the workspace, the
-    /// trust map and the terminal to ask on, which the loop owns.
-    ApplyCheckout(String),
+    /// Bring back the files written in the checkout with this number, or only the paths given.
+    /// Needs the workspace, the trust map and the terminal to ask on, which the loop owns.
+    ApplyCheckout(String, Vec<String>),
     /// Run a command the user typed in shell mode. Needs the workspace and the conversation.
     Run(String),
     /// Put the transcript in front of the user in their editor. Needs the terminal, which the
@@ -1996,7 +1996,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         return match crate::checkouts_command::parse(argument) {
             crate::checkouts_command::Asked::List => Action::ListCheckouts,
             crate::checkouts_command::Asked::Remove(id) => Action::RemoveCheckout(id),
-            crate::checkouts_command::Asked::Apply(id) => Action::ApplyCheckout(id),
+            crate::checkouts_command::Asked::Apply(id, paths) => Action::ApplyCheckout(id, paths),
             crate::checkouts_command::Asked::Unreadable => {
                 session.note(t!(checkouts_command_takes));
                 Action::Redraw
@@ -4159,7 +4159,7 @@ fn event_loop(
                 stored.append_audit(session.turns, removal.events());
                 needs_draw = true;
             }
-            Action::ApplyCheckout(id) => {
+            Action::ApplyCheckout(id, paths) => {
                 // The person's own typing is the request, so no turn is run: each file goes
                 // through the write gate and is put to them, whatever the map would have said
                 // (CHECKOUT-14).
@@ -4185,6 +4185,7 @@ fn event_loop(
                     &workspace,
                     &task,
                     &id,
+                    &paths,
                     &mut confirmer,
                     &mut trail,
                     answers.trust.clone(),
@@ -17180,7 +17181,14 @@ mod tests {
             ("/checkouts", Action::ListCheckouts),
             (
                 "/checkouts apply c2",
-                Action::ApplyCheckout("c2".to_string()),
+                Action::ApplyCheckout("c2".to_string(), vec![]),
+            ),
+            (
+                "/checkouts apply 2 a.rs src/b.rs",
+                Action::ApplyCheckout(
+                    "c2".to_string(),
+                    vec!["a.rs".to_string(), "src/b.rs".to_string()],
+                ),
             ),
             (
                 "/checkouts remove 2",

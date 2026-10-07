@@ -2046,8 +2046,9 @@ checkouts-none =
 checkouts-no-such =
     cette session ne garde pas de copie de travail { $id }. /checkouts liste celles qu'elle garde
 checkouts-command-takes =
-    /checkouts liste les copies de travail que cette session garde, /checkouts apply <n> rapporte
-    les fichiers écrits dans celle qui porte ce numéro, et /checkouts remove <n> la supprime
+    /checkouts liste les copies de travail que cette session garde, /checkouts apply <n> [chemin ...]
+    rapporte les fichiers écrits dans celle qui porte ce numéro, ou seulement les chemins nommés, et
+    /checkouts remove <n> la supprime
 # Suivi d'une ligne par fichier, telle que la porte d'écriture l'a formulée.
 checkouts-applied = des fichiers de la copie de travail { $id } ont été rapportés :
 checkouts-not-applied = rien de la copie de travail { $id } n'a été rapporté :
