@@ -1,6 +1,6 @@
 // That the permission mode chosen in the composer governs the next turn: accepting edits writes a
 // file with no card and still puts a command to the window, planning writes nothing and asks
-// nothing about a write, the control stays usable while a turn runs, and the Session menu's
+// nothing about a write, the control stays usable while a turn runs, and the Chat menu's
 // shortcut walks the modes.
 //
 // The real app and the real bridge, against a model service this script serves itself, in a
@@ -45,7 +45,7 @@ const service = createServer(async (request, response) => {
 })
 await listening(service)
 
-const toolResults = (round) => (JSON.parse(round).messages ?? []).filter((message) => message.role === 'tool').map((message) => message.content).join('\n')
+const lastToolResult = (round) => (JSON.parse(round).messages ?? []).filter((message) => message.role === 'tool').at(-1)?.content
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-mode-')))
 const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
@@ -149,7 +149,7 @@ try {
   assert.equal(await writeCards.count(), 0, 'planning put a write to the window')
   assert.equal(existsSync(join(project, 'plan.md')), false, 'planning wrote a file')
   assert.ok(rounds[sentBefore].includes('Plan mode.'), 'the planner was told it is planning')
-  assert.match(toolResults(rounds.at(-1)), /refused|declined|not/, 'the planner was told the write did not happen')
+  assert.match(lastToolResult(rounds.at(-1)), /refused: this turn is in plan mode/, 'the planner was told plan mode refused the write')
   await refusedWriteLaysOut('plan.md')
   assert.equal(await changeState('plan.md'), 'refused', 'a write plan mode refused is listed as refused, not failed')
   assert.equal(await changeState('notes.md'), 'applied', 'the write that landed is listed as applied')
