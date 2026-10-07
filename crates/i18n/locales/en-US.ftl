@@ -1251,7 +1251,12 @@ history-age-days = { $count }d ago
 history-age-months = { $count }mo ago
 # In the border of the box while a stored prompt is being walked to: which of the stored prompts is
 # in the box, of how many.
-input-history-position = History { $index }/{ $total }
+input-history-position = { $scope } { $index }/{ $total }
+input-history-this-session = This session
+input-history-all = All
+input-history-widen = { $chord } all prompts
+input-history-narrow = { $chord } this session
+input-history-none-here = nothing sent this session  ·  { $chord } for earlier ones
 # At the other end of that same border, the ways in: the search over every prompt, and the search
 # narrowed to the ones sent from this project. The narrower one is dropped where the row will not
 # hold both beside the position, and then the other one is, so a longer wording is one that fewer

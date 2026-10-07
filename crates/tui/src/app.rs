@@ -692,6 +692,25 @@ pub enum Action {
     Quit,
 }
 
+/// Ctrl-Right and Ctrl-Left as the prompt history's scope, and say whether the key was that.
+///
+/// Only where the history can use them (INPUT-40): on a stored prompt, or where Up found nothing
+/// this session sent. Everywhere else they are the word motion `edit_line` makes of them, and Alt
+/// stays the word motion there too, since a person who recalled a prompt to edit it needs one.
+fn change_history_scope(session: &mut Session, key: KeyEvent) -> bool {
+    if !key.modifiers.contains(KeyModifiers::CONTROL) || key.modifiers.contains(KeyModifiers::ALT) {
+        return false;
+    }
+    match key.code {
+        KeyCode::Right if session.history.can_widen(session.input().is_empty()) => {
+            session.widen_history();
+        }
+        KeyCode::Left if session.history.can_narrow() => session.narrow_history(),
+        _ => return false,
+    }
+    true
+}
+
 /// Move the caret or delete around it, and say whether the key was one that does.
 ///
 /// Shared by the idle and mid-turn handlers, because what has been typed can be edited in both:
@@ -1506,6 +1525,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     // The hint offering the way out lives for one press, and this is it. Cleared before the arms
     // rather than after, so the Ctrl-C that puts it up survives its own press.
     session.cleared_by_interrupt = false;
+    session.offered_all_prompts = false;
 
     // The offer to leave outlives its own press, because the press that takes it is the next one.
     // Any other key withdraws it: somebody who went and did something else has moved on, and an
@@ -1517,6 +1537,9 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 
     // Before the match, since a key that moves the caret cannot also be one of the keys below:
     // the ones this answers are exactly the ones nothing else claims.
+    if !session.bindings().claims(&key) && change_history_scope(session, key) {
+        return Action::Redraw;
+    }
     if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
     }
@@ -2343,7 +2366,7 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // Up and Down walk the prompt history, which is what they do in a shell and so what a
         // user expects at a prompt. Scrolling the transcript keeps the wheel and the page keys,
         // and Up still scrolls once there is no history left to walk.
-        KeyCode::Up if session.history.can_recall() => {
+        KeyCode::Up if session.history.can_recall() || session.history.only_earlier_sessions() => {
             session.recall_older();
             Action::Redraw
         }
@@ -2521,10 +2544,14 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // up when this path takes over, and a press that did not take it down would leave it standing
     // frame after frame saying the next Ctrl-C leaves, which mid-turn stops the turn instead.
     session.cleared_by_interrupt = false;
+    session.offered_all_prompts = false;
 
     // Before the modifier guard, since the readline bindings are how the caret moves on a terminal
     // that sends nothing for the named keys, and a line that can be typed mid-turn has to be
     // editable mid-turn: the alternative is a box that takes words and will not let them be fixed.
+    if !session.bindings().claims(&key) && change_history_scope(session, key) {
+        return Action::Redraw;
+    }
     if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
     }
@@ -21471,6 +21498,111 @@ mod tests {
         assert_eq!(session.caret(), "read ".len());
         handle_key(&mut session, ctrl_key(KeyCode::Right));
         assert_eq!(session.caret(), "read src/main.rs".len());
+    }
+
+    /// A session with two prompts stored by earlier sessions and one of its own.
+    fn with_earlier_sessions() -> Session {
+        let mut session = Session::new("none");
+        session.history = crate::history::History::from_entries(vec![
+            bravebot_session::store::Entry::sent("old one", None),
+            bravebot_session::store::Entry::sent("old two", None),
+        ]);
+        type_line(&mut session, "mine");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("ok", Vec::new(), 0);
+        session
+    }
+
+    /// Up walks this session's prompts and stops at the oldest of them; Ctrl-Right goes on into
+    /// every stored prompt from the one on screen, and Ctrl-Left comes back.
+    #[test]
+    fn ctrl_right_widens_the_walk_to_every_stored_prompt_and_ctrl_left_narrows_it() {
+        let mut session = with_earlier_sessions();
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "mine");
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(
+            session.input(),
+            "mine",
+            "Up walked past this session's prompts"
+        );
+
+        handle_key(&mut session, ctrl_key(KeyCode::Right));
+        assert_eq!(
+            session.input(),
+            "mine",
+            "widening moved off the prompt on screen"
+        );
+        assert_eq!(session.history.position(), Some((3, 3)));
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "old two");
+
+        // Not this session's, so the nearest of this session's before it, and failing that the
+        // oldest.
+        handle_key(&mut session, ctrl_key(KeyCode::Left));
+        assert_eq!(session.input(), "mine");
+        assert_eq!(session.history.position(), Some((1, 1)));
+    }
+
+    /// A prompt that is in both lists stays on screen across the switch, at its place in each.
+    #[test]
+    fn switching_scope_keeps_a_prompt_that_is_in_both() {
+        let mut session = with_earlier_sessions();
+        type_line(&mut session, "mine too");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("ok", Vec::new(), 0);
+        handle_key(&mut session, key(KeyCode::Up));
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "mine");
+        handle_key(&mut session, ctrl_key(KeyCode::Right));
+        assert_eq!(session.history.position(), Some((3, 4)));
+        handle_key(&mut session, ctrl_key(KeyCode::Left));
+        assert_eq!(session.input(), "mine");
+        assert_eq!(session.history.position(), Some((1, 2)));
+    }
+
+    /// Where a person recalled a prompt to edit it, Alt is still the word motion, and so is
+    /// Ctrl in a line that is being typed.
+    #[test]
+    fn the_word_keys_still_move_the_caret_outside_a_recalled_prompt() {
+        let mut session = with_earlier_sessions();
+        type_line(&mut session, "read src now");
+        handle_key(&mut session, ctrl_key(KeyCode::Left));
+        assert_eq!(session.caret(), "read src ".len());
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+
+        let mut session = with_earlier_sessions();
+        handle_key(&mut session, key(KeyCode::Up));
+        let on_screen = session.input().to_string();
+        let before = session.caret();
+        handle_key(
+            &mut session,
+            KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
+        );
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        assert_eq!(session.input(), on_screen);
+        assert!(session.caret() < before, "Alt-Left did not move the caret");
+    }
+
+    /// A new session has nothing of its own: Up recalls nothing, and the hint line names the key
+    /// that reaches the stored ones, which then walks them.
+    #[test]
+    fn up_in_a_new_session_says_why_it_recalled_nothing() {
+        let mut session = Session::new("none");
+        session.history =
+            crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
+                "old one", None,
+            )]);
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "");
+        assert!(session.offered_all_prompts);
+        assert!(!session.history.is_browsing());
+
+        handle_key(&mut session, ctrl_key(KeyCode::Right));
+        assert!(!session.offered_all_prompts);
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "old one");
+        assert_eq!(session.history.position(), Some((1, 1)));
     }
 
     /// The readline bindings, because a terminal may send nothing at all for the named keys and

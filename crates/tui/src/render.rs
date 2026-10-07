@@ -2889,9 +2889,18 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
         });
 
     if let Some((index, total)) = session.history.position() {
+        let scope_name = match session.history.scope() {
+            crate::history::Scope::Session => t!(input_history_this_session),
+            crate::history::Scope::All => t!(input_history_all),
+        };
         let position = format!(
             " {} ",
-            t!(input_history_position, index = index, total = total)
+            t!(
+                input_history_position,
+                scope = scope_name,
+                index = index,
+                total = total
+            )
         );
         // The other ways in, said where somebody has just shown they are looking for an old prompt.
         // A search nobody can find is a search nobody has, and walking back one at a time is what
@@ -2908,15 +2917,29 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
             input_history_search,
             chord = session.bindings().history_name()
         );
-        let ways_in = [
-            format!(
-                " {search}  ·  {} ",
-                t!(input_history_scope, chord = session.bindings().stash_name())
-            ),
-            format!(" {search} "),
-        ]
-        .into_iter()
-        .find(|title| taken + wrap::display_width(title) <= room);
+        let switch = if session.history.can_narrow() {
+            Some(t!(input_history_narrow, chord = "ctrl-left"))
+        } else if session.history.can_widen(false) {
+            Some(t!(input_history_widen, chord = "ctrl-right"))
+        } else {
+            None
+        };
+        let ways_in = switch
+            .map(|switch| {
+                format!(
+                    " {switch}  ·  {search}  ·  {} ",
+                    t!(input_history_scope, chord = session.bindings().stash_name())
+                )
+            })
+            .into_iter()
+            .chain([
+                format!(
+                    " {search}  ·  {} ",
+                    t!(input_history_scope, chord = session.bindings().stash_name())
+                ),
+                format!(" {search} "),
+            ])
+            .find(|title| taken + wrap::display_width(title) <= room);
         block = block.title_top(Line::from(Span::styled(position, dim())));
         if let Some(ways_in) = ways_in {
             block = block.title_top(Line::from(Span::styled(ways_in, dim())).right_aligned());
@@ -3784,6 +3807,15 @@ fn note_at_the_right(session: &Session) -> Option<String> {
     // said nothing, and the next press of it ends the session.
     if session.cleared_by_interrupt {
         return Some("ctrl-c again to exit  ".to_string());
+    }
+
+    // Up found nothing this session sent. The earlier ones are stored, and which key reaches them
+    // is what the press has to say, or it reads as a key that does nothing.
+    if session.offered_all_prompts && !session.history.is_browsing() {
+        return Some(format!(
+            "{}  ",
+            t!(input_history_none_here, chord = "ctrl-right")
+        ));
     }
 
     // The same sentence for the same reason, on the rung where there was no line to take. Without
@@ -8048,7 +8080,12 @@ mod tests {
         session.submit().expect("the prompt is sent");
         session.complete("ok", Vec::new(), 0);
         session.recall_older();
-        let position = t!(input_history_position, index = 1, total = 1);
+        let position = t!(
+            input_history_position,
+            scope = t!(input_history_this_session),
+            index = 1,
+            total = 1
+        );
 
         let some_room = rendered_at(&session, 40, 12);
         assert!(some_room.contains(&position), "{some_room}");
@@ -8060,6 +8097,42 @@ mod tests {
         let none = rendered_at(&session, 30, 12);
         assert!(none.contains(&position), "{none}");
         assert!(!none.contains("ctrl-r"), "{none}");
+    }
+
+    /// The border says which scope Up is walking and the key that changes it; the hint line says
+    /// why Up recalled nothing in a session that has sent nothing.
+    #[test]
+    fn the_border_names_the_scope_and_the_hint_line_the_way_to_earlier_prompts() {
+        let mut session = Session::new("none");
+        session.history =
+            crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
+                "old one", None,
+            )]);
+        session.recall_older();
+        let hint = rendered_at(&session, 120, 12);
+        assert!(
+            hint.contains(&t!(input_history_none_here, chord = "ctrl-right")),
+            "{hint}"
+        );
+
+        session.type_char('x');
+        session.submit().expect("the prompt is sent");
+        session.complete("ok", Vec::new(), 0);
+        session.recall_older();
+        let narrow = rendered_at(&session, 120, 12);
+        assert!(narrow.contains("This session 1/1"), "{narrow}");
+        assert!(
+            narrow.contains(&t!(input_history_widen, chord = "ctrl-right")),
+            "{narrow}"
+        );
+
+        session.widen_history();
+        let wide = rendered_at(&session, 120, 12);
+        assert!(wide.contains("All 2/2"), "{wide}");
+        assert!(
+            wide.contains(&t!(input_history_narrow, chord = "ctrl-left")),
+            "{wide}"
+        );
     }
 
     /// The list folds into columns, so it does not push the transcript off a short terminal the way
@@ -9850,7 +9923,7 @@ mod tests {
 
         let output = rendered_at(&session, 60, 10);
         assert!(
-            output.contains("History 78/83"),
+            output.contains("This session 78/83"),
             "the position is not shown: {output}"
         );
         assert!(
