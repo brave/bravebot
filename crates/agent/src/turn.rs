@@ -970,6 +970,21 @@ pub struct Tick {
     pub unpaceable: bool,
 }
 
+/// The largest image a paste will carry.
+///
+/// Not a policy rule: nothing about a big picture is unsafe, it is that encoding one into a request
+/// costs a third again in base64 and a screenshot of a large display already runs to several
+/// megabytes. Every front end that takes a paste holds it to this one number, so a screenshot one
+/// takes the other takes too.
+pub const MAX_PASTED_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
+/// The media types a front end that cannot see the clipboard may name for a pasted picture
+/// (PASTE-3).
+///
+/// The type lands in a `data:` URL, where it is routing. A caller's string only selects an entry
+/// here, and the entry is what is sent.
+pub const PASTED_IMAGE_MEDIA: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+
 /// An image on its way into a prompt, before it has been encoded for the wire.
 ///
 /// Raw bytes rather than the finished data URL, so the size that is recorded and reported is the

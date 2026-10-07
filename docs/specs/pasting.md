@@ -87,8 +87,9 @@ are two. One is the TUI's Ctrl-V. The other is the `images` list a front end sen
 see the gesture, so a front end putting a picture there is saying that a person pasted it, as a
 `dropped` path says a person dropped it ([DROP-10](dropping.md#DROP-10)). The bridge holds the list
 to what a string can be held to: a type from [PASTE-3](#PASTE-3)'s set, data that decodes, and no
-more than the terminal's 10 MB cap. Anything else, or a list of any other shape, refuses the send
-rather than starting a turn without the picture.
+more than the 10 MB cap (`MAX_PASTED_IMAGE_BYTES` in the agent crate) that the terminal also reads.
+Anything else, or a list of any other shape, refuses the send rather than starting a turn without
+the picture.
 
 A picture a tool read has one way into the planner's context, and it is not this one.
 [VET-4](tools/vet-content.md#VET-4)'s `vet_content` lets one picture through where a person handed a
@@ -111,9 +112,9 @@ the person's own message. This gate still admits a paste and nothing else.
 It ends up in the data URL, where it is routing, so it comes from a fixed set
 the clipboard reader owns, and never from a filename or from what a tool printed.
 
-The bridge keeps its own fixed set: `image/png`, `image/jpeg`, `image/gif` and `image/webp`. A
-front end's `media` string selects an entry, and the entry is what is sent; a string that matches
-none, `IMAGE/PNG` included, refuses the send.
+The bridge's set is `PASTED_IMAGE_MEDIA` in the agent crate: `image/png`, `image/jpeg`,
+`image/gif` and `image/webp`. A front end's `media` string selects an entry, and the entry is what
+is sent; a string that matches none, `IMAGE/PNG` included, refuses the send.
 
 `verified-by: by-construction (the type is a static string from the clipboard reader's literals to the data URL it is formatted into, so a media type read from a filename or from what a tool printed does not compile)`
 `verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`

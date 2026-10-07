@@ -271,7 +271,7 @@ fn a_picture_the_bridge_cannot_carry_refuses_the_send() {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.encode(vec![
             0u8;
-            bravebot_ui_bridge::attached::MAX_PASTED_BYTES
+            bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES
                 + 1
         ])
     };

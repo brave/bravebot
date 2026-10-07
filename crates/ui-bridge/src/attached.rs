@@ -7,26 +7,16 @@
 
 use crate::protocol::{Failure, Request};
 use base64::Engine;
-use bravebot_agent::turn::PastedImage;
+use bravebot_agent::turn::{MAX_PASTED_IMAGE_BYTES, PASTED_IMAGE_MEDIA, PastedImage};
 use bravebot_agent::workspace::{MAX_ATTACHMENT_BYTES, media_for};
 use serde_json::Value;
 use std::path::Path;
 
-/// The most a pasted picture may weigh once decoded: the terminal's own cap on a paste, so a
-/// screenshot one front end takes the other takes too (PASTE-6).
-pub const MAX_PASTED_BYTES: usize = 10 * 1024 * 1024;
-
-/// The media types a pasted picture may be sent as (PASTE-3).
-///
-/// The type lands in a `data:` URL, where it is routing. The caller's string only selects an
-/// entry here, and the entry is what is sent.
-const PASTED_MEDIA: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
-
 /// The pictures a person pasted into this prompt (PASTE-2).
 ///
 /// `images` is a list of `{ "media", "data" }`, the data standard base64. An absent or `null`
-/// list is none. Any other shape, a type outside [`PASTED_MEDIA`], data that does not decode, an
-/// empty picture or one over [`MAX_PASTED_BYTES`] refuses the send.
+/// list is none. Any other shape, a type outside [`PASTED_IMAGE_MEDIA`], data that does not decode, an
+/// empty picture or one over [`MAX_PASTED_IMAGE_BYTES`] refuses the send.
 pub fn pasted(request: &Request) -> Result<Vec<PastedImage>, Failure> {
     let entries = match request.params.get("images") {
         None | Some(Value::Null) => return Ok(Vec::new()),
@@ -45,14 +35,18 @@ fn pasted_image(entry: &Value) -> Result<PastedImage, Failure> {
             "a pasted picture is an object with a string `media` and a string `data`",
         ));
     };
-    let Some(media_type) = PASTED_MEDIA.iter().copied().find(|known| *known == media) else {
+    let Some(media_type) = PASTED_IMAGE_MEDIA
+        .iter()
+        .copied()
+        .find(|known| *known == media)
+    else {
         return Err(Failure::bad_request(format!(
             "a pasted picture is one of {}, and {media} is not",
-            PASTED_MEDIA.join(", ")
+            PASTED_IMAGE_MEDIA.join(", ")
         )));
     };
     // Refused before decoding, so an oversized string is never decoded into memory.
-    if data.len() > MAX_PASTED_BYTES.div_ceil(3) * 4 {
+    if data.len() > MAX_PASTED_IMAGE_BYTES.div_ceil(3) * 4 {
         return Err(too_large(data.len() / 4 * 3));
     }
     let bytes = base64::engine::general_purpose::STANDARD
@@ -61,7 +55,7 @@ fn pasted_image(entry: &Value) -> Result<PastedImage, Failure> {
     if bytes.is_empty() {
         return Err(Failure::bad_request("a pasted picture holds no bytes"));
     }
-    if bytes.len() > MAX_PASTED_BYTES {
+    if bytes.len() > MAX_PASTED_IMAGE_BYTES {
         return Err(too_large(bytes.len()));
     }
     Ok(PastedImage { media_type, bytes })
@@ -69,7 +63,7 @@ fn pasted_image(entry: &Value) -> Result<PastedImage, Failure> {
 
 fn too_large(size: usize) -> Failure {
     Failure::bad_request(format!(
-        "a pasted picture of {size} bytes is over the {MAX_PASTED_BYTES} a paste may be"
+        "a pasted picture of {size} bytes is over the {MAX_PASTED_IMAGE_BYTES} a paste may be"
     ))
 }
 

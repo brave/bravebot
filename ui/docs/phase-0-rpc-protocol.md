@@ -604,7 +604,7 @@ extension and never from the caller. The read is unconfined and the file is vouc
 `images` is a list of pictures a person pasted (PASTE-2), each `{ "media": string, "data": string }`.
 `media` is one of `image/png`, `image/jpeg`, `image/gif` or `image/webp`, matched exactly, and the
 bridge sends its own copy of the matching type (PASTE-3). `data` is the picture as standard base64,
-at most 10 MiB once decoded (`bravebot_ui_bridge::attached::MAX_PASTED_BYTES`, the terminal's paste
+at most 10 MiB once decoded (`bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES`, the terminal's paste
 cap) and not empty. The picture is not read from anywhere, so it takes no trust rule; it is recorded
 in the audit trail and kept in the session record, so a reopened session still carries it
 (PASTE-9).
