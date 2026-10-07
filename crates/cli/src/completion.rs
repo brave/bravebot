@@ -42,7 +42,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 25] = [
+const FLAGS: [Flag; 26] = [
     flag("plain", None, false),
     flag("bg", None, false),
     flag("resume", Some('r'), false),
