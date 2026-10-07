@@ -209,9 +209,15 @@ fn idle(directory: &Path) -> UnixStream {
 /// another test thread spawns a process while a child of this one exits: `Command::spawn` blocks
 /// signals around the fork, which queues the exit's SIGCHLD, and the thread it then wakes is the
 /// one reading here. The read is repeated for the time that is left.
+///
+/// macOS refuses to set a timeout on a socket whose peer has already closed, failing with `EINVAL`.
+/// Such a read returns at once, so it is made without a timeout, and without blocking in case the
+/// socket is not closed after all.
 fn closed_within(stream: &mut UnixStream, within: Duration) -> bool {
     closed_by(within, |left| {
-        stream.set_read_timeout(Some(left)).unwrap();
+        if stream.set_read_timeout(Some(left)).is_err() {
+            stream.set_nonblocking(true).unwrap();
+        }
         stream.read(&mut [0u8; 1])
     })
 }
@@ -236,6 +242,18 @@ fn closed_by(within: Duration, mut read: impl FnMut(Duration) -> std::io::Result
             Err(_) => return false,
         }
     }
+}
+
+/// The host closes a connection past the limit as soon as it accepts it, which can be before the
+/// test starts waiting on it. A close that came first is still a close.
+#[test]
+fn a_connection_closed_before_the_wait_began_is_seen_as_closed() {
+    let (mut waiting, host) = UnixStream::pair().unwrap();
+    drop(host);
+    assert!(
+        closed_within(&mut waiting, WAIT),
+        "a closed connection was not seen as closed"
+    );
 }
 
 /// A read the kernel interrupted says nothing about the connection, so a close that arrives after
