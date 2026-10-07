@@ -2852,6 +2852,15 @@ fn doctor() -> ExitCode {
                     ),
                 );
             }
+            for path in settings.summary_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_summary_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
 
             // A key beside the ones this build reads, which the lines above cannot cover: those name
             // a key that was recognised and not obeyed, and this one was never read at all. The file

@@ -407,7 +407,7 @@ one thing leaves everything else in force:
 | `env`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
 | anything else | the closest file that set it wins |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
@@ -444,6 +444,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `model` | the model to request when nobody has chosen one ([below](#model)) |
 | `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
 | `fallbackModel` | the model a turn moves to when its own keeps failing ([below](#fallbackmodel)) |
+| `summaryModel` | the model compaction summaries and `/goal` checks run on ([below](#summarymodel)) |
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
@@ -497,7 +498,7 @@ others in force, so a mistake in a checkout cannot decide that your own file no 
 :::caution
 **A `.bravebot/settings.json` arrives with a checkout.** A repository you have just cloned cannot name
 the host every request goes to, the model, the advisor model, the fallback model, or the environment variables read as a
-gateway's credential: a `provider` block, or a `model`, `advisorModel` or `fallbackModel` key, in a project or local file is ignored, and `bravebot
+gateway's credential: a `provider` block, or a `model`, `advisorModel`, `fallbackModel` or `summaryModel` key, in a project or local file is ignored, and `bravebot
 doctor` names each file whose block or key was dropped. It can still set the other keys here, so read
 a project's settings file before working in it; `doctor` names the files in force. It cannot grant a
 capability either. The names that would (`permissions.allow`, and `permissions.additionalDirectories`)
@@ -601,6 +602,30 @@ other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that nam
 reported by `bravebot doctor`. A model your administrator refuses is not used as a fallback.
 
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
+
+### `summaryModel`
+
+```json
+{ "summaryModel": "haiku" }
+```
+
+The model that compaction summaries and `/goal` checks run on. Both are side requests rather than
+the work itself, so a session on an expensive model can summarise its own history and judge its
+stopping condition on a cheaper one. Without the key both run on the model the session is using.
+
+A model that needs a sign-in this machine has not made is reported, and the request is not sent to
+the session's model instead. A compaction refused this way leaves the conversation as it was, and a
+goal check refused this way ends the goal. Naming a cheaper model is a limit on what background work
+costs, and quietly falling back would spend exactly what the key was set to avoid.
+
+**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** The model is sent the conversation, so a `.bravebot/settings.json` or
+`.bravebot/settings.local.json` that names one is ignored and reported by `bravebot doctor`, as a
+`model` is.
+
+The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier. The context
+budget that decides when to compact is still measured against the window of the model the session is
+using, not this one.
 
 ### `effort`
 

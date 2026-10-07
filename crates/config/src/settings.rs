@@ -141,6 +141,7 @@ const READ_KEYS: &[&str] = &[
     PROVIDER_BLOCK,
     "run",
     "search",
+    "summaryModel",
     "terminalTitle",
     "tui",
     "updateCheck",
@@ -212,6 +213,10 @@ pub struct Settings {
     ///
     /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
     fallback_model: Option<String>,
+    /// What the top-level `summaryModel` key named, if it named anything.
+    ///
+    /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
+    summary_model: Option<String>,
     /// What the top-level `effort` key named, if it named anything.
     ///
     /// The word as the file spelled it, for the reason `editor_mode` below keeps one: which words
@@ -301,6 +306,11 @@ pub struct Settings {
     /// Kept for the same reason: the model it names is sent the whole conversation once the
     /// primary fails, which makes it a destination, and a checkout cannot choose one.
     fallback_ignored: Vec<PathBuf>,
+    /// The layers that named `summaryModel` and were not obeyed, weakest first.
+    ///
+    /// Kept for the same reason: the model it names is sent the conversation to summarise and the
+    /// exchange to judge, which makes it a destination, and a checkout cannot choose one.
+    summary_ignored: Vec<PathBuf>,
     /// The `permissions` blocks and rule lists a layer spelled as another shape, with the file each
     /// came from. The merge keeps the weaker block or list in their place, so the merged root no
     /// longer holds them and only the layer that wrote one can say it was ignored (PERM-11).
@@ -571,6 +581,7 @@ impl Settings {
         let mut model_ignored = Vec::new();
         let mut advisor_ignored = Vec::new();
         let mut fallback_ignored = Vec::new();
+        let mut summary_ignored = Vec::new();
         let mut misshapen = Vec::new();
         let mut mcp_declared = Vec::new();
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
@@ -613,6 +624,9 @@ impl Settings {
                 }
                 if root.remove("fallbackModel") {
                     fallback_ignored.push(path.clone());
+                }
+                if root.remove("summaryModel") {
+                    summary_ignored.push(path.clone());
                 }
             }
             if root.contains_key(VETTING_BLOCK) {
@@ -715,6 +729,7 @@ impl Settings {
         settings.model_ignored = model_ignored;
         settings.advisor_ignored = advisor_ignored;
         settings.fallback_ignored = fallback_ignored;
+        settings.summary_ignored = summary_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -765,6 +780,7 @@ impl Settings {
             model: word(root, "model"),
             advisor_model: word(root, "advisorModel"),
             fallback_model: word(root, "fallbackModel"),
+            summary_model: word(root, "summaryModel"),
             effort: word(root, "effort"),
             prompt_cache_ttl: word(root, "promptCacheTtl")
                 .and_then(|word| crate::CacheTtl::parse(&word)),
@@ -814,6 +830,7 @@ impl Settings {
             model_ignored: Vec::new(),
             advisor_ignored: Vec::new(),
             fallback_ignored: Vec::new(),
+            summary_ignored: Vec::new(),
         }
     }
 
@@ -868,6 +885,15 @@ impl Settings {
     /// [`Settings::model`] is.
     pub fn fallback_model(&self) -> Option<&str> {
         self.fallback_model.as_deref()
+    }
+
+    /// The model the settings in force name for compaction summaries and goal checks, if they name
+    /// one.
+    ///
+    /// Read from the person's own file and the file `--settings` names only, for the reason
+    /// [`Settings::model`] is.
+    pub fn summary_model(&self) -> Option<&str> {
+        self.summary_model.as_deref()
     }
 
     /// How hard the settings in force asked the model to think, if they asked for anything.
@@ -1124,6 +1150,7 @@ impl Settings {
             && self.model_ignored.is_empty()
             && self.advisor_ignored.is_empty()
             && self.fallback_ignored.is_empty()
+            && self.summary_ignored.is_empty()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -1158,6 +1185,11 @@ impl Settings {
     /// The files that named `fallbackModel` from a layer not entitled to, weakest first.
     pub fn fallback_ignored(&self) -> impl Iterator<Item = &Path> {
         self.fallback_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The files that named `summaryModel` from a layer not entitled to, weakest first.
+    pub fn summary_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.summary_ignored.iter().map(PathBuf::as_path)
     }
 
     /// The files that were read, weakest first, for `doctor` to report.
@@ -1200,6 +1232,7 @@ impl Settings {
             .into_iter()
             .chain(self.advisor_model.is_some().then_some("advisorModel"))
             .chain(self.fallback_model.is_some().then_some("fallbackModel"))
+            .chain(self.summary_model.is_some().then_some("summaryModel"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
@@ -4793,6 +4826,34 @@ mod tests {
             .named(r#"{"fallbackModel": "named-fallback"}"#)
             .read();
         assert_eq!(named.fallback_model(), Some("named-fallback"));
+    }
+
+    /// COMPACT-14: the summary model is a destination for the conversation, so a checkout's layers
+    /// cannot name it, and the layers that can are reported for the ones that could not.
+    #[test]
+    fn a_project_layer_cannot_name_the_summary_model() {
+        let settings = Layers::new("summary-layers")
+            .global(r#"{"summaryModel": "  personal-summary "}"#)
+            .project(r#"{"summaryModel": "this-checkout"}"#)
+            .local(r#"{"summaryModel": "also-this-checkout"}"#)
+            .read();
+        assert_eq!(settings.summary_model(), Some("personal-summary"));
+        assert_eq!(settings.summary_ignored().count(), 2);
+
+        let only_project = Layers::new("summary-only-project")
+            .project(r#"{"summaryModel": "this-checkout"}"#)
+            .read();
+        assert_eq!(only_project.summary_model(), None);
+        assert_eq!(only_project.summary_ignored().count(), 1);
+
+        // The file `--settings` named is the person's own act, so it may name one and wins over the
+        // home file.
+        let named = Layers::new("summary-named")
+            .global(r#"{"summaryModel": "personal-summary"}"#)
+            .named(r#"{"summaryModel": "named-summary"}"#)
+            .read();
+        assert_eq!(named.summary_model(), Some("named-summary"));
+        assert_eq!(named.summary_ignored().count(), 0);
     }
 
     #[test]

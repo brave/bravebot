@@ -212,6 +212,10 @@ pub enum GoalError {
     Denied(Denial),
     /// The call failed or was refused in transit.
     Chat(crate::backend::BackendError),
+    /// The configured summary model needs a sign-in this machine has not made, so nothing was sent.
+    ///
+    /// Holds the resolved model name, for a sentence naming what could not be reached.
+    NeedsSignIn(String),
 }
 
 impl fmt::Display for GoalError {
@@ -219,11 +223,26 @@ impl fmt::Display for GoalError {
         match self {
             Self::Denied(d) => write!(f, "{d}"),
             Self::Chat(e) => write!(f, "{e}"),
+            Self::NeedsSignIn(model) => {
+                write!(
+                    f,
+                    "{}",
+                    bravebot_i18n::t!(summary_model_needs_sign_in, model = model)
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for GoalError {}
+
+/// The resolved name of a summary model this machine has no sign-in for, from
+/// [`crate::compact::side_request_model`].
+impl From<String> for GoalError {
+    fn from(value: String) -> Self {
+        Self::NeedsSignIn(value)
+    }
+}
 
 impl From<Denial> for GoalError {
     fn from(value: Denial) -> Self {
@@ -252,7 +271,8 @@ pub fn assess<S: Sink>(
     // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
     // below adds to it. A judge that could call a tool would be a turn, and it would be a turn
     // whose job is deciding whether turns stop.
-    let model = chat.model.unwrap_or(&chat.config.default_model);
+    let model = crate::compact::side_request_model(chat.config, chat.model)?;
+    let model = model.as_ref();
     // The exchange is given up once this answers, so nothing asks for a cache of it: the next
     // check carries a turn's work on the end of the same exchange, in front of the same condition,
     // so the prefix this one would pay to store is never sent again. The instructions in front of

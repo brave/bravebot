@@ -21760,6 +21760,263 @@ fn an_exchange_to_ask_beside() -> bravebot_agent::Conversation {
     conversation
 }
 
+/// A configuration naming `model` as the summary model, resolved as the settings key is.
+///
+/// The endpoint is the test's own, so the name is a literal the request carries verbatim: what each
+/// test below reads off the wire is which of two names was asked for.
+fn config_with_summary_model(endpoint: &str, model: &str) -> Config {
+    let mut config = config_for(endpoint);
+    config.summary_model = Some(model.to_string());
+    config
+}
+
+/// The model each request named, which is what distinguishes a side request that honoured the
+/// setting from one that ran on the session's model.
+fn model_in(body: &str) -> String {
+    let at = body.find(r#""model":""#).expect("a request names a model");
+    let rest = &body[at + r#""model":""#.len()..];
+    rest[..rest.find('"').expect("the name is closed")].to_string()
+}
+
+/// COMPACT-14: with the key set the summariser's request carries that model, which is the whole
+/// point of the setting: a session on an expensive model summarises its own history on a cheap one.
+///
+/// The session's model is named too, and differs, so a compaction that ignored the setting fails
+/// here rather than passing on a name that happens to match.
+#[test]
+fn a_compaction_runs_on_the_summary_model_the_settings_name() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_with_summary_model(&endpoint, "a-cheap-summary-model");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = a_long_conversation();
+
+    turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        Some("an-expensive-session-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+    )
+    .expect("compacting must not be refused")
+    .expect("a long conversation has something to summarise");
+
+    let body = received.recv().expect("the summariser's request");
+    assert_eq!(
+        model_in(&body),
+        "a-cheap-summary-model",
+        "the compaction did not run on the model the setting named: {body}"
+    );
+}
+
+/// COMPACT-14: with the key unset the summariser runs on the session's own model, so a person who
+/// configured nothing sees the behaviour they had before the key existed.
+#[test]
+fn a_compaction_with_no_summary_model_runs_on_the_sessions_own() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_for(&endpoint);
+    assert_eq!(config.summary(), None, "the fixture named a summary model");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = a_long_conversation();
+
+    turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        Some("an-expensive-session-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+    )
+    .expect("compacting must not be refused")
+    .expect("a long conversation has something to summarise");
+
+    let body = received.recv().expect("the summariser's request");
+    assert_eq!(
+        model_in(&body),
+        "an-expensive-session-model",
+        "an unset key did not leave the compaction on the session's model: {body}"
+    );
+}
+
+/// COMPACT-14: a summary model needing a sign-in this machine has not made refuses the compaction
+/// and leaves the conversation whole. It is not replaced by the session's model, because a cheaper
+/// model is a cost boundary and falling back past it spends what the person meant to cap.
+///
+/// The endpoint would answer a request, so what this establishes is that none was sent: a fallback
+/// to the session's model would compact successfully and shorten the conversation.
+#[test]
+fn a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conversation_whole() {
+    let (endpoint, received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let mut config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.to_string()),
+        bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+        bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+        bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+        // A profile no machine has, so no session exists whoever runs this.
+        bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+        _ => None,
+    })
+    .expect("config");
+    config.summary_model = Some("haiku".to_string());
+    assert!(
+        bravebot_agent::backend::Backend::needs_sign_in(&config, &config.summary().unwrap()),
+        "the summary model would not have needed a sign-in"
+    );
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = a_long_conversation();
+    let before = conversation.len();
+
+    let refused = turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        Some("an-expensive-session-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+    );
+
+    let failure = match refused {
+        Err(failure) => failure,
+        Ok(_) => panic!("a summary model with no sign-in must refuse the compaction"),
+    };
+    let said = failure.to_string();
+    assert!(
+        said.contains("haiku-arn") && said.contains("sign-in"),
+        "the refusal did not name the model and the sign-in: {said}"
+    );
+    assert_eq!(
+        conversation.len(),
+        before,
+        "a refused compaction shortened the conversation anyway"
+    );
+    let sent: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        sent.is_empty(),
+        "a model with no sign-in was sent a request: {sent:?}"
+    );
+}
+
+/// GOAL-19: the judge runs on the model the setting names, so one key caps what both side requests
+/// cost. The session's model is named too and differs, so a check that ignored the setting fails.
+#[test]
+fn a_check_runs_on_the_summary_model_the_settings_name() {
+    let (endpoint, received) =
+        serve_sequence(vec![reply_with("MET\nthe second listing shows a.txt")]);
+    let config = config_with_summary_model(&endpoint, "a-cheap-summary-model");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+
+    turn::goal(
+        &config,
+        &egress,
+        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        Some("an-expensive-session-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("judging a stopping condition must not be refused");
+
+    let body = received.recv().expect("the check's request");
+    assert_eq!(
+        model_in(&body),
+        "a-cheap-summary-model",
+        "the check did not run on the model the setting named: {body}"
+    );
+}
+
+/// GOAL-19: with the key unset the judge runs on the session's own model.
+#[test]
+fn a_check_with_no_summary_model_runs_on_the_sessions_own() {
+    let (endpoint, received) =
+        serve_sequence(vec![reply_with("MET\nthe second listing shows a.txt")]);
+    let config = config_for(&endpoint);
+    assert_eq!(config.summary(), None, "the fixture named a summary model");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+
+    turn::goal(
+        &config,
+        &egress,
+        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        Some("an-expensive-session-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("judging a stopping condition must not be refused");
+
+    let body = received.recv().expect("the check's request");
+    assert_eq!(
+        model_in(&body),
+        "an-expensive-session-model",
+        "an unset key did not leave the check on the session's model: {body}"
+    );
+}
+
+/// GOAL-19: a summary model needing a sign-in sends no check at all, rather than judging the
+/// condition on the session's model. The goal ends on the failure, as it does for any request that
+/// could not be made.
+#[test]
+fn a_summary_model_needing_a_sign_in_sends_no_check() {
+    let (endpoint, received) =
+        serve_sequence(vec![reply_with("MET\nthe second listing shows a.txt")]);
+    let mut config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.to_string()),
+        bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+        bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+        bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+        // A profile no machine has, so no session exists whoever runs this.
+        bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+        _ => None,
+    })
+    .expect("config");
+    config.summary_model = Some("haiku".to_string());
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+
+    let refused = turn::goal(
+        &config,
+        &egress,
+        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        Some("an-expensive-session-model"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+
+    let failure = match refused {
+        Err(failure) => failure,
+        Ok(_) => panic!("a summary model with no sign-in must send no check"),
+    };
+    let said = failure.to_string();
+    assert!(
+        said.contains("haiku-arn") && said.contains("sign-in"),
+        "the refusal did not name the model and the sign-in: {said}"
+    );
+    let sent: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        sent.is_empty(),
+        "a model with no sign-in was sent a check: {sent:?}"
+    );
+}
+
 /// What `/goal` runs when a turn ends, over its own path like `/btw`'s: a policy it builds
 /// itself, one request with no tools offered, and a verdict the driver is allowed to read.
 ///

@@ -301,3 +301,32 @@ the summariser does not. Without the argument they find out what was dropped on 
 `verified-by: bravebot_tui::app::the_compact_command_carries_its_focus_verbatim`
 `verified-by: bravebot_tui::app::a_word_longer_than_compact_is_still_a_prompt`
 `verified-by: bravebot_tui::render::the_compact_command_offers_a_focus_after_its_word`
+
+<a id="COMPACT-14"></a>
+### COMPACT-14: the `summaryModel` setting names the model a summary runs on
+
+`summaryModel` holds one model name. The summariser runs on it, and on the session's own model
+where the key names nothing. A tier word in it resolves as it does for `model`. The key is read from
+`~/.bravebot/settings.json` and from the file `--settings` names, and from no project or local layer
+([BACKEND-24](backends.md#BACKEND-24)): the model it names is sent the conversation, which makes it
+a destination, so a layer that names it is dropped and `doctor` names the file.
+
+A model needing a sign-in this machine has not made refuses the compaction, which leaves the
+conversation exactly as it was, as every other refusal here does. It is not replaced by the
+session's model.
+
+**Why refuse rather than fall back.** A cheaper model is a cost boundary. A summary quietly sent to
+the session's model instead spends the rate the person named this key to avoid, on the longest
+prefix a session sends.
+
+**What does not change with the model.** The labelling is the summariser's context, which is the
+planner's context ([COMPACT-1](#COMPACT-1)), so the model that answers does not enter into it. The
+summariser is still offered no tools ([COMPACT-2](#COMPACT-2)), and the budget is still measured
+against the window of the planner's model rather than this one
+([COMPACT-9](#COMPACT-9)).
+
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_summary_model`
+`verified-by: bravebot_config::lib::the_summary_setting_resolves_a_tier_word_and_is_absent_when_unset`
+`verified-by: bravebot_agent::turn::a_compaction_runs_on_the_summary_model_the_settings_name`
+`verified-by: bravebot_agent::turn::a_compaction_with_no_summary_model_runs_on_the_sessions_own`
+`verified-by: bravebot_agent::turn::a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conversation_whole`

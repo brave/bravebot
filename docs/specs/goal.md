@@ -387,6 +387,28 @@ for having been interrupted would punish the detour the pause exists for.
 `verified-by: bravebot_tui::status::the_report_says_a_goal_is_paused`
 `verified-by: bravebot_tui::panel::a_paused_goal_is_drawn_and_says_it_is_paused`
 
+<a id="GOAL-19"></a>
+### GOAL-19: the judge runs on the model `summaryModel` names
+
+The check goes to the model the `summaryModel` setting names, and to the session's own model where
+the key names nothing. The key, the layers it is read from and the refusal for a model with no
+sign-in are [COMPACT-14](compaction.md#COMPACT-14)'s; one setting names the model for both side
+requests, so a person capping what background work costs caps it once.
+
+A model needing a sign-in this machine has not made sends no check. The goal ends, as it does for
+every other request that failed ([GOAL-6](#GOAL-6)), and the reason says which model could not be
+reached.
+
+**What does not change with the model.** The verdict is still read as [GOAL-4](#GOAL-4) has it, and
+still only where the gate lets the driver hold it ([GOAL-5](#GOAL-5)): the judge is given the
+exchange the planner was given, so what licenses reading its answer is the context rather than the
+model that answered. The judge is still offered no tools and still gets one round
+([GOAL-3](#GOAL-3)).
+
+`verified-by: bravebot_agent::turn::a_check_runs_on_the_summary_model_the_settings_name`
+`verified-by: bravebot_agent::turn::a_check_with_no_summary_model_runs_on_the_sessions_own`
+`verified-by: bravebot_agent::turn::a_summary_model_needing_a_sign_in_sends_no_check`
+
 ## Known costs
 
 - **The judge reads the transcript, not the world.** It cannot run a command or open a file, so a

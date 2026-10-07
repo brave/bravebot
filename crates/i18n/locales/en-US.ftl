@@ -435,6 +435,8 @@ doctor-settings-advisor-ignored =
     advisorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-fallback-ignored =
     fallbackModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-summary-ignored =
+    summaryModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 # A key that only ever refuses, spelled as something other than a boolean. It is read as absence, so
 # the session is as permissive as one that named nothing, and nothing else would say so.
 doctor-settings-narrowing-ignored =
@@ -2693,6 +2695,10 @@ delegate-model-needs-sign-in =
 # The endpoint substitutes a model it will not serve rather than refusing. The name it answered
 # with is left out, because a notice is the driver's own words.
 delegate-model-substituted = { $definition } asked for { $model } and was answered by a different model
+# The model `summaryModel` named, from the person's own settings file. A compaction or a goal check
+# is refused rather than sent to the session's model, since the setting is a cost boundary.
+summary-model-needs-sign-in =
+    { $model } is set as the summary model and needs a sign-in first, so nothing was sent
 # A definition's skills line named skills this session did not find. The definition is its file's
 # path and the skills are that file's own words, joined with a comma, both from a vouched-for file.
 delegate-skills-not-found =
