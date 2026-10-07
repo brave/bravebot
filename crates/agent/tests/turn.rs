@@ -5464,6 +5464,56 @@ fn an_approved_edit_changes_only_the_matched_passage() {
     );
 }
 
+/// A planner writes `old_text` with `\n`, because that is what it types. In a file that ends its
+/// lines with `\r\n` the passage was never found, or a replacement went in with bare `\n` among the
+/// `\r\n` and left the file inconsistent. The edit is matched and written in the file's terminator,
+/// and the reviewer is told the terminators were kept, since the diff cannot show them.
+#[test]
+fn an_edit_to_a_crlf_file_keeps_its_line_endings() {
+    let scratch = Scratch::new("edit-crlf");
+    std::fs::write(
+        scratch.path.join("a.txt"),
+        "keep\r\nold one\r\nold two\r\ntail\r\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"old one\nold two","new_text":"new one\nnew two\nnew three"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust("a.txt");
+    let task = Task::new("edit a.txt").with_permissions(rules(&[], &["Edit(a.txt)"], &[]));
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read(scratch.path.join("a.txt")).unwrap(),
+        b"keep\r\nnew one\r\nnew two\r\nnew three\r\ntail\r\n"
+    );
+    assert_eq!(
+        confirmer.seen[0].line_endings_note().as_deref(),
+        Some("line endings: CRLF kept")
+    );
+}
+
 /// The reason edit_file exists: when review is needed, the user sees a diff of a located
 /// passage with the file's current contents to compare against.
 ///

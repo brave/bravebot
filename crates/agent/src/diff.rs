@@ -21,13 +21,45 @@ pub enum Change {
     Elided(usize),
 }
 
+/// The line terminators a text uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineEnding {
+    /// Every terminator is `\n`.
+    Lf,
+    /// Every terminator is `\r\n`.
+    Crlf,
+    /// Both appear.
+    Mixed,
+}
+
+impl LineEnding {
+    /// The terminators `text` uses, or `None` where it has none (empty, or a single unterminated
+    /// line).
+    pub fn of(text: &str) -> Option<Self> {
+        let all = text.matches('\n').count();
+        let crlf = text.matches("\r\n").count();
+        match (all, crlf) {
+            (0, _) => None,
+            (_, 0) => Some(Self::Lf),
+            (all, crlf) if all == crlf => Some(Self::Crlf),
+            _ => Some(Self::Mixed),
+        }
+    }
+}
+
 /// The difference between two texts, by line.
+///
+/// Lines are compared without their terminators, so a change that only swaps `\r\n` for `\n`
+/// has no added or removed line. The terminators each side uses are recorded separately, in
+/// [`Diff::line_endings`], so that change is still visible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diff {
     changes: Vec<Change>,
     added: usize,
     removed: usize,
     exact: bool,
+    before_ending: Option<LineEnding>,
+    after_ending: Option<LineEnding>,
 }
 
 /// Cells the longest-common-subsequence table may occupy.
@@ -43,6 +75,8 @@ impl Diff {
     pub fn compute(before: &str, after: &str) -> Self {
         let old: Vec<&str> = before.lines().collect();
         let new: Vec<&str> = after.lines().collect();
+        let before_ending = LineEnding::of(before);
+        let after_ending = LineEnding::of(after);
 
         // Matching head and tail are trimmed first. Most edits touch a small region, and
         // this is what keeps the quadratic step small enough to run at all.
@@ -66,6 +100,8 @@ impl Diff {
                 added: new_middle.len(),
                 removed: old_middle.len(),
                 exact: false,
+                before_ending,
+                after_ending,
             };
         }
 
@@ -90,6 +126,8 @@ impl Diff {
             added,
             removed,
             exact: true,
+            before_ending,
+            after_ending,
         }
     }
 
@@ -109,6 +147,11 @@ impl Diff {
     /// only the counts are meaningful.
     pub fn is_exact(&self) -> bool {
         self.exact
+    }
+
+    /// The terminators the text before and the text after use.
+    pub fn line_endings(&self) -> (Option<LineEnding>, Option<LineEnding>) {
+        (self.before_ending, self.after_ending)
     }
 
     /// Whether the two texts differ by line at all.
@@ -224,6 +267,41 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_text_is_classed_by_its_terminators() {
+        assert_eq!(LineEnding::of(""), None);
+        assert_eq!(LineEnding::of("no newline"), None);
+        assert_eq!(LineEnding::of("a\nb\n"), Some(LineEnding::Lf));
+        assert_eq!(LineEnding::of("a\r\nb\r\n"), Some(LineEnding::Crlf));
+        assert_eq!(LineEnding::of("a\r\nb\n"), Some(LineEnding::Mixed));
+        assert_eq!(LineEnding::of("a\nb\r\n"), Some(LineEnding::Mixed));
+    }
+
+    #[test]
+    fn a_diff_remembers_the_terminators_of_both_sides() {
+        let diff = Diff::compute("a\r\nb\r\n", "a\nb\n");
+        assert_eq!(
+            diff.line_endings(),
+            (Some(LineEnding::Crlf), Some(LineEnding::Lf))
+        );
+        assert!(
+            added(&diff).is_empty() && removed(&diff).is_empty(),
+            "lines() hides terminators, which is why they are recorded separately"
+        );
+    }
+
+    #[test]
+    fn an_oversize_diff_still_remembers_the_terminators() {
+        let before: String = (0..2000).map(|n| format!("old {n}\r\n")).collect();
+        let after: String = (0..2000).map(|n| format!("new {n}\n")).collect();
+        let diff = Diff::compute(&before, &after);
+        assert!(!diff.is_exact());
+        assert_eq!(
+            diff.line_endings(),
+            (Some(LineEnding::Crlf), Some(LineEnding::Lf))
+        );
     }
 
     #[test]

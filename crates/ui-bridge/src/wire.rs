@@ -381,6 +381,9 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
         // The driver's own record, so a front-end can say the working directory's file was
         // written after the checkout it is being brought back from was made.
         "writtenSinceCheckout": request.written_since_checkout,
+        // What the write does to the file's line terminators, which the changes below cannot
+        // show: they are compared without them. Null where both sides end in `\n`.
+        "lineEndings": request.line_endings_note(),
         "existing": request.existing.is_some(),
         "added": diff.added(),
         "removed": diff.removed(),

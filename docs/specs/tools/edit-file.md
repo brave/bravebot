@@ -79,3 +79,33 @@ told only that. [EDIT-2](#EDIT-2) is what makes the file itself trusted by this 
 `verified-by: bravebot_agent::replace::a_change_of_line_terminator_still_shows_the_line`
 `verified-by: bravebot_agent::replace::removing_the_final_newline_still_shows_the_last_line`
 `verified-by: bravebot_agent::replace::adding_the_final_newline_still_shows_the_last_line`
+
+<a id="EDIT-5"></a>
+### EDIT-5: an edit takes the terminator the file already has
+
+When every line terminator in the file is `\r\n`, `old_text` and `new_text` are converted from
+`\n` to `\r\n` before the passage is located and before the replacement is written, and text that
+already has `\r\n` is left alone. An edit never changes a file's existing terminator. A file that
+has no terminator, or only `\n`, is matched as given, and so is a file that mixes the two, since
+there is no single terminator to take. An edit that differs from the passage only in its terminators
+is refused as unchanged after the conversion, not before it.
+
+The approval states the terminators in words (`line endings: CRLF kept`), because the diff
+compares lines without them and a change of terminator alone would otherwise show nothing. It says
+nothing when both sides end their lines in `\n`.
+
+**Why.** A planner writes `\n`. Without the conversion, a multi-line `old_text` does not match in a
+CRLF file, and a replacement that does match leaves bare `\n` among the `\r\n`: a file that is
+inconsistent and a diff that looks right.
+
+`verified-by: bravebot_agent::replace::an_lf_passage_is_found_in_a_crlf_file_and_replaced_with_crlf`
+`verified-by: bravebot_agent::replace::a_multi_line_replacement_of_one_line_takes_the_files_terminator`
+`verified-by: bravebot_agent::replace::text_that_already_has_crlf_is_not_doubled`
+`verified-by: bravebot_agent::replace::every_occurrence_in_a_crlf_file_is_matched_and_converted`
+`verified-by: bravebot_agent::replace::an_edit_that_differs_only_in_terminators_changes_nothing_in_a_crlf_file`
+`verified-by: bravebot_agent::replace::an_lf_file_is_not_converted`
+`verified-by: bravebot_agent::replace::a_file_that_mixes_terminators_is_matched_exactly`
+`verified-by: bravebot_agent::diff::a_diff_remembers_the_terminators_of_both_sides`
+`verified-by: bravebot_agent::turn::an_edit_to_a_crlf_file_keeps_its_line_endings`
+`verified-by: bravebot_agent::confirm::an_edit_that_keeps_crlf_says_so`
+`verified-by: bravebot_agent::confirm::a_write_that_swaps_the_terminators_says_which_way`

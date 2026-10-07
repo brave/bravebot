@@ -1804,6 +1804,7 @@ function Card({
               approving.</span>
             </p>
           )}
+          {request.lineEndings && <p className="permission-scope" data-test="line-endings">{request.lineEndings}</p>}
           {request.credentials && request.credentials.length > 0 && <Alert type="warning" className="card-alert credential-finding">
             <Icon name="shield-alert" slot="icon" />
             <span slot="title">This looks like it would put a secret in the tree</span>

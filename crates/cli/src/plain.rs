@@ -1194,6 +1194,7 @@ fn change(request: &WriteRequest) -> Vec<String> {
     if request.written_since_checkout {
         lines.push(t!(write_since_checkout).to_string());
     }
+    lines.extend(request.line_endings_note());
 
     let diff = &request.diff;
     // A change too large to diff says so rather than showing a guess at it, which is what the
@@ -2134,6 +2135,30 @@ mod tests {
         };
         assert!(asked(true).contains("after the checkout was made"));
         assert!(!asked(false).contains("after the checkout was made"));
+    }
+
+    /// The diff compares lines without their terminators, so an edit that keeps a file's CRLF
+    /// endings looks the same as one that does not. The question says which it is.
+    #[test]
+    fn an_edit_to_a_crlf_file_says_its_line_endings_are_kept() {
+        let asked = |before: &str, after: &str| {
+            change(&WriteRequest {
+                written_since_checkout: false,
+                path: "out.txt".to_string(),
+                contents: after.to_string(),
+                existing: Some(before.to_string()),
+                diff: bravebot_agent::diff::Diff::compute(before, after),
+                intent: bravebot_agent::confirm::Intent::Edit,
+                untrusted: false,
+                remark: None,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+            })
+            .join("\n")
+        };
+        assert!(asked("a\r\nb\r\n", "a\r\nc\r\n").contains("line endings: CRLF kept"));
+        assert!(!asked("a\nb\n", "a\nc\n").contains("line endings"));
     }
 
     /// A processor's claim about a body it produced belongs beside the lines it describes. Nothing

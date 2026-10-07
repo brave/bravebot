@@ -334,6 +334,12 @@ export interface ConfirmRequest {
    * checkout the body comes from was made. Names only: it says nothing of whether the bytes differ.
    */
   writtenSinceCheckout?: boolean
+  /**
+   * What the write does to the file's line terminators, in the agent's words, or null where both
+   * sides end in LF. The changes below are compared without terminators, so this is the only place
+   * a swap of CRLF for LF, or a kept CRLF, is stated.
+   */
+  lineEndings?: string | null
   request: number
   path: string
   intent: Intent

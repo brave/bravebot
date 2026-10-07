@@ -389,6 +389,33 @@ fn a_write_request_carries_whether_the_path_was_written_since_the_checkout() {
     );
 }
 
+/// An edit to a CRLF file keeps its terminators, which the diff cannot show because it compares
+/// lines without them. The request tells the front-end in words, and says nothing for LF files.
+#[test]
+fn a_write_request_says_what_happens_to_the_line_endings() {
+    let request = |before: &str, after: &str| WriteRequest {
+        written_since_checkout: false,
+        path: "out.txt".into(),
+        contents: after.into(),
+        existing: Some(before.into()),
+        diff: Diff::compute(before, after),
+        intent: Intent::Edit,
+        untrusted: false,
+        remark: None,
+        credentials: Vec::new(),
+        may_always: false,
+        record: None,
+    };
+    assert_eq!(
+        wire::write_request(1, &request("a\r\nb\r\n", "a\r\nc\r\n"))["lineEndings"],
+        json!("line endings: CRLF kept")
+    );
+    assert_eq!(
+        wire::write_request(1, &request("a\nb\n", "a\nc\n"))["lineEndings"],
+        json!(null)
+    );
+}
+
 /// The body never goes on the wire. A reviewer reads a diff; shipping `contents` invites
 /// a front-end to show the whole file instead, which is the thing the design avoids.
 #[test]

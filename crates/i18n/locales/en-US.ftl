@@ -1300,6 +1300,9 @@ write-credentials =
 write-since-checkout =
     this session wrote to this file in the working directory after the checkout was made, so it
     may hold changes the checkout's copy does not. Read the difference before approving
+write-line-endings-kept = line endings: { $ending } kept
+write-line-endings-changed = line endings: { $from } to { $to }
+write-line-endings-new = line endings: { $ending }
 write-unchanged = { $count ->
     [one] … { $count } unchanged line
    *[other] … { $count } unchanged lines
