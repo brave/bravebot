@@ -133,8 +133,8 @@ character, so prose containing one still names nothing. Completing an entry whos
 writes the escaped form, so the line reads back as the path that was chosen. NAME-5 applies to the
 unescaped path.
 
-**Why.** A reference ended at the first space, so a file such as `My Documents/notes.md` was offered
-by the picker and then completed to text that named a different path. Where a reference ends is
+**Why.** Without the escaped form, a file whose name holds a space cannot be named, and the picker
+would offer an entry that completes to text naming a different path. Where a reference ends is
 decided from the line the user typed, not from file contents.
 
 `verified-by: bravebot_tui::entries::a_backslash_before_a_space_continues_a_reference`
