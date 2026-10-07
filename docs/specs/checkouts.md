@@ -149,7 +149,7 @@ Built.
 `verified-by: bravebot_agent::agents::a_project_replacement_keeps_the_checkout_and_a_reader_is_told_it_has_none`
 `verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_gives_its_delegate_one_the_spawn_did_not_ask_for`
 `verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_inside_one_is_refused`
-`verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_with_no_state_directory_is_refused`
+`verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_with_no_state_directory_is_given_a_temporary_one`
 `verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_outside_a_repository_is_refused_by_name`
 `verified-by: bravebot_agent::tools::a_definition_asking_for_a_checkout_is_offered_as_working_in_one`
 `verified-by: bravebot_agent::turn::an_addressed_turn_works_in_the_working_directory_and_says_its_checkout_is_not_applied`
@@ -347,14 +347,15 @@ distrust a path inside `.git` and close `read_git` for the whole repository
 search and `git status` of the person's has to skip, and build tools in it walking up the tree
 would find the person's own configuration.
 
-Built where the session has a state directory. A session that keeps no record, or has no state
-directory, is refused a checkout and told so: the system temporary directory variant is not built.
-The one test asking from a session that has none asks through a definition
-([CHECKOUT-2](#CHECKOUT-2)).
+Built. The one test asking from a session that has no state directory asks through a definition
+([CHECKOUT-2](#CHECKOUT-2)); a leftover directory of a killed session is taken by the scratch
+sweep, and its `worktrees/<id>` entries are not.
 
 `verified-by: bravebot_agent::workspace::each_checkout_is_a_numbered_workspace_under_the_state_directory`
 `verified-by: bravebot_agent::workspace::a_checkout_is_keyed_by_the_workspace_and_readable_by_its_owner_alone`
-`verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_with_no_state_directory_is_refused`
+`verified-by: bravebot_agent::workspace::a_session_with_no_state_directory_makes_its_checkouts_in_the_temporary_directory`
+`verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_with_no_state_directory_is_given_a_temporary_one`
+`verified-by: bravebot_agent::incognito::a_checkout_is_not_made_under_the_state_directory`
 
 ## Working in one
 

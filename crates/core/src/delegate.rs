@@ -1000,8 +1000,6 @@ pub enum CheckoutRefusal {
     Reader,
     /// The run already works in a checkout, which its delegates share.
     AlreadyInCheckout,
-    /// The session keeps no state directory to make one in.
-    NoStateDirectory,
     /// The directory for checkouts would sit inside the working directory.
     InsideWorkingDirectory,
     /// A directory opened beside the working directory holds the working directory.
@@ -1022,7 +1020,6 @@ impl CheckoutRefusal {
             Self::UnknownIsolation => "unknown-isolation",
             Self::Reader => "reader-has-no-checkout",
             Self::AlreadyInCheckout => "already-in-a-checkout",
-            Self::NoStateDirectory => "no-state-directory",
             Self::InsideWorkingDirectory => "inside-working-directory",
             Self::OpenedHoldsWorkingDirectory(_) => "opened-directory-holds-working-directory",
             Self::OpenedHoldsCheckouts(_) => "opened-directory-holds-checkouts",

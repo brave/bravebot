@@ -7162,6 +7162,51 @@ fn each_checkout_is_a_numbered_workspace_under_the_state_directory() {
     assert_eq!(workspace.checkout().map(|c| c.id().to_string()), None);
 }
 
+/// CHECKOUT-6. Where the session has no state directory a checkout is made under the system
+/// temporary directory, outside the working directory, and the checkout and its entry in the
+/// repository are gone once the session's last workspace is.
+#[test]
+fn a_session_with_no_state_directory_makes_its_checkouts_in_the_temporary_directory() {
+    let scratch = Scratch::new("checkout-temporary");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+
+    let made = workspace
+        .checkout_in_temporary_directory_cause(&policy, d1())
+        .expect("a checkout");
+
+    let root = made.root().to_path_buf();
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
+    let temporary = std::env::temp_dir().canonicalize().expect("temporary");
+    assert!(root.starts_with(&temporary), "{root:?}");
+    assert!(!root.starts_with(&scratch.path), "{root:?}");
+    assert_eq!(
+        std::fs::read_to_string(root.join("README")).expect("README"),
+        "hello\n"
+    );
+    let entry = scratch.path.join(".git/worktrees/c1");
+    assert!(
+        entry.is_dir(),
+        "no entry for the checkout in the repository"
+    );
+
+    drop(made);
+    assert!(
+        root.is_dir(),
+        "a delegate's ending took the session's checkout"
+    );
+    drop(policy);
+    drop(workspace);
+
+    assert!(!root.exists(), "the checkout outlived the session");
+    assert!(
+        !entry.exists(),
+        "the repository still names a checkout that is gone"
+    );
+}
+
 /// CHECKOUT-7. A checkout is refused, and nothing is written, where it would sit in the working
 /// directory, where a directory opened beside the working directory holds it, and where the
 /// workspace is itself a checkout.
