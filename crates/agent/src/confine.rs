@@ -454,12 +454,25 @@ struct Prepared {
     variables: Variables,
 }
 
+/// Whether variable names are compared without regard to case, as Windows does.
+const FOLD_CASE: bool = cfg!(windows);
+
+type Pair = (std::ffi::OsString, std::ffi::OsString);
+
 /// The variables `command` will start with: this process's, less the names removed and with the
 /// ones set.
-fn effective_environment(command: &Command) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
-    let mut held: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
-    for (name, value) in command.get_envs() {
-        held.retain(|(existing, _)| !same_variable(existing, name));
+fn effective_environment(command: &Command) -> Vec<Pair> {
+    overlay(std::env::vars_os().collect(), command.get_envs(), FOLD_CASE)
+}
+
+/// `held` less every name `changes` removes or sets, plus the values it sets.
+fn overlay<'a>(
+    mut held: Vec<Pair>,
+    changes: impl Iterator<Item = (&'a std::ffi::OsStr, Option<&'a std::ffi::OsStr>)>,
+    fold_case: bool,
+) -> Vec<Pair> {
+    for (name, value) in changes {
+        held.retain(|(existing, _)| !same_variable(existing, name, fold_case));
         if let Some(value) = value {
             held.push((name.to_os_string(), value.to_os_string()));
         }
@@ -467,9 +480,8 @@ fn effective_environment(command: &Command) -> Vec<(std::ffi::OsString, std::ffi
     held
 }
 
-/// Whether two names are one variable, which on Windows does not depend on case.
-fn same_variable(left: &std::ffi::OsStr, right: &std::ffi::OsStr) -> bool {
-    if cfg!(windows) {
+fn same_variable(left: &std::ffi::OsStr, right: &std::ffi::OsStr, fold_case: bool) -> bool {
+    if fold_case {
         left.eq_ignore_ascii_case(right)
     } else {
         left == right
@@ -477,9 +489,13 @@ fn same_variable(left: &std::ffi::OsStr, right: &std::ffi::OsStr) -> bool {
 }
 
 fn variable(environment: &[(String, String)], name: &str) -> Option<String> {
+    lookup(environment, name, FOLD_CASE)
+}
+
+fn lookup(environment: &[(String, String)], name: &str, fold_case: bool) -> Option<String> {
     environment
         .iter()
-        .find(|(held, _)| same_variable(held.as_ref(), name.as_ref()))
+        .find(|(held, _)| same_variable(held.as_ref(), name.as_ref(), fold_case))
         .map(|(_, value)| value.clone())
         .filter(|value| !value.is_empty())
 }
@@ -1130,12 +1146,45 @@ mod tests {
     }
 
     /// Windows reads `Path` and `PATH` as one variable, so a step setting one must replace the
-    /// other rather than start with both.
+    /// other rather than start with both, and a lookup of `PATH` must find `Path`.
     #[test]
-    fn variable_names_differ_by_case_only_on_windows() {
-        let name = |text: &str| std::ffi::OsString::from(text);
-        assert!(same_variable(&name("PATH"), &name("PATH")));
-        assert!(!same_variable(&name("PATH"), &name("TEMP")));
-        assert_eq!(same_variable(&name("Path"), &name("PATH")), cfg!(windows));
+    fn variable_names_match_without_case_only_when_folding() {
+        use std::ffi::{OsStr, OsString};
+        let pair = |name: &str, value: &str| (OsString::from(name), OsString::from(value));
+        let set =
+            |name: &'static str, value: &'static str| (OsStr::new(name), Some(OsStr::new(value)));
+
+        let folded = overlay(
+            vec![pair("Path", "inherited"), pair("TEMP", "t")],
+            [set("PATH", "chosen")].into_iter(),
+            true,
+        );
+        assert_eq!(folded, vec![pair("TEMP", "t"), pair("PATH", "chosen")]);
+
+        let exact = overlay(
+            vec![pair("Path", "inherited"), pair("TEMP", "t")],
+            [set("PATH", "chosen")].into_iter(),
+            false,
+        );
+        assert_eq!(
+            exact,
+            vec![
+                pair("Path", "inherited"),
+                pair("TEMP", "t"),
+                pair("PATH", "chosen")
+            ]
+        );
+
+        let removed = overlay(
+            vec![pair("Path", "inherited")],
+            [(OsStr::new("PATH"), None)].into_iter(),
+            true,
+        );
+        assert!(removed.is_empty());
+
+        let held = vec![("Path".to_string(), r"C:\bin".to_string())];
+        assert_eq!(lookup(&held, "PATH", true), Some(r"C:\bin".to_string()));
+        assert_eq!(lookup(&held, "PATH", false), None);
+        assert_eq!(lookup(&held, "TEMP", true), None);
     }
 }
