@@ -1478,7 +1478,7 @@ fn doctor_names_the_tier_of_every_credential_it_accounts_for() {
 /// CLI-7: `doctor` says which handler at Brave's endpoint will answer a chat request, since the
 /// host and the path are the same either way. Both directions from one fixture: a report that
 /// always said `signed`, or always said `API key`, passes one run and fails the other. A blank key
-/// is not an opt-in (BACKEND-53), so it is run as well, and the key itself is never printed.
+/// is not an opt-in (BACKEND-54), so it is run as well, and the key itself is never printed.
 #[test]
 fn doctor_says_whether_requests_are_signed_or_present_an_api_key() {
     let scratch = Scratch::new("cli-running-doctor-requests");
