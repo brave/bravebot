@@ -148,6 +148,10 @@ describe('a real bravebot-rpc process through the typed client', () => {
     assert.equal(question.supported, true)
     assert.equal((question.data as { path: string }).path, 'approved.txt')
     assert.equal(existsSync(join(made.project, 'approved.txt')), false, 'nothing is written before an answer')
+    // Answers belong to a user question; given to a write they are refused before anything is sent.
+    await assert.rejects(session.answer(question.request, [{ typed: 'yes' }]), UnsupportedError)
+    assert.equal(session.view.pending?.request, question.request, 'the write is still waiting for its own answer')
+    assert.equal(existsSync(join(made.project, 'approved.txt')), false)
     await session.decide(question.request, 'approve')
     await until(session, 'the first turn to end', (view) => view.status === 'completed')
     assert.equal(readFileSync(join(made.project, 'approved.txt'), 'utf8'), 'approved bytes')

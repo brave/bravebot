@@ -1,6 +1,6 @@
 {
-  "name": "decisions-are-approve-or-reject",
-  "description": "Any decision other than approve or reject is refused locally rather than read by the bridge as a rejection.",
+  "name": "replies-use-the-form-the-question-takes",
+  "description": "A decision other than approve or reject, and answers given to an approval question, are refused locally rather than sent for the bridge to read.",
   "steps": [
     {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
     {"expectRequest": "info", "method": "agent.info", "params": {}},
@@ -17,6 +17,9 @@
     {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 2, "turn": 1, "status": "waiting", "pending": {"row": 2, "request": 4, "kind": "confirm", "supported": true, "data": {"request": 4, "path": "out.txt", "intent": "create", "changes": []}}, "rows": [{"id": 2, "turn": 1, "kind": "approval", "event": "confirm.request", "data": {"request": 4, "path": "out.txt", "intent": "create", "changes": []}, "resolved": false}]}}]},
     {"start": "typo", "call": "decide", "session": "a", "args": {"request": 4, "decision": "approved"}},
     {"await": "typo", "error": {"name": "UnsupportedError"}},
-    {"expectNoRequest": true}
+    {"start": "answers", "call": "answer", "session": "a", "args": {"request": 4, "answers": [{"typed": "yes"}]}},
+    {"await": "answers", "error": {"name": "UnsupportedError"}},
+    {"expectNoRequest": true},
+    {"expectView": "a", "status": "waiting", "pending": {"request": 4, "kind": "confirm"}}
   ]
 }
