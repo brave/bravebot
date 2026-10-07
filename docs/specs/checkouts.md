@@ -355,6 +355,7 @@ sweep, and its `worktrees/<id>` entries are not.
 `verified-by: bravebot_agent::workspace::a_checkout_is_keyed_by_the_workspace_and_readable_by_its_owner_alone`
 `verified-by: bravebot_agent::workspace::a_session_with_no_state_directory_makes_its_checkouts_in_the_temporary_directory`
 `verified-by: bravebot_agent::turn::a_definition_asking_for_a_checkout_with_no_state_directory_is_given_a_temporary_one`
+`verified-by: bravebot_agent::incognito::a_checkout_is_not_made_under_the_state_directory`
 
 ## Working in one
 

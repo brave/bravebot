@@ -13,9 +13,13 @@
 //! ordinary behaviour. An integration test is its own process, so this file engages once and no
 //! other test in the workspace is affected.
 
+#[allow(dead_code)]
+mod repository;
+
 use bravebot_agent::remembered::Store;
 use bravebot_core::command::{Plan, Step, Steps};
 use bravebot_core::remembered::RememberedLine;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 /// A scratch state directory that removes itself.
@@ -374,5 +378,127 @@ fn a_memory_left_untrusted_is_still_recorded() {
     assert_eq!(
         record.paths(),
         vec!["/work/.bravebot/memory/notes.md".to_string()]
+    );
+}
+
+/// One reply as the SSE stream the turn loop reads: `content`, or a call to `spawn_agent`.
+fn sse(content: Option<&str>, spawn: Option<&str>) -> String {
+    let mut frames = vec![serde_json::json!({"choices": [{"delta": {"role": "assistant"}}]})];
+    if let Some(content) = content {
+        frames.push(serde_json::json!({"choices": [{"delta": {"content": content}}]}));
+    }
+    if let Some(arguments) = spawn {
+        frames.push(serde_json::json!({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "c1", "function": {"name": "spawn_agent", "arguments": arguments}}
+        ]}}]}));
+    }
+    frames.push(serde_json::json!({"choices": [{"finish_reason": "stop"}]}));
+    let mut text: String = frames
+        .iter()
+        .map(|frame| format!("data: {frame}\n\n"))
+        .collect();
+    text.push_str("data: [DONE]\n\n");
+    text
+}
+
+/// A model that starts one delegate asking for a checkout, and records every request it is sent.
+///
+/// Told apart by what a request holds rather than by the order they arrive in, since the delegate
+/// and the turn that started it ask at the same time: the delegate's is the one carrying its task
+/// and no tool result, and the turn's later ones carry the result.
+fn a_model_starting_a_delegate_in_a_checkout() -> (String, std::sync::mpsc::Receiver<String>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut length = 0usize;
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 && line.trim() != "" {
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    line.clear();
+                }
+                let mut body = vec![0u8; length];
+                let _ = reader.read_exact(&mut body);
+                let body = String::from_utf8_lossy(&body).to_string();
+                let _ = sender.send(body.clone());
+                let reply = if body.contains("\"role\":\"tool\"") {
+                    sse(Some("done"), None)
+                } else if body.contains("THE-DELEGATES-TASK") {
+                    sse(Some("ran"), None)
+                } else {
+                    sse(
+                        None,
+                        Some(
+                            r#"{"kind":"worker","task":"THE-DELEGATES-TASK","isolation":"checkout"}"#,
+                        ),
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            });
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), received)
+}
+
+/// CHECKOUT-6, INCOG-5: a private session with a state directory is given its delegate's checkout
+/// in the system temporary directory, and nothing is made under that state directory, which is
+/// where a checkout would outlast the session.
+#[test]
+fn a_checkout_is_not_made_under_the_state_directory() {
+    let scratch = Scratch::new("checkout-not-in-state");
+    let work = std::env::temp_dir().join("bravebot-agent-incognito-checkout-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).expect("create the working directory");
+    repository::commit_files(&work, &[("README", "committed\n")], "first");
+    let workspace = bravebot_agent::Workspace::new(&work).expect("workspace");
+    let (endpoint, received) = a_model_starting_a_delegate_in_a_checkout();
+    let config = bravebot_config::Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        _ => None,
+    })
+    .expect("config");
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+
+    let outcome = bravebot_agent::turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &bravebot_agent::turn::Task::new("START-THE-DELEGATE")
+            .with_home(Some(scratch.home.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut bravebot_core::event::RecordingSink::new(),
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    drop(workspace);
+    let _ = std::fs::remove_dir_all(&work);
+    outcome.expect("turn runs");
+
+    let asked: Vec<String> = received.try_iter().collect();
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("It works in a checkout of commit")),
+        "the delegate was not given a checkout"
+    );
+    assert!(
+        !scratch.home.join("checkouts").exists(),
+        "a private session made a checkout under the state directory"
     );
 }
