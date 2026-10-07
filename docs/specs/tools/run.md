@@ -477,7 +477,8 @@ enumerated: the set of programs someone might ask for cannot be listed in advanc
 confined ([SANDBOX-17](#SANDBOX-17)): on Linux and macOS to reading the machine except the places
 that hold a credential and writing only the session's directories, on Windows to what its plan
 accounts for, with the credential a `git push` needs lent by the operation it names
-([SANDBOX-16](#SANDBOX-16)).
+([SANDBOX-16](#SANDBOX-16)), and the network kept only by a stage that has a reason to reach it
+where the session closed it ([SANDBOX-20](sandboxing.md#SANDBOX-20)).
 
 Do not add an allowlist and treat it as the safety property. What holds is the label on the
 output, not a belief about the binary. The audited table in [command-line.md](command-line.md) is

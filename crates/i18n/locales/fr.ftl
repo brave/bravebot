@@ -106,6 +106,10 @@ cli-options-heading = Options :
 cli-option-file = Inclure un fichier de l'espace de travail comme contexte (répétable)
 cli-option-add-dir = Accéder à un répertoire hors de celui de travail (répétable)
 cli-option-settings = Lire ce fichier de réglages pour cette exécution, au-dessus de ceux trouvés sur le disque
+cli-option-run-network =
+    Si les programmes lancés par `run` peuvent joindre le réseau. closed le refuse à tous sauf à la
+    récupération d'un gestionnaire de paquets, à git ou gh avec une opération distante, à curl, à ssh et
+    à une étape avec une portée distante
 cli-option-agent = Adresser chaque tour à cette définition, comme /agent le fait pour un seul
 cli-option-system-prompt =
     Remplacer la phrase d'ouverture de l'invite système du planificateur à chaque tour. Le reste demeure
@@ -145,6 +149,8 @@ cli-add-dir-needs-a-path = --add-dir demande le chemin absolu d'un répertoire
 cli-directory-ends-checkouts = { $directory } contient le répertoire de travail, donc aucun délégué n'obtient de copie de travail tant qu'il est ouvert ; relancez sans --add-dir { $directory } pour en avoir une
 cli-settings-needs-a-path = --settings demande le chemin d'un fichier de réglages
 cli-settings-not-a-file = --settings ne nomme aucun fichier : { $path }
+cli-run-network-needs-a-word = --run-network demande open ou closed
+cli-run-network-unknown = --run-network accepte open ou closed, pas { $word }
 cli-agent-needs-a-name = --agent demande le nom d'une définition
 cli-agent-not-for-a-command =
     --agent nomme la définition sous laquelle travaille une session ou une tâche, et { $command }
@@ -373,6 +379,14 @@ doctor-settings-fallback-ignored =
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-narrowing-ignored =
     { $key } dans { $path } n'est pas un booléen, il est donc lu comme absent et ne refuse rien
+doctor-run-network = réseau de run
+doctor-run-network-closed = fermé, sauf pour les étapes qui téléchargent ou joignent un dépôt distant ({ $source })
+doctor-settings-network-ignored =
+    run.network « open » dans { $path } n'est pas suivi : une copie de travail peut fermer le réseau, jamais l'ouvrir
+doctor-settings-network-unreadable =
+    run.network dans { $path } n'est ni open ni closed, donc il est lu comme absent
+doctor-managed-network-unreadable =
+    run.network dans { $path } n'est ni open ni closed, donc le réseau est fermé
 doctor-settings-allow-ignored =
     la règle allow { $rule } dans { $path } n'est pas accordée : une règle allow répond à une
     invite, le fichier d'un projet la propose donc et vous l'accordez au démarrage d'une session
@@ -1214,6 +1228,8 @@ run-carries-aws = { $program } lit aussi vos identifiants aws dans ~/.aws
 run-carries-kubernetes = { $program } lit aussi vos identifiants kubernetes dans ~/.kube
 run-carries-docker = { $program } lit aussi vos identifiants docker dans ~/.docker
 run-carries-reach = { $program } lit aussi { $path }, où pointe votre { $variable }
+run-network-closed = le réseau est fermé aux programmes que cette session lance, sauf à ceux ci-dessous
+run-keeps-network = { $program } atteint aussi le réseau
 run-spends-authority =
     elle dépense aussi des accès qui sont déjà les vôtres ailleurs, que personne ne redemande et que rien ici ne reprend :
 run-authority-container = { $named } : le démon de conteneurs, qui exécute n'importe quoi en root sur cette machine
@@ -1515,6 +1531,14 @@ status-vetting = Vérification
 status-vetting-auto =
     une vérification qui ne trouve rien donne le contenu au modèle sans demander
 status-vetting-where = conservé dans ~/.bravebot/vetting
+status-network = Réseau des programmes
+status-network-closed = fermé, sauf pour les étapes qui téléchargent ou joignent un dépôt distant
+status-network-by-default = fermé par défaut
+status-network-by-flag = fermé par --run-network
+status-network-by-settings = fermé par run.network dans { $path }
+status-network-by-a-setting = fermé par run.network dans un fichier de réglages
+status-network-pinned = imposé fermé par { $path }, ni un drapeau ni un fichier de réglages ne peut le changer
+status-network-pinned-by-policy = imposé fermé par les réglages gérés, ni un drapeau ni un fichier de réglages ne peut le changer
 status-this-session = Cette session
 status-time = Temps
 status-time-inference = sur le modèle
@@ -2271,6 +2295,7 @@ agent-checkout-not-applied =
 ## L'écran d'accueil
 
 opening-confinement = confinement disponible : { $level }
+opening-network-closed = réseau fermé
 opening-invitation = Posez une question sur cet espace de travail.
 
 

@@ -175,7 +175,8 @@ machine-level file pinned and where that file is, how to configure a service whe
 configured will serve a turn, the model in force
 and whether it was chosen or defaulted, where the state directory is or that there is none, what a
 TLS handshake is validated against and what a request is routed through, the
-confinement available on this platform, and the state of any imported subscription. Each AWS
+confinement available on this platform, whether the network is closed for confined programs and
+which layer closed it ([SANDBOX-20](sandboxing.md#SANDBOX-20)), and the state of any imported subscription. Each AWS
 account gets its profile and a line saying whether the AWS CLI gives it a credential a request can
 be signed with. Where it does not, the line says why: a session that is signed out names `bravebot
 auth login bedrock`, and a profile the CLI does not have, a CLI that is not installed and an answer

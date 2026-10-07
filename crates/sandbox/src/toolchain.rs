@@ -47,6 +47,23 @@ impl Toolchain {
         }
     }
 
+    /// Whether the program `resolved` is one of this toolchain's that fetches what it builds with,
+    /// so a stage of it keeps the network where the session has closed it.
+    ///
+    /// Keyed on the file, as [`Toolchain::of`] is, and not on the toolchain: `node` and `python3`
+    /// run a script and fetch nothing, where `npm`, `npx` and `pip` do. A program that runs
+    /// another, `python3 -m pip`, is the program it resolved to and brings none.
+    pub fn fetches(self, resolved: &Path) -> bool {
+        let Some(name) = resolved.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        match self {
+            Self::Cargo | Self::Go | Self::Maven | Self::Gradle => true,
+            Self::Node => name != "node",
+            Self::Python => versioned(name, "pip"),
+        }
+    }
+
     /// The name a person and the planner know this toolchain by.
     pub fn name(self) -> &'static str {
         match self {
@@ -266,6 +283,30 @@ mod tests {
                 Some(toolchain),
                 "{resolved}"
             );
+        }
+    }
+
+    /// Fetching is a property of the file a stage resolved to. Keyed on the toolchain, `python3`
+    /// and `node` running a script would keep the network a closed session took from `cat`.
+    #[test]
+    fn only_the_programs_that_fetch_are_known_to_fetch() {
+        for (resolved, fetches) in [
+            ("/usr/bin/cargo", true),
+            ("/home/a-person/.cargo/bin/rustup", true),
+            ("/usr/bin/npm-cli.js", true),
+            ("/usr/share/nodejs/npm/bin/npx-cli.js", true),
+            ("/usr/bin/node", false),
+            ("/usr/bin/pip3", true),
+            ("/usr/bin/pip", true),
+            ("/usr/bin/python3", false),
+            ("/usr/bin/python3.12", false),
+            ("/usr/local/go/bin/go", true),
+            ("/usr/share/maven/bin/mvn", true),
+            ("/opt/gradle/bin/gradle", true),
+        ] {
+            let path = Path::new(resolved);
+            let toolchain = Toolchain::of(path).expect(resolved);
+            assert_eq!(toolchain.fetches(path), fetches, "{resolved}");
         }
     }
 

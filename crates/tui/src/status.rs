@@ -241,6 +241,34 @@ pub fn named_mode(
 }
 
 /// Compose the report.
+/// The line for the network the programs `run` starts have, where it is closed.
+fn network_line(settled: Option<&bravebot_config::RunNetwork>) -> Option<Line> {
+    let settled = settled.filter(|settled| settled.network.is_closed())?;
+    Some(
+        Line::new(t!(status_network), t!(status_network_closed))
+            .with_note(run_network_source(&settled.decided)),
+    )
+}
+
+/// Who closed the network for the programs `run` starts, in the words `/status` and `doctor` share.
+pub fn run_network_source(decided: &bravebot_config::Decided) -> String {
+    use bravebot_config::Decided;
+    match decided {
+        Decided::Default => t!(status_network_by_default).to_string(),
+        Decided::Flag => t!(status_network_by_flag).to_string(),
+        Decided::Settings(Some(path)) => t!(
+            status_network_by_settings,
+            path = path.display().to_string()
+        )
+        .to_string(),
+        Decided::Settings(None) => t!(status_network_by_a_setting).to_string(),
+        Decided::Managed(Some(path)) => {
+            t!(status_network_pinned, path = path.display().to_string()).to_string()
+        }
+        Decided::Managed(None) => t!(status_network_pinned_by_policy).to_string(),
+    }
+}
+
 pub fn report(facts: &Facts<'_>) -> Report {
     let mut lines = Vec::new();
 
@@ -394,6 +422,11 @@ pub fn report(facts: &Facts<'_>) -> Report {
             },
         ),
     );
+
+    // Only where it is closed, for the reason the mode and the vetting lines are: an open network is
+    // what every session had, and a line saying so on each would be skimmed past. The note says who
+    // closed it, because the way to open it again depends on that.
+    lines.extend(network_line(bravebot_config::settled_run_network()));
 
     // Named rather than counted, since the question is which of them this session can reach, and
     // said where there are none, since a checkout that asked for one is where somebody looks. The
@@ -1824,6 +1857,31 @@ mod tests {
                 "the opening screen says something the configuration does not: {opening}"
             );
         }
+    }
+
+    /// A closed network is on the report with who closed it, an open one and a session that never
+    /// settled one are not, and a pin says it cannot be changed from a flag.
+    #[test]
+    fn a_closed_network_is_reported_with_who_closed_it_and_an_open_one_is_not() {
+        use bravebot_config::{Decided, RunNetwork};
+        use bravebot_sandbox::network::Network;
+        let settled = |network, decided| RunNetwork { network, decided };
+
+        assert!(network_line(None).is_none());
+        assert!(network_line(Some(&settled(Network::Open, Decided::Flag))).is_none());
+        let flag = network_line(Some(&settled(Network::Closed, Decided::Flag))).expect("a line");
+        assert_eq!(flag.label.trim(), t!(status_network));
+        assert!(flag.note.contains("--run-network"));
+        let pinned = network_line(Some(&settled(
+            Network::Closed,
+            Decided::Managed(Some("/etc/bravebot/managed.json".into())),
+        )))
+        .expect("a line");
+        let note = pinned.note.as_str();
+        assert!(
+            note.contains("/etc/bravebot/managed.json") && note.contains("pinned"),
+            "{note}"
+        );
     }
 
     /// Before the first turn nothing has been observed, so the panel says premium is available

@@ -42,7 +42,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 26] = [
+const FLAGS: [Flag; 27] = [
     flag("plain", None, false),
     flag("bg", None, false),
     flag("resume", Some('r'), false),
@@ -52,6 +52,7 @@ const FLAGS: [Flag; 26] = [
     flag("file", None, true),
     flag("add-dir", None, true),
     flag("settings", None, true),
+    flag("run-network", None, true),
     flag("agent", None, true),
     flag("system-prompt", None, true),
     flag("append-system-prompt", None, true),

@@ -74,7 +74,7 @@ fn main() -> ExitCode {
         .find(|arg| {
             matches!(
                 arg.as_str(),
-                "--incognito" | "--safe" | "--vet" | "--settings"
+                "--incognito" | "--safe" | "--vet" | "--settings" | "--run-network"
             )
         })
         .cloned();
@@ -124,6 +124,18 @@ fn main() -> ExitCode {
                 Ending::Argument,
                 t!(cli_settings_not_a_file, path = path.display().to_string()),
             );
+        }
+        Err(complaint) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+        }
+    }
+
+    // After the settings file is registered, which the settings it reads include, and before a
+    // session is assembled: a stage started under one answer and the next under another would
+    // make the network a property of the line rather than of the session.
+    match take_run_network(&mut args) {
+        Ok(flag) => {
+            bravebot_config::settle_run_network(flag);
         }
         Err(complaint) => {
             return stopped_before_the_turn(as_json, Ending::Argument, complaint);
@@ -524,6 +536,37 @@ fn take_settings(args: &mut Vec<String>) -> Result<Option<PathBuf>, String> {
     Ok(named)
 }
 
+/// Take `--run-network <open|closed>` out of the arguments, answering with the setting it named.
+///
+/// Removed before dispatch for the reason `--settings` is. A word that is neither is refused with
+/// the two that are named, since a typo read as `open` would leave the network a person meant to
+/// close open and say nothing. Given twice the last one wins, as `--settings` does. The arguments
+/// are rewritten only once the whole scan has succeeded.
+fn take_run_network(
+    args: &mut Vec<String>,
+) -> Result<Option<bravebot_sandbox::network::Network>, String> {
+    let mut named = None;
+    let mut kept = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] != "--run-network" {
+            kept.push(args[index].clone());
+            index += 1;
+            continue;
+        }
+        let Some(word) = args.get(index + 1) else {
+            return Err(t!(cli_run_network_needs_a_word).to_string());
+        };
+        match bravebot_sandbox::network::Network::parse(word) {
+            Some(network) => named = Some(network),
+            None => return Err(t!(cli_run_network_unknown, word = word.clone()).to_string()),
+        }
+        index += 2;
+    }
+    *args = kept;
+    Ok(named)
+}
+
 fn print_help() {
     /// Wide enough for the longest invocation below, so a translated description starts in the
     /// same column as every other one rather than wherever hand-counted spaces left it.
@@ -614,6 +657,7 @@ fn print_help() {
         ("--file <path>", t!(cli_option_file)),
         ("--add-dir <path>", t!(cli_option_add_dir)),
         ("--settings <path>", t!(cli_option_settings)),
+        ("--run-network <open|closed>", t!(cli_option_run_network)),
         ("--agent <name>", t!(cli_option_agent)),
         ("--system-prompt <prompt>", t!(cli_option_system_prompt)),
         (
@@ -2891,6 +2935,49 @@ fn doctor() -> ExitCode {
                     t!(
                         doctor_settings_narrowing_ignored,
                         key = format!("permissions.{key}"),
+                        path = bravebot_config::managed_file().display().to_string()
+                    ),
+                );
+            }
+
+            // The network for the programs `run` starts, named only where it is not open, with who
+            // decided it, and the layers that tried to open what a person closed. A word that
+            // is neither is read as absent, so it is said for the reason a mistyped pin is.
+            let network = bravebot_config::settled_run_network()
+                .cloned()
+                .unwrap_or_else(|| bravebot_config::resolve_run_network(None, &settings, &managed));
+            if network.network.is_closed() {
+                fact(
+                    t!(doctor_run_network),
+                    t!(
+                        doctor_run_network_closed,
+                        source = bravebot_tui::status::run_network_source(&network.decided)
+                    ),
+                );
+            }
+            for path in settings.run_network_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_network_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            for path in settings.run_network_unreadable() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_network_unreadable,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            if managed.network_unreadable() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_managed_network_unreadable,
                         path = bravebot_config::managed_file().display().to_string()
                     ),
                 );
@@ -5774,6 +5861,39 @@ mod tests {
             assert!(take_incognito(&mut arguments), "{typed:?}");
             assert!(take_skip_permissions(&mut arguments), "{typed:?}");
             assert_eq!(arguments, args(&["-p", "x"]), "left over: {typed:?}");
+        }
+    }
+
+    /// The setting is taken out wherever it was typed, with its word, and a word that is neither
+    /// is refused rather than read as `open`.
+    #[test]
+    fn the_run_network_flag_is_taken_out_with_its_word_and_refuses_any_other() {
+        use bravebot_sandbox::network::Network;
+        for typed in [
+            &["--run-network", "closed", "-p", "do a thing"][..],
+            &["-p", "--run-network", "closed", "do a thing"][..],
+            &["-p", "do a thing", "--run-network", "closed"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert_eq!(
+                take_run_network(&mut arguments),
+                Ok(Some(Network::Closed)),
+                "{typed:?}"
+            );
+            assert_eq!(arguments, args(&["-p", "do a thing"]), "{typed:?}");
+        }
+        let mut twice = args(&["--run-network", "closed", "--run-network", "open"]);
+        assert_eq!(take_run_network(&mut twice), Ok(Some(Network::Open)));
+        let mut none = args(&["-p", "do a thing"]);
+        assert_eq!(take_run_network(&mut none), Ok(None));
+        for typed in [
+            &["-p", "x", "--run-network"][..],
+            &["--run-network", "Closed", "-p", "x"][..],
+            &["--run-network", "off", "-p", "x"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(take_run_network(&mut arguments).is_err(), "{typed:?}");
+            assert_eq!(arguments, args(typed), "a refusal rewrote the list");
         }
     }
 

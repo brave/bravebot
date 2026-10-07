@@ -16,6 +16,7 @@ use crate::exec::ExecError;
 use bravebot_core::command::Step;
 use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base, run_base};
+use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::scope::{Reach, Scope, environment_reach};
 use bravebot_sandbox::toolchain::Toolchain;
@@ -31,6 +32,8 @@ pub struct Confinement {
     home: Option<PathBuf>,
     roots: Vec<PathBuf>,
     scratch: Option<PathBuf>,
+    /// What the session decided about the network for the stages it starts.
+    network: Network,
     /// The program a test has the platform fail to confine, which no machine's real mechanism does
     /// on demand.
     #[cfg(test)]
@@ -69,9 +72,84 @@ impl Confinement {
             home: home.map(canonical),
             roots: roots.iter().map(|root| canonical(root)).collect(),
             scratch: scratch.map(canonical),
+            network: Network::Open,
             #[cfg(test)]
             unconfinable: None,
         }
+    }
+
+    /// This confinement with the session's decision about the network: with it closed, a stage
+    /// keeps egress only where [`Confinement::egress`] says it carries a reason to.
+    pub fn with_network(mut self, network: Network) -> Self {
+        self.network = network;
+        self
+    }
+
+    /// Whether the stage `step` starts may reach the network.
+    ///
+    /// The one place it is decided, read by [`Confinement::policy`], [`Confinement::describe`] and
+    /// [`Confinement::profile`] so they cannot disagree. Open, every stage has the egress the base
+    /// grants. Closed, a stage has it where its resolved program is a toolchain's that fetches, where
+    /// its argv names a credential scope, or where the program exists to talk to one.
+    /// Decided from the compiled step and the session's setting and from nothing a program printed,
+    /// and apart from the home directory: a `cargo build` fetches whether or not a cache is named.
+    pub fn egress(&self, step: &Step) -> bool {
+        !self.network.is_closed() || self.egress_reason(step).is_some()
+    }
+
+    /// Why a stage keeps the network under a closed setting, in words fixed here so the line a
+    /// person reads never carries a name the plan chose.
+    fn egress_reason(&self, step: &Step) -> Option<&'static str> {
+        // Every reason below is read from the file name, so a file the plan could have written
+        // under a directory it may write to must not earn the network by being named `curl`.
+        if self.writable_by_the_plan(&step.resolved) {
+            return None;
+        }
+        if Toolchain::of(&step.resolved).is_some_and(|toolchain| toolchain.fetches(&step.resolved))
+        {
+            Some("a toolchain that fetches")
+        } else if Scope::of(&step.resolved, &step.args, &step.environment).is_some() {
+            Some("a credential scope")
+        } else if program_talks_to_a_remote(&step.resolved) {
+            Some("a program that talks to a remote")
+        } else {
+            None
+        }
+    }
+
+    fn writable_by_the_plan(&self, file: &Path) -> bool {
+        let file = canonical(file);
+        self.roots
+            .iter()
+            .chain(self.scratch.iter())
+            .any(|dir| file.starts_with(dir))
+            || file.starts_with(&self.temporary)
+            || file.starts_with(canonical(&self.temporary))
+    }
+
+    /// What the trail records about the network for the stages of one run, or `None` where the
+    /// session left it open and there is nothing to say.
+    ///
+    /// Each stage that keeps it is named by its place in the line and one of the fixed reasons,
+    /// never by a program name or an argument the plan chose.
+    pub fn network_for_the_trail(&self, steps: &[&Step]) -> Option<String> {
+        if !self.network.is_closed() {
+            return None;
+        }
+        let kept: Vec<String> = steps
+            .iter()
+            .enumerate()
+            .filter_map(|(at, step)| {
+                Some(format!("stage {} ({})", at + 1, self.egress_reason(step)?))
+            })
+            .collect();
+        Some(match kept.is_empty() {
+            true => "the network was closed for every stage of this run".to_string(),
+            false => format!(
+                "the network was closed for this run except for {}",
+                kept.join(", ")
+            ),
+        })
     }
 
     /// This confinement, failing for the step that starts `program` as the platform would for one
@@ -124,6 +202,7 @@ impl Confinement {
                 .chain(self.scratch.iter())
                 .cloned()
                 .collect(),
+            network: self.network,
             carried: steps
                 .iter()
                 .filter_map(|step| {
@@ -136,11 +215,13 @@ impl Confinement {
                         }
                         _ => Vec::new(),
                     };
-                    (toolchain.is_some() || scope.is_some()).then(|| Carried {
+                    let network = self.network.is_closed() && self.egress(step);
+                    (toolchain.is_some() || scope.is_some() || network).then(|| Carried {
                         program: step.program.clone(),
                         toolchain,
                         scope,
                         reaches,
+                        network,
                     })
                 })
                 .collect(),
@@ -171,6 +252,9 @@ impl Confinement {
             base(self.prelude, &self.temporary, None, self.home.as_deref())
         }
         .allow_git_directory_writes();
+        if !self.egress(step) {
+            policy = policy.without_network_egress();
+        }
 
         if let Some(home) = self.home.as_deref() {
             if self.reads_the_machine() {
@@ -236,14 +320,22 @@ impl Confinement {
         }
         let mut toolchains = std::collections::BTreeSet::new();
         let mut scopes = std::collections::BTreeSet::new();
+        let mut reaching = std::collections::BTreeSet::new();
         for step in steps {
             let (toolchain, scope) = self.carries(step);
             toolchains.extend(toolchain.map(Toolchain::name));
             scopes.extend(scope.map(Scope::name));
+            if self.network.is_closed() {
+                reaching.extend(self.egress_reason(step));
+            }
         }
         let named = |names: std::collections::BTreeSet<&str>| match names.is_empty() {
             true => "none".to_string(),
             false => names.into_iter().collect::<Vec<_>>().join(", "),
+        };
+        let network = match self.network {
+            Network::Open => "open".to_string(),
+            Network::Closed => format!("closed, kept only by steps with: {}", named(reaching),),
         };
         if self.reads_the_machine() {
             return format!(
@@ -251,9 +343,11 @@ impl Confinement {
                  credential, and write {} and the temporary directory and the toolchain caches; \
                  a place that holds a credential was read only where a credential scope added it \
                  for the steps that named one (credential scopes: {}). Any other path is refused \
-                 by the operating system as `Operation not permitted` or `Permission denied`.",
+                 by the operating system as `Operation not permitted` or `Permission denied`. \
+                 Network: {}.",
                 directories.join(", "),
                 named(scopes),
+                network,
             );
         }
         format!(
@@ -262,10 +356,11 @@ impl Confinement {
              they reached only what a toolchain list or credential scope added for the steps \
              that named one (toolchain lists: {}; credential scopes: {}). Any other path is \
              refused by the operating system as `Operation not permitted` or `Permission \
-             denied`.",
+             denied`. Network: {}.",
             directories.join(", "),
             named(toolchains),
             named(scopes),
+            network,
         )
     }
 
@@ -298,6 +393,9 @@ impl Confinement {
             })
             .collect();
         let wanted = self.policy(step, directory, &readable);
+        if let Some(detail) = cannot_close_the_network(&wanted, &capabilities) {
+            return Err(not_confined(detail));
+        }
         let _ = wanted.create_missing_write_rows(&capabilities);
         let policy = wanted.nameable_under(&capabilities).policy;
         let variables = environment
@@ -458,15 +556,19 @@ impl Container {
 ///
 /// A turn that does not confine says nothing, so a planner is never told of a boundary its
 /// programs do not have. Where the platform has no base to confine on, it is told the opposite.
-pub fn stated_to_the_planner(confine_runs: bool) -> Option<&'static str> {
-    stated(confine_runs, Prelude::current())
+pub fn stated_to_the_planner(confine_runs: bool) -> Option<String> {
+    stated(
+        confine_runs,
+        Prelude::current(),
+        bravebot_config::run_network(),
+    )
 }
 
-fn stated(confine_runs: bool, prelude: Option<Prelude>) -> Option<&'static str> {
+fn stated(confine_runs: bool, prelude: Option<Prelude>, network: Network) -> Option<String> {
     if !confine_runs {
         return None;
     }
-    Some(match prelude {
+    let mut said = String::from(match prelude {
         Some(Prelude::Windows) => {
             "Programs this tool starts are confined. Each may reach only the directories the \
              session was opened on, the scratch directory and the temporary directory, all read \
@@ -492,6 +594,33 @@ fn stated(confine_runs: bool, prelude: Option<Prelude>) -> Option<&'static str> 
             "Programs this tool starts are not confined on this platform: they run with the \
              access of the person's own account."
         }
+    });
+    if prelude.is_some() && network.is_closed() {
+        said.push_str(
+            " The network is closed: a program has no network access unless it is a package \
+             manager's fetch, `git` or `gh` with a remote operation, `curl`, `ssh`, or a \
+             command that names a remote credential scope. A connection refused or a host that \
+             does not resolve for any other program was stopped by the sandbox.",
+        );
+    }
+    Some(said)
+}
+
+/// Why a backend cannot apply `policy`, where the policy withholds the network and the backend does
+/// not enforce that, or `None`.
+///
+/// Refused here with the setting named rather than left to the backend's own words: a person who
+/// closed the network and is told only that confinement failed does not know which setting asked
+/// for what the platform cannot do, and a backend that applied the rest and left the network open
+/// would be the silent fall back to `open` the setting exists to forbid.
+fn cannot_close_the_network(
+    policy: &SandboxPolicy,
+    capabilities: &bravebot_sandbox::policy::Capabilities,
+) -> Option<String> {
+    (!policy.allow_network && !capabilities.network_denial_enforced).then(|| {
+        "the network is closed for this session (run.network) and this platform cannot deny it \
+         to a program that does not need it"
+            .to_string()
     })
 }
 
@@ -967,15 +1096,15 @@ mod tests {
         assert!(machine.describe(&[]).reads_the_machine);
         assert!(!listed.describe(&[]).reads_the_machine);
         assert_ne!(
-            stated(true, Some(Prelude::Linux)),
-            stated(true, Some(Prelude::Windows))
+            stated(true, Some(Prelude::Linux), Network::Open),
+            stated(true, Some(Prelude::Windows), Network::Open)
         );
         assert_eq!(
-            stated(true, Some(Prelude::Linux)),
-            stated(true, Some(Prelude::MacOs))
+            stated(true, Some(Prelude::Linux), Network::Open),
+            stated(true, Some(Prelude::MacOs), Network::Open)
         );
         assert!(
-            stated(true, Some(Prelude::Linux))
+            stated(true, Some(Prelude::Linux), Network::Open)
                 .is_some_and(|said| said.contains("except the places that hold a credential"))
         );
     }
@@ -1084,6 +1213,22 @@ mod tests {
         assert!(writes(&push, "/run/agent.sock"));
         assert!(!writes(&make, "/run/agent.sock"));
         assert!(!writes(&bare, "/run/agent.sock"));
+
+        // Closing the network leaves the socket where it was: the rule is about files, and the
+        // stage that reaches a remote is the one that keeps both.
+        let closed = confined.with_network(Network::Closed);
+        let push = closed.policy(
+            &step("/usr/bin/git", &["push"]),
+            Path::new("/work"),
+            &environment,
+        );
+        let make = closed.policy(
+            &step("/usr/bin/make", &[]),
+            Path::new("/work"),
+            &environment,
+        );
+        assert!(writes(&push, "/run/agent.sock") && push.allow_network);
+        assert!(!writes(&make, "/run/agent.sock") && !make.allow_network);
     }
 
     /// A step with an assignment in front of it carries no scope, so the socket does not follow it
@@ -1265,7 +1410,8 @@ mod tests {
     /// in the machine. The sentence has to name both spellings of the refusal and say who widens it.
     #[test]
     fn a_confining_turn_tells_the_planner_what_a_refusal_means() {
-        let said = stated(true, Some(Prelude::Linux)).expect("a confining turn says something");
+        let said = stated(true, Some(Prelude::Linux), Network::Open)
+            .expect("a confining turn says something");
 
         assert!(said.contains("confined"), "{said}");
         assert!(said.contains("`Operation not permitted`"), "{said}");
@@ -1276,20 +1422,34 @@ mod tests {
         );
     }
 
+    /// A planner that is not told the network is closed reads `Could not resolve host` as an
+    /// outage and retries. Only a closed network says so, and a turn that does not confine does not.
+    #[test]
+    fn a_closed_network_is_told_to_the_planner_and_an_open_one_is_not() {
+        let open = stated(true, Some(Prelude::MacOs), Network::Open).expect("says something");
+        let closed = stated(true, Some(Prelude::MacOs), Network::Closed).expect("says something");
+        assert!(!open.contains("network"), "{open}");
+        assert!(closed.starts_with(open.as_str()), "{closed}");
+        assert!(closed.contains("The network is closed"), "{closed}");
+        assert_eq!(stated(false, Some(Prelude::MacOs), Network::Closed), None);
+        let unconfined = stated(true, None, Network::Closed).expect("says something");
+        assert!(!unconfined.contains("network is closed"), "{unconfined}");
+    }
+
     /// A planner told of a boundary its programs do not have would stop reaching for paths they
     /// can reach, so a turn that does not confine says nothing, whatever the platform.
     #[test]
     fn a_turn_that_does_not_confine_says_nothing_of_confinement() {
-        assert_eq!(stated(false, Some(Prelude::Linux)), None);
-        assert_eq!(stated(false, Some(Prelude::MacOs)), None);
-        assert_eq!(stated(false, None), None);
+        assert_eq!(stated(false, Some(Prelude::Linux), Network::Open), None);
+        assert_eq!(stated(false, Some(Prelude::MacOs), Network::Open), None);
+        assert_eq!(stated(false, None, Network::Open), None);
     }
 
     /// Windows has no base, so the same sentence would be false there. The regression it rejects
     /// is the confined sentence on a platform whose programs run with the person's own access.
     #[test]
     fn a_platform_with_no_base_says_its_programs_are_not_confined() {
-        let said = stated(true, None).expect("a confining turn says something");
+        let said = stated(true, None, Network::Open).expect("a confining turn says something");
 
         assert!(said.contains("not confined"), "{said}");
         assert!(!said.contains("Operation not permitted"), "{said}");
@@ -1369,6 +1529,177 @@ mod tests {
                 "{program}: {line}"
             );
         }
+    }
+
+    /// With the network closed the policy, the line and the prompt's description are read from one
+    /// decision: a stage keeps egress in the policy exactly where the line names a reason and the
+    /// description marks it.
+    #[test]
+    fn the_policy_the_line_and_the_description_agree_on_which_stages_keep_the_network() {
+        let closed = confinement(&["/work/project"]).with_network(Network::Closed);
+
+        for (program, args, kept, reason) in [
+            (
+                "/usr/bin/cargo",
+                vec!["build"],
+                true,
+                "a toolchain that fetches",
+            ),
+            (
+                "/usr/bin/pip",
+                vec!["install", "x"],
+                true,
+                "a toolchain that fetches",
+            ),
+            ("/usr/bin/git", vec!["push"], true, "a credential scope"),
+            (
+                "/usr/bin/curl",
+                vec!["https://a.example"],
+                true,
+                "a program that talks",
+            ),
+            ("/usr/bin/ssh", vec!["host"], true, "a program that talks"),
+            (
+                "/usr/bin/docker",
+                vec!["pull", "x"],
+                true,
+                "a credential scope",
+            ),
+            ("/usr/bin/python3", vec!["x.py"], false, ""),
+            ("/usr/bin/node", vec!["x.js"], false, ""),
+            ("/usr/bin/git", vec!["status"], false, ""),
+            ("/usr/bin/make", vec!["test"], false, ""),
+            ("/bin/cat", vec!["a"], false, ""),
+        ] {
+            let step = step(program, &args);
+            let policy = closed.policy(&step, Path::new("/work"), &[]);
+            let line = closed.profile(&[&step]);
+            let described = closed.describe(&[&step]);
+
+            assert_eq!(policy.allow_network, kept, "{program} {args:?}");
+            assert_eq!(closed.egress(&step), kept, "{program} {args:?}");
+            assert!(line.contains("Network: closed"), "{line}");
+            if kept {
+                assert!(line.contains(reason), "{program}: {line}");
+                assert!(described.network == Network::Closed);
+                assert!(
+                    described.carried.iter().any(|carried| carried.network),
+                    "{program}: the prompt does not mark the stage"
+                );
+            } else {
+                assert!(line.contains("kept only by steps with: none"), "{line}");
+            }
+        }
+
+        let open = confinement(&["/work/project"]);
+        let make = step("/usr/bin/make", &[]);
+        assert!(open.policy(&make, Path::new("/work"), &[]).allow_network);
+        assert!(open.profile(&[&make]).ends_with("Network: open."));
+    }
+
+    /// A file the plan could have written, under a directory it may write to, gets no network by
+    /// being named `curl` or `cargo`: the reasons are read from the file name.
+    #[test]
+    fn a_program_the_plan_could_have_written_keeps_no_network_by_its_name() {
+        let closed = confinement(&["/work/project"]).with_network(Network::Closed);
+        for (program, args) in [
+            ("/work/project/bin/curl", vec!["https://a.example"]),
+            ("/work/project/target/cargo", vec!["build"]),
+            ("/var/scratch/ssh", vec!["host"]),
+            ("/work/project/git", vec!["push"]),
+            ("/tmp/curl", vec![]),
+        ] {
+            let step = step(program, &args);
+            assert!(!closed.egress(&step), "{program}");
+            assert!(
+                !closed.policy(&step, Path::new("/work"), &[]).allow_network,
+                "{program}"
+            );
+            assert!(
+                closed
+                    .network_for_the_trail(&[&step])
+                    .unwrap()
+                    .contains("every stage")
+            );
+        }
+        let installed = step("/usr/bin/curl", &["https://a.example"]);
+        assert!(closed.egress(&installed));
+    }
+
+    /// A stage with an assignment in front of it carries no remote scope, so it has no network
+    /// under a closed setting; an unrelated `NAME=value` cannot be used to ask for one either way.
+    #[test]
+    fn a_closed_network_is_not_reopened_by_what_a_stage_is_started_with() {
+        let closed = confinement(&["/work/project"]).with_network(Network::Closed);
+        let mut assigned = step("/usr/bin/git", &["push"]);
+        assigned.environment = vec![("GIT_SSH_COMMAND".to_string(), "ssh".to_string())];
+        assert!(!closed.egress(&assigned));
+
+        let mut arguments = step("/usr/bin/make", &["--network", "open", "curl"]);
+        arguments.environment = vec![("BRAVEBOT_RUN_NETWORK".to_string(), "open".to_string())];
+        assert!(!closed.egress(&arguments));
+    }
+
+    /// The trail names each stage that kept the network by its place and a fixed reason, and holds
+    /// nothing a plan wrote: not the program, not an argument. An open network leaves no entry.
+    #[test]
+    fn the_trail_names_the_stages_that_kept_a_closed_network_by_place_and_reason() {
+        let open = confinement(&["/work/project"]);
+        let closed = open.clone().with_network(Network::Closed);
+        let push = step("/usr/bin/git", &["push", "origin", "a-secret-branch"]);
+        let cat = step("/bin/cat", &["notes"]);
+        let build = step("/usr/bin/cargo", &["build"]);
+
+        assert_eq!(open.network_for_the_trail(&[&push]), None);
+        let kept = closed
+            .network_for_the_trail(&[&cat, &push, &build])
+            .expect("a closed network is recorded");
+        assert_eq!(
+            kept,
+            "the network was closed for this run except for stage 2 (a credential scope), \
+             stage 3 (a toolchain that fetches)"
+        );
+        assert!(!kept.contains("secret") && !kept.contains("git"), "{kept}");
+        assert_eq!(
+            closed.network_for_the_trail(&[&cat]).as_deref(),
+            Some("the network was closed for every stage of this run")
+        );
+    }
+
+    /// The pip bit is the file's: a `python3` resolved from the same installation gets none.
+    #[test]
+    fn the_fetch_bit_is_keyed_on_the_resolved_file() {
+        let closed = confinement(&["/work/project"]).with_network(Network::Closed);
+        let mut renamed = step("/usr/bin/python3", &["-m", "pip", "install", "x"]);
+        renamed.program = "pip".to_string();
+        assert!(
+            !closed.egress(&renamed),
+            "a name the plan chose granted egress"
+        );
+        assert!(closed.egress(&step("/usr/bin/pip3", &["install", "x"])));
+    }
+
+    /// A backend that cannot deny the network is refused rather than left to run the stage with it
+    /// open, and the refusal names the setting. A backend that can, and a policy that keeps the
+    /// network, are not.
+    #[test]
+    fn a_backend_that_cannot_deny_the_network_refuses_a_closed_stage() {
+        use bravebot_sandbox::policy::Capabilities;
+        let closed = confinement(&["/work/project"]).with_network(Network::Closed);
+        let denied = closed.policy(&step("/bin/cat", &["a"]), Path::new("/work"), &[]);
+        let kept = closed.policy(&step("/usr/bin/cargo", &["build"]), Path::new("/work"), &[]);
+        let backend = |network_denial_enforced| Capabilities {
+            level: bravebot_sandbox::policy::ConfinementLevel::Kernel,
+            mechanisms: Vec::new(),
+            network_denial_enforced,
+            grants_paths_that_do_not_exist: true,
+        };
+        let (cannot, can) = (backend(false), backend(true));
+
+        let refused = cannot_close_the_network(&denied, &cannot).expect("refused");
+        assert!(refused.contains("run.network"), "{refused}");
+        assert_eq!(cannot_close_the_network(&denied, &can), None);
+        assert_eq!(cannot_close_the_network(&kept, &cannot), None);
     }
 
     /// A session directory under the build directory, which no row of the base reaches, and a

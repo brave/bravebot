@@ -2250,6 +2250,7 @@ mod tests {
         let unconfined = program(&request).join("\n");
         request.confined = Some(bravebot_agent::Confined {
             directories: vec!["/work".into(), "/var/scratch/session".into()],
+            network: bravebot_sandbox::network::Network::Open,
             carried: vec![bravebot_agent::Carried {
                 program: "docker".into(),
                 toolchain: None,
@@ -2258,6 +2259,7 @@ mod tests {
                     variable: "DOCKER_CONFIG",
                     path: "/home/someone/docker-work".into(),
                 }],
+                network: false,
             }],
             reads_the_machine: false,
         });

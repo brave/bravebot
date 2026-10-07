@@ -6020,6 +6020,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("ambient", named.join(", "));
     }
 
+    /// Record that the network was closed for the programs of one `run`, and which stages kept it.
+    ///
+    /// `detail` is built from the stage's place in the line and a reason from a fixed set, so it
+    /// holds nothing the plan or a program wrote. Recorded only for a closed network: an entry on
+    /// every line saying the ordinary thing would bury the ones that say something.
+    pub fn record_run_network(&mut self, detail: String) {
+        self.allow("run_network", detail);
+    }
+
     /// Record the permission mode a turn begins with, by its name.
     ///
     /// The mode decides whether the next prompt is drawn, and it is the one thing that changes

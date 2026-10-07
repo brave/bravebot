@@ -115,6 +115,13 @@ impl SandboxPolicy {
         self
     }
 
+    /// Take the network back from a policy that granted it, for a stage a closed session gives
+    /// none. Whatever resolver or socket the backend ties to egress goes with it.
+    pub fn without_network_egress(mut self) -> Self {
+        self.allow_network = false;
+        self
+    }
+
     pub fn allow_subprocesses(mut self) -> Self {
         self.allow_subprocesses = true;
         self

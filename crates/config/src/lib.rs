@@ -23,12 +23,17 @@ pub mod keys;
 mod managed;
 pub mod mcp;
 mod obfuscate;
+mod run_network;
 pub mod scrub;
 mod settings;
 #[cfg(test)]
 mod testutil;
 
 pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_file};
+pub use run_network::{
+    Decided, RunNetwork, resolve as resolve_run_network, run_network, settle_run_network,
+    settled_run_network,
+};
 pub use settings::{
     Attribution, Narrowing, NotADocument, PermissionLists, RunDeadlines, Settings, check_document,
     local_settings_file, name_a_settings_file, named_settings_file, project_settings_file,

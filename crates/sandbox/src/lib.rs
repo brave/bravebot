@@ -26,6 +26,7 @@ pub mod linux;
 // this backend reaches is itself a Unix one.
 #[cfg(any(target_os = "macos", all(test, unix)))]
 pub mod macos;
+pub mod network;
 pub mod policy;
 pub mod process;
 pub mod scope;

@@ -262,6 +262,8 @@ pub struct Confined {
     /// The directories every stage reads and writes: those the session was opened on and its
     /// scratch directory.
     pub directories: Vec<std::path::PathBuf>,
+    /// What the session decided about the network for these stages.
+    pub network: bravebot_sandbox::network::Network,
     /// What a stage carries beyond them, in step order. A stage that carries nothing is absent.
     pub carried: Vec<Carried>,
 }
@@ -278,6 +280,8 @@ pub struct Carried {
     /// What the person's environment moves that scope to, beyond its fixed rows, each named with
     /// the variable it came from.
     pub reaches: Vec<bravebot_sandbox::scope::Reach>,
+    /// Whether the stage keeps the network a closed session took from the others.
+    pub network: bool,
 }
 
 impl Confined {
@@ -289,13 +293,19 @@ impl Confined {
         }
     }
 
-    /// One sentence for each toolchain list and each credential scope a stage brings, in step
-    /// order, worded once here so no front end carries its own copy of them.
+    /// One sentence for each toolchain list, each credential scope and each stage that keeps a
+    /// closed network, in step order, worded once here so no front end carries its own copy of them.
     pub fn sentences(&self) -> Vec<String> {
         use bravebot_sandbox::scope::Scope;
         let mut sentences = Vec::new();
+        if self.network.is_closed() {
+            sentences.push(t!(run_network_closed).to_string());
+        }
         for stage in &self.carried {
             let program = stage.program.as_str();
+            if stage.network {
+                sentences.push(t!(run_keeps_network, program = program).to_string());
+            }
             if let Some(toolchain) = stage.toolchain {
                 sentences.push(
                     t!(
@@ -2294,10 +2304,12 @@ mod tests {
             toolchain: None,
             scope: Some(scope),
             reaches: Vec::new(),
+            network: false,
         };
         let confined = Confined {
             reads_the_machine: false,
             directories: Vec::new(),
+            network: bravebot_sandbox::network::Network::Open,
             carried: vec![
                 carried("aws", Scope::Aws),
                 carried("kubectl", Scope::Kubernetes),
@@ -2308,6 +2320,7 @@ mod tests {
                     toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Node),
                     scope: None,
                     reaches: Vec::new(),
+                    network: false,
                 },
             ],
         };
@@ -2340,7 +2353,9 @@ mod tests {
                 toolchain: None,
                 scope: Some(Scope::Remote),
                 reaches: Vec::new(),
+                network: false,
             }],
+            network: bravebot_sandbox::network::Network::Open,
         };
 
         let sentences = confined.sentences();
@@ -2359,6 +2374,39 @@ mod tests {
                 ..confined.clone()
             }
             .heading()
+        );
+    }
+
+    /// A closed network is said once, and a stage that keeps it is named, so a person approving a
+    /// plan learns which program leaves the machine. An open one says nothing: it is today's.
+    #[test]
+    fn a_closed_network_is_said_once_and_each_stage_that_keeps_it_is_named() {
+        use bravebot_sandbox::network::Network;
+        let keeping = |program: &str| Carried {
+            program: program.into(),
+            toolchain: None,
+            scope: None,
+            reaches: Vec::new(),
+            network: true,
+        };
+        let confined = |network, carried| Confined {
+            reads_the_machine: false,
+            directories: Vec::new(),
+            network,
+            carried,
+        };
+
+        let closed = confined(Network::Closed, vec![keeping("curl")]).sentences();
+        assert_eq!(closed.len(), 2, "{closed:?}");
+        assert!(closed[0].contains("network is closed"), "{closed:?}");
+        assert!(
+            closed[1].starts_with("curl") && closed[1].contains("network"),
+            "{closed:?}"
+        );
+
+        assert!(
+            confined(Network::Open, Vec::new()).sentences().is_empty(),
+            "an open network was announced"
         );
     }
 
