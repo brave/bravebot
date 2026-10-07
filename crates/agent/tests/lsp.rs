@@ -367,6 +367,97 @@ fn a_server_approved_in_one_turn_answers_the_next() {
     );
 }
 
+/// RUN-12: a language server is started from the same withheld set a `run` stage is, so the
+/// variable a provider block names does not reach the server, which runs whatever the project's
+/// toolchain makes of it.
+///
+/// The block names a variable no built-in list holds, and the set is built after the settings
+/// exist, which is when a session builds it. The server records its environment on the way up.
+#[test]
+fn a_language_server_is_not_handed_a_gateways_environment_token() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let scratch = Scratch::new("agent-lsp-gateway-token");
+    let (workspace, _recorded) = a_workspace_with_a_server(&scratch);
+    let seen = scratch.path.join("environment");
+    let program = scratch.path.join("bin/rust-analyzer");
+    std::fs::write(
+        &program,
+        FAKE_SERVER.replacen(
+            "echo started >> \"$STARTS\"",
+            &format!("env > '{}'", seen.display()),
+            1,
+        ),
+    )
+    .expect("write the server");
+
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join(".bravebot")).expect("create the home");
+    std::fs::write(
+        home.join(".bravebot").join("settings.json"),
+        r#"{"provider": {"acme": {
+            "options": {"baseURL": "https://gateway.acme.invalid/v1"},
+            "env": ["ACME_GATEWAY_TOKEN"]
+        }}}"#,
+    )
+    .expect("write the settings");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        a_question_about_a_symbol(),
+        reply_with("it is declared in src/a.rs"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+    };
+
+    let previous_home = std::env::var_os("HOME");
+    // SAFETY: PATH_LOCK is held for the whole of this body, so no other test in this binary reads
+    // or writes the environment, and both variables are put back before any assertion.
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("ACME_GATEWAY_TOKEN", "a-live-gateway-token");
+        std::env::remove_var("BRAVEBOT_SUBPROCESS_ENV_SCRUB");
+    }
+    let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("where is Held declared"),
+        &mut Conversation::new(),
+        &mut asking,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(&workspace),
+        TrustedPrograms::new(),
+        Some(&mut servers),
+        &Cancel::new(),
+    )
+    .outcome;
+    // SAFETY: as above.
+    unsafe {
+        std::env::remove_var("ACME_GATEWAY_TOKEN");
+        match previous_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+    outcome.expect("the turn runs");
+
+    let environment = std::fs::read_to_string(&seen).expect("the server recorded its environment");
+    assert!(
+        environment.contains("PATH="),
+        "the server saw no environment at all: {environment}"
+    );
+    assert!(
+        !environment.contains("a-live-gateway-token"),
+        "the gateway's token reached a language server"
+    );
+}
+
 /// A screen reads which servers are running through the roster the set reports to. It names none
 /// before a question starts one, names the program the person approved once one is up, and names
 /// none again when the set is dropped, as `/cd` and `/clear` do.

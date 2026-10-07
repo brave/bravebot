@@ -692,10 +692,7 @@ mod tests {
     /// credential over is what was asked for.
     #[test]
     fn this_agents_own_credentials_reach_none_of_the_aws_cli_this_crate_starts() {
-        let mut expected: Vec<String> = bravebot_config::scrub::own_credentials()
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let mut expected = bravebot_config::scrub::own_credentials();
         expected.sort();
         for (what, command) in [
             ("the export", export_command(None)),

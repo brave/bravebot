@@ -114,7 +114,9 @@ pub const SUBPROCESS_ENV_SCRUB: &str = "BRAVEBOT_SUBPROCESS_ENV_SCRUB";
 
 /// The credentials this agent holds, which are removed from the environment of a program it runs.
 ///
-/// The signing key and the key id, and nothing else. These name a secret that reaches Brave's
+/// The signing key and the key id, which are always withheld. The variables a gateway's provider
+/// block names are withheld as well, read from the configuration by [`crate::scrub`] rather than
+/// listed here. These two name a secret that reaches Brave's
 /// backend and no subprocess has any use for one: a program the planner chose is doing whatever the
 /// person approved, never authenticating as this agent. Everything else is left alone, including
 /// the endpoints and the model names, which are hosts and identifiers rather than secrets.

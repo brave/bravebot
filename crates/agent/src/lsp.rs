@@ -100,7 +100,7 @@ impl LanguageServers {
                 state,
                 resolve_program,
                 incognito,
-                bravebot_config::scrub::names(&bravebot_config::Settings::load()),
+                bravebot_config::scrub::withheld(),
             ))),
             root,
         }

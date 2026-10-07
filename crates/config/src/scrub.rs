@@ -24,7 +24,9 @@
 //!
 //! # Narrow on purpose
 //!
-//! This agent's own credentials, and whatever a person named in their settings file. Not a survey
+//! This agent's own credentials, which are the signing key, its key id and the variables the
+//! gateways in force read their bearer tokens from, and whatever a person named in their settings
+//! file. A gateway's variable is known rather than guessed: the provider block states it. Not a survey
 //! of every credential the machine might hold: `AWS_PROFILE`, `GITHUB_TOKEN` and `NPM_TOKEN` are
 //! left where they are, because `run aws s3 ls` and `run gh pr list` are ordinary requests and a
 //! filter matching names cannot distinguish one from an exfiltration. Guessing would trade a claim
@@ -62,39 +64,70 @@ fn named_in_the_settings_file() -> &'static Vec<String> {
 
 /// The credentials this agent holds for itself, which no program it starts is handed.
 ///
+/// The signing key and its key id, and every variable a gateway in force reads its bearer token
+/// from. The gateway names are read from the configuration on each call rather than once: a name
+/// there only adds a variable to the set, and a gateway added or removed mid-session is then
+/// withheld or released for the next program, without a restart.
+///
 /// Empty where the filtering is switched off. This much is what a program started for this agent's
 /// own purposes withholds, the AWS CLI that resolves a Bedrock credential being the one of those:
 /// nobody asked for that program, so there is no answer of theirs to read, and what the machine
 /// holds for AWS is what it is being run to resolve.
-pub fn own_credentials() -> Vec<&'static str> {
+pub fn own_credentials() -> Vec<String> {
     if !enabled() {
         return Vec::new();
     }
-    crate::env_var::SCRUBBED.to_vec()
+    credentials_of(crate::gateway_variables())
 }
 
 /// Every variable withheld from a program somebody asked for, as this machine is configured.
 pub fn withheld() -> Vec<String> {
-    with_own_credentials(named_in_the_settings_file().iter().map(String::as_str))
+    with_listed(
+        own_credentials(),
+        named_in_the_settings_file().iter().map(String::as_str),
+    )
 }
 
-/// [`withheld`], against named settings rather than the file, so a test needs no ambient one.
+/// [`withheld`], against named settings rather than the files, so a test needs no ambient one.
+///
+/// Reads the gateways from `settings` alone. The managed layer and a Vertex AI service named by
+/// the environment are [`withheld`]'s to add.
 pub fn names(settings: &Settings) -> Vec<String> {
-    with_own_credentials(settings.scrubbed())
-}
-
-/// The built-in credentials, then whatever a settings file added that is not already among them.
-fn with_own_credentials<'a>(named: impl Iterator<Item = &'a str>) -> Vec<String> {
     if !enabled() {
         return Vec::new();
     }
-    let mut names: Vec<String> = own_credentials().into_iter().map(str::to_string).collect();
-    for named in named {
-        if !names.iter().any(|already| already == named) {
-            names.push(named.to_string());
+    with_listed(
+        credentials_of(crate::gateway_variable_names(settings.providers())),
+        settings.scrubbed(),
+    )
+}
+
+/// The built-in credentials, then the gateway variables that are not already among them.
+fn credentials_of(gateway_variables: Vec<String>) -> Vec<String> {
+    let mut names: Vec<String> = crate::env_var::SCRUBBED
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    for name in gateway_variables {
+        if !names.contains(&name) {
+            names.push(name);
         }
     }
     names
+}
+
+/// `own`, then whatever a settings file listed that is not already among them.
+fn with_listed<'a>(mut own: Vec<String>, listed: impl Iterator<Item = &'a str>) -> Vec<String> {
+    // Nothing of its own is the filtering switched off, which withholds a person's list too.
+    if own.is_empty() {
+        return own;
+    }
+    for name in listed {
+        if !own.iter().any(|already| already == name) {
+            own.push(name.to_string());
+        }
+    }
+    own
 }
 
 /// Whether the filtering is in force.
@@ -168,7 +201,7 @@ mod tests {
             "a name somebody listed stopped reaching a program they asked for"
         );
         assert!(
-            !own_credentials().contains(&"AWS_PROFILE"),
+            !own_credentials().iter().any(|name| name == "AWS_PROFILE"),
             "a settings file decided what this agent withholds from its own credential resolution"
         );
     }
@@ -187,7 +220,7 @@ mod tests {
         let settings = Settings::parse(&format!(r#"{{"run": {{"scrubEnv": ["{listed}"]}}}}"#));
 
         let asked = names(&settings);
-        let cached = with_own_credentials(std::iter::once(listed));
+        let cached = with_listed(credentials_of(Vec::new()), std::iter::once(listed));
 
         assert_eq!(
             cached, asked,
@@ -196,6 +229,83 @@ mod tests {
         assert!(
             asked.iter().any(|name| name == listed),
             "the fixture's own name is missing, so the comparison says nothing"
+        );
+    }
+
+    /// RUN-12: the variables a gateway's token is read from are withheld with no configuration
+    /// beyond the provider block that names them, and every one it names, not only the first.
+    #[test]
+    fn the_variables_a_provider_block_names_are_withheld() {
+        let settings = Settings::parse(
+            r#"{"provider": {"gateway": {
+                "options": {"baseURL": "https://gateway.example/v1"},
+                "env": ["GATEWAY_FIRST_TOKEN", "GATEWAY_SECOND_TOKEN"]
+            }}}"#,
+        );
+        let names = names(&settings);
+        for expected in [
+            "GATEWAY_FIRST_TOKEN",
+            "GATEWAY_SECOND_TOKEN",
+            "SERVICES_KEY_AICHAT",
+            "BRAVE_SERVICES_KEY_ID",
+        ] {
+            assert!(
+                names.iter().any(|name| name == expected),
+                "{expected} was not withheld"
+            );
+        }
+    }
+
+    /// The names come out of the block rather than out of a list of well-known gateways, and a
+    /// block that states no variable adds none: the set is exactly what the configuration states.
+    #[test]
+    fn a_variable_no_provider_block_names_is_not_withheld() {
+        let settings = Settings::parse(
+            r#"{"provider": {
+                "openrouter": {"env": ["OPENROUTER_CUSTOM_NAME"]},
+                "keyless": {"options": {"baseURL": "https://keyless.example/v1", "apiKey": "k"}}
+            }}"#,
+        );
+        let names = names(&settings);
+        assert!(names.iter().any(|name| name == "OPENROUTER_CUSTOM_NAME"));
+        assert!(
+            !names.iter().any(|name| name == "OPENROUTER_API_KEY"),
+            "a well-known name was withheld that no block reads"
+        );
+        assert_eq!(
+            names.len(),
+            3,
+            "a block naming no variable added to the set: {names:?}"
+        );
+    }
+
+    /// A variable two blocks read, or one the built-in set already holds, is listed once.
+    #[test]
+    fn a_variable_several_blocks_name_is_withheld_once() {
+        let settings = Settings::parse(
+            r#"{"provider": {
+                "a": {"options": {"baseURL": "https://a.example/v1"}, "env": ["SHARED_TOKEN"]},
+                "b": {"options": {"baseURL": "https://b.example/v1"},
+                      "env": ["SHARED_TOKEN", "SERVICES_KEY_AICHAT"]}
+            }}"#,
+        );
+        let names = names(&settings);
+        for repeated in ["SHARED_TOKEN", "SERVICES_KEY_AICHAT"] {
+            assert_eq!(names.iter().filter(|name| *name == repeated).count(), 1);
+        }
+    }
+
+    /// A gateway's variable is this agent's own credential, so the programs it starts for itself
+    /// are held to it as well, which a name in `run.scrubEnv` is not.
+    #[test]
+    fn a_gateway_variable_is_one_of_this_agents_own() {
+        assert_eq!(
+            credentials_of(vec!["GATEWAY_TOKEN".to_string()]),
+            [
+                "SERVICES_KEY_AICHAT",
+                "BRAVE_SERVICES_KEY_ID",
+                "GATEWAY_TOKEN"
+            ]
         );
     }
 

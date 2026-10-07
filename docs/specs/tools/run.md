@@ -505,6 +505,16 @@ authenticates to its backend with and with the session's own directory named in 
 emptied, so a program that distinguishes an unset variable from a blank one sees what a machine that
 never held the credential sees.
 
+Those credentials are the signing key and its key id, and every variable the `env` of a gateway in
+force names as a place its bearer token may live. The gateways in force are the managed layer's where
+it states any, otherwise the person's own provider blocks and the Vertex AI service the environment
+names, so the set follows the configuration with no second list to keep in step. A variable no block
+names is the person's own and stays. The same set is taken off a background job, a hook
+([HOOK-4](../hooks.md#HOOK-4)), a language server ([lsp.md](lsp.md)) and the `aws` CLI the
+Bedrock backend starts. Reading the token for a request is unaffected: only the programs this agent
+starts lose the variable. `run.scrubEnv` remains the person's own list and adds to this set.
+`BRAVEBOT_SUBPROCESS_ENV_SCRUB=0` restores every variable, gateway variables included.
+
 **Why.** A person approving a run reads the argv, the resolved binary and the directory. The
 environment is not among those, so a credential travelling alongside them is granted without having
 been seen, and "run `git log`" is approved as an inspection of the repository. A subprocess has no
@@ -540,6 +550,20 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_config::scrub::this_agents_credentials_are_withheld_without_being_configured`
 `verified-by: bravebot_config::scrub::nothing_of_the_users_own_is_withheld_by_guesswork`
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_withheld_as_well`
+`verified-by: bravebot_config::scrub::the_variables_a_provider_block_names_are_withheld`
+`verified-by: bravebot_config::scrub::a_variable_no_provider_block_names_is_not_withheld`
+`verified-by: bravebot_config::scrub::a_variable_several_blocks_name_is_withheld_once`
+`verified-by: bravebot_config::scrub::a_gateway_variable_is_one_of_this_agents_own`
+`verified-by: bravebot_config::lib::a_gateway_blocks_token_variables_are_the_ones_it_reads`
+`verified-by: bravebot_config::lib::a_managed_gateway_block_decides_which_variables_are_gateway_tokens`
+`verified-by: bravebot_config::lib::google_api_key_is_a_gateway_token_only_while_vertex_is_configured`
+`verified-by: bravebot_agent::exec::a_gateways_environment_token_does_not_reach_a_program_it_runs`
+`verified-by: bravebot_agent::exec::no_stage_of_a_pipeline_sees_a_gateways_environment_token`
+`verified-by: bravebot_agent::exec::a_background_job_is_not_handed_a_gateways_environment_token`
+`verified-by: bravebot_agent::exec::a_variable_no_provider_block_names_still_reaches_a_program`
+`verified-by: bravebot_agent::exec::switching_the_filtering_off_restores_a_gateways_environment_token`
+`verified-by: bravebot_agent::hooks::a_hook_is_not_handed_a_gateways_environment_token`
+`verified-by: bravebot_agent::lsp::a_language_server_is_not_handed_a_gateways_environment_token`
 
 <a id="RUN-13"></a>
 ### RUN-13: the caller is told how the run ended, whichever way the label went

@@ -1094,6 +1094,87 @@ fn resolve_model(
         .or_else(|| settings.get(env_var::DEFAULT_MODEL).map(str::to_string))
 }
 
+/// Where a value is looked up: what the managed layer pinned, else the environment and the build,
+/// else the settings file's `env` block.
+fn lookup_in<'a>(
+    settings: &'a Settings,
+    managed: &'a Managed,
+    exported: impl Fn(&str) -> Option<String> + 'a,
+    baked: impl Fn(&str) -> Option<String> + 'a,
+) -> impl Fn(&str) -> Option<String> + 'a {
+    move |key: &str| match managed.get(key) {
+        Some(pinned) => Some(pinned.to_string()),
+        None => match key {
+            env_var::DEFAULT_MODEL => resolve_model(exported(key), settings, &baked),
+            _ => resolve(key, exported(key), &baked)
+                .or_else(|| settings.get(key).map(str::to_string)),
+        },
+    }
+}
+
+/// The gateways in force, before any stored key is attached.
+///
+/// A gateway is a destination too, so an approved endpoint pins nothing while anybody can
+/// add one beside it. The managed block replaces the person's rather than merging with
+/// it, empty included, which is the only way to say that there are to be none.
+fn gateways(
+    settings: &Settings,
+    managed: &Managed,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Vec<provider::Provider> {
+    match managed.gateways() {
+        Some(gateways) => gateways.to_vec(),
+        None => {
+            let mut providers = settings.providers().to_vec();
+            // The environment names a Vertex AI service only where no block does, so a file
+            // is never quietly completed by a variable it does not mention.
+            if !providers
+                .iter()
+                .any(|entry| entry.id == provider::GOOGLE_VERTEX_ID)
+            {
+                providers.extend(provider::Provider::from_environment(lookup));
+            }
+            providers
+        }
+    }
+}
+
+/// The variables the gateways in force read a bearer token from, as this machine is configured.
+///
+/// Names only: the providers they came from hold tokens, and are dropped here. Read from the
+/// process environment, the managed layer and the settings layers on each call, so the answer is
+/// the one [`Config::from_env_and_settings`] would act on.
+pub(crate) fn gateway_variables() -> Vec<String> {
+    gateway_variables_under(
+        &Settings::load(),
+        &Managed::load(),
+        |key| env::var(key).ok(),
+        built_in,
+    )
+}
+
+/// [`gateway_variables`], over sources it is handed, so a test needs no ambient ones.
+fn gateway_variables_under(
+    settings: &Settings,
+    managed: &Managed,
+    exported: impl Fn(&str) -> Option<String>,
+    baked: impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let lookup = lookup_in(settings, managed, exported, baked);
+    gateway_variable_names(&gateways(settings, managed, &lookup))
+}
+
+/// Each variable name any of `providers` reads a token from, once.
+fn gateway_variable_names(providers: &[provider::Provider]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for name in providers.iter().flat_map(|provider| &provider.env) {
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+    names
+}
+
 impl Config {
     /// Read configuration from the process environment, falling back to the values
     /// built into this binary.
@@ -1152,32 +1233,8 @@ impl Config {
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
-        let lookup = |key: &str| match managed.get(key) {
-            Some(pinned) => Some(pinned.to_string()),
-            None => match key {
-                env_var::DEFAULT_MODEL => resolve_model(exported(key), settings, &baked),
-                _ => resolve(key, exported(key), &baked)
-                    .or_else(|| settings.get(key).map(str::to_string)),
-            },
-        };
-        // A gateway is a destination too, so an approved endpoint pins nothing while anybody can
-        // add one beside it. The managed block replaces the person's rather than merging with
-        // it, empty included, which is the only way to say that there are to be none.
-        let providers = match managed.gateways() {
-            Some(gateways) => gateways.to_vec(),
-            None => {
-                let mut providers = settings.providers().to_vec();
-                // The environment names a Vertex AI service only where no block does, so a file
-                // is never quietly completed by a variable it does not mention.
-                if !providers
-                    .iter()
-                    .any(|entry| entry.id == provider::GOOGLE_VERTEX_ID)
-                {
-                    providers.extend(provider::Provider::from_environment(&lookup));
-                }
-                providers
-            }
-        };
+        let lookup = lookup_in(settings, managed, exported, baked);
+        let providers = gateways(settings, managed, &lookup);
         // A gateway the machine-level layer names is given a stored key too: that layer pins where
         // a token goes and keeps none of its own, so a key its owner stored is the way it has.
         let providers = providers
@@ -3274,6 +3331,70 @@ mod tests {
         let unusable = Settings::parse(r#"{"provider": {"google-vertex": {}}}"#);
         let config = resolved(&unusable, google_env, complete_env).expect("configured");
         assert!(vertex_of(&config).is_some());
+    }
+
+    /// RUN-12: the variables a program is not handed include the ones the gateways in force read a
+    /// token from, whatever the person called them.
+    #[test]
+    fn a_gateway_blocks_token_variables_are_the_ones_it_reads() {
+        let settings = Settings::parse(
+            r#"{"provider": {
+                "mine": {"options": {"baseURL": "https://mine.invalid/v1"},
+                         "env": ["MINE_FIRST_TOKEN", "MINE_SECOND_TOKEN"]},
+                "keyless": {"options": {"baseURL": "https://keyless.invalid/v1"}}
+            }}"#,
+        );
+        let variables =
+            gateway_variables_under(&settings, &Managed::default(), |_| None, complete_env);
+        assert_eq!(variables, vec!["MINE_FIRST_TOKEN", "MINE_SECOND_TOKEN"]);
+    }
+
+    /// The gateways in force are the managed layer's where it states any, so a variable only the
+    /// replaced block named is no gateway's token any more.
+    #[test]
+    fn a_managed_gateway_block_decides_which_variables_are_gateway_tokens() {
+        let managed = managed::scratch(
+            "gateway-variables-managed",
+            r#"{"provider": {"approved": {"options": {"baseURL": "https://approved.example/v1"},
+                                          "env": ["APPROVED_TOKEN"]}}}"#,
+        );
+        let settings = Settings::parse(
+            r#"{"provider": {"mine": {"options": {"baseURL": "https://mine.invalid/v1"},
+                                      "env": ["MINE_TOKEN"]}}}"#,
+        );
+        let variables = gateway_variables_under(&settings, &managed, |_| None, complete_env);
+        assert_eq!(variables, vec!["APPROVED_TOKEN"]);
+    }
+
+    /// A Vertex AI service the environment names reads `GOOGLE_API_KEY`, so that variable is a
+    /// gateway token only while the service exists: a key alone is some other tool's.
+    #[test]
+    fn google_api_key_is_a_gateway_token_only_while_vertex_is_configured() {
+        let configured = gateway_variables_under(
+            &Settings::default(),
+            &Managed::default(),
+            google_env,
+            complete_env,
+        );
+        assert_eq!(configured, vec![env_var::GOOGLE_API_KEY]);
+
+        let key_alone =
+            |k: &str| (k == env_var::GOOGLE_API_KEY).then(|| PLACEHOLDER_KEY.to_string());
+        let alone = gateway_variables_under(
+            &Settings::default(),
+            &Managed::default(),
+            key_alone,
+            complete_env,
+        );
+        assert!(alone.is_empty(), "a key with no service withheld {alone:?}");
+
+        let none = managed::scratch("gateway-variables-no-vertex", r#"{"provider": {}}"#);
+        let replaced =
+            gateway_variables_under(&Settings::default(), &none, google_env, complete_env);
+        assert!(
+            replaced.is_empty(),
+            "a managed layer with no gateway left {replaced:?}"
+        );
     }
 
     #[test]
