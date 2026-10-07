@@ -1719,6 +1719,13 @@ status-time-overhead = unaccounted for
 status-cache = Prompt cache, last turn
 status-cache-read = served from the cache
 status-cache-written = written to it for the next turn
+# The lifetime the settings ask the service to keep a cached prefix for. It is the setting and not a
+# measurement: no reply says how long a service actually kept anything, and a model that refuses the
+# field is sent the request without it.
+status-cache-lifetime = lifetime asked of the service
+status-cache-lifetime-five-minutes = 5 minutes
+status-cache-lifetime-one-hour = 1 hour
+status-cache-lifetime-service-default = none, the service's own
 # The latest turn's cache read as a share of its prompt tokens, on the footer.
 hint-cache-hit-rate = cache { $rate }%
 status-trust = Trust

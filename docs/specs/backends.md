@@ -1186,6 +1186,12 @@ which turn is the last one moves the figures with it: rewinding a turn puts back
 before it read, and a turn that failed or was stopped reports nothing rather than leaving the turn
 before it on the panel.
 
+**The lifetime asked for is reported beside them.** The status panel's cache lines end with the
+`promptCacheTtl` the settings chose, or say none was and the service's own applies. That is the
+setting and not a reading: no reply says how long a service kept a prefix, and a model that refuses
+the field is sent the request without it (BACKEND-27, BACKEND-32). It sits there because a read of
+zero after a pause means a different thing under five minutes than under an hour.
+
 **Presented as two figures and never as their sum.** They are priced in opposite directions, a read
 at a fraction of a fresh token and a write above one, so a turn that saved almost the whole prompt
 and a turn that paid a premium on it add up the same. The heading carries no total of its own, and
@@ -1200,6 +1206,7 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_agent::turn::a_turn_against_a_server_that_says_nothing_about_a_cache_reports_nothing`
 `verified-by: bravebot_agent::turn::a_turn_counts_what_its_delegates_read_out_of_the_cache`
 `verified-by: bravebot_tui::status::the_panel_says_how_much_of_the_prompt_came_out_of_the_cache`
+`verified-by: bravebot_tui::status::the_panel_says_which_cache_lifetime_the_settings_asked_for`
 `verified-by: bravebot_tui::status::a_backend_that_reports_nothing_about_a_cache_gets_no_cache_lines`
 `verified-by: bravebot_tui::status::a_turn_that_only_wrote_to_the_cache_does_not_report_a_read_of_zero`
 `verified-by: bravebot_tui::render::the_hint_line_shows_the_last_turns_cache_hit_rate`
