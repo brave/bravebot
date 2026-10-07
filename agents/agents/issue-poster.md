@@ -46,18 +46,8 @@ Apply these and no others:
   Apply no axis to a security issue, or when the task says the issue is a finding nobody has read.
   A person who names a value gets that value.
 
-Read the labels that exist before posting:
-
-```bash
-gh label list --repo brave/bravebot --limit 200 --json name --jq '.[].name'
-```
-
-If a label you need is not there, post nothing and report the line that creates it, since creating a
-label is a person's call:
-
-```bash
-gh label create <name> --repo brave/bravebot --color <hex> --description '<text>'
-```
+The post command below reads the labels that exist and refuses when one is missing, printing the
+`gh label create` line for a person to run, since creating a label is not yours to do.
 
 ## Assignee
 
@@ -66,12 +56,17 @@ say so in the report.
 
 ## Post
 
-Write the body to a file outside the checkout, then post with one `--label` for each label:
+Write the body to a file outside the checkout, then post through the shared helper, one `--label`
+for each label:
 
 ```bash
-gh issue create --repo brave/bravebot --title '<title>' --body-file <file> \
+python3 agents/issue_helper.py post --title '<title>' --body-file <file> \
   --label <label> --label <label> [--assignee <login>]
 ```
+
+It checks every label and the login against the repository before it files anything, prints the
+issue URL, and exits 2 with the reason when it filed nothing. Post nothing by hand in its place,
+and report a refusal as it is printed.
 
 Write the title and body as [AGENTS.md](../AGENTS.md) says under "Writing", with no em-dash and no
 account of how the draft was made.

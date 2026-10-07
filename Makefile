@@ -188,6 +188,7 @@ check-spec:
 	python3 agents/skills/check-spec/check-spec.py --mechanical-only
 	@python3 contrib/terminal-screenshot.py --selftest
 	@python3 contrib/check-issue-posters.py --selftest
+	@python3 agents/issue_helper_selftest.py
 	@python3 contrib/check-issue-posters.py
 
 # The deterministic half of the security audit. It answers the questions check-spec cannot: whether
