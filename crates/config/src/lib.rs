@@ -2040,6 +2040,59 @@ mod tests {
         }
     }
 
+    /// CRED-6, CRED-7 and CRED-8: each question a gate asks is filed under the gate whose clause
+    /// asks it. A bound with no end under gate 2 is what makes narrow and permanent fail there
+    /// rather than pass and leave gate 3's work to be skipped, and a condition moved up or down a
+    /// gate would let an arrangement that fails it pass the gate the clause says it fails.
+    #[test]
+    fn each_gate_asks_the_conditions_its_clauses_name() {
+        let asked_at = |gate: Gate| -> Vec<Condition> {
+            Condition::all()
+                .into_iter()
+                .filter(|condition| condition.gate() == gate)
+                .collect()
+        };
+
+        assert_eq!(
+            asked_at(Gate::One),
+            [
+                Condition::NothingDecidesEachUse,
+                Condition::NothingCanRefuseAUse
+            ],
+            "gate 1 asks whether something the agent cannot impersonate decides each use (CRED-6)"
+        );
+        assert_eq!(
+            asked_at(Gate::Two),
+            [
+                Condition::NoBoundFixedBeforeIssue,
+                Condition::BoundEnforcedWithinReach,
+                Condition::BoundWithNoEnd
+            ],
+            "gate 2 asks for a bound fixed before issue (CRED-7), kept beyond the agent's reach \
+             (CRED-7) and with an end (CRED-8)"
+        );
+        assert_eq!(
+            asked_at(Gate::Three),
+            [
+                Condition::NotMintedForOneStep,
+                Condition::IssuerEndsNothing,
+                Condition::RenewableWithoutAuthority
+            ]
+        );
+    }
+
+    /// CRED-4: what a credential's walk and tier are read from is the arrangement, and a name a
+    /// person could rewrite is not part of one. A gateway's walk is the same whatever host the
+    /// block names, so a rewritten host moves no drop and so no tier.
+    #[test]
+    fn a_gateways_walk_is_the_same_whatever_host_it_names() {
+        let at = |host| Held::GatewayToken { host };
+        let (one, two) = (at("one.invalid"), at("two.invalid"));
+
+        assert_eq!(one.walk(), two.walk());
+        assert_eq!(one.tier(), two.tier());
+    }
+
     /// CRED-3: a drop says whether the counterparty refused or nobody attempted it, and every drop
     /// this configuration records is one nobody attempted. The two answers end at the same tier
     /// and only the second is ours to revisit, so recording a refusal where the arrangement is

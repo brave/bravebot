@@ -317,7 +317,10 @@ a bound, a value becomes mintable on demand. Rewriting a justification moves not
 **Why.** The gates ask about the arrangement, so only the arrangement answers them. A tier that can
 be argued upward is a tier that will be.
 
-`verified-by: none`
+`verified-by: bravebot_config::lib::a_gateways_walk_is_the_same_whatever_host_it_names`
+`verified-by: bravebot_config::lib::every_credential_in_the_record_stands_at_a_tier_the_walk_arrived_at`
+`verified-by: bravebot_config::lib::removing_denying_or_accepting_changes_no_tier`
+`verified-by: bravebot_config::lib::a_credentials_binding_does_not_move_its_tier`
 
 <a id="CRED-5"></a>
 ### CRED-5: authority with no custody and no refusal leaves the scale, and is declared where it is granted
@@ -350,7 +353,7 @@ gate has already failed.
 **Why.** This is the test that keeps Delegated from being a relabelling exercise. Both answers that
 reach it rest on what the agent holds being useless by itself.
 
-`verified-by: none`
+`verified-by: bravebot_config::lib::each_gate_asks_the_conditions_its_clauses_name`
 
 <a id="CRED-7"></a>
 ### CRED-7: a bound is decided before issue and enforced beyond the agent's reach
@@ -362,7 +365,7 @@ closed where the agent cannot reach it. A bound the agent's own code checks is n
 impersonate answers to whoever is asking. A bound enforced past that point survives the agent's side
 being wrong, which is the only reason a derivative is worth having.
 
-`verified-by: none`
+`verified-by: bravebot_config::lib::each_gate_asks_the_conditions_its_clauses_name`
 
 <a id="CRED-8"></a>
 ### CRED-8: a bound with no end does not pass gate 2
@@ -374,7 +377,7 @@ move the tier.
 with a small reach. Letting scope alone pass the gate would let gate 3's work be skipped by doing
 gate 2's twice.
 
-`verified-by: none`
+`verified-by: bravebot_config::lib::each_gate_asks_the_conditions_its_clauses_name`
 
 <a id="CRED-9"></a>
 ### CRED-9: the issuer ends the credential's life, and refresh without authority is not expiry
