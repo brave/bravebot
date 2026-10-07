@@ -1736,6 +1736,13 @@ command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d
 command-exit = Partir
 
 
+## Quand Entrée exécute une commande proposée pendant qu'un travail tourne
+
+command-when-now = direct
+command-when-queued = en file
+command-when-either = direct/en file
+
+
 ## Where a skill offered after a slash was found
 
 skill-from-project = (projet)

@@ -570,7 +570,7 @@ fn runs_while_working(line: &str) -> bool {
 /// `/loop 5m check the deploy` would find no loop to stop, and the loop would start after it. And a
 /// command that changes something waits behind any line at all, so it lands where it was typed:
 /// `/rename` ahead of a waiting `/clear` would name the session being left.
-fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
+pub(crate) fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
     let changes = row_typed(line).is_some_and(|command| {
         matches!(command.mid_turn, MidTurn::Changes | MidTurn::RunsWhenNamed)
     });
@@ -2668,6 +2668,13 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         && session.queue_command()
     {
         return queued(session, key);
+    }
+
+    // After the arms that recognise a whole command, as at rest: Enter on a half-typed word takes
+    // the highlighted row rather than queueing "/mod" as a prompt.
+    if key.code == KeyCode::Enter && session.completion_would_change_the_line() {
+        session.accept_completion();
+        return Action::Redraw;
     }
 
     // After the arm that starts a line, so Shift-Enter still writes a paragraph, and before the
@@ -14158,17 +14165,137 @@ mod tests {
         assert!(!session.shortcuts, "the list did not go down again");
     }
 
-    /// A line being composed mid-turn is one Enter queues, and finishing it is machinery for
-    /// something about to be sent. The list is not, which is why it is the one thing offered there.
-    #[test]
-    fn nothing_is_offered_for_completion_while_a_turn_runs() {
-        let mut session = Session::new("none");
-        type_line(&mut session, "anything");
-        session.submit().expect("the prompt is sent");
+    fn type_without_sending_while_working(session: &mut Session, line: &str) {
+        for c in line.chars() {
+            handle_key_while_working(session, key(KeyCode::Char(c)));
+        }
+    }
 
-        handle_key_while_working(&mut session, key(KeyCode::Char('/')));
+    /// Rejects: the old rule that a running turn offers nothing, which left a person to remember
+    /// the word of a command that CMD-8 would have carried out or queued. Also rejects offering the
+    /// skills, which are not read while work runs.
+    #[test]
+    fn a_slash_offers_every_command_and_no_skill_while_a_turn_runs() {
+        let mut session = a_turn_running_on("anything");
+
+        type_without_sending_while_working(&mut session, "/");
         session.settle_skills(|| panic!("skills were read for a line the turn will queue"));
+
+        match session.offered() {
+            crate::state::Offered::Slash { commands, skills } => {
+                assert_eq!(commands, completions("/"), "not the rows offered at rest");
+                assert!(skills.is_empty(), "skills were offered mid-turn");
+            }
+            other => panic!("expected the commands, got {other:?}"),
+        }
+    }
+
+    /// Rejects: offering a command for a word that is not the whole line, which is a prompt
+    /// (CMD-2), for a word nothing starts with, or files, which a line queued mid-turn does not
+    /// reach for.
+    #[test]
+    fn nothing_is_offered_while_a_turn_runs_for_a_prompt_an_unknown_word_or_a_file() {
+        for typed in ["fix /ef", "/zzz", "@"] {
+            let mut session = a_turn_running_on("anything");
+            type_without_sending_while_working(&mut session, typed);
+            assert_eq!(
+                session.offered(),
+                crate::state::Offered::Nothing,
+                "{typed} was offered something while a turn ran"
+            );
+        }
+    }
+
+    /// Rejects: a line armed as a shell command line being offered command words while work runs,
+    /// since there `/ef` is a path to a program (CMD-3).
+    #[test]
+    fn nothing_is_offered_in_shell_mode_while_work_runs() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        session.shell = true;
+
+        type_without_sending_while_working(&mut session, "/ef");
+
         assert_eq!(session.offered(), crate::state::Offered::Nothing);
+    }
+
+    /// Rejects: a mid-turn Tab that is dropped, or one that leaves the line short of the name.
+    #[test]
+    fn tab_completes_a_half_typed_command_while_a_turn_runs() {
+        let mut session = a_turn_running_on("anything");
+        type_without_sending_while_working(&mut session, "/ef");
+
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Tab)),
+            Action::Redraw
+        );
+
+        assert_eq!(session.input(), "/effort ");
+        assert_eq!(session.commands_waiting().count(), 0, "Tab queued the line");
+    }
+
+    /// Rejects: Enter on a half-typed word queueing "/ef" as a prompt behind the turn, which is
+    /// what a person who sees the list and presses Enter on the row did not ask for.
+    #[test]
+    fn enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs() {
+        let mut session = a_turn_running_on("anything");
+        type_without_sending_while_working(&mut session, "/ef");
+
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+
+        assert_eq!(session.input(), "/effort ");
+        assert!(session.queued.is_empty(), "the half word was queued");
+        assert_eq!(session.commands_waiting().count(), 0);
+    }
+
+    /// Rejects: the completion arm sitting ahead of the whole-command arms, so that `/c` plus
+    /// Enter, or a command typed in full, are completed rather than carried out as CMD-8 says.
+    #[test]
+    fn a_whole_command_is_still_carried_out_or_queued_while_a_turn_runs() {
+        let mut session = a_turn_running_on("anything");
+        assert_eq!(type_while_working(&mut session, "/cost"), Action::Redraw);
+        assert!(
+            !session.said_while_working().is_empty(),
+            "/cost was completed, not carried out"
+        );
+        assert!(session.input().is_empty());
+
+        assert_eq!(type_while_working(&mut session, "/model"), Action::Redraw);
+        assert_eq!(session.commands_waiting().collect::<Vec<_>>(), ["/model"]);
+        assert!(session.input().is_empty(), "/model was completed again");
+    }
+
+    /// Rejects: the arrows being dropped mid-turn, so the row Enter completes could not be chosen.
+    #[test]
+    fn the_arrows_choose_the_row_while_a_turn_runs() {
+        let mut session = a_turn_running_on("anything");
+        type_without_sending_while_working(&mut session, "/e");
+        let first = session.highlighted_completion();
+
+        handle_key_while_working(&mut session, key(KeyCode::Down));
+        assert_ne!(session.highlighted_completion(), first, "Down did not move");
+
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_ne!(session.input(), "/e", "Enter did not take the row");
+        assert!(session.input().starts_with("/e"));
+    }
+
+    /// Rejects: a compaction or an aside, where `a_turn_is_running` is false, offering its
+    /// commands as a mid-turn arm would, when every one of them waits there.
+    #[test]
+    fn commands_are_offered_during_an_aside_as_well() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+
+        type_without_sending_while_working(&mut session, "/");
+
+        assert!(matches!(
+            session.offered(),
+            crate::state::Offered::Slash { .. }
+        ));
     }
 
     /// In shell mode a `?` is a glob for the shell to expand, so it is typed like any other

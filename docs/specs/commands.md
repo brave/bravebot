@@ -352,6 +352,14 @@ waiting command is held in the queue, and taking back what is waiting gives it b
 any other line. What a command carried out mid-turn says is held under the turn until the turn has
 been folded in.
 
+While work runs the commands are offered as at rest ([INPUT-9](terminal-input.md#INPUT-9)), each row
+marked with the column above: `now` for a command that is carried out as it is typed, `queued` for
+one that waits, and `now/queued` for one that is carried out or waits by what follows the word and
+by what is already waiting; a `now` row reads `queued` while a line of the same command waits
+(above). During a compaction or an aside every row reads `queued`. Tab, or Enter
+on a half-typed word, takes the highlighted row and queues nothing; Enter on a whole command is
+carried out or queued as above.
+
 `verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::app::a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn`
@@ -383,6 +391,12 @@ been folded in.
 `verified-by: bravebot_tui::app::a_queued_command_is_not_what_the_turn_took`
 `verified-by: bravebot_tui::app::a_queued_command_comes_back_to_the_box`
 `verified-by: bravebot_tui::app::copy_typed_mid_turn_takes_the_reply_without_waiting`
+`verified-by: bravebot_tui::render::each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs`
+`verified-by: bravebot_tui::render::every_row_is_queued_during_an_aside`
+`verified-by: bravebot_tui::render::a_row_reads_queued_while_a_line_of_its_command_waits`
+`verified-by: bravebot_tui::render::the_rows_carry_no_label_when_nothing_is_running`
+`verified-by: bravebot_tui::app::enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs`
+`verified-by: bravebot_tui::app::a_whole_command_is_still_carried_out_or_queued_while_a_turn_runs`
 
 ## What a slash word is offered
 
@@ -402,9 +416,10 @@ name typed in full sends the line, unless the arrows moved onto another row firs
 is told that a prompt naming a skill as `/name` is the person asking for it, and it loads that
 skill the way it loads any other. The arrows walk down the commands and on into the skills.
 
-Nothing is offered in shell mode, while a turn runs, or after the word of a command line, which is
-CMD-3 and CMD-5 holding for skills as they hold for commands. A skill whose name a command claims,
-or whose name holds a space or a control character, is never a row.
+Nothing is offered in shell mode, while work runs (the commands alone are, CMD-8), or after the
+word of a command line, which is CMD-3 and CMD-5 holding for skills as they hold for commands. A
+skill whose name a command claims, or whose name holds a space or a control character, is never a
+row.
 
 **Why.** A person who knows which skill a task wants should be able to say so without hoping the
 planner picks it from its description, and the name is easier to take from a list than to
@@ -423,7 +438,7 @@ would read them on every letter.
 `verified-by: bravebot_tui::app::the_arrows_walk_from_the_commands_onto_the_skills`
 `verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
 `verified-by: bravebot_tui::app::no_skill_is_offered_in_a_command_line_or_inside_a_command`
-`verified-by: bravebot_tui::app::nothing_is_offered_for_completion_while_a_turn_runs`
+`verified-by: bravebot_tui::app::a_slash_offers_every_command_and_no_skill_while_a_turn_runs`
 `verified-by: bravebot_tui::skills::the_word_being_typed_is_the_last_one_on_the_line`
 `verified-by: bravebot_tui::skills::nothing_is_offered_inside_a_command_line`
 `verified-by: bravebot_tui::skills::what_matches_is_every_name_starting_with_the_word_in_name_order`
