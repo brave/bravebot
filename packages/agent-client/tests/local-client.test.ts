@@ -167,3 +167,32 @@ test('Ctrl-D at the approval prompt rejects the question and the turn finishes',
   assert.match(result.out, /reject confirm request/)
   assert.equal(existsSync(join(made.project, 'out.txt')), false, 'a write nobody approved must not land')
 })
+
+/** Run the program against the refusing bridge stand-in. */
+async function againstRefusingBridge(extra: NodeJS.ProcessEnv, args: string[] = []) {
+  const started = Date.now()
+  const result = await run(
+    process.execPath,
+    [program, '--rpc', join(FIXTURES, 'refusing-runtime.mjs'), '--directory', '/nonexistent', '--trust', 'no', '--decide', 'approve', ...args, 'go'],
+    { env: { ...process.env, ...extra }, timeout: 30_000 },
+  ).then(
+    (done) => ({ code: 0, out: done.stdout + done.stderr }),
+    (failed: { code: number; stdout: string; stderr: string }) => ({ code: failed.code, out: failed.stdout + failed.stderr }),
+  )
+  return { ...result, seconds: (Date.now() - started) / 1000 }
+}
+
+test('when a reply is refused the program cancels the turn and ends it instead of waiting for a question nobody will answer', async () => {
+  const result = await againstRefusingBridge({})
+  assert.equal(result.code, 1, result.out)
+  assert.match(result.out, /could not answer: the bridge could not apply the reply/)
+  assert.match(result.out, /turn ended cancelled/)
+  assert.doesNotMatch(result.out, /abandoned/)
+})
+
+test('when the bridge does not end the turn either, the program gives up after its grace period', async () => {
+  const result = await againstRefusingBridge({ IGNORE_CANCEL: '1' }, ['--grace', '1'])
+  assert.equal(result.code, 1, result.out)
+  assert.match(result.out, /turn abandoned/)
+  assert.ok(result.seconds < 20, `took ${result.seconds} seconds`)
+})

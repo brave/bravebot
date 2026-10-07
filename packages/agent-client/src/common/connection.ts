@@ -77,10 +77,10 @@ export class RpcConnection {
     try {
       line = JSON.stringify({ id: this.nextId + 1, method, params }) + '\n'
     } catch (error) {
-      return Promise.reject(new RpcError('bad_request', describeFailure(error) ?? 'the parameters cannot be written'))
+      return Promise.reject(new RpcError('bad_request', describeFailure(error) ?? 'the parameters cannot be written', 'rejected'))
     }
-    if (line.length > MAX_REQUEST_CHARS) return Promise.reject(new RpcError('frame_limit', `a request may be at most ${MAX_REQUEST_CHARS} characters`))
-    if (!options.control && this.waiting.size >= MAX_PENDING) return Promise.reject(new RpcError('request_limit', `at most ${MAX_PENDING} requests may wait for an answer`))
+    if (line.length > MAX_REQUEST_CHARS) return Promise.reject(new RpcError('frame_limit', `a request may be at most ${MAX_REQUEST_CHARS} characters`, 'rejected'))
+    if (!options.control && this.waiting.size >= MAX_PENDING) return Promise.reject(new RpcError('request_limit', `at most ${MAX_PENDING} requests may wait for an answer`, 'rejected'))
     const id = ++this.nextId
     return new Promise((resolve, reject) => {
       const cancel = options.untimed

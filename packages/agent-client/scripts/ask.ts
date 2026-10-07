@@ -18,7 +18,8 @@ export function yesNoAsker(input: Readable, output: Writable): { ask(text: strin
   return {
     async ask(text) {
       if (ended) return false
-      const answer = await Promise.race([terminal.question(text), inputEnded])
+      // A question the interface abandons because its input ended counts as no, however it is reported.
+      const answer = await Promise.race([terminal.question(text).catch(() => 'n'), inputEnded])
       return answer.trim().toLowerCase().startsWith('y')
     },
     close: () => terminal.close(),

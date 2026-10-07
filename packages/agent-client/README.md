@@ -53,6 +53,17 @@ declined. The child inherits this process's environment, so it reaches the model
 normally does. Released payloads are printed as one line of JSON with control and bidirectional
 characters escaped; this is a diagnostic dump, not a display surface.
 
+Before you use it:
+
+- `--decide approve` approves every question the turn asks, including commands and fetches and writes of
+  content that came from outside. Use it only on a project and a task you would approve anyway.
+- The dump prints full prompts, approval details (including the text of files about to be written) and
+  fetched pages. Keep the output out of CI logs and anywhere else shared.
+- The bridge child inherits this process's whole environment, secrets included. Run the program from a
+  shell that holds only what `bravebot-rpc` needs.
+- If an answer cannot be sent, the program cancels the turn, and if the bridge does not end it within
+  `--grace` seconds (default 10) it gives up and exits non-zero.
+
 ## Check
 
 `make check-agent-client` from the repository root builds `bravebot-rpc`, installs, type-checks

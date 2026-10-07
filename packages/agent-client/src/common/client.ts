@@ -327,7 +327,7 @@ export class RpcAgentClient implements AgentClient {
 
   async createSession(options: { workspace: string }): Promise<AgentSession> {
     const workspace = this.configured.find((candidate) => candidate.id === options.workspace)
-    if (!workspace) throw new RpcError('unknown_workspace', 'that workspace is not configured')
+    if (!workspace) throw new RpcError('unknown_workspace', 'that workspace is not configured', 'rejected')
     await this.describe()
     let created: Session | null = null
     const opened = (outcome: Outcome): void => {

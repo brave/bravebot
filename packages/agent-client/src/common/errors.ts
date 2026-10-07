@@ -7,7 +7,7 @@ export class RpcError extends Error {
   constructor(
     readonly code: string,
     message: string,
-    readonly outcome: 'rejected' | 'unknown' = 'rejected',
+    readonly outcome: 'rejected' | 'unknown',
   ) {
     super(message)
     this.name = 'RpcError'
