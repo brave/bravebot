@@ -928,8 +928,8 @@ Some refused tasks know every possible act in advance, but the right one can be 
 reading service content: approve or request changes, file an email or reply to it.
 [manifest-choose.md](manifest-choose.md) proposes a `choose` step for them. The plan fixes every
 branch and its acts before anything is read, and at run time only a trusted selector, such as the
-person, picks one. What was read may inform that choice but cannot make it. An act in the chosen
-branch still passes its usual checks and its popup.
+person, picks one. Untrusted observations may inform that choice but cannot select a branch. An act
+in the chosen branch still passes its usual checks and its popup.
 
 ### Turn mode
 
