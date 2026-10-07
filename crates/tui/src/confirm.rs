@@ -1117,6 +1117,9 @@ fn draw_run(
         if request.writes_a_file() {
             why.push(t!(run_write_not_remembered));
         }
+        if request.feeds_a_reference() {
+            why.push(t!(run_stdin_not_remembered));
+        }
         for reason in why {
             lines.push(Line::from(Span::styled(
                 format!("  {reason}"),
@@ -4507,6 +4510,40 @@ mod tests {
             drawn.contains("an assignment in front of a program"),
             "the prompt dropped the assignment reason: {drawn}"
         );
+    }
+
+    /// A line fed a reference asks every time whatever is remembered, for any label the reference
+    /// has: an entry records a program, its arguments and a tree, and `python3 -` fed one public
+    /// page is the same entry as `python3 -` fed another. The prompt withholds `a` and says why,
+    /// with the reason for a reference and not the one for private input, since a public page
+    /// releases nothing.
+    #[test]
+    fn a_run_fed_a_reference_offers_no_standing_permission() {
+        let mut request = a_run(false);
+        request.stdin = Some("ref:1".to_string());
+        request.plan.stdin = Some(bravebot_core::label::Label::untrusted_public());
+        assert!(!request.releases_private(), "the page was taken as private");
+
+        let drawn = rendered_run(&request);
+        assert!(
+            drawn.contains("a line fed a reference is asked about every time"),
+            "the prompt did not give the reason for withholding the key: {drawn}"
+        );
+        assert!(
+            !drawn.contains("private input is asked"),
+            "the prompt gave the private-input reason for a public page: {drawn}"
+        );
+
+        for key in ['a', 'A', 'r', 'R'] {
+            let pressed = run_answer_for(
+                KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                &request,
+            );
+            assert_eq!(
+                pressed, None,
+                "`{key}` answered a prompt that does not offer it"
+            );
+        }
     }
 
     /// A compiled plan with an assignment written in front of its program, as

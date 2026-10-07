@@ -118,6 +118,13 @@ dropped into a run that looked like it had worked. The refusal is made twice, wh
 and again where the bytes would be written. `background: true` is refused with it for the same
 reason: nothing is waited for there and nothing is fed either.
 
+**A line fed a reference is asked about every time.** A vouched entry and a remembered line hold a
+program and its arguments, and the reference is in neither, so `sh -s` fed one fetched page is the
+same entry as `sh -s` fed another. Whatever label the reference carries, public or private, trusted
+or not, a line given a `stdin_ref` is put to a person unless a rule they wrote decides it or the
+audited table proves it writes nothing and reads only vouched paths, which meets the reference's
+integrity into its label first. `a` and `r` are not offered at that prompt ([RUN-6](#RUN-6)).
+
 **Why.** This is the point of the split: both trusted and untrusted data reach real tools, and
 only the routing part has to be trustworthy.
 
@@ -129,6 +136,8 @@ only the routing part has to be trustworthy.
 `verified-by: bravebot_agent::exec::a_line_naming_a_file_for_standard_input_cannot_also_be_fed_bytes`
 `verified-by: bravebot_agent::turn::a_quarantined_reference_is_fed_to_a_program_the_planner_may_not_read`
 `verified-by: bravebot_agent::turn::a_private_reference_fed_to_a_vouched_line_is_still_put_to_a_person`
+`verified-by: bravebot_agent::turn::a_vouched_line_is_asked_again_for_each_page_it_is_fed`
+`verified-by: bravebot_core::policy::a_vouched_line_fed_a_reference_is_asked_about_anyway`
 `verified-by: bravebot_agent::turn::a_background_line_cannot_be_fed_a_reference`
 `verified-by: bravebot_agent::turn::a_line_naming_a_file_for_standard_input_cannot_also_name_a_reference`
 `verified-by: bravebot_tui::confirm::a_run_prompt_names_the_reference_it_would_be_fed`
@@ -139,7 +148,7 @@ only the routing part has to be trustworthy.
 | | Label | Gate |
 |---|---|---|
 | Program and arguments | `(T,pub)` | a person approves the exact argv |
-| Standard input | may be untrusted | a person approves when it is private |
+| Standard input | may be untrusted | a person approves when it is private, and whenever it is a reference |
 | Standard output and error | `(U,priv)` | quarantined |
 | …for a command a person vouched for | `(T,priv)` | RUN-7 |
 | …for a plan that proves what it read | the meet over its read set, private | [command-line.md](command-line.md) |
@@ -164,6 +173,11 @@ filter a way of laundering any quarantined document into the planner's context, 
 guarantee this repository exists for. The endorsement is bound to it too, so an answer given for a
 line fed one thing is not redeemable for the same steps fed another.
 
+A vouch is not redeemable for them either. An entry names the program, its arguments and the tree,
+so it would cover the same steps fed any reference, including a public one a stranger wrote: the
+row's gate is therefore met by a reference as well as by private input, and a line fed one is asked
+about whatever is vouched for ([RUN-3](#RUN-3)).
+
 `verified-by: bravebot_core::command::a_file_redirected_into_a_program_is_private_input`
 `verified-by: bravebot_core::command::a_redirection_on_a_later_step_is_private_input`
 `verified-by: bravebot_core::command::a_plan_that_feeds_a_program_nothing_releases_nothing`
@@ -172,7 +186,8 @@ line fed one thing is not redeemable for the same steps fed another.
 `verified-by: bravebot_core::policy::one_unvouched_step_makes_the_whole_lines_output_untrusted`
 `verified-by: bravebot_core::policy::a_vouched_line_fed_content_nobody_vouched_for_prints_untrusted_output`
 `verified-by: bravebot_core::policy::a_vouched_line_fed_content_the_user_vouched_for_still_prints_trusted_output`
-`verified-by: bravebot_core::policy::a_private_reference_fed_to_a_vouched_line_is_put_to_a_person`
+`verified-by: bravebot_core::policy::a_reference_fed_to_a_vouched_line_is_put_to_a_person`
+`verified-by: bravebot_core::policy::a_vouched_line_fed_a_reference_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_the_same_plan_fed_something_else`
 `verified-by: bravebot_core::command::a_plan_fed_a_reference_encodes_apart_from_the_same_plan_fed_nothing`
 
@@ -233,6 +248,13 @@ honest about what it covers, and the refusal is made twice: once where the promp
 again where an answer is acted on, since an invariant about what the trusted list may hold does
 not rest on a drawing.
 
+**A `stdin_ref` is withheld on the same grounds, whatever label the reference carries.** The entry
+holds the program and its arguments and not the reference, so `a` made for `python3 -` fed one
+fetched page would cover `python3 -` fed another, and `git apply` fed a patch would apply the next
+patch it was handed. Public does not make this safe: a public reference is the label a fetched body
+has, and the body is what an attacker wrote. The refusal is made twice, as above, and the prompt
+says which reason it is.
+
 **A `>` redirection is withheld on the same grounds.** An entry records no destination any more
 than it records a source, so an entry made at a write prompt would cover this program and these
 arguments with the redirection gone, which is a line the person never read. The two directions are
@@ -246,6 +268,9 @@ source; what they did not read is the line that entry covers. The refusal is mad
 `verified-by: bravebot_agent::cmdline::an_input_redirection_is_private_input`
 `verified-by: bravebot_agent::turn::a_line_that_reads_a_file_is_not_remembered_however_it_is_answered`
 `verified-by: bravebot_agent::turn::a_line_that_writes_is_not_remembered_however_it_is_answered`
+`verified-by: bravebot_agent::turn::always_at_a_prompt_for_a_fed_page_does_not_cover_the_next_page`
+`verified-by: bravebot_core::policy::no_standing_answer_is_offered_for_a_line_fed_a_reference`
+`verified-by: bravebot_tui::confirm::a_run_fed_a_reference_offers_no_standing_permission`
 `verified-by: bravebot_tui::confirm::a_run_reading_a_file_offers_no_standing_permission`
 `verified-by: bravebot_tui::confirm::a_run_that_releases_private_data_offers_no_standing_permission`
 `verified-by: bravebot_tui::confirm::a_run_writing_a_file_offers_no_standing_permission`
@@ -986,7 +1011,9 @@ does and a keypress must not overturn a standing instruction to be asked. So `r`
 such a rule matches the line, and one written afterwards takes the line back.
 
 **Where `r` is not offered.** At a prompt for a run that releases private data, for the reason `a` is
-not offered there ([RUN-6](#RUN-6)). Where the line names a file to write, and where it would run
+not offered there ([RUN-6](#RUN-6)). At a prompt for a run fed a `stdin_ref`, whatever the reference's
+label, for the reason RUN-6 gives: the record holds the line and not the reference, so a line
+remembered fed one page would run unasked in a later session fed another. Where the line names a file to write, and where it would run
 anywhere but the workspace root, which takes in a line naming a directory
 ([CMDLINE-12](command-line.md#CMDLINE-12)) and a session with no root known: those are asked about
 whatever is recorded, so the key would stop no prompt. Where the line writes an assignment in front of
@@ -1072,6 +1099,7 @@ begun in either. And a line whose arguments differ every time is not helped at a
 `verified-by: bravebot_core::policy::output_of_a_line_remembered_past_the_session_is_still_untrusted_and_private`
 `verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
 `verified-by: bravebot_core::policy::a_remembered_line_fed_private_input_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::a_remembered_line_fed_a_reference_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_remembered_line_that_writes_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_remembered_line_run_outside_the_root_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_remembered_line_carrying_an_environment_assignment_is_asked_about_anyway`
@@ -1088,6 +1116,7 @@ begun in either. And a line whose arguments differ every time is not helped at a
 `verified-by: bravebot_agent::remembered::a_line_nothing_can_read_leaves_the_rest_of_the_record_answering`
 `verified-by: bravebot_agent::turn::a_line_remembered_past_the_session_runs_without_asking`
 `verified-by: bravebot_agent::turn::a_line_remembered_past_the_session_covers_no_other_line`
+`verified-by: bravebot_agent::turn::remembering_a_fed_line_does_not_cover_another_page_in_a_later_session`
 `verified-by: bravebot_agent::turn::a_turn_with_nobody_to_ask_reads_no_record`
 `verified-by: bravebot_agent::turn::answering_with_a_key_the_prompt_did_not_offer_records_nothing`
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`

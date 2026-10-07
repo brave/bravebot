@@ -14591,6 +14591,202 @@ fn approving_once_leaves_the_session_vouching_for_nothing() {
     );
 }
 
+/// Two pages a server holds, each a shell script that creates a marker file, and the tool calls
+/// that fetch them and feed each one in turn to `sh -s`. A fetch is allowed by a rule so that the
+/// confirmer under test is asked about runs and nothing else. The pages are fetched first, and a
+/// fetch takes two reference numbers (the page and the notice that it was withheld), so the pages
+/// are `ref:1` and `ref:3` whichever way the runs are answered. Each marker is
+/// created by one page and so tells which page a program was given.
+///
+/// The runs go through the real run tool, which labels a fetched page `(U,pub)`: a page is
+/// attacker-influenceable but not confidential, so nothing about it is private.
+fn two_pages_fed_to_a_shell(
+    scratch: &Scratch,
+    home: Option<(&std::path::Path, &str)>,
+    pages: &[&str],
+    confirmer: &mut AskedAboutRuns,
+    programs: bravebot_core::programs::TrustedPrograms,
+) -> bravebot_agent::turn::Outcome {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (site, _requests) = serve_pages(
+        pages
+            .iter()
+            .map(|marker| page(&format!("touch {marker}\n")))
+            .collect(),
+    );
+    let mut calls: Vec<String> = pages
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/page-{index}"}}"#))
+        })
+        .collect();
+    calls.extend((0..pages.len()).map(|index| {
+        let number = 2 * index + 1;
+        tool_request_2(
+            "run",
+            &format!(r#"{{"command":"sh -s","stdin_ref":"ref:{number}"}}"#),
+        )
+    }));
+    calls.push(reply_with("done"));
+    let (endpoint, _received) = serve_sequence(calls);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut task = Task::new("run the pages").with_permissions(rules(
+        &[],
+        &[],
+        &["WebFetch(domain:127.0.0.1)"],
+    ));
+    if let Some((state, session)) = home {
+        task = task
+            .with_home(Some(state.to_path_buf()))
+            .remembering(Some(session.to_string()));
+    }
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        programs,
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs")
+}
+
+/// RUN-4: a vouched entry names a program and its arguments, and `sh -s` fed one fetched page is
+/// the same entry as `sh -s` fed another. The session vouched for the line and refuses everything
+/// it is asked, so a page that ran at all ran without anybody being asked: both lines have to
+/// reach the prompt, and neither page may have run.
+#[test]
+fn a_vouched_line_is_asked_again_for_each_page_it_is_fed() {
+    let scratch = Scratch::new("run-vouched-fed-pages");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let seen = confirmer.seen.clone();
+
+    two_pages_fed_to_a_shell(
+        &scratch,
+        None,
+        &["first.txt", "second.txt"],
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+            "sh",
+            &["-s"],
+            &scratch.path,
+        )]),
+    );
+
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        2,
+        "a vouched line was fed a fetched page without anybody being asked"
+    );
+    assert_eq!(asked[0].stdin.as_deref(), Some("ref:1"));
+    assert_eq!(asked[1].stdin.as_deref(), Some("ref:3"));
+    for marker in ["first.txt", "second.txt"] {
+        assert!(
+            !scratch.path.join(marker).exists(),
+            "a page the person refused ran: {marker}"
+        );
+    }
+}
+
+/// RUN-4, RUN-6: `a` at the prompt for `sh -s` fed the first page does not stop the prompt for the
+/// second. The first line is approved and runs; the second is put to the person, refused, and does
+/// not run. The prompts are asserted to have happened, because an empty list is also what a line
+/// nobody was asked about leaves behind.
+#[test]
+fn always_at_a_prompt_for_a_fed_page_does_not_cover_the_next_page() {
+    let scratch = Scratch::new("run-always-fed-pages");
+    let mut confirmer = AskedAboutRuns::answering_in_turn(vec![
+        bravebot_agent::RunDecision::approve_always(),
+        bravebot_agent::RunDecision::reject(),
+    ]);
+    let seen = confirmer.seen.clone();
+
+    let outcome = two_pages_fed_to_a_shell(
+        &scratch,
+        None,
+        &["first.txt", "second.txt"],
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        2,
+        "the second page was fed to a program with nobody asked"
+    );
+    assert!(
+        scratch.path.join("first.txt").exists(),
+        "the approved line did not run"
+    );
+    assert!(
+        !scratch.path.join("second.txt").exists(),
+        "a page the person was never shown ran"
+    );
+    assert!(
+        outcome.programs.is_empty(),
+        "answering `a` for a fed line vouched for the program"
+    );
+}
+
+/// RUN-4, RUN-6, RUN-19: `r` for `sh -s` fed one page, in one process, does not cover `sh -s` fed
+/// another page in a later process. Two turns share a state directory and nothing else: the second
+/// has vouched for nothing and fetches a page of its own, which is `ref:1` there too, so the only
+/// thing that could let it run is the first session's record.
+#[test]
+fn remembering_a_fed_line_does_not_cover_another_page_in_a_later_session() {
+    let scratch = Scratch::new("run-remember-fed-pages");
+    let home = Scratch::new("run-remember-fed-pages-home");
+
+    let mut first = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_and_record());
+    let first_seen = first.seen.clone();
+    two_pages_fed_to_a_shell(
+        &scratch,
+        Some((&home.path, "the-first-session")),
+        &["first.txt"],
+        &mut first,
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+    assert_eq!(first_seen.lock().unwrap().len(), 1, "nobody was asked");
+    assert!(
+        scratch.path.join("first.txt").exists(),
+        "the line did not run"
+    );
+    assert!(
+        record_for(&home.path, &scratch).read().is_empty(),
+        "a line fed a reference was written to the record"
+    );
+
+    let mut later = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let later_seen = later.seen.clone();
+    two_pages_fed_to_a_shell(
+        &scratch,
+        Some((&home.path, "a-later-session")),
+        &["second.txt"],
+        &mut later,
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+    assert_eq!(
+        later_seen.lock().unwrap().len(),
+        1,
+        "a later session ran a page it was never shown, on the strength of an earlier answer"
+    );
+    assert!(
+        !scratch.path.join("second.txt").exists(),
+        "the other page ran"
+    );
+}
+
 /// A redirection is a write, and what lands in the file is what a program printed. A line no
 /// person vouched for prints bytes an earlier step may have read out of a page somebody else
 /// wrote, so the destination holds untrusted content however trusted the tree around it is. Left

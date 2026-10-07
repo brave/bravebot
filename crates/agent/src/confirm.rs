@@ -301,6 +301,19 @@ impl RunRequest {
         !self.plan.writes.is_empty()
     }
 
+    /// Whether the line is fed a reference as its standard input.
+    ///
+    /// The fourth reason, and the one a label cannot settle: a reference holding a public page is
+    /// as much the planner's input as one holding the user's data. An entry records a program, its
+    /// arguments and a tree, none of which is the reference, so `a` made for `python3 -` fed one
+    /// page would cover it fed any other.
+    ///
+    /// Asked apart from [`RunRequest::can_be_remembered`] for the reason
+    /// [`RunRequest::carries_an_assignment`] is.
+    pub fn feeds_a_reference(&self) -> bool {
+        self.plan.stdin.is_some()
+    }
+
     /// Whether an entry could record this line at all, which is what `a` would make.
     ///
     /// One question rather than a list of reasons repeated at each place that asks, so a reason
