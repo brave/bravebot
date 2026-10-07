@@ -2057,7 +2057,7 @@ pub enum Deletion {
 /// Whether `id` is a name a session could have been given: one path segment of letters, digits,
 /// `-` and `_`, which covers the version 4 UUID of today and the time-and-process-id names of older
 /// builds, and nothing that could lead out of the directory it is joined onto.
-fn is_a_session_name(id: &str) -> bool {
+pub fn is_a_session_name(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id

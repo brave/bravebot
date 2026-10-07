@@ -41,6 +41,9 @@ would. It passes over a [manifest run](#a-manifest-run-is-recorded-but-cannot-be
 than refusing it. Where this directory holds nothing continuable it says so and fails rather than
 starting a fresh session.
 
+**From inside a session**, [`/resume`](../reference/commands.md#resume-id) opens the same list, or
+takes an id, and moves you onto that session without leaving the program.
+
 **Leaving a session prints the command that resumes it**, after the terminal is handed back, so it
 stays on the screen you are left looking at. A session that never wrote a record prints nothing.
 

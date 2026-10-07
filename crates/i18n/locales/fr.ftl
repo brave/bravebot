@@ -1071,6 +1071,9 @@ resume-keys =
     ↑↓ pour choisir  ·  Entrée pour reprendre  ·  tapez pour rechercher  ·  Échap pour une
     nouvelle session
 resume-from-pr = pull request { $pull_request }
+resume-keys-within =
+    ↑↓ pour choisir  ·  Entrée pour reprendre  ·  tapez pour rechercher  ·  Échap pour rester dans
+    cette session
 resume-nothing-matches = aucune correspondance
 resume-manifest-run =
     c'était une exécution manifest, qui ne peut pas être reprise ; démarrez une nouvelle
@@ -1552,6 +1555,10 @@ session-checkout-not-restored =
         [one] le checkout { $ids } était gardé par cette session mais n'est plus où il a été créé, il n'est donc pas listé
        *[other] les checkouts { $ids } étaient gardés par cette session mais ne sont plus où ils ont été créés, ils ne sont donc pas listés
     }
+session-resume-nothing-else = aucune autre session à reprendre dans ce répertoire
+session-resume-already-here = c'est la session déjà ouverte
+session-resume-no-such = aucune session avec cet identifiant dans ce répertoire
+session-resume-held-by-background = cette session est tenue par une session d'arrière-plan en cours, elle ne peut donc pas être reprise ici
 session-branch-moved =
     cette session tournait sur { $was } ; cette copie de travail est sur { $now }
 session-branch-gone =
@@ -1662,6 +1669,7 @@ command-pr = Dire pour quelle pull request est cette session, l'afficher ou l'ef
 command-compact = Résumer la conversation jusqu'ici, en gardant la partie récente
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
+command-resume = Reprendre une autre session de ce répertoire, par identifiant ou dans une liste
 command-forget-trust = Ne plus retenir que ce répertoire est approuvé, pour que les sessions suivantes ici demandent
 command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie

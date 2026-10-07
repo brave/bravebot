@@ -39,6 +39,8 @@ pub struct Picker {
     /// A pull request number or address the list was opened for, which keeps only the sessions
     /// linked to it before anything typed narrows further.
     from_pr: Option<String>,
+    /// Whether it is drawn over a running session, where leaving it stays in that session.
+    within_a_session: bool,
 }
 
 impl Picker {
@@ -50,6 +52,7 @@ impl Picker {
             selected: 0,
             project: project.into(),
             from_pr: None,
+            within_a_session: false,
         }
     }
 
@@ -247,7 +250,93 @@ pub fn choose<B: Backend>(
     project: &Path,
     from_pr: Option<&str>,
 ) -> Choice {
-    let mut picker = Picker::new(sessions::list(project), project.display().to_string());
+    pick(terminal, project, None, from_pr)
+}
+
+/// Why `/resume` carried on from no record.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// The id is not shaped like a session's name, or names no record of this directory.
+    NoSuchSession,
+    /// The id is the session being run.
+    AlreadyHere,
+    /// The record is a manifest run, which has no conversation to continue.
+    Manifest,
+    /// A running background session holds the record, so a second writer would fork it (BG-9).
+    Held,
+}
+
+impl Refusal {
+    /// What to say in the transcript. The id typed is never part of it, since it may hold an escape.
+    pub fn note(&self) -> String {
+        match self {
+            Self::NoSuchSession => t!(session_resume_no_such).to_string(),
+            Self::AlreadyHere => t!(session_resume_already_here).to_string(),
+            Self::Manifest => manifest_note().to_string(),
+            Self::Held => t!(session_resume_held_by_background).to_string(),
+        }
+    }
+}
+
+/// The record `/resume <id>` names, read as `--resume <id>` reads it.
+///
+/// The id is checked for the shape of a session's name before it reaches a path.
+pub fn named(project: &Path, current: &str, typed: &str) -> Result<Box<sessions::Record>, Refusal> {
+    if typed == current {
+        return Err(Refusal::AlreadyHere);
+    }
+    sessions::is_a_session_name(typed)
+        .then(|| sessions::load(project, typed))
+        .flatten()
+        .map(Box::new)
+        .ok_or(Refusal::NoSuchSession)
+        .and_then(continuable)
+}
+
+/// The record, if it is one that can be carried on from: neither a manifest run nor one a running
+/// background session holds. The picker refuses the first on Enter; the second is checked here
+/// because a record is picked up in this process and not another.
+pub fn continuable(record: Box<sessions::Record>) -> Result<Box<sessions::Record>, Refusal> {
+    continuable_unless(record, bravebot_session::jobs::is_running)
+}
+
+/// [`continuable`], with the question of whether a running background session holds an id put by
+/// the caller, so that the refusal can be reached without one.
+pub fn continuable_unless(
+    record: Box<sessions::Record>,
+    held: impl Fn(&str) -> bool,
+) -> Result<Box<sessions::Record>, Refusal> {
+    if record.manifest.is_some() {
+        return Err(Refusal::Manifest);
+    }
+    if held(&record.id) {
+        return Err(Refusal::Held);
+    }
+    Ok(record)
+}
+
+/// Show the list from inside a running session, leaving out the session being run.
+///
+/// Picking the session already open would reload it from its record and gain nothing, so it is not
+/// offered. Where nothing else is left the answer is `Fresh`, which the caller reads as staying put.
+pub fn choose_other<B: Backend>(
+    terminal: &mut Terminal<B>,
+    project: &Path,
+    current: &str,
+) -> Choice {
+    pick(terminal, project, Some(current), None)
+}
+
+fn pick<B: Backend>(
+    terminal: &mut Terminal<B>,
+    project: &Path,
+    current: Option<&str>,
+    from_pr: Option<&str>,
+) -> Choice {
+    let mut listed = sessions::list(project);
+    listed.retain(|session| Some(session.id.as_str()) != current);
+    let mut picker = Picker::new(listed, project.display().to_string());
+    picker.within_a_session = current.is_some();
     if let Some(wanted) = from_pr {
         picker = picker.from_pull_request(wanted);
     }
@@ -362,6 +451,9 @@ fn draw(frame: &mut Frame, picker: &Picker) {
 
     let (footer, colour) = match picker.note {
         Some(note) => (format!("  {note}"), theme::note()),
+        None if picker.within_a_session => {
+            (format!("  {}", t!(resume_keys_within)), theme::muted())
+        }
         None => (format!("  {}", t!(resume_keys)), theme::muted()),
     };
     frame.render_widget(
@@ -454,6 +546,27 @@ mod tests {
             bytes: 1024,
             manifest: true,
         }
+    }
+
+    fn drawn(picker: &Picker) -> String {
+        let mut terminal =
+            Terminal::new(ratatui::backend::TestBackend::new(100, 12)).expect("a terminal");
+        terminal.draw(|frame| draw(frame, picker)).expect("a frame");
+        terminal.backend().to_string()
+    }
+
+    /// CMD-14. Drawn over a running session the list says Escape stays in it, and drawn at startup
+    /// it says Escape starts a new one: the same key, and the footer is where a person reads which.
+    #[test]
+    fn the_footer_says_what_escape_does_where_the_list_is_drawn() {
+        let mut within = picker();
+        within.within_a_session = true;
+        assert!(drawn(&within).contains(t!(resume_keys_within)));
+        assert!(!drawn(&within).contains(t!(resume_keys)));
+
+        let at_startup = picker();
+        assert!(drawn(&at_startup).contains(t!(resume_keys)));
+        assert!(!drawn(&at_startup).contains(t!(resume_keys_within)));
     }
 
     fn picker() -> Picker {

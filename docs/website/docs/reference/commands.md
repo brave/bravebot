@@ -24,6 +24,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
 | `/branch` | `[<name>]` | Copy this session and carry on in the copy, keeping the original to return to |
+| `/resume` | `[<id>]` | Pick up another session of this directory, by id or from a list |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
@@ -702,6 +703,24 @@ It needs a record to copy, so it says there is nothing to branch until the first
 is refused in an incognito session, which writes none, and while the session keeps a checkout, which
 a copy does not carry: remove it with `/checkouts remove` first. Typed while a turn runs it waits
 for the turn to end.
+
+## `/resume [id]`
+
+Leaves this session for another one recorded in this directory, and carries on from it. With no id
+it draws the list `bravebot --resume` draws, without the session you are in, and Enter picks the one
+under the cursor. Escape, or Ctrl-C, returns to the session you were in. With an id it picks up that
+record, so `/resume <id>` is `bravebot --resume <id>` without leaving the program.
+
+The session picked up is restored as the flag restores it: its transcript, its spend, and the
+folders, programs and rules you trusted in it, and only those. Nothing you granted in the session you
+left comes with you, and its loop, goal and watches end. The session you left is written as its last
+turn left it and stays resumable. Servers started for this process keep running.
+
+It is refused, with a line saying why, for an id that is no session of this directory, for the
+session already open, for a [manifest run](../using/sessions.md#a-manifest-run-is-recorded-but-cannot-be-continued),
+and for a session a running background session holds. Where this directory records no other session
+it says so. Typed while a turn runs it waits for the turn to end. The word takes an id and nothing
+else, and none of what you type after it is sent to the planner.
 
 ## `/export [path]`
 

@@ -4943,3 +4943,119 @@ fn a_resume_that_restores_no_checkout_still_writes_the_records_checkouts_back() 
         "a checkout the record held was erased by a front end that restored none"
     );
 }
+
+/// Writes one record under `project` and returns its id: a conversation, or with `manifest` a
+/// manifest run that holds none.
+fn recorded(project: &Path, title: &str, manifest: bool) -> String {
+    let conversation = if manifest {
+        Conversation::new()
+    } else {
+        a_conversation()
+    };
+    let stored = StoredManifest::of(
+        &bravebot_agent::manifest::Attempt {
+            shape: Some("1. Read it.".into()),
+            proposed: None,
+            plan: None,
+            steps: Vec::new(),
+        },
+        None,
+    );
+    let mut handle = Handle::begin(project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        title,
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 0,
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &a_trust_map(),
+            programs: &a_program_list(),
+            directories: &[],
+            manifest: manifest.then_some(&stored),
+            rewind: &[],
+            checkouts: &[],
+        },
+    );
+    handle.id().to_string()
+}
+
+/// CMD-14. `/resume <id>` picks up the record the id names and reads it as `--resume` does, so the
+/// map and the programs vouched for are the record's own. An id that names no record, the session
+/// already open, and a manifest run are each refused and read nothing else.
+#[test]
+fn resume_by_id_reads_the_record_named_and_refuses_what_it_cannot_continue() {
+    use bravebot_tui::resume::{Refusal, named};
+    let scratch = Scratch::new("resume-by-id");
+    let earlier = recorded(&scratch.project, "the earlier one", false);
+    let open = recorded(&scratch.project, "the open one", false);
+    let run = recorded(&scratch.project, "a manifest run", true);
+
+    let record = named(&scratch.project, &open, &earlier).expect("the record named");
+    assert_eq!(record.id, earlier);
+    assert_eq!(record.title, "the earlier one");
+    // Re-rooted at the directory resumed into, so the rules are the record's and the keys are not.
+    let map = record
+        .trust_map(&scratch.project)
+        .expect("the record's map");
+    assert!(format!("{map:?}").contains("fetched.json"), "{map:?}");
+
+    assert_eq!(
+        named(&scratch.project, &open, &open).unwrap_err(),
+        Refusal::AlreadyHere
+    );
+    assert_eq!(
+        named(&scratch.project, &open, &run).unwrap_err(),
+        Refusal::Manifest
+    );
+    assert_eq!(
+        named(&scratch.project, &open, "no-such-session").unwrap_err(),
+        Refusal::NoSuchSession
+    );
+}
+
+/// CMD-14. A record a running background session holds is refused, with a line that does not carry
+/// the id, and one nothing holds is let through. The check is handed in, so no roster is needed.
+#[test]
+fn resume_refuses_a_record_a_running_background_session_holds() {
+    use bravebot_tui::resume::{Refusal, continuable_unless};
+    let scratch = Scratch::new("resume-held");
+    let held = recorded(&scratch.project, "the held one", false);
+    let free = recorded(&scratch.project, "the free one", false);
+    let load = |id: &str| Box::new(sessions::load(&scratch.project, id).expect("a record"));
+
+    let refusal = continuable_unless(load(&held), |id| id == held).unwrap_err();
+    assert_eq!(refusal, Refusal::Held);
+    assert!(!refusal.note().contains(&held), "{}", refusal.note());
+    let record = continuable_unless(load(&free), |id| id == held).expect("a record nothing holds");
+    assert_eq!(record.id, free);
+}
+
+/// CMD-14. A typed id is a person's, but it is joined onto a path all the same: one that climbs out
+/// of the sessions directory finds nothing even where a readable record is waiting at the place it
+/// climbs to.
+#[test]
+fn resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory() {
+    use bravebot_tui::resume::{Refusal, named};
+    let scratch = Scratch::new("resume-by-id-escape");
+    let earlier = recorded(&scratch.project, "the earlier one", false);
+    let here = sessions::project_directory(&scratch.project).expect("a directory");
+    std::fs::copy(
+        here.join(format!("{earlier}.json")),
+        here.parent().expect("a parent").join("decoy.json"),
+    )
+    .expect("place the decoy");
+
+    for typed in ["../decoy", "..", "a/b", "id with spaces"] {
+        assert_eq!(
+            named(&scratch.project, "open", typed).unwrap_err(),
+            Refusal::NoSuchSession,
+            "{typed:?} reached a record"
+        );
+    }
+}

@@ -1251,6 +1251,7 @@ resume-heading = Resume session
 resume-search-placeholder = Search…
 resume-keys = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc for a new session
 resume-from-pr = for pull request { $pull_request }
+resume-keys-within = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc to stay in this session
 resume-nothing-matches = nothing matches that
 resume-manifest-run = that was a manifest run, which cannot be continued; start a new session
 
@@ -2005,6 +2006,7 @@ command-add-dir = Open another directory and trust it for this session, or close
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
 command-branch = Copy this session and carry on in the copy, keeping the original to return to
+command-resume = Pick up another session of this directory, by id or from a list
 command-issue = Say which issue this session is for, show it, or clear it
 command-pr = Say which pull request this session is for, show it, or clear it
 command-compact = Summarise the conversation so far, keeping the recent part
@@ -2063,6 +2065,14 @@ session-branched =
     branched: this session is now a copy, { $title }. The original is as it was. To return to it,
     run `bravebot --resume { $id }` in { $directory }
 # Left in the transcript when /branch is typed before the session has a record to copy.
+# Left in the transcript when /resume is typed and no other session is recorded for this directory.
+session-resume-nothing-else = no other session to resume in this directory
+# Left in the transcript when /resume names the session that is already open.
+session-resume-already-here = that is the session already open
+# Left in the transcript when /resume names an id that is no session of this directory.
+session-resume-no-such = no session with that id in this directory
+# Left in the transcript when /resume names a session a running background session holds.
+session-resume-held-by-background = that session is held by a running background session, so it cannot be resumed here
 session-branch-nothing-written = nothing to branch yet: the session has no record until its first turn ends
 # Left in the transcript when /branch is typed where session records are not written.
 session-branch-unwritable = /branch needs a session record to copy, and this session does not write one

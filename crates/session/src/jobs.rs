@@ -288,6 +288,13 @@ pub struct Roster {
     root: PathBuf,
 }
 
+/// Whether a background session is running under `id`, the id of a session record (BG-9).
+pub fn is_running(id: &str) -> bool {
+    Roster::readable()
+        .and_then(|roster| roster.get(id))
+        .is_some_and(|seen| seen.live)
+}
+
 impl Roster {
     /// The roster of the person running this, for reading. `None` where there is no home.
     pub fn readable() -> Option<Self> {
