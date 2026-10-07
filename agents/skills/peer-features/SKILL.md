@@ -80,7 +80,8 @@ advisory lists that has no row. A tool added to the advisory lists needs a row h
 tracker, and it is the advisory skill's `post`: it skips a gap an issue body already cites, by its
 own id or by one merged into it, and a title the tracker already holds, posts one issue every ten seconds or so, stops after 100 issues,
 and refuses before posting anything when a label is missing. `gh` is absent from this skill's
-`allowed-tools` so that a `gh issue create` typed here asks first.
+`allowed-tools` so that a `gh issue create` typed here asks first. An issue filed outside this
+script goes through the [issue-poster](../../agents/issue-poster.md) definition.
 
 **A run never fixes anything and never edits a spec.** It compares, drafts, files and records. Where
 closing a gap needs a clause, the issue says so. Specs change through their own review.

@@ -42,7 +42,8 @@ edit there.
 tracker. It skips an advisory an issue body already cites and a title the tracker already holds,
 posts one issue every ten seconds or so, stops after 100 issues, and refuses before posting
 anything when a label is missing. `gh` is absent from this skill's `allowed-tools` so that a
-`gh issue create` typed here asks first.
+`gh issue create` typed here asks first. An issue filed outside this script goes through the
+[issue-poster](../../agents/issue-poster.md) definition.
 
 **A run never fixes anything.** It vets, drafts, files and records. Fixing is a separate task.
 
