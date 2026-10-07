@@ -35,6 +35,7 @@
 
 use crate::skills::{Catalogue, Notice};
 use crate::workspace::Workspace;
+use bravebot_aichat::protocol::Effort;
 use bravebot_core::capability::Capability;
 use bravebot_core::delegate::{Admitted, Definition, Definitions, Kind, Narrowing};
 use bravebot_core::event::Sink;
@@ -60,6 +61,8 @@ enum Read {
         no_memory: Option<NoMemory>,
         /// An `isolation:` value asking for nothing here, as the file wrote it.
         no_checkout: Option<String>,
+        /// An `effort:` value naming no level, as the file wrote it.
+        no_effort: Option<String>,
     },
     /// Not a definition at all: no `name`, so nothing claimed to be one.
     ///
@@ -135,6 +138,22 @@ fn read_definition(text: &str, origin: &str) -> Read {
         definition = definition.with_skills(names_in(skills));
     }
 
+    // Settled here rather than carried as written, because a level is one of five this program
+    // enumerates and an unrecognised word must not become a request field. The definition still
+    // loads, as a skill naming one does: the word is said back to whoever wrote it, and the
+    // delegate asks for the level the spawning turn runs at.
+    let mut no_effort = None;
+    if let Some(written) = declared
+        .get("effort")
+        .map(|effort| effort.trim())
+        .filter(|effort| !effort.is_empty())
+    {
+        match Effort::named(written) {
+            Some(level) => definition = definition.with_effort(level.as_str()),
+            None => no_effort = Some(written.to_string()),
+        }
+    }
+
     // The key other agents' definitions spell it with, so a file ported from one selects the
     // same servers here. No alias holds a colon, so one in the line is a server declared inline,
     // whose entry may hold an argv and a variable's value: the line then selects no server, and
@@ -198,6 +217,7 @@ fn read_definition(text: &str, origin: &str) -> Read {
         declares_servers,
         no_memory,
         no_checkout,
+        no_effort,
     }
 }
 
@@ -652,6 +672,7 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
             declares_servers,
             no_memory,
             no_checkout,
+            no_effort,
         } => {
             if declares_servers {
                 notices.push(Notice::from_message(t!(
@@ -676,6 +697,14 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
                     delegate_isolation_not_read,
                     definition = origin,
                     value = value
+                )));
+            }
+            if let Some(word) = no_effort {
+                notices.push(Notice::from_message(t!(
+                    delegate_effort_not_a_level,
+                    definition = origin,
+                    effort = word,
+                    levels = Effort::ALL.map(Effort::as_str).join(", ")
                 )));
             }
             match definitions.insert(*definition) {
@@ -1409,6 +1438,49 @@ mod tests {
 
         assert_eq!(definition.name(), "default-reader");
         assert_eq!(definition.model(), None);
+    }
+
+    /// A definition can name the effort level its delegate runs at, in any of the five words and
+    /// in any case. An absent or empty line names none, which is the spawning turn's level, so
+    /// the two have to stay apart: a definition written to inherit must not be given a level.
+    #[test]
+    fn a_definition_reads_the_effort_level_it_names() {
+        let effort_of = |line: &str| {
+            definition_of(&format!(
+                "---\nname: eager\ndescription: thinks hard\nkind: reader\n{line}---\n\nbody\n"
+            ))
+            .effort()
+            .map(str::to_string)
+        };
+
+        for level in Effort::ALL {
+            assert_eq!(
+                effort_of(&format!("effort: {}\n", level.as_str())).as_deref(),
+                Some(level.as_str()),
+                "{level:?}"
+            );
+        }
+        assert_eq!(effort_of("effort: HIGH\n").as_deref(), Some("high"));
+        assert_eq!(effort_of("effort: \"  low  \"\n").as_deref(), Some("low"));
+        assert_eq!(effort_of("effort:\n"), None);
+        assert_eq!(effort_of("effort: \"   \"\n"), None);
+        assert_eq!(effort_of(""), None);
+    }
+
+    /// A word naming none of the five levels leaves the definition loading with no level, so its
+    /// delegate keeps the spawning turn's. An unrecognised word must not become a request field,
+    /// and the definition is still selectable.
+    #[test]
+    fn an_effort_word_naming_no_level_leaves_the_definition_loading_without_one() {
+        for word in ["highest", "xxhigh", "9", "inherit"] {
+            let definition = definition_of(&format!(
+                "---\nname: eager\ndescription: thinks hard\nkind: reader\neffort: \
+                 {word}\n---\n\nbody\n"
+            ));
+
+            assert_eq!(definition.name(), "eager", "{word}");
+            assert_eq!(definition.effort(), None, "{word} became a level");
+        }
     }
 
     /// `skills:` is read the way `tools:` is, so both spellings of a list arrive as the same

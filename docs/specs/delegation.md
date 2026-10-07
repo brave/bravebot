@@ -906,6 +906,40 @@ futility as the round limit and takes the same way out, which keeps what the del
 `verified-by: bravebot_agent::shared::a_stopped_delegates_question_is_declined_and_a_siblings_is_asked`
 `verified-by: bravebot_agent::shared::a_question_waiting_for_the_person_is_declined_when_its_delegate_is_stopped_meanwhile`
 
+<a id="DELEGATE-26"></a>
+### DELEGATE-26: a definition may name the effort its delegate asks for
+
+`effort:` is optional and holds one of the five words `/effort` takes, read case-insensitively. A
+definition naming one has its delegate's requests carry that level. A definition naming none, or
+writing an empty line, has its delegate ask for the level the turn that spawned it runs at, so a
+level chosen for a session reaches the delegates started in it.
+
+A word naming none of the five levels is reported, naming the file and the word, and the definition
+still loads with no level of its own. An unrecognised word is never sent as a level.
+
+The level is configuration, not content, on the same footing as the model beside it
+([DELEGATE-22](#DELEGATE-22)): a definition loads only from a source somebody vouched for
+([DELEGATE-20](#DELEGATE-20)), so the file is the endorsement for the request field the word lands
+in. It grants no capability, and a delegate holds what its kind holds whatever level it asks for.
+
+A later definition of the same name takes the key over, as it takes over the model, the skills and
+the rounds ([DELEGATE-20](#DELEGATE-20)), because how hard a model is asked to think changes what a
+run costs and never what it may do.
+
+A level is sent only to a model that reads one. The same check the turn's own level passes applies
+here, so a delegate on a model that reads none carries no level whatever its definition says.
+
+**Why report rather than refuse.** A definition with no usable level is still selectable, and
+dropping it would cost the delegate over a word that decides nothing about what it may reach. The
+model is the other way round ([DELEGATE-22](#DELEGATE-22)) because a model names a cost boundary and
+a service to send the conversation to.
+
+`verified-by: bravebot_agent::agents::a_definition_reads_the_effort_level_it_names`
+`verified-by: bravebot_agent::agents::an_effort_word_naming_no_level_leaves_the_definition_loading_without_one`
+`verified-by: bravebot_agent::agents::an_effort_word_naming_no_level_is_reported_and_the_definition_still_loads`
+`verified-by: bravebot_core::delegate::a_definition_may_name_an_effort_and_the_spec_carries_it`
+`verified-by: bravebot_agent::turn::a_delegate_asks_for_the_effort_its_definition_named`
+
 ## Known costs
 
 - **A definition is trusted exactly as far as a configuration file somebody pasted is.** That is

@@ -448,6 +448,47 @@ fn a_project_cannot_hand_back_a_server_a_persons_own_definition_left_off() {
     );
 }
 
+/// DELEGATE-26. An effort word naming none of the five levels is reported, naming the file and
+/// the word, and the definition still loads: a value that cannot be used is not a reason to drop
+/// a definition, and its delegate keeps the spawning turn's level.
+#[test]
+fn an_effort_word_naming_no_level_is_reported_and_the_definition_still_loads() {
+    let scratch = Scratch::new("definition-effort-unreadable");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "eager",
+        &format!(
+            "{}\neffort: highest",
+            frontmatter("eager", "thinks as hard as it can", "reader")
+        ),
+        "read the diff and report the shape",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    let found = definitions.get("eager").expect("selectable");
+    assert_eq!(found.effort(), None, "an unreadable word became a level");
+
+    let said: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect();
+    assert_eq!(
+        said,
+        [
+            "~/.bravebot/agents/eager.md asks for effort highest, which is none of low, medium, \
+             high, xhigh, max, so its delegate keeps the effort of the turn that spawns it"
+        ]
+    );
+}
+
 /// A project's file takes over the rounds of the person's own of the same name, held to the
 /// ceiling of the kind it is loaded as. A worker's number under a reader's name is a reader's
 /// ceiling, and both cuts are said, so neither line reads to its author as the one in force.

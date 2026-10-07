@@ -285,6 +285,12 @@ pub struct Definition {
     ///
     /// `None` leaves the delegate on the model the spawning turn is running on.
     model: Option<String>,
+    /// The effort level requested for this delegate, where the definition named one.
+    ///
+    /// `None` leaves the delegate on the level the spawning turn runs at. The word is one of the
+    /// five this program enumerates, settled where the file was read, because this crate names no
+    /// level type: a word naming none of them is reported there and never reaches here.
+    effort: Option<String>,
     /// The tools the definition asked for, where it asked for any.
     ///
     /// `None` is the kind's own set. `Some` is a narrowing and only a narrowing: what it selects
@@ -338,6 +344,7 @@ impl Definition {
             description: kind.purpose().to_string(),
             kind,
             model: None,
+            effort: None,
             tools: None,
             skills: None,
             servers: None,
@@ -363,6 +370,7 @@ impl Definition {
             description: description.into(),
             kind,
             model: None,
+            effort: None,
             tools,
             skills: None,
             servers: None,
@@ -402,6 +410,18 @@ impl Definition {
     /// Request a particular model for this delegate.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
+        self
+    }
+
+    /// The effort level requested for this delegate, where the definition named one.
+    pub fn effort(&self) -> Option<&str> {
+        self.effort.as_deref()
+    }
+
+    /// Request a particular effort level for this delegate. The caller has settled the word
+    /// against the five levels.
+    pub fn with_effort(mut self, effort: impl Into<String>) -> Self {
+        self.effort = Some(effort.into());
         self
     }
 
@@ -1053,6 +1073,8 @@ pub struct DelegateSpec {
     definition: String,
     /// The model this delegate was requested to run on, where its definition named one.
     model: Option<String>,
+    /// The effort level this delegate was requested to run at, where its definition named one.
+    effort: Option<String>,
     /// The tools its definition named, where it named any, already without the ones its kind
     /// does not reach.
     tools: Option<Vec<String>>,
@@ -1099,6 +1121,7 @@ impl DelegateSpec {
             kind,
             definition: definition.name().to_string(),
             model: definition.model().map(str::to_string),
+            effort: definition.effort().map(str::to_string),
             tools,
             skills: definition.skills().map(<[String]>::to_vec),
             prompt: definition.prompt().to_string(),
@@ -1152,6 +1175,13 @@ impl DelegateSpec {
     /// The model this delegate was requested to run on, where its definition named one.
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    /// The effort level this delegate was requested to run at, where its definition named one.
+    ///
+    /// `None` is the level the spawning turn runs at.
+    pub fn effort(&self) -> Option<&str> {
+        self.effort.as_deref()
     }
 
     /// The tools its definition confined it to, where it named any, and `None` where it named
@@ -2532,6 +2562,30 @@ mod tests {
             Tree::default(),
         );
         assert_eq!(spec.model(), Some("haiku"));
+    }
+
+    /// A definition may name an effort level to run at, and the spec carries it. `None` is the
+    /// level the spawning turn runs at, so the two stay apart on the spec as well.
+    #[test]
+    fn a_definition_may_name_an_effort_and_the_spec_carries_it() {
+        let spec_for = |definition: Definition| {
+            DelegateSpec::new(
+                DelegateId::nth(1),
+                &definition,
+                "read something",
+                Kind::Reader.capabilities(),
+                60,
+                Tree::default(),
+            )
+        };
+        let plain =
+            || Definition::from_file("eager", "thinks hard", Kind::Reader, None, "", "test");
+
+        let definition = plain().with_effort("low");
+        assert_eq!(definition.effort(), Some("low"));
+        assert_eq!(spec_for(definition).effort(), Some("low"));
+        assert_eq!(plain().effort(), None);
+        assert_eq!(spec_for(plain()).effort(), None);
     }
 
     /// A definition may name the skills its delegate is offered, and the spec carries the list

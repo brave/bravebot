@@ -4438,6 +4438,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // never change it. What each delegate carries is the model in force when it
                         // started, which is the one its parent was asking at the time.
                         let spawning_model = turn_model.clone();
+                        let spawning_effort = effort;
                         for (id, seeded) in std::mem::take(&mut output.delegate) {
                             let vouched = seeded.vouched.clone();
                             let checkout = seeded
@@ -4464,6 +4465,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     task.home.as_deref(),
                                     task.profile.as_deref(),
                                     spawning_model.as_deref(),
+                                    spawning_effort,
                                     task.permission_mode,
                                     task.auto_vetting,
                                     &task.attribution,

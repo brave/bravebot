@@ -498,6 +498,9 @@ pub fn run(
     // parent's would have.
     profile: Option<&std::path::Path>,
     model: Option<&str>,
+    // The spawning turn's level, which a delegate keeps where its definition names none
+    // (DELEGATE-26).
+    effort: Option<bravebot_aichat::protocol::Effort>,
     // The spawning turn's, since a delegate is that turn's work done elsewhere.
     permission_mode: crate::PermissionMode,
     // The spawning turn's as well, and it travels with the mode because the two are read together.
@@ -595,6 +598,14 @@ pub fn run(
         .as_ref()
         .map(|(_, resolved)| resolved.clone())
         .or_else(|| model.map(str::to_string));
+    // The definition's level where its file named one, and the spawning turn's where it named
+    // none, so `/effort` reaches delegates (DELEGATE-26). The word was settled against the five
+    // levels when the file was read, so one naming no level is already absent here.
+    let delegate_effort = seeded
+        .spec
+        .effort()
+        .and_then(bravebot_aichat::protocol::Effort::named)
+        .or(effort);
 
     // The mode is the spawning turn's, and inherited rather than chosen: a delegate is that turn's
     // own work done elsewhere, so a session that is planning must not have writes happening inside
@@ -605,6 +616,7 @@ pub fn run(
         .with_profile(profile.map(std::path::Path::to_path_buf))
         .remembering(seeded.remembering.clone())
         .with_model(delegate_model)
+        .with_effort(delegate_effort)
         .with_permissions(seeded.permissions.clone())
         .with_permission_mode(permission_mode)
         .with_auto_vetting(auto_vetting)
