@@ -171,6 +171,41 @@ pub fn matches(pattern: &str, name: &str) -> bool {
         .all(|character| *character == '*')
 }
 
+/// Which variable names a pattern in `run.scrubEnv` selected, each with the pattern that selected
+/// it, in the order the entries are written.
+///
+/// For the report alone. An exact entry is not listed: it names what it withholds already, and a
+/// person reading it back learns nothing. A pattern is the entry whose effect cannot be read off the
+/// file, since what it stands for depends on the variables this machine holds.
+///
+/// Names only, never a value, on the same terms the rest of this module withholds them. A name
+/// already among the built-in credentials is listed too where a pattern selected it: the question
+/// this answers is what the person's pattern reached, not what would otherwise have leaked.
+pub fn matched_by_patterns(settings: &Settings) -> Vec<(String, String)> {
+    matched_by_patterns_against(settings, &environment())
+}
+
+/// [`matched_by_patterns`], against `environment` rather than this process's own, for the reason
+/// [`names_against`] takes one.
+pub fn matched_by_patterns_against(
+    settings: &Settings,
+    environment: &[String],
+) -> Vec<(String, String)> {
+    if !enabled() {
+        return Vec::new();
+    }
+    settings
+        .scrubbed()
+        .filter(|entry| is_a_pattern(entry))
+        .flat_map(|entry| {
+            environment
+                .iter()
+                .filter(move |name| matches(entry, name))
+                .map(move |name| (entry.to_string(), name.clone()))
+        })
+        .collect()
+}
+
 /// Whether `entry` is a pattern rather than a name.
 ///
 /// A variable name cannot contain either character on any platform this runs on, so an entry
@@ -578,6 +613,42 @@ mod tests {
         assert!(
             names(&settings).iter().any(|name| name == "PATH"),
             "a pattern was matched against something other than this process's environment"
+        );
+    }
+
+    /// RUN-28: the report says what a pattern reached on this machine, which is the one thing the
+    /// file cannot say. An exact entry withholds what it spells, so listing it back teaches nobody
+    /// anything; a pattern's reach depends on the variables this process holds.
+    ///
+    /// Both halves are asserted together because a report listing every withheld name would pass a
+    /// test that only checked the pattern's matches.
+    #[test]
+    fn the_report_names_what_a_pattern_reached_and_not_what_an_exact_entry_spelled() {
+        let settings = Settings::parse(r#"{"run": {"scrubEnv": ["AWS_*", "MY_EXACT_NAME"]}}"#);
+        let matched = matched_by_patterns_against(
+            &settings,
+            &an_environment(&["AWS_PROFILE", "aws_region", "MY_EXACT_NAME", "PATH"]),
+        );
+
+        assert_eq!(
+            matched,
+            vec![
+                ("AWS_*".to_string(), "AWS_PROFILE".to_string()),
+                ("AWS_*".to_string(), "aws_region".to_string()),
+            ],
+            "the report does not name each variable the pattern reached, and only those"
+        );
+    }
+
+    /// A pattern that reached nothing has nothing to report, so a person is not shown an empty
+    /// claim that something was withheld.
+    #[test]
+    fn a_pattern_that_reached_nothing_is_not_reported() {
+        let settings = Settings::parse(r#"{"run": {"scrubEnv": ["NOTHING_*"]}}"#);
+
+        assert!(
+            matched_by_patterns_against(&settings, &an_environment(&["PATH", "HOME"])).is_empty(),
+            "a pattern matching no variable was reported as having withheld one"
         );
     }
 }

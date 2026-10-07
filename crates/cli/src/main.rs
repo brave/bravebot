@@ -2786,6 +2786,21 @@ fn doctor() -> ExitCode {
                 (true, true) => fact(t!(doctor_settings), t!(doctor_settings_absent)),
             }
 
+            // What a pattern in `run.scrubEnv` reached on this machine. An exact entry withholds
+            // what it says and needs no line; a pattern's effect depends on the variables this
+            // process holds, so the file alone does not tell a person whether it caught what they
+            // meant or more than they meant. Names only, never a value (RUN-28).
+            for (pattern, name) in bravebot_config::scrub::matched_by_patterns(&settings) {
+                fact(
+                    t!(doctor_scrub_pattern),
+                    t!(
+                        doctor_scrub_pattern_matched,
+                        pattern = pattern,
+                        variable = name
+                    ),
+                );
+            }
+
             // Which files are in force, weakest first, and then only the names where that order
             // decided something. A person reading a value they did not expect has three places it
             // could have come from, and the paths are the whole of what tells them which.

@@ -50,6 +50,8 @@ fr:cli-usage-sessions-stop
 fr:command-branch
 fr:command-caffeinate
 fr:command-init
+fr:doctor-scrub-pattern
+fr:doctor-scrub-pattern-matched
 fr:gigabytes
 fr:init-already-there
 fr:kilobytes

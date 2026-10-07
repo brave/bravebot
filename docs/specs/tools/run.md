@@ -1653,6 +1653,12 @@ pattern is a way of naming variables and the names it stands for are not known u
 names. The list is still read once when the process starts
 ([RUN-12](#RUN-12)).
 
+`doctor` names what a pattern reached on this machine: the pattern and one variable it selected, one
+line each, in the order the entries are written. Names only, on the terms the rest of this list
+withholds them. An exact entry is not listed, since it spells what it withholds and reading it back
+says nothing; a pattern is the entry whose effect the file alone does not give, because what it
+stands for depends on the variables this machine holds.
+
 **Nothing is withheld that the person did not write.** No pattern is built in and none is
 defaulted, so the set this agent withholds with no configuration is exactly the exact names
 [RUN-12](#RUN-12) states and the position that a name filter cannot tell `run aws s3 ls` from an
@@ -1669,6 +1675,8 @@ person who wanted every `AWS_*` or `*_TOKEN` kept from the programs a turn start
 went out of date without saying so.
 
 `verified-by: bravebot_config::scrub::a_pattern_withholds_the_family_it_names_whatever_the_case`
+`verified-by: bravebot_config::scrub::the_report_names_what_a_pattern_reached_and_not_what_an_exact_entry_spelled`
+`verified-by: bravebot_config::scrub::a_pattern_that_reached_nothing_is_not_reported`
 `verified-by: bravebot_config::scrub::a_pattern_covers_the_whole_name_and_a_question_mark_one_character`
 `verified-by: bravebot_config::scrub::a_pattern_matching_a_built_in_credential_does_not_list_it_twice`
 `verified-by: bravebot_config::scrub::a_pattern_naming_no_variable_adds_nothing_and_an_exact_name_still_does`
