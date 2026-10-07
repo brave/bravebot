@@ -571,8 +571,11 @@ whatever a front end sends back. The terminal draws both; the desktop front end 
 What this agent authenticates with, and anything it holds to spend on the person's behalf, are
 never written to a session record and never shown except as a redaction. Removing them from the
 environment of a program the agent starts is the same rule [tools/run.md](tools/run.md) already
-states and pins, covering the signing key and its key id, exempting a line the person typed at the
-`!` prompt, and switched off only by an environment variable rather than by any settings file.
+states and pins, covering the signing key, its key id and every variable a gateway's provider block
+names as the home of its token, exempting a line the person typed at the `!` prompt, and switched off
+only by an environment variable rather than by any settings file. The gateway variables come from the
+effective provider configuration ([RUN-12](tools/run.md#RUN-12)), so a block naming a variable of its
+own is covered without a list of well-known gateways.
 
 **Why not wider.** The person's own environment is left alone: asking a program to use credentials
 they already have is an ordinary request, and a name filter cannot tell one of those from an
@@ -595,6 +598,8 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_bedrock::credentials::this_agents_own_credentials_reach_none_of_the_aws_cli_this_crate_starts`
 `verified-by: bravebot_bedrock::credentials::the_machines_own_aws_configuration_still_reaches_the_cli`
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_not_one_of_this_agents_own`
+`verified-by: bravebot_config::scrub::the_variables_a_provider_block_names_are_withheld`
+`verified-by: bravebot_agent::exec::a_gateways_environment_token_does_not_reach_a_program_it_runs`
 
 <a id="CRED-15"></a>
 ### CRED-15: what a turn reads is scanned before the planner receives it
@@ -1106,6 +1111,11 @@ is the value a credential takes when a form is asked for and granted.
 ## Known costs
 
 We accept these deliberately. Do not "fix" one without changing this spec first.
+
+- **The gateway variables are read when a program starts.** The set is built from the provider
+  blocks in force at that moment, so a block added mid-session withholds its variable from the next
+  program and not from one already running. `BRAVEBOT_SUBPROCESS_ENV_SCRUB=0` returns every variable
+  to every program, a gateway's token included, and is the only way to switch the rule off.
 
 - **Most of what is already on the machine is out of reach.** An OS keychain, a cloud cache, a
   browser profile, a shell history: nothing here touches them. Reading one is ordinary file access,

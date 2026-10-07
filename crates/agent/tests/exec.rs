@@ -432,6 +432,181 @@ fn this_agents_own_credentials_do_not_reach_a_program_it_runs() {
     );
 }
 
+/// A home directory whose settings declare a gateway that reads its token from a variable no
+/// built-in list names, with the variable set to a live-looking value.
+///
+/// `HOME` is pointed at the scratch directory so the block is the one the program under test loads,
+/// and the name is deliberately not `OPENROUTER_API_KEY`: a withheld set that happened to list the
+/// well-known gateways would pass with that one.
+#[cfg(unix)]
+fn with_a_gateway_token(scratch: &Scratch) -> EnvGuard {
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join(".bravebot")).expect("create the home");
+    std::fs::write(
+        home.join(".bravebot").join("settings.json"),
+        r#"{"provider": {"acme": {
+            "options": {"baseURL": "https://gateway.acme.invalid/v1"},
+            "env": ["ACME_GATEWAY_TOKEN", "ACME_GATEWAY_FALLBACK"]
+        }}}"#,
+    )
+    .expect("write the settings");
+    with_env(&[
+        ("HOME", Some(home.to_str().expect("a path"))),
+        ("ACME_GATEWAY_TOKEN", Some("a-live-gateway-token")),
+        ("ACME_GATEWAY_FALLBACK", Some("a-live-fallback-token")),
+        ("BRAVEBOT_SUBPROCESS_ENV_SCRUB", None),
+    ])
+}
+
+/// The request the withheld variable is for still carries it: it is withheld from the programs this
+/// agent starts, and the agent reads it from its own environment.
+#[cfg(unix)]
+fn the_gateway_still_authenticates() {
+    use bravebot_config::provider::Credential;
+    let settings = bravebot_config::Settings::load();
+    let acme = settings
+        .providers()
+        .iter()
+        .find(|provider| provider.id == "acme")
+        .expect("the block was read");
+    match acme.credential(|name| std::env::var(name).ok()) {
+        Credential::Token(token) => assert_eq!(token.expose(), "a-live-gateway-token"),
+        _ => panic!("the gateway lost its token, so withholding it broke the request"),
+    }
+}
+
+/// RUN-12: the variables a provider block names are withheld from a program the planner chose,
+/// every one the block lists, and the gateway still authenticates.
+#[cfg(unix)]
+#[test]
+fn a_gateways_environment_token_does_not_reach_a_program_it_runs() {
+    let scratch = Scratch::new("scrub-gateway");
+    let _guard = with_a_gateway_token(&scratch);
+
+    let ran = run(
+        Pipeline::new(vec![Stage::new("env", Vec::new())]),
+        &scratch.path,
+    )
+    .expect("env runs");
+
+    assert!(ran.succeeded());
+    assert!(
+        !ran.stdout.contains("a-live-gateway-token"),
+        "the gateway's token reached a program the planner chose"
+    );
+    assert!(
+        !ran.stdout.contains("a-live-fallback-token"),
+        "only the first variable the block lists was withheld"
+    );
+    the_gateway_still_authenticates();
+}
+
+/// A later stage is as reachable as the first.
+#[cfg(unix)]
+#[test]
+fn no_stage_of_a_pipeline_sees_a_gateways_environment_token() {
+    let scratch = Scratch::new("scrub-gateway-stages");
+    let _guard = with_a_gateway_token(&scratch);
+
+    let ran = run(
+        Pipeline::new(vec![
+            Stage::new("true", Vec::new()),
+            Stage::new("env", Vec::new()),
+        ]),
+        &scratch.path,
+    )
+    .expect("the pipeline runs");
+
+    assert!(
+        !ran.stdout.contains("a-live-gateway-token"),
+        "a later stage was handed the gateway's token"
+    );
+}
+
+/// The background path starts its own command, so the foreground test says nothing about it.
+#[cfg(unix)]
+#[test]
+fn a_background_job_is_not_handed_a_gateways_environment_token() {
+    let scratch = Scratch::new("scrub-gateway-background");
+    let _guard = with_a_gateway_token(&scratch);
+    let resolved = script(
+        &scratch.path,
+        "show-env",
+        "#!/bin/sh
+env
+",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("show-env", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let printed = job.printed();
+    assert!(job.ended(), "the job never ended");
+    assert!(
+        printed.contains("PATH="),
+        "the job printed no environment at all: {printed}"
+    );
+    assert!(
+        !printed.contains("a-live-gateway-token") && !printed.contains("a-live-fallback-token"),
+        "a background job was handed a gateway's token"
+    );
+    the_gateway_still_authenticates();
+}
+
+/// A variable no provider block names is the person's own and still reaches the program, so the
+/// set is read from the configuration rather than widened to anything token-shaped.
+#[cfg(unix)]
+#[test]
+fn a_variable_no_provider_block_names_still_reaches_a_program() {
+    let scratch = Scratch::new("scrub-gateway-unnamed");
+    let _guard = with_a_gateway_token(&scratch);
+    // SAFETY: the guard above holds ENV_LOCK, and the variable is removed again below.
+    unsafe { std::env::set_var("OPENROUTER_API_KEY", "a-key-no-block-reads") };
+
+    let ran = run(
+        Pipeline::new(vec![Stage::new("env", Vec::new())]),
+        &scratch.path,
+    )
+    .expect("env runs");
+    // SAFETY: as above, before the assertion so a failure cannot leave it set.
+    unsafe { std::env::remove_var("OPENROUTER_API_KEY") };
+
+    assert!(
+        ran.stdout.contains("a-key-no-block-reads"),
+        "a variable no block names was withheld"
+    );
+}
+
+/// The escape hatch restores a gateway's variable along with the signing key.
+#[cfg(unix)]
+#[test]
+fn switching_the_filtering_off_restores_a_gateways_environment_token() {
+    let scratch = Scratch::new("scrub-gateway-off");
+    let _guard = with_a_gateway_token(&scratch);
+    // SAFETY: the guard above holds ENV_LOCK, and the previous value is restored below.
+    unsafe { std::env::set_var("BRAVEBOT_SUBPROCESS_ENV_SCRUB", "0") };
+
+    let ran = run(
+        Pipeline::new(vec![Stage::new("env", Vec::new())]),
+        &scratch.path,
+    )
+    .expect("env runs");
+
+    // SAFETY: as above; the guard recorded the variable as absent, so it removes it again, but
+    // it is removed here first so a failed assertion cannot leave it set for the next test.
+    unsafe { std::env::remove_var("BRAVEBOT_SUBPROCESS_ENV_SCRUB") };
+    assert!(
+        ran.stdout.contains("a-live-gateway-token"),
+        "`0` did not restore a gateway's variable"
+    );
+}
+
 /// Every stage, not only the first. A credential is as reachable from the middle of a pipeline as
 /// from the front, so one stage spared would be the whole of the hole.
 #[cfg(unix)]

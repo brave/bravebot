@@ -94,13 +94,14 @@ impl LanguageServers {
             // The same `$PATH` lookup `run` uses, so a name cannot mean one binary to a command a
             // person approved and another to a question put to a server. And the same withheld
             // credentials, which is RUN-12: a person approving a server did not approve handing it
-            // what this agent authenticates with.
+            // what this agent authenticates with. Computed when each server starts, since the
+            // provider blocks in force can change during a session.
             servers: Arc::new(Mutex::new(Servers::new(
                 root.clone(),
                 state,
                 resolve_program,
                 incognito,
-                bravebot_config::scrub::names(&bravebot_config::Settings::load()),
+                bravebot_config::scrub::withheld,
             ))),
             root,
         }

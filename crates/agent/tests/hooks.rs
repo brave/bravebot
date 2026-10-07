@@ -384,3 +384,62 @@ fn a_hook_is_not_handed_this_agent_s_own_credentials() {
     let key = std::fs::read_to_string(scratch.path.join("key.txt")).expect("what it saw");
     assert!(key.is_empty(), "a credential reached a hook: {key}");
 }
+
+/// RUN-12: the variables a provider block names are withheld from a hook as well, and the hook
+/// still runs in the environment it had otherwise.
+///
+/// The block names a variable no built-in list holds. `HOME` is pointed at a settings file that
+/// declares it, which is where the program under test reads providers from.
+#[test]
+fn a_hook_is_not_handed_a_gateways_environment_token() {
+    let scratch = Scratch::new("scrubbed-gateway");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join(".bravebot")).expect("create the home");
+    std::fs::write(
+        home.join(".bravebot").join("settings.json"),
+        r#"{"provider": {"acme": {
+            "options": {"baseURL": "https://gateway.acme.invalid/v1"},
+            "env": ["ACME_GATEWAY_TOKEN"]
+        }}}"#,
+    )
+    .expect("write the settings");
+    let program = script(
+        &scratch.path,
+        "keep-env",
+        "#!/bin/sh\nenv > environment.txt\n",
+    );
+    let hooks = declaring("turn-started", &[program.to_str().expect("a path")]);
+
+    static ENVIRONMENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _held = ENVIRONMENT.lock().unwrap_or_else(|held| held.into_inner());
+    let previous_home = std::env::var_os("HOME");
+    // SAFETY: ENVIRONMENT is held, nothing else in this binary reads these names, and both
+    // variables are put back before any assertion.
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("ACME_GATEWAY_TOKEN", "a-live-gateway-token");
+        std::env::remove_var("BRAVEBOT_SUBPROCESS_ENV_SCRUB");
+    }
+
+    fire(&hooks, Moment::TurnStarted, None, &scratch.path);
+
+    // SAFETY: as above.
+    unsafe {
+        std::env::remove_var("ACME_GATEWAY_TOKEN");
+        match previous_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    let environment =
+        std::fs::read_to_string(scratch.path.join("environment.txt")).expect("what it saw");
+    assert!(
+        environment.contains("PATH="),
+        "the hook saw no environment at all: {environment}"
+    );
+    assert!(
+        !environment.contains("a-live-gateway-token"),
+        "a gateway's token reached a hook"
+    );
+}
