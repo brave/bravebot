@@ -150,6 +150,21 @@ The command line that started a session or a run is the other source. `--agent <
 it is read before any turn exists, so no turn's output can set it. It names the definition for every
 turn of the session, while a `/agent` line names one for a single turn.
 
+The session record is a third source, and only for a name that source got from the second. The
+driver writes the name `--agent` gave into the record of the session it started, and a session
+resumed, continued or forked from that record works under the same name. What stands in for the
+keystroke on a resume is the person's own earlier `--agent` and their choice to resume that session.
+The name is only ever written by the driver, from the argument, under the state directory and never
+from a checkout, so no turn's output and no file in a checkout can set it. It is matched against
+the set a turn starting now would resolve ([ADDRESS-5](#ADDRESS-5)) before any turn is sent, so an
+edit to the definition is followed. A name that matches nothing now is said, with the definition
+named and that the narrowing is gone, and the session opens without it and no longer records it. A
+definition whose model needs a sign-in is refused, as at the start ([ADDRESS-11](#ADDRESS-11)),
+rather than replaced by the planner. A `--agent` on the command line that resumes names the
+definition for that session in place of the recorded one. A `/clear` opens a new record under the
+definition the session still works under. The desktop addresses no definition, so a session resumed
+there stops recording the name.
+
 [MEMORY-10](definition-memory.md#MEMORY-10) adds a second source: a
 turn in a desktop bot's conversation addresses that bot's definition. The name comes from the
 conversation a person opened rather than from a line, and nothing a turn produced chooses it, so
@@ -158,7 +173,17 @@ what stands in for the keystroke is making the bot and opening its conversation.
 `verified-by: bravebot_tui::app::a_line_addressing_a_definition_queued_while_a_turn_ran_addresses_it_when_the_turn_ends`
 `verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`
 `verified-by: bravebot_tui::app::a_name_from_the_command_line_is_worked_under_where_it_was_written_and_refused_where_not`
-`verified-by: by-construction (in the interface a name reaches a turn only through Session::address or Session::work_under; the first's one caller settles the Action::Address that only the /agent branch of dispatch_command returns, and dispatch_command is reached from the input box's key handler and from the queue that handler filled; the second's one caller is the event loop before its first turn, with the name main took off the command line; a session in lines and a one-shot run put a name on a Task only from that same argument; and the turn reads the name off the session as it starts, so nothing a turn produced sets one)`
+`verified-by: bravebot_session::sessions::a_session_records_the_definition_it_was_started_under_and_its_fork_and_resume_keep_it`
+`verified-by: bravebot_tui::app::a_resumed_session_works_under_the_definition_its_record_names`
+`verified-by: bravebot_tui::app::a_recorded_definition_that_is_gone_is_said_and_the_session_opens_without_it`
+`verified-by: bravebot_tui::app::a_recorded_definition_whose_model_needs_a_sign_in_is_refused_not_replaced`
+`verified-by: bravebot_cli::running::a_continued_run_works_under_the_definition_the_session_recorded`
+`verified-by: bravebot_tui::app::a_name_typed_with_a_resume_replaces_the_recorded_one`
+`verified-by: bravebot_tui::app::the_typed_name_outranks_the_recorded_one_and_only_a_recorded_miss_is_survivable`
+`verified-by: bravebot_tui::app::a_cleared_session_records_the_definition_it_still_works_under`
+`verified-by: bravebot_cli::running::a_definition_named_on_a_continued_run_replaces_the_recorded_one`
+`verified-by: bravebot_ui_bridge::interop::resuming_a_session_started_under_a_definition_stops_recording_it`
+`verified-by: by-construction (in the interface a name reaches a turn only through Session::address or Session::work_under; the first's one caller settles the Action::Address that only the /agent branch of dispatch_command returns, and dispatch_command is reached from the input box's key handler and from the queue that handler filled; the second's one caller is the event loop before its first turn, with the name main took off the command line or the one the record carries, which only Handle::set_agent writes, from that same argument or the session's own standing definition; a session in lines and a one-shot run put a name on a Task only from that same argument; and the turn reads the name off the session as it starts, so nothing a turn produced sets one)`
 
 <a id="ADDRESS-4"></a>
 ### ADDRESS-4: a conversation that has met untrusted content addresses a definition anyway
@@ -442,9 +467,11 @@ the one that matched the name.
   [ADDRESS-8](#ADDRESS-8)'s exception, and a person who wanted the session to keep looking can ask
   the session rather than the definition.
 
-- **A session started under a definition cannot be resumed under it.** The session record does not
-  keep the name, so `--agent` is refused with `--resume`, `--continue` and `--fork`, and a session
-  resumed without it goes to the planner from then on.
+- **A resumed session is under the definition as it is now, not as it was.** The record keeps the
+  name and nothing else, so an edit to the definition between the two sessions applies to the turns
+  already in the transcript only as far as the next turn reads it. A definition that was deleted
+  leaves a session that goes on as the planner's, with the loss said once. The desktop addresses no
+  definition, so a session resumed there stops recording the name.
 
 - **A self-paced `/loop` in such a session stops after one tick.** The tick is addressed, so it
   cannot schedule the next one ([ADDRESS-8](#ADDRESS-8)). A `/loop` with an interval is scheduled

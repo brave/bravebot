@@ -191,10 +191,8 @@ fn main() -> ExitCode {
         }
         // With no arguments the interactive session is the natural default.
         None => interactive(
-            agent.map_or(
-                bravebot_tui::app::Start::Fresh,
-                bravebot_tui::app::Start::Under,
-            ),
+            bravebot_tui::app::Start::Fresh,
+            agent,
             skip_permissions,
             prompts,
         ),
@@ -203,8 +201,13 @@ fn main() -> ExitCode {
             run_task(&args, skip_permissions, agent, prompts)
         }
         Some("--resume" | "-r") => match args.get(1) {
-            Some(id) => resume_named(id, skip_permissions, prompts),
-            None => interactive(bravebot_tui::app::Start::Choose, skip_permissions, prompts),
+            Some(id) => resume_named(id, agent, skip_permissions, prompts),
+            None => interactive(
+                bravebot_tui::app::Start::Choose,
+                agent,
+                skip_permissions,
+                prompts,
+            ),
         },
         // The same list, opened for the sessions linked to one pull request. A missing value is
         // refused rather than read as a plain `--resume`, since a script whose variable expanded to
@@ -212,6 +215,7 @@ fn main() -> ExitCode {
         Some("--from-pr") => match args.get(1).map(|wanted| wanted.trim()) {
             Some(wanted) if !wanted.is_empty() && !wanted.starts_with('-') => interactive(
                 bravebot_tui::app::Start::ChooseFromPr(wanted.to_string()),
+                agent,
                 skip_permissions,
                 prompts,
             ),
@@ -220,11 +224,11 @@ fn main() -> ExitCode {
         // The same, for the session somebody was in a moment ago, which is the one they mean
         // often enough that asking them to find its id is asking for nothing.
         Some("--continue" | "-c") if !continues_with_a_task(&args) => {
-            continue_here(skip_permissions, prompts)
+            continue_here(agent, skip_permissions, prompts)
         }
         // Fork a session, creating a new session record that starts with the same transcript.
         Some("--fork" | "-f") => match args.get(1) {
-            Some(id) => fork_named(id, skip_permissions, prompts),
+            Some(id) => fork_named(id, agent, skip_permissions, prompts),
             // No result object here, and none is owed: reaching this arm means the arguments held
             // `--fork` and nothing after it, so the command line cannot also have carried `--json`.
             // `bravebot --fork --json` reads the flag as the session id and is refused by name in
@@ -357,15 +361,10 @@ fn continues_with_a_task(args: &[String]) -> bool {
 
 /// Why `--agent` cannot go with the command line's first argument, or `None` where it can.
 ///
-/// A resumed or forked session is refused because its record does not store which definition the
-/// session used, and its earlier turns were the planner's (CLI-17). The other commands start
-/// neither a session nor a task. A name nothing would use is refused instead of ignored, for the
-/// reason CLI-13 gives about a settings file.
+/// The commands other than a session or a task start neither, so a name they would not use is
+/// refused instead of ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_definition(first: Option<&str>) -> Option<String> {
     match first? {
-        flag @ ("--resume" | "-r" | "--continue" | "-c" | "--fork" | "-f" | "--from-pr") => {
-            Some(t!(cli_agent_not_with_a_recorded_session, flag = flag).to_string())
-        }
         command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
         | "import-leo-creds" | "import-providers" | "completion") => {
             Some(t!(cli_agent_not_for_a_command, command = command).to_string())
@@ -1003,20 +1002,12 @@ fn run_task(
         );
     }
 
-    // A record stores no definition, so a run addressed to one cannot carry on a recorded session
-    // (CLI-17), and a manifest run has no conversation to carry a recorded one into.
+    // A manifest run has no conversation to carry a recorded one into.
     if let Some(asked) = &resume {
         let flag = match asked {
             continued::Resume::Id(_) => "--resume",
             continued::Resume::Latest => "--continue",
         };
-        if agent.is_some() {
-            return stopped_before_the_turn(
-                as_json,
-                Ending::Argument,
-                t!(cli_agent_not_with_a_recorded_session, flag = flag),
-            );
-        }
         if mode == Mode::Manifest {
             return stopped_before_the_turn(
                 as_json,
@@ -1048,7 +1039,9 @@ fn run_task(
     //
     // A run under a definition and no `--model` is asked below instead, once the definition is
     // matched, because the model it asks for is the definition's where the definition names one.
-    let asked_below = agent.is_some() && model.is_none();
+    // A continued session may be recorded as having worked under one, which is not known until its
+    // record is read.
+    let asked_below = (agent.is_some() || resume.is_some()) && model.is_none();
     if !asked_below
         && let Some(how) = nothing_serves(&config, &model_for_this_run(model.as_deref(), &config))
     {
@@ -1112,14 +1105,30 @@ fn run_task(
     // Matched here, before any server is reached, so a name matching nothing sends nothing and the
     // refusal lists the names that exist (ADDRESS-5). The turn's kernel matches it again and makes
     // the decision. This match is what makes a miss exit with the argument status.
-    let under = match agent
-        .as_deref()
-        .map(|name| definition_for_a_run(&config, &workspace, &permissions, name, model.is_some()))
-        .transpose()
-    {
-        Ok(under) => under.flatten(),
-        Err(refused) => return stopped_before_the_turn(as_json, Ending::Argument, refused),
-    };
+    //
+    // A continued session works under the definition its record names unless this command line
+    // named one. The recorded name is the person's own earlier `--agent`, so a name that matches
+    // nothing now is said on stderr and the run goes on without it, where a name typed here would
+    // end the run (ADDRESS-3).
+    let recorded = continued
+        .as_ref()
+        .and_then(|record| record.agent.as_deref());
+    let (agent, under) =
+        match bravebot_tui::app::settle_definition(agent.as_deref(), recorded, |name| {
+            definition_for_a_run(&config, &workspace, &permissions, name, model.is_some())
+        }) {
+            Ok(bravebot_tui::app::Settled::Under { name, found }) => (Some(name), found),
+            Ok(bravebot_tui::app::Settled::Gone { name, why }) => {
+                eprintln!(
+                    "{}",
+                    t!(session_recorded_definition_gone, definition = name.as_str())
+                );
+                eprintln!("{why}");
+                (None, None)
+            }
+            Ok(bravebot_tui::app::Settled::Nothing) => (None, None),
+            Err(refused) => return stopped_before_the_turn(as_json, Ending::Argument, refused),
+        };
     if asked_below
         && let Some(how) = nothing_serves(
             &config,
@@ -1225,7 +1234,7 @@ fn run_task(
             bravebot_session::store::load_vetting(),
             settings.auto_vetting(),
         ))
-        .addressing(agent)
+        .addressing(agent.clone())
         .model_outranks_a_definition(named_on_the_command_line);
     for file in files {
         task = task.with_file(file);
@@ -1382,6 +1391,7 @@ fn run_task(
                         trust: &trust,
                         begins,
                         prompt_at: reporter.prompt_at(),
+                        agent: agent.as_deref(),
                     },
                 );
             }
@@ -1760,7 +1770,7 @@ fn definition_for_a_run(
     permissions: &bravebot_core::permissions::Permissions,
     name: &str,
     model_named: bool,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, bravebot_tui::app::Unusable> {
     let trust = bravebot_agent::workspace::trust_store(workspace.root());
     let definitions = bravebot_agent::agents::resolved(
         workspace,
@@ -1771,7 +1781,7 @@ fn definition_for_a_run(
     );
     if definitions.get(name).is_none() {
         let names = definitions.names().join(", ");
-        return Err(
+        return Err(bravebot_tui::app::Unusable::Missing(
             match bravebot_agent::agents::not_vouched_for(workspace, &trust) {
                 0 => t!(cli_agent_no_such_definition, name = name, names = names),
                 count => t!(
@@ -1782,7 +1792,7 @@ fn definition_for_a_run(
                 ),
             }
             .to_string(),
-        );
+        ));
     }
     // Nothing asks for the definition's model when the command line named one, so its sign-in
     // does not matter.
@@ -2229,7 +2239,12 @@ fn print_trace(output: &mut impl Write, sink: &RecordingSink) {
     }
 }
 
-fn resume_named(id: &str, skip_permissions: bool, prompts: SystemPrompts) -> ExitCode {
+fn resume_named(
+    id: &str,
+    agent: Option<String>,
+    skip_permissions: bool,
+    prompts: SystemPrompts,
+) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
         return fail(Ending::Failed, t!(cli_directory_unknown));
     };
@@ -2256,6 +2271,7 @@ fn resume_named(id: &str, skip_permissions: bool, prompts: SystemPrompts) -> Exi
         }
         Some(record) => interactive(
             bravebot_tui::app::Start::Resuming(Box::new(record)),
+            agent,
             skip_permissions,
             prompts,
         ),
@@ -2263,7 +2279,12 @@ fn resume_named(id: &str, skip_permissions: bool, prompts: SystemPrompts) -> Exi
     }
 }
 
-fn fork_named(id: &str, skip_permissions: bool, prompts: SystemPrompts) -> ExitCode {
+fn fork_named(
+    id: &str,
+    agent: Option<String>,
+    skip_permissions: bool,
+    prompts: SystemPrompts,
+) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
         return fail(Ending::Failed, t!(cli_directory_unknown));
     };
@@ -2282,6 +2303,7 @@ fn fork_named(id: &str, skip_permissions: bool, prompts: SystemPrompts) -> ExitC
         Some(_) => match bravebot_session::sessions::fork(&directory, id) {
             Some(record) => interactive(
                 bravebot_tui::app::Start::Resuming(Box::new(record)),
+                agent,
                 skip_permissions,
                 prompts,
             ),
@@ -2296,20 +2318,25 @@ fn fork_named(id: &str, skip_permissions: bool, prompts: SystemPrompts) -> ExitC
 /// Where there is none, this says so and fails. Starting a fresh session instead would answer a
 /// different question than the one asked, and it would answer it by throwing away the request:
 /// somebody who meant to carry on and got an empty transcript has lost the thing they asked for.
-fn continue_here(skip_permissions: bool, prompts: SystemPrompts) -> ExitCode {
+fn continue_here(
+    agent: Option<String>,
+    skip_permissions: bool,
+    prompts: SystemPrompts,
+) -> ExitCode {
     let Ok(directory) = std::env::current_dir() else {
         return fail(Ending::Failed, t!(cli_directory_unknown));
     };
     match bravebot_session::sessions::most_recent(&directory) {
         // By the id, so this arrives at the interface the way a named resume does, down to a
         // record that went away between the list and the read.
-        Some(session) => resume_named(&session.id, skip_permissions, prompts),
+        Some(session) => resume_named(&session.id, agent, skip_permissions, prompts),
         None => fail(Ending::Failed, t!(cli_nothing_to_continue)),
     }
 }
 
 fn interactive(
     start: bravebot_tui::app::Start,
+    agent: Option<String>,
     skip_permissions: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
@@ -2371,6 +2398,7 @@ fn interactive(
         confinement,
         started,
         start,
+        agent,
         skip_permissions,
         prompts,
     ) {
@@ -5940,19 +5968,12 @@ mod tests {
         }
     }
 
-    /// A recorded session stores no definition, so resuming it under a name would continue the
-    /// planner's conversation as a definition's. A command that starts no session has nothing to
-    /// address. Both are refused, so the name is never silently dropped.
+    /// A command that starts no session has nothing to address, so the name is refused rather than
+    /// silently dropped. A way of picking up a recorded session has something to address: the
+    /// record names the definition, and a name given with the flag replaces it (CLI-17).
     #[test]
     fn a_definition_is_refused_where_nothing_would_work_under_it() {
         for first in [
-            "--resume",
-            "-r",
-            "--continue",
-            "-c",
-            "--fork",
-            "-f",
-            "--from-pr",
             "doctor",
             "auth",
             "mcp",
@@ -5974,6 +5995,13 @@ mod tests {
             Some("--plain"),
             Some("--model"),
             Some("a task"),
+            Some("--resume"),
+            Some("-r"),
+            Some("--continue"),
+            Some("-c"),
+            Some("--fork"),
+            Some("-f"),
+            Some("--from-pr"),
         ] {
             assert_eq!(without_a_definition(first), None, "{first:?} was refused");
         }

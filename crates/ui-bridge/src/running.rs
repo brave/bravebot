@@ -215,6 +215,10 @@ impl State {
         record: &bravebot_session::sessions::Record,
         trust: TrustStore,
     ) -> Self {
+        let mut handle = Handle::resuming(project, record, crate::FRONT, crate::agent_build());
+        // The desktop addresses no definition, so the turns it writes are not the definition's and
+        // the record must not go on saying they were.
+        handle.set_agent(None);
         Self {
             conversation: Conversation::restored(record.conversation.clone()),
             trust,
@@ -222,12 +226,7 @@ impl State {
             asked_about: Default::default(),
             exposed: Default::default(),
             directories: record.directories.iter().map(PathBuf::from).collect(),
-            handle: Some(Handle::resuming(
-                project,
-                record,
-                crate::FRONT,
-                crate::agent_build(),
-            )),
+            handle: Some(handle),
             turns: record.turns,
             history: record.history.clone(),
             tokens: record.tokens,

@@ -752,8 +752,8 @@ one-shot run to the definition `name` selects, as a `/agent` line addresses one 
 ([addressing-a-definition.md](addressing-a-definition.md)). The flag and its name are taken out of
 the arguments before anything dispatches on them, as `--settings` is. If the flag is given twice,
 the last name is used. It is refused when no name follows it, when the name is blank or opens with
-`-`, and when it is given with `--resume`, `--continue`, `--fork`, `--mode manifest` or a command
-that starts neither a session nor a task.
+`-`, and when it is given with `--mode manifest` or a command that starts neither a session nor a
+task.
 
 The name is matched against the set a turn starting now would resolve
 ([ADDRESS-5](addressing-a-definition.md#ADDRESS-5)), before any turn is sent. A session matches it
@@ -796,10 +796,15 @@ Ticks and rounds are addressed too, because addressing only narrows what a turn 
 ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)). An unaddressed tick would have more tools than
 the turns the person typed.
 
-It is refused with a recorded session because the record does not store which definition the
-session used. The recorded turns were the planner's, and continuing under a definition would mix
-turns from both in one transcript with nothing marking which is which. It is refused with
-`--mode manifest` because a manifest run plans every step before any runs and none of the steps is
+The name is written into the record of the session it started, by the driver from this argument. A
+session picked up with `--resume`, `--continue`, `--fork`, `--from-pr`, `/resume` or a one-shot run
+carrying one on works under the recorded name, matched as above before any turn is sent
+([ADDRESS-3](addressing-a-definition.md#ADDRESS-3)). A `--agent` given with one of them names the
+definition for that session in place of the recorded one, and is refused as a fresh session's is
+when it matches nothing. A recorded name that matches nothing now does not end the run: it is said,
+with the definition named and that the narrowing is gone, and the session or run goes on as the
+planner's and stops recording the name. A recorded name whose model needs a sign-in is refused, since
+going on would substitute the planner's model. It is refused with `--mode manifest` because a manifest run plans every step before any runs and none of the steps is
 addressed, while a definition is addressed one turn at a time.
 
 `--model` outranks the definition for the reason in CLI-9: it names the model for this one
@@ -1280,8 +1285,10 @@ A turn after piped input (CLI-3) is therefore given no byte the first turn was n
 The flags are refused with the status for an argument (CLI-6), before anything is sent, when no id
 follows `--resume`, when the id or the directory's latest session names no record, when the record
 is a manifest run ([SESSION-10](sessions.md#SESSION-10)) or a session a background process is
-running ([BG-9](background-sessions.md#BG-9)), with `--agent` because a record stores no definition
-(CLI-17), and with `--mode manifest`. `--resume` and `--continue` with no task open the session
+running ([BG-9](background-sessions.md#BG-9)), and with `--mode manifest`. A continued run works
+under the definition the record names, and a `--agent` given with the flag names one in place of it
+(CLI-17). The result object names the definition in `agent`, and the record names it for the next
+run. `--resume` and `--continue` with no task open the session
 interactively, and a session in lines writes no record (CLI-14).
 
 **Why.** A script chaining a review, a fix and a summary has to restate everything each time while a

@@ -50,6 +50,9 @@ pub struct Finished<'a> {
     /// The length of the recounted conversation before the turn, and where the prompt entered it.
     pub begins: usize,
     pub prompt_at: Option<usize>,
+    /// The definition this run was addressed to, which is what the record is to say the session
+    /// works under from here (CLI-17).
+    pub agent: Option<&'a str>,
 }
 
 /// Write the turn down, as a new session or as one more turn of the one it continued.
@@ -64,6 +67,7 @@ pub fn keep(root: &Path, previous: Option<Record>, turn: Finished<'_>) -> Option
         Some(record) => {
             let mut handle =
                 Handle::resuming(root, &record, Front::Terminal, bravebot_stamp::BUILD);
+            handle.set_agent(turn.agent.map(str::to_string));
             let written = handle.save_continuation(
                 record,
                 Continuation {
@@ -81,6 +85,7 @@ pub fn keep(root: &Path, previous: Option<Record>, turn: Finished<'_>) -> Option
         }
         None => {
             let mut handle = Handle::begin(root, Front::Terminal, bravebot_stamp::BUILD);
+            handle.set_agent(turn.agent.map(str::to_string));
             let history = [bravebot_session::sessions::StoredTurn::completed(
                 1,
                 turn.prompt,

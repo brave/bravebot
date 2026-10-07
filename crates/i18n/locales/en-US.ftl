@@ -142,10 +142,6 @@ cli-directory-ends-checkouts = { $directory } holds the working directory, so no
 cli-settings-needs-a-path = --settings requires a path to a settings file
 cli-settings-not-a-file = --settings names no file: { $path }
 cli-agent-needs-a-name = --agent requires the name of a definition
-# The flag is one of --resume, --continue and --fork, as typed.
-cli-agent-not-with-a-recorded-session =
-    --agent starts a new session, and { $flag } picks up a recorded one, which does not keep the
-    definition it worked under
 # The command is the first argument, one of this program's own subcommands.
 cli-agent-not-for-a-command =
     --agent names the definition a session or a task works under, and { $command } starts neither
@@ -2583,6 +2579,11 @@ agent-answered = { $name } answered
 # Said when a session started with --agent opens, after the directory's trust is settled (CLI-17).
 session-working-under =
     every turn is addressed to { $definition }; /agent <name> <task> addresses another for one turn
+# Said when a resumed session was started under a definition that cannot be used now. The reason
+# follows in the next line. The name is the one the driver recorded from the person's --agent.
+session-recorded-definition-gone =
+    this session was started under { $definition }, and the narrowing is gone: every turn from here
+    is the session's own, with the tools and model it would have without --agent
 # Said for /model in a session started with --agent under a definition that names a model.
 session-model-is-the-definitions =
     every turn is addressed to { $definition }, which asks for { $model }, so /model has nothing to

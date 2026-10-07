@@ -2056,7 +2056,7 @@ fn address(
     let addressed = match definition_named(config, definitions, name) {
         Ok(addressed) => addressed,
         Err(refused) => {
-            session.note(refused);
+            session.note(refused.into_message());
             return Action::Redraw;
         }
     };
@@ -2065,6 +2065,77 @@ fn address(
         return Action::Redraw;
     }
     Action::Submit(session.address(addressed, task, pasted, attached))
+}
+
+/// Why a definition a name selects cannot be worked under.
+///
+/// Kept apart because a session resumed under a name its record carries goes on without a
+/// definition that no longer exists and refuses one it cannot reach: continuing without a model
+/// that needs a sign-in would substitute the planner's (ADDRESS-11, CLI-9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unusable {
+    /// Nothing in the set a turn starting now would resolve has the name.
+    Missing(String),
+    /// The definition exists, and the model it asks for is refused or needs a sign-in.
+    Refused(String),
+}
+
+impl Unusable {
+    /// The sentence saying why, for whoever is to read it.
+    pub fn into_message(self) -> String {
+        match self {
+            Unusable::Missing(message) | Unusable::Refused(message) => message,
+        }
+    }
+}
+
+/// What a session or a run is to work under, once the name typed on the command line and the name
+/// its record carries have been weighed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Settled<T> {
+    /// Neither source named a definition.
+    Nothing,
+    /// The session works under `name`, which `work` accepted as `found`, and its record says so.
+    Under { name: String, found: T },
+    /// The record's definition no longer exists. The session goes on without it, says so, and
+    /// stops recording the name.
+    Gone { name: String, why: String },
+}
+
+/// Decide which definition a session or run works under, the one policy every front end shares
+/// (ADDRESS-3).
+///
+/// A name typed on this command line wins and ends the session when `work` finds nothing for it. A
+/// recorded name is the person's own earlier `--agent`, so one that matches nothing now is
+/// reported as [`Settled::Gone`] for the caller to say in its own way, and one whose model is
+/// refused or needs a sign-in ends the session too, because going on would substitute the
+/// planner's model for the one the definition asked for (ADDRESS-11, CLI-9). `work` is given the
+/// name to try and is called at most once.
+pub fn settle_definition<T>(
+    typed: Option<&str>,
+    recorded: Option<&str>,
+    work: impl FnOnce(&str) -> Result<T, Unusable>,
+) -> Result<Settled<T>, String> {
+    match (typed, recorded) {
+        (Some(name), _) => work(name)
+            .map(|found| Settled::Under {
+                name: name.to_string(),
+                found,
+            })
+            .map_err(Unusable::into_message),
+        (None, Some(name)) => match work(name) {
+            Ok(found) => Ok(Settled::Under {
+                name: name.to_string(),
+                found,
+            }),
+            Err(Unusable::Missing(why)) => Ok(Settled::Gone {
+                name: name.to_string(),
+                why,
+            }),
+            Err(refused) => Err(refused.into_message()),
+        },
+        (None, None) => Ok(Settled::Nothing),
+    }
 }
 
 /// Work every turn of `session` under the definition `name` selects, or say why it selects none.
@@ -2083,7 +2154,7 @@ fn work_under(
     trust: &TrustStore,
     permissions: &bravebot_core::permissions::Permissions,
     name: &str,
-) -> Result<(), String> {
+) -> Result<(), Unusable> {
     let definitions = bravebot_agent::agents::resolved(
         workspace,
         home,
@@ -2110,14 +2181,16 @@ pub fn definition_named(
     config: &Config,
     definitions: &bravebot_core::delegate::Definitions,
     name: &str,
-) -> Result<crate::state::Addressed, String> {
+) -> Result<crate::state::Addressed, Unusable> {
     let Some(definition) = definitions.get(name) else {
-        return Err(t!(
-            agent_no_such_definition,
-            name = name,
-            names = definitions.names().join(", ")
-        )
-        .to_string());
+        return Err(Unusable::Missing(
+            t!(
+                agent_no_such_definition,
+                name = name,
+                names = definitions.names().join(", ")
+            )
+            .to_string(),
+        ));
     };
     // The machine-level layer first: a model this machine does not request is refused whatever the
     // credentials for it are, and asking about a sign-in would send somebody to fix the wrong thing
@@ -2125,23 +2198,27 @@ pub fn definition_named(
     if let Some(written) = definition.model()
         && let Some((file, why)) = config.model_refused(written)
     {
-        return Err(t!(
-            delegate_model_refused,
-            definition = name,
-            model = written,
-            reason = bravebot_agent::backend::refusal_reason(file, why)
-        )
-        .to_string());
+        return Err(Unusable::Refused(
+            t!(
+                delegate_model_refused,
+                definition = name,
+                model = written,
+                reason = bravebot_agent::backend::refusal_reason(file, why)
+            )
+            .to_string(),
+        ));
     }
     if let Some(written) = definition.model()
         && bravebot_agent::backend::Backend::needs_sign_in(config, &config.model_named(written))
     {
-        return Err(t!(
-            delegate_model_needs_sign_in,
-            definition = name,
-            model = written
-        )
-        .to_string());
+        return Err(Unusable::Refused(
+            t!(
+                delegate_model_needs_sign_in,
+                definition = name,
+                model = written
+            )
+            .to_string(),
+        ));
     }
     Ok(crate::state::Addressed {
         name: name.to_string(),
@@ -2829,11 +2906,6 @@ pub enum Start {
     ChooseFromPr(String),
     /// A session read back off disk, continuing where it left off.
     Resuming(Box<bravebot_session::sessions::Record>),
-    /// A new session whose every turn addresses the definition `--agent` named (CLI-17).
-    ///
-    /// Always a new session, because a record does not store the name, and a resumed conversation
-    /// would mix the planner's earlier turns with the definition's later ones.
-    Under(String),
 }
 
 /// How a session ended.
@@ -2855,12 +2927,14 @@ struct Switch {
 }
 
 /// Run the interface until the user leaves.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     config: &mut Config,
     workspace: &Workspace,
     confinement: String,
     mut servers: crate::state::Servers,
     start: Start,
+    agent: Option<String>,
     skip_permissions: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
 ) -> io::Result<Ended> {
@@ -2916,6 +2990,9 @@ pub fn run(
             // they were started for this process, not for one conversation.
             let mut workspace = workspace.clone();
             let mut start = start;
+            // Only the first session is the one the command line named a definition for. A
+            // session `/resume` switches to works under the definition its own record names.
+            let mut named = agent;
             loop {
                 let mut switch = None;
                 let ended = event_loop(
@@ -2925,6 +3002,7 @@ pub fn run(
                     confinement.clone(),
                     &mut servers,
                     start,
+                    named.take(),
                     skip_permissions,
                     prompts.clone(),
                     &mut switch,
@@ -3411,6 +3489,7 @@ fn event_loop(
     confinement: String,
     servers: &mut crate::state::Servers,
     start: Start,
+    named: Option<String>,
     skip_permissions: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
     switch: &mut Option<Switch>,
@@ -3462,8 +3541,10 @@ fn event_loop(
     let beginning = beginning_of(&start, workspace.root());
     // Read off `start` for the same reason, and matched only after the question below is answered,
     // because the set includes the checkout's definitions only when the person vouched for them.
-    let under = match &start {
-        Start::Under(name) => Some(name.clone()),
+    // The name the record carries is the person's own earlier `--agent`; `named` is the one typed
+    // on this command line (ADDRESS-3).
+    let recorded = match &start {
+        Start::Resuming(record) => record.agent.clone(),
         _ => None,
     };
 
@@ -3472,7 +3553,7 @@ fn event_loop(
     // session begins with an exchange that outlived the process it happened in.
     let (mut conversation, mut stored, programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
-        Start::Fresh | Start::Choose | Start::ChooseFromPr(_) | Start::Under(_) => (
+        Start::Fresh | Start::Choose | Start::ChooseFromPr(_) => (
             Conversation::new(),
             bravebot_session::sessions::Handle::begin(
                 workspace.root(),
@@ -3665,17 +3746,17 @@ fn event_loop(
     // Matched after every startup question, because the set holds the checkout's definitions only
     // when the answer vouched for them. A name matching nothing starts no session, because a
     // planner's session in its place would look the same on screen and have more tools (CLI-17).
-    if let Some(name) = &under
-        && let Err(refused) = work_under(
-            &mut session,
-            config,
-            &workspace,
-            bravebot_agent::home::directory().as_deref(),
-            &answers.trust,
-            &answers.rules.permissions,
-            name,
-        )
-    {
+    if let Err(refused) = settle_under(
+        &mut session,
+        config,
+        &workspace,
+        bravebot_agent::home::directory().as_deref(),
+        &answers.trust,
+        &answers.rules.permissions,
+        &mut stored,
+        named.as_deref(),
+        recorded.as_deref(),
+    ) {
         return Ok(Ended::Refused(refused));
     }
 
@@ -4292,11 +4373,7 @@ fn event_loop(
                 // throwing away the record would be answering a question they did not ask.
                 session.clear();
                 conversation = Conversation::new();
-                stored = bravebot_session::sessions::Handle::begin(
-                    workspace.root(),
-                    bravebot_session::sessions::Front::Terminal,
-                    bravebot_stamp::BUILD,
-                );
+                stored = handle_after_clear(workspace.root(), &session);
                 session.note(t!(session_cleared));
 
                 // A new session, so it is asked what a new session is asked. The map goes with the
@@ -6033,6 +6110,57 @@ enum Beginning {
     Resumed(Option<TrustStore>),
 }
 
+/// The record a cleared session writes to: a new id, and the definition every turn is still
+/// addressed to, because it outlives the context it was working in.
+fn handle_after_clear(
+    root: &std::path::Path,
+    session: &Session,
+) -> bravebot_session::sessions::Handle {
+    let mut handle = bravebot_session::sessions::Handle::begin(
+        root,
+        bravebot_session::sessions::Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    handle.set_agent(session.standing_definition().map(|one| one.name.clone()));
+    handle
+}
+
+/// Work the session under the definition [`settle_definition`] settles on, writing the name into
+/// its record, or say why it cannot start.
+///
+/// A name typed on this command line that matches nothing ends the session before it begins. A
+/// recorded name that matches nothing is said in the transcript, with the definition named and
+/// that the narrowing is gone, and the session goes on without it and without recording it: the
+/// turns from here are not the definition's, so a later resume must not claim they were.
+#[allow(clippy::too_many_arguments)]
+fn settle_under(
+    session: &mut Session,
+    config: &mut Config,
+    workspace: &Workspace,
+    home: Option<&std::path::Path>,
+    trust: &TrustStore,
+    permissions: &bravebot_core::permissions::Permissions,
+    stored: &mut bravebot_session::sessions::Handle,
+    typed: Option<&str>,
+    recorded: Option<&str>,
+) -> Result<(), String> {
+    match settle_definition(typed, recorded, |name| {
+        work_under(session, config, workspace, home, trust, permissions, name)
+    })? {
+        Settled::Nothing => {}
+        Settled::Under { name, .. } => stored.set_agent(Some(name)),
+        Settled::Gone { name, why } => {
+            session.note(t!(
+                session_recorded_definition_gone,
+                definition = name.as_str()
+            ));
+            session.note(why);
+            stored.set_agent(None);
+        }
+    }
+    Ok(())
+}
+
 /// What the way a session was started leaves it holding.
 ///
 /// Only a resume brings a map, and the map it brings is the record of the session it is picking
@@ -6042,7 +6170,7 @@ enum Beginning {
 fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
     match start {
         // Choosing has already resolved into one of the other two by the time this runs.
-        Start::Fresh | Start::Choose | Start::ChooseFromPr(_) | Start::Under(_) => Beginning::New,
+        Start::Fresh | Start::Choose | Start::ChooseFromPr(_) => Beginning::New,
         // Read under the directory being resumed into rather than the one recorded, so a project
         // that was moved or renamed since resumes with its rules about the same files.
         Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),
@@ -16146,7 +16274,8 @@ mod tests {
 
         config.models = bravebot_config::Managed::at(&path).models().clone();
         let refused = definition_named(&config, &definitions, "rule-reviewer")
-            .expect_err("the definition was addressed");
+            .expect_err("the definition was addressed")
+            .into_message();
         assert!(
             refused.contains("an-expensive-model") && refused.contains(&path.display().to_string()),
             "the refusal named neither the model nor the file that refused it: {refused}"
@@ -16505,11 +16634,11 @@ mod tests {
                 &Default::default(),
                 "nobody"
             ),
-            Err(
+            Err(Unusable::Missing(
                 "there is no definition called nobody; this session resolved reader, checker, \
                  worker, rule-reviewer"
                     .to_string()
-            )
+            ))
         );
         assert!(
             session.standing_definition().is_none(),
@@ -16535,6 +16664,309 @@ mod tests {
                 "every turn is addressed to rule-reviewer; /agent <name> <task> addresses another \
                  for one turn"
             )
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A home holding one definition of the person's own, for the tests of a resumed session.
+    fn a_home_with_a_definition(label: &str, model: Option<&str>) -> std::path::PathBuf {
+        let home = crate::testutil::scratch_dir(label);
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("agents")).expect("scratch");
+        let model = model.map_or(String::new(), |model| format!("model: {model}\n"));
+        std::fs::write(
+            home.join("agents").join("rule-reviewer.md"),
+            format!(
+                "---\nname: rule-reviewer\ndescription: Checks a diff.\nkind: reader\n{model}---\n\nREVIEW\n"
+            ),
+        )
+        .expect("write the definition");
+        home
+    }
+
+    fn a_handle_for_test(workspace: &Workspace) -> bravebot_session::sessions::Handle {
+        bravebot_session::sessions::Handle::begin(
+            workspace.root(),
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        )
+    }
+
+    /// ADDRESS-3. The name `--agent` gave is written into the session's record and is the only
+    /// thing that puts it there; a session that names none writes none.
+    #[test]
+    fn a_resumed_session_works_under_the_definition_its_record_names() {
+        let home = a_home_with_a_definition("bravebot-resume-under-home", None);
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+        settle_under(
+            &mut session,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut stored,
+            Some("rule-reviewer"),
+            None,
+        )
+        .expect("the name is held");
+        assert_eq!(stored.agent(), Some("rule-reviewer"));
+
+        // The record read back is what a resume starts from, and it is addressed again from it.
+        let mut resumed_session = Session::new("none");
+        let mut resumed = a_handle_for_test(&workspace);
+        resumed.set_agent(stored.agent().map(str::to_string));
+        settle_under(
+            &mut resumed_session,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut resumed,
+            None,
+            Some("rule-reviewer"),
+        )
+        .expect("the recorded name is held");
+        assert_eq!(resumed_session.standing_definition(), Some(&standing()));
+        assert_eq!(resumed.agent(), Some("rule-reviewer"));
+        assert_eq!(
+            resumed_session
+                .take_addressing()
+                .map(|addressed| addressed.name),
+            Some("rule-reviewer".to_string()),
+            "a turn of the resumed session was not addressed to the definition"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-3. A definition deleted since is said, naming it and that the narrowing is gone,
+    /// and the session opens. It stops recording the name, because the turns from here are not the
+    /// definition's.
+    #[test]
+    fn a_recorded_definition_that_is_gone_is_said_and_the_session_opens_without_it() {
+        let home = a_home_with_a_definition("bravebot-resume-gone-home", None);
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+        let mut stored = a_handle_for_test(&workspace);
+        stored.set_agent(Some("deleted-since".to_string()));
+        let mut session = Session::new("none");
+
+        let settled = settle_under(
+            &mut session,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut stored,
+            None,
+            Some("deleted-since"),
+        );
+
+        assert_eq!(settled, Ok(()), "the session did not open");
+        assert!(
+            session.standing_definition().is_none(),
+            "the session was addressed to a definition that does not exist"
+        );
+        assert_eq!(stored.agent(), None, "the record went on naming it");
+        let said = said_in_the_transcript(&session).join("\n");
+        assert!(
+            said.contains("deleted-since") && said.contains("the narrowing is gone"),
+            "the loss was not said: {said}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-11, CLI-9. A definition that is there and names a model needing a sign-in is not
+    /// a definition that went away: going on would run the planner on its own model in place of
+    /// the one the definition asked for.
+    #[test]
+    fn a_recorded_definition_whose_model_needs_a_sign_in_is_refused_not_replaced() {
+        let home = a_home_with_a_definition("bravebot-resume-signin-home", Some("haiku"));
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://unused.invalid".into()),
+            bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+            bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+            bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+            bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+            _ => None,
+        })
+        .expect("config");
+        let mut stored = a_handle_for_test(&workspace);
+        stored.set_agent(Some("rule-reviewer".to_string()));
+        let mut session = Session::new("none");
+
+        let settled = settle_under(
+            &mut session,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut stored,
+            None,
+            Some("rule-reviewer"),
+        );
+
+        let refused = settled.expect_err("the session opened on the planner's model");
+        assert!(
+            refused.contains("rule-reviewer") && refused.contains("haiku"),
+            "the refusal named neither the definition nor its model: {refused}"
+        );
+        assert!(session.standing_definition().is_none());
+        assert_eq!(
+            stored.agent(),
+            Some("rule-reviewer"),
+            "the name was dropped"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-3. A name typed on the command line replaces the one the record carries, in the
+    /// session and in the record the session goes on writing.
+    #[test]
+    fn a_name_typed_with_a_resume_replaces_the_recorded_one() {
+        let home = a_home_with_a_definition("bravebot-resume-override-home", None);
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+        let mut stored = a_handle_for_test(&workspace);
+        stored.set_agent(Some("rule-reviewer".to_string()));
+        let mut session = Session::new("none");
+
+        settle_under(
+            &mut session,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut stored,
+            Some("checker"),
+            Some("rule-reviewer"),
+        )
+        .expect("the typed name is held");
+
+        assert_eq!(stored.agent(), Some("checker"));
+        assert_eq!(
+            session.standing_definition().map(|one| one.name.as_str()),
+            Some("checker"),
+            "the session went on under the recorded definition"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-3, ADDRESS-11. The policy both front ends share: the typed name wins and a typed
+    /// miss ends the run, a recorded miss is reported and dropped, a recorded definition that
+    /// exists but cannot be used ends the run, and no name tries nothing.
+    #[test]
+    fn the_typed_name_outranks_the_recorded_one_and_only_a_recorded_miss_is_survivable() {
+        let tried = std::cell::RefCell::new(Vec::new());
+        let missing = |name: &str| -> Result<(), Unusable> {
+            tried.borrow_mut().push(name.to_string());
+            Err(Unusable::Missing(format!("no {name}")))
+        };
+        let refused = |name: &str| -> Result<(), Unusable> {
+            tried.borrow_mut().push(name.to_string());
+            Err(Unusable::Refused(format!("{name} needs a sign-in")))
+        };
+        let found = |name: &str| -> Result<(), Unusable> {
+            tried.borrow_mut().push(name.to_string());
+            Ok(())
+        };
+
+        assert_eq!(
+            settle_definition(Some("typed"), Some("recorded"), found),
+            Ok(Settled::Under {
+                name: "typed".to_string(),
+                found: ()
+            })
+        );
+        assert_eq!(tried.take(), ["typed"], "the recorded name was tried too");
+
+        assert_eq!(
+            settle_definition(Some("typed"), Some("recorded"), missing),
+            Err("no typed".to_string()),
+            "a typed name that matches nothing did not end the run"
+        );
+        assert_eq!(tried.take(), ["typed"]);
+
+        assert_eq!(
+            settle_definition(None, Some("recorded"), missing),
+            Ok(Settled::Gone {
+                name: "recorded".to_string(),
+                why: "no recorded".to_string()
+            })
+        );
+        assert_eq!(
+            settle_definition(None, Some("recorded"), refused),
+            Err("recorded needs a sign-in".to_string()),
+            "a recorded definition that cannot be used was dropped"
+        );
+        assert_eq!(
+            settle_definition(Some("typed"), None, refused),
+            Err("typed needs a sign-in".to_string())
+        );
+        tried.take();
+
+        assert_eq!(settle_definition(None, None, found), Ok(Settled::Nothing));
+        assert!(
+            tried.take().is_empty(),
+            "a name was tried where none was given"
+        );
+    }
+
+    /// ADDRESS-3. `/clear` begins a new record, and a session working under a definition goes on
+    /// addressing it, so the new record names it and a resume of that record is not the planner's.
+    #[test]
+    fn a_cleared_session_records_the_definition_it_still_works_under() {
+        let home = a_home_with_a_definition("bravebot-clear-under-home", None);
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+        settle_under(
+            &mut session,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut stored,
+            Some("rule-reviewer"),
+            None,
+        )
+        .expect("the name is held");
+
+        session.clear();
+        let cleared = handle_after_clear(workspace.root(), &session);
+
+        assert_ne!(
+            cleared.id(),
+            stored.id(),
+            "the cleared session kept its record"
+        );
+        assert_eq!(
+            cleared.agent(),
+            Some("rule-reviewer"),
+            "the record of a cleared session stopped naming its definition"
+        );
+        assert_eq!(
+            handle_after_clear(workspace.root(), &Session::new("none")).agent(),
+            None,
+            "a session under no definition recorded one"
         );
         let _ = std::fs::remove_dir_all(&home);
     }

@@ -368,6 +368,15 @@ pub struct Record {
     /// Empty for a record written before this was kept, and for a session that kept none.
     #[serde(default)]
     pub checkouts: Vec<StoredCheckout>,
+    /// The definition the person named with `--agent` when the session began (CLI-17).
+    ///
+    /// Only the name, written by the driver from the person's own command line. A resume works
+    /// under whatever definition that name resolves to then, so an edit to the file is followed
+    /// and a deleted one is reported (ADDRESS-3).
+    ///
+    /// `None` for a record written before this was kept, and for a session started without one.
+    #[serde(default)]
+    pub agent: Option<String>,
 }
 
 /// A kept checkout as it is written down.
@@ -1597,6 +1606,8 @@ pub struct Handle {
     title: String,
     issue: Option<String>,
     pull_request: Option<String>,
+    /// The definition the person named on the command line, for the record to carry.
+    agent: Option<String>,
     /// Whether a record for this id is on disk yet.
     ///
     /// An id exists from the first moment, but a session that was opened and abandoned leaves
@@ -1644,6 +1655,7 @@ impl Handle {
             title: String::new(),
             issue: None,
             pull_request: None,
+            agent: None,
             wrote: false,
             server_children_may_run: false,
             build: build.to_string(),
@@ -1666,6 +1678,7 @@ impl Handle {
             title: record.title.clone(),
             issue: record.issue.clone(),
             pull_request: record.pull_request.clone(),
+            agent: record.agent.clone(),
             // The record it came from is the one being written back to.
             wrote: true,
             server_children_may_run: record.server_children_may_run(),
@@ -1798,6 +1811,17 @@ impl Handle {
         true
     }
 
+    /// Record that the person started this session under the definition `name`, from their own
+    /// `--agent` (CLI-17). Written with the next save; a session that names none records none.
+    pub fn set_agent(&mut self, name: Option<String>) {
+        self.agent = name;
+    }
+
+    /// The definition the person named when the session began, if they named one.
+    pub fn agent(&self) -> Option<&str> {
+        self.agent.as_deref()
+    }
+
     /// The link of this kind the person gave the session, if they gave one.
     pub fn link(&self, kind: Link) -> Option<&str> {
         match kind {
@@ -1927,6 +1951,7 @@ impl Handle {
                         .cloned(),
                 )
                 .collect(),
+            agent: self.agent.clone(),
         };
 
         self.write(&directory, &record);
@@ -1985,6 +2010,7 @@ impl Handle {
         record.branch = self.branch.clone();
         record.build = Some(self.build.clone());
         record.front = Some(self.front.recorded().to_string());
+        record.agent = self.agent.clone();
         self.write(&directory, &record)
     }
 
@@ -3622,6 +3648,100 @@ mod tests {
         assert_eq!(cleared.pull_request.as_deref(), Some(PULL));
     }
 
+    /// ADDRESS-3. The name the driver set is written with the record, kept by the turns that follow
+    /// it, a resume, a fork and a continuation, and replaced or cleared only by the driver. A
+    /// record from before the name was kept reads as naming none.
+    #[test]
+    fn a_session_records_the_definition_it_was_started_under_and_its_fork_and_resume_keep_it() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-agent");
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_agent(Some("rule-reviewer".to_string()));
+        save_a_turn_session(&mut handle);
+
+        let record = load(&root, handle.id()).expect("the record was not written");
+        assert_eq!(record.agent.as_deref(), Some("rule-reviewer"));
+
+        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        assert_eq!(resumed.agent(), Some("rule-reviewer"));
+        save_a_turn_session(&mut resumed);
+        let again = load(&root, resumed.id()).expect("the record is still there");
+        assert_eq!(
+            again.agent.as_deref(),
+            Some("rule-reviewer"),
+            "the next turn's save dropped the name"
+        );
+
+        let forked = fork(&root, handle.id()).expect("the session forks");
+        assert_eq!(forked.agent.as_deref(), Some("rule-reviewer"));
+
+        let mut moved = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        moved.set_agent(None);
+        save_a_turn_session(&mut moved);
+        let cleared = load(&root, moved.id()).expect("the record is still there");
+        assert_eq!(cleared.agent, None, "the driver clearing the name left it");
+
+        let mut plain = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut plain);
+        assert_eq!(
+            load(&root, plain.id()).expect("written").agent,
+            None,
+            "a session started without --agent recorded a name"
+        );
+
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        written
+            .as_object_mut()
+            .expect("an object")
+            .remove("agent")
+            .expect("the name is written");
+        let old: Record = serde_json::from_value(written).expect("an old record reads");
+        assert_eq!(old.agent, None);
+    }
+
+    /// A continued one-shot run rewrites the record it carried on, so it must write the name its
+    /// handle holds and not drop the one the record had.
+    #[test]
+    fn a_continuation_writes_the_name_its_handle_holds() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-agent-continued");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_agent(Some("rule-reviewer".to_string()));
+        save_a_turn_session(&mut handle);
+        let record = load(&root, handle.id()).expect("written");
+
+        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        let trust = TrustStore::new(&root);
+        let snapshot = a_record().conversation;
+        let next = || Continuation {
+            conversation: &snapshot,
+            prompt: "next",
+            tokens: 1,
+            model: "m",
+            trust: &trust,
+            begins: 0,
+            ends: 0,
+            prompt_at: None,
+        };
+        assert!(resumed.save_continuation(record.clone(), next()));
+        assert_eq!(
+            load(&root, handle.id()).expect("written").agent.as_deref(),
+            Some("rule-reviewer")
+        );
+
+        resumed.set_agent(Some("another".to_string()));
+        assert!(resumed.save_continuation(record, next()));
+        assert_eq!(
+            load(&root, handle.id()).expect("written").agent.as_deref(),
+            Some("another")
+        );
+    }
+
     /// Every record written before the links were kept has neither field, and it must still
     /// resume, with no link rather than with an error.
     #[test]
@@ -4066,6 +4186,7 @@ mod tests {
             manifest: None,
             rewind: Vec::new(),
             checkouts: Vec::new(),
+            agent: None,
         }
     }
 
