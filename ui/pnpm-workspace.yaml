@@ -10,3 +10,7 @@ auditConfig:
   ignoreGhsas:
     - GHSA-ch52-4w7c-c8xp
     - GHSA-vfj7-8cjw-p6xm
+
+# @electron/packager walks dependencies from node_modules/<name> without following symlinks, so
+# pnpm's default layout fails it on packages whose own dependencies sit beside them in .pnpm.
+nodeLinker: hoisted
