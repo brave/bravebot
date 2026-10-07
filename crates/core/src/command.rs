@@ -595,11 +595,18 @@ impl Plan {
     /// every time whatever is recorded, so the key stops no prompt for the line it was pressed on:
     /// the only thing it could ever grant is the bare one.
     ///
+    /// Nor is standard input fed from a reference, whatever the reference's label. An entry holds a
+    /// program and its arguments and not the bytes it reads, so one made for `python3 -` fed one
+    /// page would cover `python3 -` fed any other, and that other page would run unasked.
+    ///
     /// Which reason it is belongs to whoever explains the refusal, not here.
     ///
     /// [RUN-8]: ../../../docs/specs/tools/run.md
     pub fn can_be_remembered(&self) -> bool {
-        !self.releases_private() && !self.carries_an_assignment() && self.writes.is_empty()
+        !self.releases_private()
+            && !self.carries_an_assignment()
+            && self.writes.is_empty()
+            && self.stdin.is_none()
     }
 
     /// The plan as a person should read it before approving.

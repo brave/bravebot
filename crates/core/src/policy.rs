@@ -5828,6 +5828,23 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return false;
         }
 
+        // A plan fed a reference has an input as well as a program, and neither a vouched entry
+        // nor a remembered line records it: both are spelled against the program and its arguments,
+        // so one made for `python3 -` fed one page would cover `python3 -` fed another. Asked every
+        // time, whatever the reference's label, because a public body is the one an attacker wrote.
+        // Past the rules, which the person wrote knowing what a line may be fed, and past the proof
+        // road, which has already met the reference's integrity into its label and answers only for
+        // a line that writes nothing.
+        if plan.stdin.is_some() {
+            self.allow(
+                "approval",
+                "the line is fed a reference, which no vouched entry or remembered line records, \
+                 asking"
+                    .to_string(),
+            );
+            return true;
+        }
+
         if self.every_step_vouched(plan) {
             self.allow(
                 "approval",
@@ -5887,11 +5904,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Read-only, and it writes no audit entry: it is a question about what to draw rather than a
     /// gate anything passes, and the gate is [`Policy::plan_needs_approval`] above.
     ///
+    /// A line fed a reference is among the refusals: the record holds the line and not what it was
+    /// fed, so the key would cover the same line fed any other reference. It is not among the
+    /// reasons a rule cannot answer, which is why [`Policy::a_rule_could_answer`] does not name it.
+    ///
     /// The refusal is made twice, here and again where the answer is acted on, for the reason
     /// RUN-6 gives about the key that vouches: an invariant about what a record may hold does not
     /// rest on a drawing.
     pub fn may_remember(&self, plan: &crate::command::Plan) -> bool {
-        self.a_rule_could_answer(plan)
+        self.a_rule_could_answer(plan) && plan.stdin.is_none()
     }
 
     /// Whether a rule the person writes in the settings file would decide this line.
@@ -9504,10 +9525,12 @@ five
     }
 
     /// The label the policy layer put on the plan is what the private-input question is answered
-    /// from, so the reference route reaches the same gate the `<` route does. A quarantined page is
-    /// public and asks nothing extra; the user's own data asks whatever is vouched for.
+    /// from, so the reference route reaches the same gate the `<` route does. The user's own data
+    /// asks whatever is vouched for, for the reason a release is asked about, and a quarantined page
+    /// asks too, for the reason a line fed a reference is: the entry names the program and not the
+    /// page.
     #[test]
-    fn a_private_reference_fed_to_a_vouched_line_is_put_to_a_person() {
+    fn a_reference_fed_to_a_vouched_line_is_put_to_a_person() {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
         policy.remember_command(vouched("/usr/bin/sed", &["-n", "2p"]));
@@ -9515,8 +9538,8 @@ five
         let mut page = plan_of(vec![step_named("sed", &["-n", "2p"])]);
         page.stdin = Some(Label::untrusted_public());
         assert!(
-            !policy.plan_needs_approval(&page),
-            "carrying content nobody vouched for is not a release and must not ask"
+            policy.plan_needs_approval(&page),
+            "a page was handed to a vouched program with nobody asked"
         );
 
         let mut theirs = plan_of(vec![step_named("sed", &["-n", "2p"])]);
@@ -9971,6 +9994,68 @@ five
         ));
         assert!(policy.plan_needs_approval(&fed));
         assert!(!policy.may_remember(&fed), "the key was offered for it too");
+    }
+
+    /// RUN-4, RUN-6: a plan fed a reference is not the line a person read. Its steps name the
+    /// program and its arguments, and the reference is in neither, so `python3 -` fed one public
+    /// page and `python3 -` fed another are the same entry. A vouched entry therefore does not stop
+    /// the question, whatever label the reference carries: public is the label a fetched body has.
+    #[test]
+    fn a_vouched_line_fed_a_reference_is_asked_about_anyway() {
+        for fed in [
+            Label::untrusted_public(),
+            Label::new(Integrity::Trusted, crate::label::Confidentiality::Public),
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink)
+                .with_root(std::path::Path::new("/work"))
+                .with_programs(crate::programs::TrustedPrograms::from_iter([vouched(
+                    "/usr/bin/git",
+                    &["apply"],
+                )]));
+            let mut plan = plan_of(vec![step_named("git", &["apply"])]);
+            assert!(
+                !policy.plan_needs_approval(&plan),
+                "the bare line was not covered, so the fed one below proves nothing"
+            );
+            plan.stdin = Some(fed);
+            assert!(
+                policy.plan_needs_approval(&plan),
+                "a vouched entry covered the same line fed a reference labelled {fed}"
+            );
+        }
+    }
+
+    /// RUN-4, RUN-6: the same for a line remembered past the session. The record holds the line and
+    /// not what it was fed, so an `r` pressed for `python3 -` fed one page would run it fed any
+    /// other, in a session that never saw either.
+    #[test]
+    fn a_remembered_line_fed_a_reference_is_asked_about_anyway() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        let mut fed = a_plan();
+        assert!(
+            !policy.plan_needs_approval(&fed),
+            "the bare line was not covered, so the fed one below proves nothing"
+        );
+        fed.stdin = Some(Label::untrusted_public());
+        assert!(policy.plan_needs_approval(&fed));
+    }
+
+    /// RUN-4, RUN-6: neither `a` nor `r` is offered for a line fed a reference, whatever the label,
+    /// because either would record the line and not the reference. The pattern advice is not
+    /// withdrawn: a rule the person writes decides the line whatever it is fed.
+    #[test]
+    fn no_standing_answer_is_offered_for_a_line_fed_a_reference() {
+        let mut sink = RecordingSink::new();
+        let policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        assert!(policy.may_remember(&a_plan()));
+        let mut fed = a_plan();
+        fed.stdin = Some(Label::untrusted_public());
+        assert!(!policy.may_remember(&fed));
+        assert!(!fed.can_be_remembered());
+        assert!(policy.a_rule_could_answer(&fed));
     }
 
     /// RUN-19: a line naming a file to write is asked about however often it was answered, since a

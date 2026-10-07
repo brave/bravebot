@@ -1199,6 +1199,8 @@ run-assignment-not-remembered =
     une affectation placée devant un programme est soumise à chaque fois, celle-ci ne peut donc pas être retenue
 run-write-not-remembered =
     une ligne nommant un fichier à écrire est soumise à chaque fois, celle-ci ne peut donc pas être retenue
+run-stdin-not-remembered =
+    une ligne alimentée par une référence est soumise à chaque fois, celle-ci ne peut donc pas être retenue
 run-remember-explained =
     r : ne plus rien demander pour cette ligne exacte, dans ce répertoire, à partir de maintenant
 run-remember-where = elle est écrite ici, et supprimer la ligne est le chemin du retour :

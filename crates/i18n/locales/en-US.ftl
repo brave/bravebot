@@ -1381,6 +1381,8 @@ run-assignment-not-remembered =
     an assignment in front of a program is asked about every time, so this one cannot be remembered
 run-write-not-remembered =
     a line naming a file to write is asked about every time, so this one cannot be remembered
+run-stdin-not-remembered =
+    a line fed a reference is asked about every time, so this one cannot be remembered
 run-remember-explained = r: stop asking about this exact line, in this directory, from now on
 run-remember-where = it is written down here, and deleting the line is the way back:
 run-remember-only-asking = it stops the asking only: what it prints stays quarantined

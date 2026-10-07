@@ -6886,13 +6886,14 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         // Recorded before the run, so a repeat of the same command later in this turn is not
         // asked about again. The policy carries it out of the turn and the session records it.
         //
-        // Not for a line an entry could not record: one that feeds a file to a program, and one that
-        // writes an assignment in front of a program. The prompt offers `a` for neither, and this is
-        // the same refusal at the layer that would act on it, asked of the same predicate so the two
-        // cannot drift. What an entry records is a program, its exact argv and the tree the line
-        // runs in, and a `<` redirection and an assignment are in none of the three, so an entry
-        // made here would cover the same program fed any other file, or run under no assignment at
-        // all. A front end answering `always` anyway must not be able to widen the list that way.
+        // Not for a line an entry could not record: one that feeds a file to a program, one that
+        // feeds it a reference, and one that writes an assignment in front of a program. The prompt
+        // offers `a` for none of them, and this is the same refusal at the layer that would act on
+        // it, asked of the same predicate so the two cannot drift. What an entry records is a
+        // program, its exact argv and the tree the line runs in, and a `<` redirection, a
+        // `stdin_ref` and an assignment are in none of the three, so an entry made here would cover
+        // the same program fed any other file or reference, or run under no assignment at all. A
+        // front end answering `always` anyway must not be able to widen the list that way.
         //
         // The tree is not among the refusals, and that is RUN-8's own answer rather than an
         // omission: an entry names the directory it was given in, so a line outside the workspace
