@@ -1381,6 +1381,7 @@ run-carries-remote = { $program } also reads your git and gh logins, your ssh co
 run-carries-aws = { $program } also reads your aws credentials in ~/.aws
 run-carries-kubernetes = { $program } also reads your kubernetes credentials in ~/.kube
 run-carries-docker = { $program } also reads your docker credentials in ~/.docker
+run-carries-reach = { $program } also reads { $path }, where your { $variable } points
 # Said above the list of what a line reaches that nothing here holds: no credential is handed
 # over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
 # only where a line reaches one, so the list is never empty and never noise. The line above is

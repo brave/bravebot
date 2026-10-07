@@ -272,6 +272,9 @@ pub struct Carried {
     pub toolchain: Option<bravebot_sandbox::toolchain::Toolchain>,
     /// The credential scope its argv names.
     pub scope: Option<bravebot_sandbox::scope::Scope>,
+    /// What the person's environment moves that scope to, beyond its fixed rows, each named with
+    /// the variable it came from.
+    pub reaches: Vec<bravebot_sandbox::scope::Reach>,
 }
 
 impl Confined {
@@ -305,6 +308,17 @@ impl Confined {
                         Scope::Kubernetes => t!(run_carries_kubernetes, program = program),
                         Scope::Docker => t!(run_carries_docker, program = program),
                     }
+                    .to_string(),
+                );
+            }
+            for reach in &stage.reaches {
+                sentences.push(
+                    t!(
+                        run_carries_reach,
+                        program = program,
+                        variable = reach.variable,
+                        path = reach.path.display().to_string()
+                    )
                     .to_string(),
                 );
             }
@@ -2270,6 +2284,7 @@ mod tests {
             program: program.into(),
             toolchain: None,
             scope: Some(scope),
+            reaches: Vec::new(),
         };
         let confined = Confined {
             directories: Vec::new(),
@@ -2282,6 +2297,7 @@ mod tests {
                     program: "npm".into(),
                     toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Node),
                     scope: None,
+                    reaches: Vec::new(),
                 },
             ],
         };

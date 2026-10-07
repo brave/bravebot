@@ -558,12 +558,22 @@ given `--kubeconfig` or `docker` is given `--config`. A stage reaches its own sc
 No scope names a private key or `~/.ssh` as a directory. The remote scope reads `~/.ssh/config`,
 `~/.ssh/known_hosts`, the public key at each name ssh looks for by default, `~/.gitconfig`,
 `~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`, and writes
-`~/.ssh/known_hosts` alone, as a file. For a `gh` stage the last row is the directory `gh` itself
-would use: `GH_CONFIG_DIR` if the environment the stage starts with sets it, else
-`$XDG_CONFIG_HOME/gh`, else `~/.config/gh`, and it is read and never written. That directory is
-refused, and the stage keeps `~/.config/gh`, where it is relative or holds `..`, is the home or
-above it, is `~/.ssh` or inside it, or is `~/.config`, `~/.cache` or `~/Library`; a link is judged by where it leads. A tool's directory is read and never written. A scope is
-added to the policy it is given and takes nothing from it. `run` adds the scope for each stage it
+`~/.ssh/known_hosts` alone, as a file. A tool's directory is read and never written.
+
+Where a variable moves what a tool reads, the stage also reads the place the variable names, as that
+place and read only: for `gh`, `GH_CONFIG_DIR` if the environment the stage starts with sets it, else
+`$XDG_CONFIG_HOME/gh`, a directory; for `git`, `GIT_CONFIG_GLOBAL` and
+`$XDG_CONFIG_HOME/git/credentials`, files; for `aws`, `AWS_CONFIG_FILE` and
+`AWS_SHARED_CREDENTIALS_FILE`, files; for `kubectl`, each file `KUBECONFIG` lists, which is split as
+`PATH` is and judged one entry at a time; and for `docker`, `DOCKER_CONFIG`, a directory. The fixed rows
+stay. A value is refused where it is relative or holds `..`; a directory also where it is the home or
+above it, is `~/.ssh` or inside it, or is `~/.config`, `~/.cache` or `~/Library`; a file where it is
+inside `~/.ssh`, is the home or above it, or is a directory; a link is judged by where it leads. A refused entry leaves the others, and the stage
+keeps its fixed rows. A value that lands inside a row the scope already holds adds nothing, and one named twice counts once. The run
+prompt says each place taken from the environment, with the variable that named it and the path it
+led to, beside the sentence for the scope.
+
+A scope is added to the policy it is given and takes nothing from it. `run` adds the scope for each stage it
 starts ([SANDBOX-18](#SANDBOX-18)).
 
 **Why.** A push is how most sessions end, so a profile that refuses one is one somebody turns off.
@@ -580,9 +590,14 @@ reads the public half of a key to name an identity to it, so the private half is
 write to a tool's directory is a program the person's own shell runs later: a `credential_process`,
 an exec plugin, a `credsStore` helper. The `gh` directory follows the environment where
 [SANDBOX-15](#SANDBOX-15) does not follow `CARGO_HOME`, because a toolchain cache is a place the
-program writes and this row is the location of a file the person's own tool is about to open. Only
-the environment the stage starts with counts: an assignment written in front of the line removes
-the scope, so a model-written `GH_CONFIG_DIR=` moves nothing.
+program writes and this row is the location of a file the person's own tool is about to open; the
+same holds for each variable above, and without it a person whose configuration lives elsewhere gets
+`Operation not permitted` from a stage the plan said was fine. A place taken from the environment is
+shown in the prompt because a credential scope is what the prompt says it is, and a row nobody saw
+is not one anybody approved. Only the environment the stage starts with counts: an assignment
+written in front of the line removes the scope, so a model-written `GH_CONFIG_DIR=` moves nothing.
+A file is judged where it is rather than where its directory is: what is granted is the one file the
+person named, and `~/.ssh` is where a key would be.
 
 `verified-by: bravebot_sandbox::scope::an_operation_that_talks_to_a_remote_carries_the_remote_scope`
 `verified-by: bravebot_sandbox::scope::a_git_operation_that_talks_to_no_remote_carries_none`
@@ -601,7 +616,17 @@ the scope, so a model-written `GH_CONFIG_DIR=` moves nothing.
 `verified-by: bravebot_sandbox::scope::gh_reads_the_configuration_directory_its_environment_names`
 `verified-by: bravebot_sandbox::scope::a_gh_directory_that_is_too_wide_or_not_a_path_is_refused`
 `verified-by: bravebot_sandbox::scope::a_gh_directory_that_is_a_link_is_judged_by_where_it_leads`
+`verified-by: bravebot_sandbox::scope::a_variable_that_moves_a_tools_configuration_moves_its_row`
+`verified-by: bravebot_sandbox::scope::a_variable_moves_the_row_of_the_tool_that_reads_it_and_no_other`
+`verified-by: bravebot_sandbox::scope::a_kubeconfig_list_is_judged_one_entry_at_a_time`
+`verified-by: bravebot_sandbox::scope::a_value_that_is_relative_or_reaches_a_key_is_refused_for_every_tool`
+`verified-by: bravebot_sandbox::scope::a_file_that_is_a_link_to_a_private_key_is_refused`
+`verified-by: bravebot_sandbox::scope::an_entry_a_list_names_twice_is_reached_once`
+`verified-by: bravebot_sandbox::scope::a_variable_pointing_at_a_row_the_scope_already_holds_adds_none`
+`verified-by: bravebot_sandbox::scope::a_reach_names_the_variable_it_came_from`
 `verified-by: bravebot_agent::confine::a_gh_stage_reads_the_configuration_directory_its_environment_names`
+`verified-by: bravebot_agent::confine::a_stage_reads_the_configuration_its_variable_moves`
+`verified-by: bravebot_agent::confine::the_prompt_names_a_location_the_environment_moved`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_what_ssh_reads_and_never_a_private_key`
 
 <a id="SANDBOX-17"></a>

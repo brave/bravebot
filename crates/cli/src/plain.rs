@@ -2254,6 +2254,10 @@ mod tests {
                 program: "docker".into(),
                 toolchain: None,
                 scope: Some(bravebot_sandbox::scope::Scope::Docker),
+                reaches: vec![bravebot_sandbox::scope::Reach {
+                    variable: "DOCKER_CONFIG",
+                    path: "/home/someone/docker-work".into(),
+                }],
             }],
         });
 
@@ -2268,6 +2272,12 @@ mod tests {
         assert!(confined.contains("/var/scratch/session"), "{confined}");
         assert!(
             confined.contains("docker also reads your docker credentials in ~/.docker"),
+            "{confined}"
+        );
+        assert!(
+            confined.contains(
+                "docker also reads /home/someone/docker-work, where your DOCKER_CONFIG points"
+            ),
             "{confined}"
         );
         assert!(
