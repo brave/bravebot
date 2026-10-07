@@ -797,7 +797,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | event | `data` | source |
 |---|---|---|
 | `agent.ready` | `{ build, version, home, configured, defaultModel }` | startup, no `session` |
-| `turn.started` | `{ turn }` | `turn.send` accepted |
+| `turn.started` | `{ turn, mode }` | `turn.send` accepted |
 | `phase` | `{ phase }` | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
 | `narration` | `{ text }` | `Reporter::narration`, **empty ones dropped** |
@@ -817,7 +817,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
 | `server.request` | `{ request, language, program, workspace, runsBuildTooling, summary }` | start a language server for the session |
 | `manifest.request` | `{ request, task, steps }` | run a frozen plan; one line per step |
-| `manifest.started` | `{ run }` | a manifest run began; `run` counts runs in this open session |
+| `manifest.started` | `{ run, mode }` | a manifest run began; `run` counts runs in this open session |
 | `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
 | `manifest.error` | `{ run, kind, message, category, attempts, status, stopped, declined, problem, attempt, record, notices }` | a run stopped |
 | `exposure.request` | `{ request, path, credentials, summary }` | let the planner read a file holding a credential |
@@ -1333,7 +1333,14 @@ Still open:
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.
 - A manifest run is passed the session's rules, and the agent's runner does not read them.
-
+- `session.mode` takes `session` and `mode`, one of `ask`, `acceptEdits` or `plan`, and answers
+  `{ permissionMode }`. Any other word, `bypass` included, is `bad_request`: bypassing is reached
+  only through the command-line flag (MODE-5). It is accepted while a turn runs and changes the
+  next turn, not the running one (MODE-8).
+- `session.new`, `session.open` and `session.fork` carry `permissionMode`, which is always `ask`.
+  A mode is not written to the record and a fork does not take its parent's (MODE-10).
+- `turn.started` and `manifest.started` carry `mode`, the mode the turn or run reads once and
+  keeps to its end.
 
 ## Shared session view, version 1
 

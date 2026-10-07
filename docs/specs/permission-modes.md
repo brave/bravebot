@@ -8,6 +8,8 @@ governs:
   - crates/agent/src/manifest.rs
   - crates/cli/src/main.rs
   - crates/tui/src/state.rs
+  - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/manifest.rs
 guards:
   - symbol: Confining
   - symbol: PermissionMode
@@ -132,6 +134,7 @@ made from less than the person can see themselves.
 `verified-by: bravebot_agent::turn::plan_mode_refuses_a_write_a_settings_rule_would_have_let_through`
 `verified-by: bravebot_agent::manifest::plan_mode_refuses_a_plan_that_writes`
 `verified-by: bravebot_agent::manifest::plan_mode_runs_a_plan_that_writes_nothing`
+`verified-by: bravebot_ui_bridge::manifest::a_session_in_plan_mode_refuses_a_plan_that_writes`
 
 <a id="MODE-4"></a>
 ### MODE-4: bypassing answers every permission question, including the ones that decide trust
@@ -326,6 +329,7 @@ be told one thing while the prompts do another, and the half that would be wrong
 can see.
 
 `verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`
+`verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_is_the_next_turns`
 
 <a id="MODE-9"></a>
 ### MODE-9: a delegate inherits the mode of the turn that spawned it
@@ -364,6 +368,30 @@ wrong direction for this to be wrong in.
 `verified-by: bravebot_tui::state::cycling_the_mode_changes_nothing_a_resume_would_read`
 `verified-by: bravebot_session::sessions::a_resumed_session_asks_about_writes_whatever_the_record_says`
 `verified-by: bravebot_session::sessions::a_record_does_not_keep_a_permission_mode`
+
+<a id="MODE-11"></a>
+### MODE-11: the desktop offers asking, accepting edits and planning, one mode per open session
+
+The desktop window offers three of the four modes: asking, accepting edits and planning. Bypassing
+is not among them and no request reaches it. The window has no command line for the flag in MODE-5
+to be given on, so a request naming bypass is refused rather than read as another mode.
+
+The mode belongs to one open session, and every session opens asking, a resumed session and a fork
+included (MODE-10). The bridge holds it, rather than each turn's request carrying it, because a
+watch starts a turn that no request asked for, and that turn runs in the mode the window shows. A
+turn or a manifest run reads the mode once, when it is accepted, and keeps it to its end (MODE-8).
+A change while one runs is accepted and describes the next.
+
+**Why.** Refusing bypass rather than reading it as asking keeps a window from drawing a mode its
+session is not in. A fork opens asking rather than taking its parent's mode for MODE-10's reason: a
+mode is an answer somebody gave while watching one piece of work, and a fork is a session begun
+again.
+
+`verified-by: bravebot_ui_bridge::permission_mode::every_way_of_opening_a_session_opens_asking`
+`verified-by: bravebot_ui_bridge::permission_mode::a_window_cannot_choose_to_bypass_every_check`
+`verified-by: bravebot_ui_bridge::permission_mode::accepting_edits_writes_unasked_and_still_asks_about_a_command`
+`verified-by: bravebot_ui_bridge::permission_mode::planning_writes_nothing_and_asks_nothing_about_a_write`
+`verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_is_the_next_turns`
 
 ## Known costs
 

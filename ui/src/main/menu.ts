@@ -202,7 +202,7 @@ export function installMenu(window: BrowserWindow): void {
     },
     {
       label: 'Chat',
-      submenu: [item('turn.send'), item('turn.cancel')],
+      submenu: [item('turn.send'), item('turn.cancel'), { type: 'separator' }, item('mode.cycle')],
     },
     { role: 'windowMenu' },
     {

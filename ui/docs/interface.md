@@ -134,6 +134,14 @@ banners above the header. It goes where it is needed:
   clear themselves after four seconds, name where a file went, and at most three show at once.
   A failure is never a confirmation.
 
+The mode control in the composer, beside the model, says how much the next turn asks before it acts: **Ask** (every
+write and command is put to you), **Accept edits** (writes go through, commands and writes that
+would create a credential are still asked about) or **Plan** (nothing is written, commands are still
+asked about). Ask is drawn plainly. The other two are tinted for as long as they hold. Every session
+opens in Ask, including a resumed one and a fork. A change while a turn runs applies from the next
+turn, and the tooltip says so. Bypassing every check is not offered here, because it is reached
+only through the terminal's `--dangerously-skip-permissions` flag.
+
 The model control in the composer opens the conversation's model picker.
 Search by name, provider, or reported capability (for example, `text` or `tools`),
 then click a model or use the arrow keys and Enter. Escape
@@ -483,6 +491,7 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 | `⌘L` | View › Focus Composer | Move focus to the message box; needs a session |
 | `⌘↩` | Chat › Send | Send the draft; greyed while a turn runs or the draft is empty |
 | `⌘.` | Chat › Cancel Turn | Cancel the running turn; greyed when nothing is running |
+| `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Ask again; needs a session |
 | `⌥⌘←` / `⌥⌘→` | View › Hide/Show Chat List / Context Panel | Fold the chat list / the context panel |
 | `Enter` | | In the message box: send, or queue the message while a turn is running |
 | `Shift+Enter` | | In the message box: insert a new line |

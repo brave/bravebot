@@ -357,7 +357,7 @@ export function written(entries: Entry[]): Write[] {
         target: entry.request.path,
         state:
           entry.interrupted ? 'cancelled' : entry.decision === 'approve'
-            ? call ? call.failed ? 'failed' : call.note === null ? 'applying' : 'applied' : 'approved'
+            ? call ? outcome(call) : 'approved'
             : entry.decision === 'reject'
               ? 'refused'
               : 'waiting',
@@ -367,18 +367,25 @@ export function written(entries: Entry[]): Write[] {
     if (entry.kind !== 'tool' || !isWrite(entry.activity) || !entry.activity.target) continue
     const target = fileTarget(entry.activity.target)
     calls.set(target, entry.activity)
-    // A call still running has not changed anything yet, and a refused or failed one never
-    // will. Neither may read as "applied".
-    const state = entry.activity.failed
-      ? 'failed'
-      : entry.activity.note === null
-        ? 'applying'
-        : 'applied'
     // An outcome already recorded for this path — a decision, or the finish of the same
     // call — outranks a line that has not finished, so a pending row cannot overwrite it.
-    rows.set(target, { target, state })
+    rows.set(target, { target, state: outcome(entry.activity) })
   }
   return [...rows.values()]
+}
+
+/**
+ * How far a write call got. One still running has not changed anything yet, and a refused or
+ * failed one never will, so neither reads as "applied".
+ *
+ * The agent marks a refusal and a failure alike as `failed`. What tells them apart is the note:
+ * every refusal the agent writes, whether plan mode's, a deny rule's or a person's, opens with
+ * "refused:", a literal in its own dispatch placed ahead of anything a path or a reason fills
+ * in, so the word is the agent's and not a file's or the model's.
+ */
+function outcome(call: Activity): Write['state'] {
+  if (call.failed) return call.note?.startsWith('refused:') ? 'refused' : 'failed'
+  return call.note === null ? 'applying' : 'applied'
 }
 
 /**

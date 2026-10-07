@@ -31,11 +31,15 @@
   --leo-progressring-stroke-width: 2px;
   --leo-progressring-color: var(--accent);
 }
+/* The call keeps its width and the note gives way: a long note, which a refusal always has,
+   wraps in what is left rather than squeezing the path out from under it. The cap is the
+   backstop for a column narrower than the call itself, where the path ellipsises instead. */
 .tool-body {
-  flex: 1 1 auto;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  max-width: calc(100% - var(--icon-meta) - var(--leo-spacing-m));
 }
 .tool .call {
   display: flex;
@@ -56,8 +60,10 @@
   color: var(--ink-tertiary);
 }
 /* The planner's reason for the call heads the line, with the call beneath it in tertiary ink.
-   A call with no reason keeps the call as its only line. */
+   A call with no reason keeps the call as its only line. The reason takes the width the call
+   sets and never widens it, so a long one ellipsises rather than pushing the note aside. */
 .tool .why {
+  contain: inline-size;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -67,8 +73,10 @@
 .tool.has-why .call { color: var(--ink-tertiary); }
 /* Clear of the generic `.note` warning chip, which this is not. */
 .tool .note {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   margin: 0 0 0 auto;
+  text-wrap: pretty;
   padding: 0;
   border-radius: 0;
   background: none;

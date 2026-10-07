@@ -6,6 +6,8 @@ import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
 import { ModelPicker } from './ModelPicker'
+import { PermissionModePicker } from './PermissionModePicker'
+import type { PermissionMode } from '../../shared/protocol'
 
 /** How many lines the field grows to before it starts to scroll. */
 const FIELD_MAX_ROWS = 6
@@ -34,6 +36,9 @@ export interface ComposerProps {
   /** Offered only where a plan run can start: a conversation, not a bot. */
   onPlan?: () => void
   onModel: (model: string) => void
+  /** Absent where no session exists to hold a mode, as on a bot's first page. */
+  permissionMode?: PermissionMode
+  onMode?: (mode: PermissionMode) => void
   attachments: FileAttachment[]
   onAttach: () => void
   onRemoveAttachment: (id: string) => void
@@ -134,7 +139,7 @@ export interface ComposerFooterProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onCancel, onPlan, onModel, attachments, onAttach, onRemoveAttachment, onPreview,
+    draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, attachments, onAttach, onRemoveAttachment, onPreview,
     queued, queuePaused, onResumeQueued, onRemoveQueued, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false,
   } = props
@@ -272,6 +277,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
               tooltip={!canAttach ? 'Send a first message, then attach files' : attachments.length >= 5 ? 'Five files at most' : 'Attach files'} />
             <span className="toolbar-spacer" />
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
+            {permissionMode && onMode && <PermissionModePicker key={`mode-${session}`} mode={permissionMode} running={running} onChoose={onMode} />}
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
             {onPlan && <ModeMenu mode={planBlocked ? 'agent' : mode} blocked={planBlocked} disabled={running} onMode={setMode} />}
             <IconButton icon={running ? 'stop-circle' : 'arrow-up'} label={running ? 'Stop' : 'Send'}

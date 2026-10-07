@@ -21,6 +21,10 @@
  * would be a decision taken without looking at it, which is the one thing this whole app is
  * arranged to prevent. The absence is structural rather than a rule somebody has to remember:
  * no `CommandId` names an approval, so there is nothing for the menu layer to dispatch.
+ *
+ * Choosing a permission mode is a command, and it is not an exception. A mode answers questions
+ * the next turn has not asked yet, and never one that is waiting: a turn keeps the mode it began
+ * with, so a card already on screen keeps its question whatever the key does (MODE-8).
  */
 
 export type CommandId =
@@ -32,6 +36,7 @@ export type CommandId =
   | 'session.export-pdf'
   | 'turn.send'
   | 'turn.cancel'
+  | 'mode.cycle'
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
@@ -150,6 +155,14 @@ export const COMMANDS: readonly Command[] = [
   { id: 'session.export-pdf', label: 'PDF…', requires: 'exportable' },
   { id: 'turn.send', label: 'Send', accelerator: 'CmdOrCtrl+Enter', requires: 'sendable' },
   { id: 'turn.cancel', label: 'Cancel Turn', accelerator: 'CmdOrCtrl+.', requires: 'running' },
+  // Not Shift+Tab, which the terminal uses: in a text field that key moves focus backwards.
+  // Offered while a turn runs, since the mode chosen describes the next turn.
+  {
+    id: 'mode.cycle',
+    label: 'Cycle Permission Mode',
+    accelerator: 'CmdOrCtrl+Shift+M',
+    requires: 'session',
+  },
   {
     id: 'view.fold-left',
     label: 'Hide Chat List',
