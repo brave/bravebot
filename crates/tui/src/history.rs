@@ -20,6 +20,16 @@ use bravebot_session::store::Entry;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Ticket(usize);
 
+/// Which prompts Up walks.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// The prompts this session sent, and the ones its record holds when it was resumed.
+    #[default]
+    Session,
+    /// Every stored prompt, from every session and workspace.
+    All,
+}
+
 /// Prompts already sent, and where the user is looking.
 #[derive(Debug, Default)]
 pub struct History {
@@ -27,10 +37,14 @@ pub struct History {
     entries: Vec<Entry>,
     /// Stable identities and submission counts, aligned with entries. Duplicates share a claim.
     claims: Vec<(Ticket, usize)>,
+    /// Whether each entry belongs to this session, aligned with entries. The stored file does not
+    /// say, so the prompts this process sent and the ones a resumed record holds are marked here.
+    mine: Vec<bool>,
+    scope: Scope,
     next_ticket: usize,
     /// How far back the user has walked. `None` means they are editing, not browsing.
     ///
-    /// Counted from the newest entry: 1 is the most recent prompt, and 0 is the kept draft, which
+    /// Counted from the newest entry of the scope: 1 is the most recent prompt, and 0 is the kept draft, which
     /// sits in front of the walk. Stored as a distance rather than an index so appending an entry
     /// cannot silently move what is being viewed.
     back: Option<usize>,
@@ -50,6 +64,8 @@ impl History {
     pub fn from_entries(entries: Vec<Entry>) -> Self {
         Self {
             claims: (0..entries.len()).map(|id| (Ticket(id), 1)).collect(),
+            mine: vec![false; entries.len()],
+            scope: Scope::Session,
             next_ticket: entries.len(),
             entries,
             back: None,
@@ -68,9 +84,94 @@ impl History {
         self.draft = Some(line);
     }
 
-    /// Whether Up has anything to bring back: a sent prompt or a kept draft.
+    /// The entries Up walks now, as indexes into `entries`, oldest first.
+    fn visible(&self) -> Vec<usize> {
+        match self.scope {
+            Scope::All => (0..self.entries.len()).collect(),
+            Scope::Session => (0..self.entries.len())
+                .filter(|at| self.mine[*at])
+                .collect(),
+        }
+    }
+
+    /// Whether Up has anything to bring back: a sent prompt in the scope or a kept draft.
     pub fn can_recall(&self) -> bool {
-        !self.entries.is_empty() || self.draft.is_some()
+        self.draft.is_some() || self.has_visible()
+    }
+
+    fn has_visible(&self) -> bool {
+        match self.scope {
+            Scope::All => !self.entries.is_empty(),
+            Scope::Session => self.mine.iter().any(|mine| *mine),
+        }
+    }
+
+    /// Which prompts Up is walking.
+    pub fn scope(&self) -> Scope {
+        self.scope
+    }
+
+    /// Whether Up has nothing to bring back only because this session has sent nothing, while
+    /// earlier sessions' prompts are stored.
+    pub fn only_earlier_sessions(&self) -> bool {
+        self.draft.is_none() && !self.has_visible() && !self.entries.is_empty()
+    }
+
+    /// Whether Ctrl-Right means "every stored prompt" now. `line_is_empty` is whether the box is
+    /// empty, since the key is the caret's word motion in a line being typed.
+    ///
+    /// While a stored prompt is on screen, or where Up found nothing of this session's and the box
+    /// holds nothing to move around in.
+    pub fn can_widen(&self, line_is_empty: bool) -> bool {
+        self.scope == Scope::Session
+            && (self.on_a_sent_prompt()
+                || (self.back.is_none() && line_is_empty && self.only_earlier_sessions()))
+    }
+
+    /// Whether Ctrl-Left means "this session's prompts" now: a stored prompt is on screen in the
+    /// wide scope and this session has some.
+    pub fn can_narrow(&self) -> bool {
+        self.scope == Scope::All && self.on_a_sent_prompt() && self.mine.iter().any(|mine| *mine)
+    }
+
+    /// Walk every stored prompt, staying on the prompt on screen. Returns it.
+    pub fn widen(&mut self) -> Option<String> {
+        let list = self.visible();
+        self.scope = Scope::All;
+        let back = self.back.filter(|back| *back > 0)?;
+        let at = list[list.len() - back];
+        self.back = Some(self.entries.len() - at);
+        Some(self.entries[at].prompt.clone())
+    }
+
+    /// Walk only this session's prompts again, and return the one now on screen: the one that was
+    /// there where it is this session's, otherwise the newest of this session's before it, and
+    /// failing that the oldest of this session's.
+    pub fn narrow(&mut self) -> Option<String> {
+        let back = self.back.filter(|back| *back > 0)?;
+        let at = self.entries.len() - back;
+        self.scope = Scope::Session;
+        let list = self.visible();
+        let place = list.iter().rposition(|each| *each <= at).unwrap_or(0);
+        self.back = Some(list.len() - place);
+        Some(self.entries[list[place]].prompt.clone())
+    }
+
+    /// Count the prompt a resumed record holds as this session's: the newest stored entry with
+    /// these words that is not already counted.
+    pub fn adopt(&mut self, prompt: &str) {
+        if let Some(at) = (0..self.entries.len())
+            .rev()
+            .find(|at| !self.mine[*at] && self.entries[*at].prompt == prompt)
+        {
+            self.mine[at] = true;
+        }
+    }
+
+    /// Start a new session's own prompts, as `/clear` does.
+    pub fn forget_session(&mut self) {
+        self.mine.iter_mut().for_each(|mine| *mine = false);
+        self.leave();
     }
 
     /// Whether the box shows a sent prompt, as opposed to a line being typed or the kept draft.
@@ -96,8 +197,10 @@ impl History {
             .is_some_and(|last| last.prompt == entry.prompt)
         {
             self.claims.last_mut().expect("an existing entry").1 += 1;
+            *self.mine.last_mut().expect("an existing entry") = true;
             return None;
         }
+        self.mine.push(true);
         self.claims.push((Ticket(self.next_ticket), 1));
         self.next_ticket += 1;
         self.entries.push(entry);
@@ -119,6 +222,7 @@ impl History {
         self.claims[at].1 -= 1;
         if self.claims[at].1 == 0 {
             self.claims.remove(at);
+            self.mine.remove(at);
             self.entries.remove(at);
             return true;
         }
@@ -145,7 +249,8 @@ impl History {
     /// because "History 78/83" reads as a place in a list.
     pub fn position(&self) -> Option<(usize, usize)> {
         let back = self.back.filter(|back| *back > 0)?;
-        Some((self.entries.len() + 1 - back, self.entries.len()))
+        let total = self.visible().len();
+        Some((total + 1 - back, total))
     }
 
     /// Step one prompt further back, returning what to show.
@@ -154,28 +259,27 @@ impl History {
     /// Returns `None` at the oldest entry, leaving the view where it is rather than wrapping:
     /// wrapping to the newest would look like the key had stopped working.
     pub fn older(&mut self, current: &str) -> Option<String> {
-        if !self.can_recall() {
-            return None;
-        }
-
+        let list = self.visible();
         let back = match self.back {
             None => {
-                self.stashed = current.to_string();
                 if let Some(draft) = &self.draft {
+                    self.stashed = current.to_string();
                     self.back = Some(0);
                     return Some(draft.clone());
                 }
+                if list.is_empty() {
+                    return None;
+                }
+                self.stashed = current.to_string();
                 1
             }
-            Some(back) if back < self.entries.len() => back + 1,
+            Some(back) if back < list.len() => back + 1,
             // Already at the oldest.
             Some(_) => return None,
         };
 
         self.back = Some(back);
-        self.entries
-            .get(self.entries.len() - back)
-            .map(|entry| entry.prompt.clone())
+        Some(self.entries[list[list.len() - back]].prompt.clone())
     }
 
     /// Step one prompt forward, returning what to show.
@@ -183,6 +287,7 @@ impl History {
     /// Stepping forward from the newest entry leaves browsing and restores the line that was
     /// being typed, which is what makes Up safe to press speculatively.
     pub fn newer(&mut self) -> Option<String> {
+        let list = self.visible();
         match self.back {
             None => None,
             Some(1) if self.draft.is_some() => {
@@ -191,13 +296,12 @@ impl History {
             }
             Some(0) | Some(1) => {
                 self.back = None;
+                self.scope = Scope::Session;
                 Some(std::mem::take(&mut self.stashed))
             }
             Some(back) => {
                 self.back = Some(back - 1);
-                self.entries
-                    .get(self.entries.len() - (back - 1))
-                    .map(|entry| entry.prompt.clone())
+                Some(self.entries[list[list.len() - (back - 1)]].prompt.clone())
             }
         }
     }
@@ -205,6 +309,7 @@ impl History {
     /// Stop browsing without changing the input.
     pub fn leave(&mut self) {
         self.back = None;
+        self.scope = Scope::Session;
         self.stashed.clear();
     }
 }
@@ -429,5 +534,95 @@ mod tests {
         history.older("");
         assert!(history.on_a_sent_prompt());
         assert_eq!(history.position(), Some((1, 1)));
+    }
+
+    fn stored(prompts: &[&str]) -> History {
+        History::from_entries(
+            prompts
+                .iter()
+                .map(|prompt| Entry::sent(*prompt, None))
+                .collect(),
+        )
+    }
+
+    /// Stored prompts belong to an earlier session, so Up has nothing until one is sent.
+    #[test]
+    fn stored_prompts_are_not_this_sessions() {
+        let mut history = stored(&["old"]);
+        assert!(!history.can_recall());
+        assert!(history.only_earlier_sessions());
+        assert_eq!(history.older(""), None);
+        history.push("new", None);
+        assert_eq!(history.older("").as_deref(), Some("new"));
+        assert_eq!(history.older(""), None);
+        assert_eq!(history.position(), Some((1, 1)));
+    }
+
+    /// A prompt a resumed record holds is counted, and clearing the conversation uncounts it.
+    #[test]
+    fn a_resumed_prompt_is_this_sessions_until_the_conversation_is_cleared() {
+        let mut history = stored(&["a", "b", "c"]);
+        history.adopt("b");
+        assert_eq!(history.older("").as_deref(), Some("b"));
+        history.forget_session();
+        assert!(history.only_earlier_sessions());
+    }
+
+    /// Switching keeps the prompt, and where the prompt is not this session's it lands on the
+    /// nearest of this session's before it.
+    #[test]
+    fn narrowing_from_a_prompt_of_another_session_lands_on_the_one_before_it() {
+        let mut history = stored(&["a", "b", "c", "d"]);
+        history.adopt("b");
+        history.adopt("d");
+        history.older("");
+        assert!(history.can_widen(false));
+        assert_eq!(history.widen().as_deref(), Some("d"));
+        assert_eq!(history.position(), Some((4, 4)));
+        history.older("");
+        assert_eq!(history.older("").as_deref(), Some("b"));
+        history.older("");
+        assert_eq!(history.narrow().as_deref(), Some("b"));
+        assert_eq!(history.position(), Some((1, 2)));
+
+        let mut history = stored(&["a", "b", "c"]);
+        history.adopt("b");
+        history.older("");
+        history.widen();
+        assert_eq!(history.older("").as_deref(), Some("a"));
+        assert_eq!(history.narrow().as_deref(), Some("b"));
+    }
+
+    /// Leaving the walk puts the scope back, so the next Up is this session's again.
+    #[test]
+    fn the_scope_goes_back_to_the_session_when_the_walk_ends() {
+        let mut history = stored(&["a"]);
+        history.push("b", None);
+        history.older("");
+        history.widen();
+        assert_eq!(history.scope(), Scope::All);
+        history.newer();
+        assert_eq!(history.scope(), Scope::Session);
+    }
+
+    /// Not the oldest of this session's: the newest one before the prompt on screen.
+    #[test]
+    fn narrowing_picks_the_nearest_earlier_prompt_not_the_oldest() {
+        let mut history = stored(&["a", "b", "c", "d", "e", "f"]);
+        for prompt in ["b", "d", "f"] {
+            history.adopt(prompt);
+        }
+        history.older("");
+        history.widen();
+        history.older("");
+        assert_eq!(history.older("").as_deref(), Some("d"));
+        assert_eq!(history.older("").as_deref(), Some("c"));
+        assert_eq!(history.narrow().as_deref(), Some("b"));
+        history.widen();
+        history.newer();
+        assert_eq!(history.newer().as_deref(), Some("d"));
+        history.newer();
+        assert_eq!(history.narrow().as_deref(), Some("d"));
+        assert_eq!(history.position(), Some((2, 3)));
     }
 }

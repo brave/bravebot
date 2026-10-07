@@ -171,6 +171,13 @@ fn a_session_recalls_a_prompt_stored_by_an_earlier_session() {
         store::append_history(&sent("a question from before"));
 
         let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        // Up in a session that has sent nothing recalls nothing, and says so.
+        session.recall_older();
+        assert_eq!(session.input(), "");
+        assert!(session.offered_all_prompts);
+
+        // The wide scope is the way to what an earlier session stored.
+        session.widen_history();
         session.recall_older();
 
         assert_eq!(session.input(), "a question from before");
@@ -227,6 +234,7 @@ fn a_history_from_an_older_version_is_still_read() {
         .expect("write");
 
         let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.widen_history();
         session.recall_older();
         assert_eq!(session.input(), "a question from before");
     });

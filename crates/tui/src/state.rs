@@ -1529,6 +1529,10 @@ pub struct Session {
     /// The hint saying which key ends it hangs on this. It lives for exactly one press, because it
     /// answers the press just made and the next press is the answer to it.
     pub cleared_by_interrupt: bool,
+    /// Up found nothing this session sent while earlier sessions' prompts are stored, so the hint
+    /// line names the key that reaches them. Lives for the press that set it, as the field above
+    /// does.
+    pub offered_all_prompts: bool,
     /// Whether an interrupt on an idle session has already offered the way out.
     ///
     /// The bottom rung of the interrupt ladder ends the session, and a bare interrupt is a single
@@ -1913,6 +1917,7 @@ impl Session {
             copied: None,
             finished: None,
             cleared_by_interrupt: false,
+            offered_all_prompts: false,
             offered_to_leave: false,
             key_arrived_alone: true,
             image_on_clipboard: false,
@@ -2358,6 +2363,8 @@ impl Session {
     /// Deliberately not touching the input line, so a prompt half-typed when the user cleared is
     /// still there to send.
     pub fn clear(&mut self) {
+        // A new conversation has sent nothing yet, so Up starts from nothing of its own.
+        self.history.forget_session();
         self.transcript.clear();
         self.turns = 0;
         self.turn_history.clear();
@@ -6220,6 +6227,8 @@ impl Session {
                 self.turn_places.insert(turn.number, self.transcript.len());
                 if let Some(prompt) = &turn.prompt {
                     self.unplaced_todos.remove(&turn.number);
+                    // This session's own, as far back as its record goes.
+                    self.history.adopt(&self.recallable(prompt));
                     self.transcript.push(Entry::user(prompt));
                     for (offset, line) in said.iter().enumerate().take(end).skip(start) {
                         // Only the submitted prompt is replaced by its display copy. Context,
@@ -6905,6 +6914,24 @@ impl Session {
     /// not reach the one they sent last.
     pub fn recall_older(&mut self) {
         if let Some(prompt) = self.history.older(&self.input) {
+            self.set_input(prompt);
+        } else if self.history.only_earlier_sessions() {
+            // Said on the hint line rather than walking into earlier sessions' prompts unannounced.
+            self.offered_all_prompts = true;
+        }
+    }
+
+    /// Ctrl-Right on a stored prompt, or where Up found nothing of this session's: walk every
+    /// stored prompt, staying on the one on screen.
+    pub fn widen_history(&mut self) {
+        if let Some(prompt) = self.history.widen() {
+            self.set_input(prompt);
+        }
+    }
+
+    /// Ctrl-Left on a stored prompt in the wide scope: walk this session's prompts again.
+    pub fn narrow_history(&mut self) {
+        if let Some(prompt) = self.history.narrow() {
             self.set_input(prompt);
         }
     }
@@ -14748,6 +14775,52 @@ mod tests {
             title: "a session".to_string(),
             was_wrote: true,
         }
+    }
+
+    /// The prompts a resumed record holds are this session's own, since the person is carrying on
+    /// the conversation they were sent in; without them Up would find nothing and send the person
+    /// to the wide scope for the prompt they typed a minute before quitting.
+    #[test]
+    fn a_resumed_sessions_own_prompts_are_in_its_session_scope() {
+        use bravebot_aichat::protocol::Message;
+
+        let mut conversation = bravebot_agent::Conversation::new();
+        let mut recorded = session();
+        let at = conversation.recounted().len();
+        for ch in "mine before".chars() {
+            recorded.type_char(ch);
+        }
+        recorded.submit().unwrap();
+        recorded.prompt_recorded(at);
+        recorded.complete("", Vec::new(), 0);
+        conversation.push(Message::user("mine before"));
+        conversation.push(Message::assistant("ok"));
+        recorded.record_turn(at, &conversation);
+
+        let mut s = session();
+        s.history = crate::history::History::from_entries(vec![
+            bravebot_session::store::Entry::sent("mine before", None),
+            bravebot_session::store::Entry::sent("somebody else's", None),
+        ]);
+        assert!(s.history.only_earlier_sessions());
+        s.replay(
+            &conversation,
+            "a title",
+            &bravebot_session::sessions::Recalled {
+                history: Some(recorded.turn_history().to_vec()),
+                turns: Some(recorded.turns),
+                trails: Default::default(),
+                todos: Default::default(),
+                asides: Vec::new(),
+            },
+        );
+        s.recall_older();
+        assert_eq!(s.input, "mine before");
+        s.recall_older();
+        assert_eq!(
+            s.input, "mine before",
+            "Up walked into another session's prompt"
+        );
     }
 
     /// An index into the transcript belongs to the process that drew it. A resumed session draws
