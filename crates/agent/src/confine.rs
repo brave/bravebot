@@ -13,7 +13,7 @@ use bravebot_core::command::Step;
 use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base};
 use bravebot_sandbox::policy::SandboxPolicy;
-use bravebot_sandbox::scope::Scope;
+use bravebot_sandbox::scope::{Scope, gh_configuration};
 use bravebot_sandbox::toolchain::Toolchain;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -115,6 +115,12 @@ impl Confinement {
             }
             if let Some(scope) = Scope::of(resolved, args, assigned) {
                 policy = scope.grant(policy, home);
+                if scope == Scope::Remote
+                    && resolved.file_name().is_some_and(|name| name == "gh")
+                    && let Some(directory) = gh_configuration(home, environment)
+                {
+                    policy = policy.allow_read(directory);
+                }
                 if scope == Scope::Remote
                     && let Some(socket) = variable(environment, "SSH_AUTH_SOCK")
                 {
@@ -482,6 +488,51 @@ mod tests {
 
         assert!(!reads(&policy, &format!("{HOME}/.ssh/known_hosts")));
         assert!(!writes(&policy, "/run/agent.sock"));
+    }
+
+    /// `gh` opens the directory its environment names, so a stage that carries the remote scope
+    /// reads that one, for `gh` alone, and not where an assignment in front of it removed the scope.
+    #[test]
+    fn a_gh_stage_reads_the_configuration_directory_its_environment_names() {
+        let confined = confinement(&["/work/project"]);
+        let second = format!("{HOME}/.config/gh-second");
+        let environment = vec![("GH_CONFIG_DIR".to_string(), second.clone())];
+        let hosts = second.clone();
+
+        let issue = confined.policy(
+            &step("/usr/local/bin/gh", &["issue", "create"]),
+            Path::new("/work"),
+            &environment,
+        );
+        let version = confined.policy(
+            &step("/usr/local/bin/gh", &["version"]),
+            Path::new("/work"),
+            &environment,
+        );
+        let push = confined.policy(
+            &step("/usr/bin/git", &["push"]),
+            Path::new("/work"),
+            &environment,
+        );
+        let mut assigned = step("/usr/local/bin/gh", &["issue", "list"]);
+        assigned.environment = vec![("GH_CONFIG_DIR".to_string(), second)];
+        let assigned = confined.policy(&assigned, Path::new("/work"), &environment);
+        let unset = confined.policy(
+            &step("/usr/local/bin/gh", &["issue", "list"]),
+            Path::new("/work"),
+            &[],
+        );
+
+        assert!(reads(&issue, &hosts));
+        assert!(!reads(
+            &issue,
+            &format!("{HOME}/.config/another-program/token")
+        ));
+        assert!(!reads(&version, &hosts));
+        assert!(!reads(&push, &hosts));
+        assert!(!reads(&assigned, &hosts));
+        assert!(reads(&unset, &format!("{HOME}/.config/gh")));
+        assert!(!reads(&unset, &hosts));
     }
 
     /// A program installed at the top of the home is read as the file a person read, and the home
