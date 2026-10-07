@@ -5774,6 +5774,34 @@ mod tests {
             );
         }
 
+        /// A directory whose `.git` is a file is a repository of its own, as a worktree or a
+        /// submodule checkout is, so it is one line however many files it holds. A name holding a
+        /// quote or a backslash is quoted with each escaped, since printing either raw makes the
+        /// line ambiguous.
+        #[test]
+        fn a_git_file_makes_a_nested_repository_and_a_quote_or_backslash_is_escaped() {
+            let repo = Repo::new("status-git-file");
+            commit(&repo, &[]);
+            let other = Repo::new("status-git-file-target");
+            write(
+                &repo,
+                "nested/.git",
+                &format!("gitdir: {}\n", other.git.display()),
+            );
+            write(&repo, "nested/inside.txt", "x\n");
+            write(&repo, "nested/also.txt", "x\n");
+            // Listing every file would show a directory that is not a repository file by file, so
+            // this is what tells one from the other.
+            repo.put("config", "[status]\n\tshowUntrackedFiles = all\n");
+            write(&repo, "q\"x.txt", "x\n");
+            write(&repo, "b\\s.txt", "x\n");
+            index(&repo, &[]);
+            assert_eq!(
+                text(&repo),
+                "?? \"b\\\\s.txt\"\n?? nested/\n?? \"q\\\"x.txt\"\n"
+            );
+        }
+
         /// A v3 index of one entry `git add -N` wrote.
         fn intent_to_add(repo: &Repo, path: &str) {
             let mut bytes = b"DIRC".to_vec();
