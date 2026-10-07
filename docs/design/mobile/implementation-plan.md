@@ -1,6 +1,6 @@
 # Mobile prototype implementation plan
 
-Status: the first Rust session-view block and the stdio TypeScript client's session lifecycle are implemented. Approval replies, the local client program and the remaining stage 1–2a evidence are outstanding, so stages 1–2a are incomplete. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
+Status: the first Rust session-view block and the stdio TypeScript client's session lifecycle and approval replies are implemented. The local client program and the remaining stage 1–2a evidence are outstanding, so stages 1–2a are incomplete. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
 
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
@@ -55,11 +55,12 @@ Never cut authentication, scope checks, labels, complete approval details, exact
 
 The first Rust block is complete: negotiated fresh-session view, typed row/status updates,
 existing approval semantics, and real stdio tests. The TypeScript package now has the session
-lifecycle: capability refusal, framing and correlation fixtures, view application, trust, send,
-cancel and close, tested against a real `bravebot-rpc` (see
-[the implemented client](client-contract.md#implemented-typescript-client)). Approval replies, the
-local client program and the remaining evidence are outstanding, so stages 1–2a are incomplete. No
-native or listener work is included.
+lifecycle (capability refusal, framing and correlation fixtures, view application, trust, send,
+cancel and close) and approval replies for `confirm`, `run`, `fetch` and `ask`, tested against a
+real `bravebot-rpc` (see
+[the implemented client](client-contract.md#implemented-typescript-client)). The local client
+program and the remaining evidence are outstanding, so stages 1–2a are incomplete. No native or
+listener work is included.
 
 ### 1. Define the common client and fixtures
 

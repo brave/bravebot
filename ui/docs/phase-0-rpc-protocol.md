@@ -1423,4 +1423,4 @@ qualified by turn. Keep drafts and optimistic UI separate until an accepted prom
 
 The [shared session view spec](../../docs/specs/session-view.md) defines the supported rows, ordering,
 approval transitions, label preservation and limits. This is the Rust part of the first mobile
-block. The stdio TypeScript client for it is `packages/agent-client`, which does not yet answer questions; no native renderer is supplied yet.
+block. The stdio TypeScript client for it is `packages/agent-client`, which answers the four supported question kinds; no native renderer is supplied yet.

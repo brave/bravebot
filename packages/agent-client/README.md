@@ -30,8 +30,10 @@ await session.answerTrust(false) // always an explicit call
 await session.send('hello')
 ```
 
-A question the turn asks appears in `view.pending`. This version cannot answer it: `session.cancel()`
-refuses it and ends the turn.
+A question the turn asks appears in `view.pending`. Answer it with `session.decide(request, 'approve' | 'reject')`
+for a write, command or fetch, or `session.answer(request, answers)` for a user question. A reply for a
+request that is no longer on screen is refused before anything is sent. `session.cancel()` refuses the
+question and ends the turn.
 
 A view that has `ended` is the last state received. It is not recovered: version 1 has no
 reconnect, so start a new session.

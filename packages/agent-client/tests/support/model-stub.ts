@@ -120,3 +120,21 @@ export class ModelStub {
       .end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)
   }
 }
+
+/** A website that answers every request with one page and records the request lines it saw. */
+export async function startWebsite(page: string): Promise<{ origin: string; requests: string[]; stop(): Promise<void> }> {
+  const requests: string[] = []
+  const server = createServer((request, response) => {
+    requests.push(`${request.method} ${request.url}`)
+    response.writeHead(200, { 'Content-Type': 'text/plain' }).end(page)
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return {
+    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    requests,
+    async stop() {
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+  }
+}

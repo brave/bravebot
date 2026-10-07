@@ -131,8 +131,10 @@ view updates and connection-loss reporting, unless the bridge reports that the s
 request unanswered past its deadline ends the connection with its outcome unknown. Startup trust is
 sent only when a caller asks. No export of the package reaches raw dispatch or the connection, so these
 rules hold for every caller. The client holds released payloads as received and branches on none of
-them. Rust still decides every transition. This version does not answer questions: a pending
-question stays in the view until the turn is cancelled.
+them. Rust still decides every transition and every answer. Replies go to the displayed question:
+the method comes from the pending kind Rust supplied, a stale request is refused without sending, a
+question the client cannot answer is refused without being sent, and a run is answered once without
+`remember`.
 
 `verified-by: bravebot_ui_bridge::view::the_client_wire_contract_matches_the_rust_types`
-`verified-by: by-construction (packages/agent-client/tests runs the shared scenarios under four chunkings, and drives a real bravebot-rpc against a model service of its own for accepted turns, trust deciding whether a write is asked about, cancellation, interleaved sessions, close, EOF, malformed input and failing callbacks, with labelled rows carried whole in the scenarios; make check-agent-client runs it, and the Front end CI job runs that target)`
+`verified-by: by-construction (packages/agent-client/tests runs the shared scenarios under four chunkings, and drives a real bravebot-rpc against a model service of its own for accepted turns, trust deciding whether a write is asked about, approval and rejection of a write, a command and a fetch with different real effects, a typed and a declined answer to a question, cancellation, interleaved sessions, close, EOF, malformed input and failing callbacks, with labelled rows carried whole in the scenarios; make check-agent-client runs it, and the Front end CI job runs that target)`
