@@ -32819,6 +32819,7 @@ fn a_second_spelling_of_the_vouched_tree_is_the_same_entry() {
     );
 }
 
+#[derive(Clone)]
 enum Served {
     /// A complete reply, streamed the way a real one arrives.
     Reply(String),
@@ -33024,6 +33025,56 @@ fn a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_mad
         held.contains("the file body"),
         "the completed round was dropped with the failure"
     );
+}
+
+/// BACKEND-53: the client makes its attempts at the model it was asked for, and the request after
+/// them names the fallback the person's settings gave. A 503 is attempted three times and a 529,
+/// which the client does not send again, once.
+#[test]
+fn a_model_the_service_keeps_failing_is_followed_by_a_request_naming_the_fallback() {
+    for (status, attempts) in [(503, 3), (529, 1)] {
+        let scratch = Scratch::new("fallback-after-overload");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let mut script = vec![Served::Status(status); attempts];
+        script.push(Served::Reply(reply_with("answered by the fallback")));
+        let (endpoint, received) = serve_script(script);
+        let mut config = config_for(&endpoint);
+        config.fallback_model = Some("fallback-model".into());
+        let mut conversation = bravebot_agent::Conversation::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+        let outcome = take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            Task::new("say something").with_model(Some("primary-model".into())),
+            &mut reporter,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+
+        outcome.expect("the fallback answered");
+        let models: Vec<String> = every_request(&received)
+            .iter()
+            .map(|body| {
+                serde_json::from_str::<serde_json::Value>(body).expect("a request")["model"]
+                    .as_str()
+                    .expect("a model")
+                    .to_string()
+            })
+            .collect();
+        let mut expected = vec!["primary-model"; attempts];
+        expected.push("fallback-model");
+        assert_eq!(models, expected, "{status}");
+        assert!(
+            reporter
+                .narration
+                .iter()
+                .any(|line| line.contains("primary-model") && line.contains("fallback-model")),
+            "{status}: the move was not announced: {:?}",
+            reporter.narration
+        );
+    }
 }
 
 #[test]

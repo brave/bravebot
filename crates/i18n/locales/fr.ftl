@@ -356,6 +356,9 @@ doctor-settings-model-ignored =
 doctor-settings-advisor-ignored =
     advisorModel dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-fallback-ignored =
+    fallbackModel dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-narrowing-ignored =
     { $key } dans { $path } n'est pas un booléen, il est donc lu comme absent et ne refuse rien
 doctor-settings-allow-ignored =
@@ -472,6 +475,7 @@ ceiling-stop-in-call = le modèle a atteint sa limite de sortie de { $tokens } j
 ceiling-stop-in-a-call = le modèle a atteint sa limite de sortie de { $tokens } jetons en écrivant un appel d'outil, qui n'a donc pas été fait ; il lui est demandé de faire le travail en plus petites parties
 ceiling-stop-thinking = le modèle a atteint sa limite de sortie de { $tokens } jetons en réfléchissant, avant d'avoir rien écrit ; il lui est redemandé
 ceiling-stop-silent = le modèle a atteint sa limite de sortie de { $tokens } jetons avant d'avoir rien écrit ; il lui est redemandé
+fallback-model-in-use = { $from } a échoué ({ $category }) ; ce tour passe à { $to }
 ceiling-stop-answer-now = le modèle a atteint sa limite de sortie de { $tokens } jetons ; il lui est demandé une réponse plus courte
 ceiling-stop-ends-in-call = le modèle a de nouveau atteint sa limite de sortie de { $tokens } jetons en écrivant un appel à { $tool }, qui n'a donc pas été fait, et cette réponse s'arrête là où elle s'est arrêtée ; relevez BRAVEBOT_OUTPUT_BUDGET ou demandez moins en un seul tour
 ceiling-stop-ends-in-a-call = le modèle a de nouveau atteint sa limite de sortie de { $tokens } jetons en écrivant un appel d'outil, qui n'a donc pas été fait, et cette réponse s'arrête là où elle s'est arrêtée ; relevez BRAVEBOT_OUTPUT_BUDGET ou demandez moins en un seul tour

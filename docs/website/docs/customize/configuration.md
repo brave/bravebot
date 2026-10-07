@@ -407,7 +407,7 @@ one thing leaves everything else in force:
 | `env`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `provider`, `model`, `advisorModel`, `fallbackModel` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
 | anything else | the closest file that set it wins |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
@@ -443,6 +443,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 |---|---|
 | `model` | the model to request when nobody has chosen one ([below](#model)) |
 | `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
+| `fallbackModel` | the model a turn moves to when its own keeps failing ([below](#fallbackmodel)) |
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
@@ -495,8 +496,8 @@ others in force, so a mistake in a checkout cannot decide that your own file no 
 
 :::caution
 **A `.bravebot/settings.json` arrives with a checkout.** A repository you have just cloned cannot name
-the host every request goes to, the model, the advisor model, or the environment variables read as a
-gateway's credential: a `provider` block, or a `model` or `advisorModel` key, in a project or local file is ignored, and `bravebot
+the host every request goes to, the model, the advisor model, the fallback model, or the environment variables read as a
+gateway's credential: a `provider` block, or a `model`, `advisorModel` or `fallbackModel` key, in a project or local file is ignored, and `bravebot
 doctor` names each file whose block or key was dropped. It can still set the other keys here, so read
 a project's settings file before working in it; `doctor` names the files in force. It cannot grant a
 capability either. The names that would (`permissions.allow`, and `permissions.additionalDirectories`)
@@ -523,7 +524,7 @@ than ones a file opens.
 your home file alone and never from a checkout's. [`provider`](#reaching-an-openai-compatible-gateway)
 and [`model`](#model) are too, since they decide which host receives your conversation and which
 variables are sent to it as a credential, and so is [`advisorModel`](#advisormodel), which decides
-which model is sent the whole conversation.
+which model is sent the whole conversation. [`fallbackModel`](#fallbackmodel) is too, for the same reason.
 :::
 
 ### `model`
@@ -577,6 +578,29 @@ other.** The advisor is sent the whole conversation, so a `.bravebot/settings.js
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier. A model that
 your administrator refuses, or that nothing is configured to serve, is not caught when the session
 starts: the call that would have asked it is answered with a failure the planner carries on from.
+
+### `fallbackModel`
+
+```json
+{ "fallbackModel": "sonnet" }
+```
+
+The model a turn moves to when the one it is running on keeps failing. A request that the service
+answers with a rate limit or an unavailable status, after the retries bravebot already makes, is
+sent again to this model, and the rest of that turn runs on it. bravebot says so when it moves. A
+failure of any other kind, such as a refused credential or a request the service rejected, ends
+the turn as it did before.
+
+The fallback has to be served by the same service as the model it replaces: the same AWS account,
+the same gateway, or the Brave endpoint. A fallback on another service is not used, since that
+would send your conversation to a provider you did not choose for it. Delegates and a model your
+definition named do not fall back.
+
+**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that names one is ignored and
+reported by `bravebot doctor`. A model your administrator refuses is not used as a fallback.
+
+The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
 
 ### `effort`
 

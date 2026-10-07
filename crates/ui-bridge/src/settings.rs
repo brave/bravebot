@@ -59,6 +59,10 @@ fn ignored(settings: &Settings) -> Vec<Value> {
     let mut ignored = named("model", settings.model_ignored().collect());
     ignored.extend(named("provider", settings.providers_ignored().collect()));
     ignored.extend(named("advisorModel", settings.advisor_ignored().collect()));
+    ignored.extend(named(
+        "fallbackModel",
+        settings.fallback_ignored().collect(),
+    ));
     ignored
 }
 

@@ -433,6 +433,8 @@ doctor-settings-model-ignored =
     model in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-advisor-ignored =
     advisorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-fallback-ignored =
+    fallbackModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 # A key that only ever refuses, spelled as something other than a boolean. It is read as absence, so
 # the session is as permissive as one that named nothing, and nothing else would say so.
 doctor-settings-narrowing-ignored =
@@ -587,6 +589,8 @@ ceiling-stop-in-call = the model reached its output limit of { $tokens } tokens 
 ceiling-stop-in-a-call = the model reached its output limit of { $tokens } tokens while writing a tool call, so the call was not made; asking it to do the work in smaller parts
 ceiling-stop-thinking = the model reached its output limit of { $tokens } tokens while thinking, before it wrote anything; asking it again
 ceiling-stop-silent = the model reached its output limit of { $tokens } tokens before it wrote anything; asking it again
+# Said when a turn's model kept failing and the person's fallbackModel takes over for the rest of it.
+fallback-model-in-use = { $from } failed as { $category }; this turn moves to { $to }
 # Said instead where the turn has no tools left, so the model is asked for an answer rather than
 # for the work.
 ceiling-stop-answer-now = the model reached its output limit of { $tokens } tokens; asking it for a shorter answer

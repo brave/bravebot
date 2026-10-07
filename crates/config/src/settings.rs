@@ -131,6 +131,7 @@ const READ_KEYS: &[&str] = &[
     "editorMode",
     "effort",
     "env",
+    "fallbackModel",
     "keybindings",
     "mcp",
     "mcpServers",
@@ -207,6 +208,10 @@ pub struct Settings {
     ///
     /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
     advisor_model: Option<String>,
+    /// What the top-level `fallbackModel` key named, if it named anything.
+    ///
+    /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
+    fallback_model: Option<String>,
     /// What the top-level `effort` key named, if it named anything.
     ///
     /// The word as the file spelled it, for the reason `editor_mode` below keeps one: which words
@@ -291,6 +296,11 @@ pub struct Settings {
     /// Kept for the same reason: the model it names is sent the whole conversation, which makes it
     /// a destination, and a checkout cannot choose one.
     advisor_ignored: Vec<PathBuf>,
+    /// The layers that named `fallbackModel` and were not obeyed, weakest first.
+    ///
+    /// Kept for the same reason: the model it names is sent the whole conversation once the
+    /// primary fails, which makes it a destination, and a checkout cannot choose one.
+    fallback_ignored: Vec<PathBuf>,
     /// The `permissions` blocks and rule lists a layer spelled as another shape, with the file each
     /// came from. The merge keeps the weaker block or list in their place, so the merged root no
     /// longer holds them and only the layer that wrote one can say it was ignored (PERM-11).
@@ -560,6 +570,7 @@ impl Settings {
         let mut provider_ignored = Vec::new();
         let mut model_ignored = Vec::new();
         let mut advisor_ignored = Vec::new();
+        let mut fallback_ignored = Vec::new();
         let mut misshapen = Vec::new();
         let mut mcp_declared = Vec::new();
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
@@ -599,6 +610,9 @@ impl Settings {
                 }
                 if root.remove("advisorModel") {
                     advisor_ignored.push(path.clone());
+                }
+                if root.remove("fallbackModel") {
+                    fallback_ignored.push(path.clone());
                 }
             }
             if root.contains_key(VETTING_BLOCK) {
@@ -700,6 +714,7 @@ impl Settings {
         settings.provider_ignored = provider_ignored;
         settings.model_ignored = model_ignored;
         settings.advisor_ignored = advisor_ignored;
+        settings.fallback_ignored = fallback_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -749,6 +764,7 @@ impl Settings {
             permissions: permission_lists(root),
             model: word(root, "model"),
             advisor_model: word(root, "advisorModel"),
+            fallback_model: word(root, "fallbackModel"),
             effort: word(root, "effort"),
             prompt_cache_ttl: word(root, "promptCacheTtl")
                 .and_then(|word| crate::CacheTtl::parse(&word)),
@@ -797,6 +813,7 @@ impl Settings {
             provider_ignored: Vec::new(),
             model_ignored: Vec::new(),
             advisor_ignored: Vec::new(),
+            fallback_ignored: Vec::new(),
         }
     }
 
@@ -843,6 +860,14 @@ impl Settings {
     /// [`Settings::model`] is.
     pub fn advisor_model(&self) -> Option<&str> {
         self.advisor_model.as_deref()
+    }
+
+    /// The model the settings in force name for a turn to move to when its own keeps failing.
+    ///
+    /// Read from the person's own file and the file `--settings` names only, for the reason
+    /// [`Settings::model`] is.
+    pub fn fallback_model(&self) -> Option<&str> {
+        self.fallback_model.as_deref()
     }
 
     /// How hard the settings in force asked the model to think, if they asked for anything.
@@ -1098,6 +1123,7 @@ impl Settings {
             && self.provider_ignored.is_empty()
             && self.model_ignored.is_empty()
             && self.advisor_ignored.is_empty()
+            && self.fallback_ignored.is_empty()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -1127,6 +1153,11 @@ impl Settings {
     /// The files that named `advisorModel` from a layer not entitled to, weakest first.
     pub fn advisor_ignored(&self) -> impl Iterator<Item = &Path> {
         self.advisor_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The files that named `fallbackModel` from a layer not entitled to, weakest first.
+    pub fn fallback_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.fallback_ignored.iter().map(PathBuf::as_path)
     }
 
     /// The files that were read, weakest first, for `doctor` to report.
@@ -1168,6 +1199,7 @@ impl Settings {
             .then_some("model")
             .into_iter()
             .chain(self.advisor_model.is_some().then_some("advisorModel"))
+            .chain(self.fallback_model.is_some().then_some("fallbackModel"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
@@ -4738,6 +4770,31 @@ mod tests {
 
     /// The advisor is a second model the planner's context is sent to, so it is a destination as
     /// the main model is: a checkout cannot name one, and the file is reported rather than obeyed.
+    /// BACKEND-53: the fallback is a destination for the conversation, so a checkout's layers
+    /// cannot name it, and the layers that can are reported for the ones that could not.
+    #[test]
+    fn a_project_layer_cannot_name_the_fallback_model() {
+        let settings = Layers::new("fallback-layers")
+            .global(r#"{"fallbackModel": "  personal-fallback "}"#)
+            .project(r#"{"fallbackModel": "this-checkout"}"#)
+            .local(r#"{"fallbackModel": "also-this-checkout"}"#)
+            .read();
+        assert_eq!(settings.fallback_model(), Some("personal-fallback"));
+        assert_eq!(settings.fallback_ignored().count(), 2);
+
+        let only_project = Layers::new("fallback-only-project")
+            .project(r#"{"fallbackModel": "this-checkout"}"#)
+            .read();
+        assert_eq!(only_project.fallback_model(), None);
+        assert_eq!(only_project.fallback_ignored().count(), 1);
+
+        let named = Layers::new("fallback-named")
+            .global(r#"{"fallbackModel": "personal-fallback"}"#)
+            .named(r#"{"fallbackModel": "named-fallback"}"#)
+            .read();
+        assert_eq!(named.fallback_model(), Some("named-fallback"));
+    }
+
     #[test]
     fn a_project_or_local_layer_cannot_name_an_advisor() {
         let settings = Layers::new("advisor-checkout")
