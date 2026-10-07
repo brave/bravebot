@@ -25,10 +25,10 @@ export interface CloseOutcome {
   saved: 'unknown'
 }
 
-/** A listener may be async; a thrown error or rejection is reported and goes no further. */
 /** One answer to an `ask` question, in the bridge's existing shape. `null` declines. */
 export type AskAnswer = { typed: string } | { chosen: number[] } | null
 
+/** A listener may be async; a thrown error or rejection is reported and goes no further. */
 export type ViewListener = (view: ViewState) => void
 
 /** One fresh session with a view. Every method addresses exactly this session. */
@@ -43,7 +43,10 @@ export interface AgentSession {
   /** Answer the startup trust question. Never sent unless a caller asks; never remembered. */
   answerTrust(trusted: boolean): Promise<void>
   send(text: string): Promise<SendResult>
-  /** Approve or reject the displayed `confirm`, `run` (once, never remembered) or `fetch` question. */
+  /**
+   * Approve or reject the displayed `confirm`, `run` (once, never remembered) or `fetch` question.
+   * A second reply to a request while the first is being sent is refused locally.
+   */
   decide(request: number, decision: 'approve' | 'reject'): Promise<void>
   /** Answer the displayed `ask` question. */
   answer(request: number, answers: AskAnswer[]): Promise<void>

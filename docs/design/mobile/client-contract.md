@@ -99,7 +99,9 @@ from anything in its payload; a reply for a request that is not displayed is ref
 sending (`StaleActionError`); a question Rust does not mark supported, a decision given to an `ask`
 question, and answers given to an approval are refused without sending. A `run` is answered once
 and the request never carries `remember`. Rust still checks every reply and refuses a wrong-kind,
-duplicate or late one, which the client reports with its code.
+duplicate or late one, which the client reports with its code. A decision other than `approve` or
+`reject`, answers that are not typed text, chosen indexes or `null`, and a second reply to a request
+while the first is being sent are refused locally.
 
 `attach`, `takeControl` and `messageStatus` fail locally. A question a turn asks appears in the
 view, and cancelling the turn refuses it.

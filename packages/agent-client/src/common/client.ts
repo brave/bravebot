@@ -6,6 +6,7 @@ import { applyUpdate, endView, startView, type ViewState } from './view.js'
 import {
   SESSION_VIEW_START,
   SESSION_VIEW_VERSION,
+  SUPPORTED_APPROVALS,
   decodeUpdate,
   readSessionViewCapability,
   type BridgeEvent,
@@ -35,10 +36,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/** The question kinds answered with a decision: every supported kind except the one that takes answers. */
+const DECISION_KINDS: readonly string[] = SUPPORTED_APPROVALS.filter((kind) => kind !== 'ask')
+
+function isAskAnswer(value: unknown): value is AskAnswer {
+  if (value === null) return true
+  if (!isRecord(value)) return false
+  if (typeof value.typed === 'string') return true
+  return Array.isArray(value.chosen) && value.chosen.every((index) => Number.isSafeInteger(index) && index >= 0)
+}
+
 class Session implements AgentSession {
   private current: ViewState | null = null
   private trust: JsonValue | null = null
   private readonly listeners = new Set<ViewListener>()
+  private readonly replying = new Set<number>()
   /** Why the view could not start, when a malformed event arrived before it existed. */
   refused: string | null = null
 
@@ -138,16 +150,33 @@ class Session implements AgentSession {
 
   async decide(request: number, decision: 'approve' | 'reject'): Promise<void> {
     const pending = this.target(request)
-    if (pending.kind !== 'confirm' && pending.kind !== 'run' && pending.kind !== 'fetch') {
+    if (!DECISION_KINDS.includes(pending.kind)) {
       throw new UnsupportedError(`a ${pending.kind} question is not an approval to approve or reject`)
     }
-    await this.connection.request(`${pending.kind}.reply`, this.params({ request, decision }))
+    if (decision !== 'approve' && decision !== 'reject') {
+      throw new UnsupportedError("a decision is 'approve' or 'reject'")
+    }
+    await this.reply(request, `${pending.kind}.reply`, { decision })
   }
 
   async answer(request: number, answers: AskAnswer[]): Promise<void> {
     const pending = this.target(request)
     if (pending.kind !== 'ask') throw new UnsupportedError(`a ${pending.kind} question takes a decision, not answers`)
-    await this.connection.request('ask.reply', this.params({ request, answers }))
+    if (!Array.isArray(answers) || !answers.every(isAskAnswer)) {
+      throw new UnsupportedError('answers are a list of { typed }, { chosen } or null')
+    }
+    await this.reply(request, 'ask.reply', { answers })
+  }
+
+  /** One reply per request at a time; the bridge would refuse the second, but the caller learns it here. */
+  private async reply(request: number, method: string, body: Record<string, unknown>): Promise<void> {
+    if (this.replying.has(request)) throw new StaleActionError(`a reply to request ${request} is already being sent`)
+    this.replying.add(request)
+    try {
+      await this.connection.request(method, this.params({ request, ...body }))
+    } finally {
+      this.replying.delete(request)
+    }
   }
 
   async cancel(): Promise<void> {

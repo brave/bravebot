@@ -1,6 +1,6 @@
 {
-  "name": "reply-run-once",
-  "description": "A command question is answered once: the request carries no remember field.",
+  "name": "ask-answers-have-a-known-shape",
+  "description": "Answers that are not a list of typed text, chosen indexes or null are refused locally.",
   "steps": [
     {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
     {"expectRequest": "info", "method": "agent.info", "params": {}},
@@ -14,11 +14,11 @@
     {"expectRequest": "send", "method": "turn.send", "params": {"session": "s1", "prompt": "go"}},
     {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 1, "turn": 1, "status": "running", "pending": null, "rows": [{"id": 1, "turn": 1, "kind": "prompt", "event": null, "data": {"text": "go"}, "resolved": false}]}}, {"id": "$send", "ok": {"turn": 1}}]},
     {"await": "send"},
-    {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 2, "turn": 1, "status": "waiting", "pending": {"row": 2, "request": 5, "kind": "run", "supported": true, "data": {"request": 5, "line": "git status", "directory": "/work", "plan": "git status", "ambient": [], "releasesPrivate": false, "stages": []}}, "rows": [{"id": 2, "turn": 1, "kind": "approval", "event": "run.request", "data": {"request": 5, "line": "git status", "directory": "/work", "plan": "git status", "ambient": [], "releasesPrivate": false, "stages": []}, "resolved": false}]}}]},
-    {"start": "reply", "call": "decide", "session": "a", "args": {"request": 5, "decision": "approve"}},
-    {"expectRequest": "reply", "method": "run.reply", "params": {"session": "s1", "request": 5, "decision": "approve"}},
-    {"send": [{"id": "$reply", "ok": {}}]},
-    {"await": "reply"},
+    {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 2, "turn": 1, "status": "waiting", "pending": {"row": 2, "request": 6, "kind": "ask", "supported": true, "data": {"request": 6, "questions": []}}, "rows": [{"id": 2, "turn": 1, "kind": "approval", "event": "ask.request", "data": {"request": 6, "questions": []}, "resolved": false}]}}]},
+    {"start": "bad", "call": "answer", "session": "a", "args": {"request": 6, "answers": [{"typed": 5}]}},
+    {"await": "bad", "error": {"name": "UnsupportedError"}},
+    {"start": "worse", "call": "answer", "session": "a", "args": {"request": 6, "answers": [{"chosen": [-1]}]}},
+    {"await": "worse", "error": {"name": "UnsupportedError"}},
     {"expectNoRequest": true}
   ]
 }

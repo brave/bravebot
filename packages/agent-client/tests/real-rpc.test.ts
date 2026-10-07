@@ -212,7 +212,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
     assert.equal(
       made.stub.requests.some((body) => body.includes(SENTINEL)),
       false,
-      'the page reached the planner',
+      'the page must not reach the planner',
     )
     assert.ok(done.rows.findIndex((row) => row.kind === 'quarantined') > done.rows.findIndex((row) => row.id === question.row))
 
