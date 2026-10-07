@@ -4265,6 +4265,49 @@ mod tests {
             );
         }
 
+        /// A server told to serve a page never exits, so the limit ends it. A cross beside it would
+        /// say the program failed, and a tick would say it finished.
+        #[test]
+        fn a_command_stopped_at_the_limit_is_marked_as_work_still_going() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "find the parser");
+            printed(
+                &mut session,
+                "serve the page",
+                true,
+                &["listening"],
+                1,
+                bravebot_agent::report::Outcome::Stopped(std::time::Duration::from_secs(60)),
+            );
+            session.watch();
+
+            let panel = listed(&session, 90, 24);
+            let row = row_naming(&panel, "serve the page");
+            assert!(
+                row.contains('●'),
+                "a run stopped at the limit was not marked as work still going: {row}"
+            );
+            assert!(
+                !row.contains('✗') && !row.contains('✓'),
+                "a run stopped at the limit was marked as ended: {row}"
+            );
+
+            let mut session = Session::new("kernel-enforced");
+            printed(
+                &mut session,
+                "serve the page",
+                true,
+                &["listening"],
+                1,
+                bravebot_agent::report::Outcome::Stopped(std::time::Duration::from_secs(60)),
+            );
+            session.watch();
+            assert!(
+                rendered(&session).contains("so it was stopped"),
+                "the view did not say the run was stopped"
+            );
+        }
+
         /// A view opened on a long log draws its last lines, and the verdict of a build is not
         /// always in them.
         #[test]

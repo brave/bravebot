@@ -448,6 +448,7 @@ RUN-11 has the limit end the run rather than fail it, and a cross beside it woul
 about the program that is not true.
 
 `verified-by: bravebot_tui::render::a_command_row_says_how_the_run_ended`
+`verified-by: bravebot_tui::render::a_command_stopped_at_the_limit_is_marked_as_work_still_going`
 `verified-by: bravebot_tui::render::a_commands_view_says_how_the_run_ended`
 `verified-by: bravebot_agent::turn::what_a_command_printed_reaches_the_person_watching`
 
