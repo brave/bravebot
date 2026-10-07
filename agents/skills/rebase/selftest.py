@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("rebase", HERE / "rebase.py")
@@ -166,6 +167,76 @@ def test_a_push_made_since_start_is_refused_rather_than_overwritten():
         code, out = quietly(rebase.push, pr())
         assert code == 1, out
         assert git("log", "-1", "--format=%s", "feature", cwd=fork) == "pushed meanwhile"
+
+
+FAKE_SSH = """\
+#!/bin/sh
+# Refuses the key ssh offers unprompted, and any named key whose file lacks the word `good`.
+if [ "$1" = "-i" ] && grep -q good "$2"; then
+    for last; do :; done
+    exec sh -c "$last"
+fi
+echo "ERROR: Permission to brave/bravebot.git denied to netzenbot." >&2
+exit 128
+"""
+
+
+@contextlib.contextmanager
+def an_agent_holding(keys):
+    with tempfile.TemporaryDirectory() as tmp:
+        bin = Path(tmp)
+        (bin / "ssh").write_text(FAKE_SSH)
+        (bin / "ssh-add").write_text("#!/bin/sh\ncat <<'EOF'\n" + "".join(k + "\n" for k in keys) + "EOF\n")
+        for tool in ("ssh", "ssh-add"):
+            (bin / tool).chmod(0o755)
+        path = os.environ["PATH"]
+        os.environ["PATH"] = f"{bin}{os.pathsep}{path}"
+        try:
+            yield
+        finally:
+            os.environ["PATH"] = path
+
+
+def an_ssh_remote(root):
+    """A clone whose pushes go to a bare repository over ssh, with a local commit that replaces its head."""
+    remote, clone = root / "remote.git", root / "clone"
+    git("init", "-q", "--bare", "-b", "main", str(remote), cwd=root)
+    git("clone", "-q", str(remote), str(clone), cwd=root)
+    (clone / "a.txt").write_text("one\n")
+    git("add", "a.txt", cwd=clone)
+    git("commit", "-q", "-m", "one", cwd=clone)
+    git("push", "-q", "origin", "HEAD:main", cwd=clone)
+    git("commit", "-q", "--allow-empty", "-m", "two", cwd=clone)
+    git("push", "-q", "origin", "HEAD:feature", cwd=clone)
+    git("fetch", "-q", "origin", cwd=clone)
+    git("commit", "-q", "--amend", "--allow-empty", "-m", "two again", cwd=clone)
+    git("remote", "set-url", "--push", "origin", f"ssh://git@example.invalid{remote}", cwd=clone)
+    pr = SimpleNamespace(
+        number=9, url="https://github.com/brave/bravebot/pull/9", tree=clone, branch="feature",
+        head="feature", head_remote="origin", onto="origin/main", tip="origin/feature",
+    )
+    return pr, remote
+
+
+def test_a_push_github_refuses_is_retried_with_each_other_key_the_agent_holds():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, remote = an_ssh_remote(Path(tmp).resolve())
+        keys = ["ssh-ed25519 AAAAbad bot@example.invalid", "ssh-ed25519 AAAAgood person@example.invalid"]
+        with an_agent_holding(keys):
+            code, out = quietly(rebase.push, pr)
+        assert code == 0 and "person@example.invalid" in out, out
+        assert "bot@example.invalid" not in out, out
+        assert git("rev-parse", "feature", cwd=remote) == git("rev-parse", "HEAD", cwd=pr.tree)
+
+
+def test_a_push_no_key_in_the_agent_can_make_is_refused_with_githubs_message():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, remote = an_ssh_remote(Path(tmp).resolve())
+        before = git("rev-parse", "feature", cwd=remote)
+        with an_agent_holding(["ssh-ed25519 AAAAbad bot@example.invalid"]):
+            code, out = quietly(rebase.push, pr)
+        assert code == 1 and "Permission to brave/bravebot.git denied" in out, out
+        assert git("rev-parse", "feature", cwd=remote) == before
 
 
 def test_a_branch_already_rebased_here_is_rebased_again_rather_than_refused():
