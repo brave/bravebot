@@ -2553,7 +2553,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 // Two counts the driver already holds: the rounds this delegate made, and the
                 // bound its spec fixed before it started. Nothing here reads the report, so the
                 // comparison is between driver-held numbers and never between bytes a delegate
-                // wrote (DELEGATE-25).
+                // wrote (DELEGATE-26).
                 let reached = rounds >= working.rounds;
                 let note = match (working.stop.was_honoured(), reached) {
                     (true, _) => format!(
@@ -2637,6 +2637,18 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 *tokens += partial.tokens;
                 *output_tokens += partial.output_tokens;
                 cached.add(partial.cached);
+                // The same comparison the answering arm makes, on the same two driver-held counts.
+                // A delegate that spent its whole budget and then failed to answer is the common
+                // way the bound is reached rather than a corner of it, and the planner told only
+                // that it did not finish retries the identical task (DELEGATE-26).
+                let reached = ran.is_some_and(|(_, rounds)| rounds >= working.rounds);
+                let bound = match reached {
+                    true => format!(
+                        " It had spent its limit of {}, so the same task will not get further.",
+                        tools::tally(working.rounds, "round", "rounds")
+                    ),
+                    false => String::new(),
+                };
                 // The same fixed name the trail records, and never the error's own text.
                 let note = match finish {
                     bravebot_core::delegate::Finish::Failed { why, .. } => {
@@ -2647,7 +2659,14 @@ fn collect_delegates<S: Sink, R: Reporter>(
                     }
                     _ => "the delegate could not finish".to_string(),
                 };
-                let body = format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish.");
+                let note = match reached {
+                    true => format!(
+                        "{note}, having spent its limit of {}",
+                        tools::tally(working.rounds, "round", "rounds")
+                    ),
+                    false => note,
+                };
+                let body = format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish.{bound}");
                 (note, body, true, None, Provenance::Driver)
             }
         };
@@ -5802,7 +5821,7 @@ mod tests {
         );
     }
 
-    /// DELEGATE-25 where the report is quarantined. The sentence about the bound is the driver's
+    /// DELEGATE-26 where the report is quarantined. The sentence about the bound is the driver's
     /// own and sits beside the report, so the planner reads the same words whether it is shown the
     /// text or handed a reference to it. An untrusted report is given here directly, since a
     /// delegate's own context meets nothing untrusted on the ordinary paths.
@@ -5854,6 +5873,7 @@ mod tests {
                 seeded: seeded.clone(),
                 checkout: None,
                 rounds: 1,
+                stop: Default::default(),
                 handle: answered,
             }];
             collect_delegates(

@@ -252,8 +252,8 @@ Zero goes with it: the bound is checked after a round, so zero would run as one.
 `verified-by: bravebot_agent::agents::a_definition_asking_past_its_kinds_ceiling_says_what_it_is_given`
 `verified-by: bravebot_agent::turn::no_kind_lets_a_definition_run_longer_than_an_unwatched_turn`
 
-<a id="DELEGATE-25"></a>
-### DELEGATE-25: a delegate that reached its bound says so beside its report
+<a id="DELEGATE-26"></a>
+### DELEGATE-26: a delegate that reached its bound says so beside its report
 
 A delegate held to [DELEGATE-6](#DELEGATE-6)'s bound answers with what it has, which reads like a
 finished answer. So the driver adds one sentence of its own, naming the bound and saying the work
@@ -263,6 +263,18 @@ The sentence sits beside the report rather than inside it, so the planner is tol
 whether it is shown the words or handed a reference to them
 ([AGENT-4](tools/spawn-agent.md#AGENT-4), [DELEGATE-8](#DELEGATE-8)). Nothing is derived from the
 report.
+
+A delegate that spent its whole budget and then did not answer at all is told of in the same terms.
+There is no report to sit beside, so the sentence says the limit was spent and that the same task
+will not get further; the person's note gains the bound the same way. What the failure was stays the
+fixed category and nothing more ([BACKEND-37](backends.md#BACKEND-37)): the bound is two counts this
+driver holds, not a reason read off a service's answer.
+
+**Why this case and not only the answering one.** It is the common way the bound is reached rather
+than a corner of it. A delegate held to a tight bound loses its tools and is asked to answer; where
+it asks for a tool instead, there is no answer to carry and the run ends as a failure. The planner
+is then told only that the delegate did not finish, which reads as bad luck, so it spawns the same
+delegate on the same task and the budget goes on repeats of a run that cannot end differently.
 
 **Why the driver says it rather than the delegate.** DELEGATE-6 has the delegate told on its
 limiting round to say what stopped it, and that is model text: a delegate may spend its last round
@@ -276,6 +288,8 @@ untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::a_delegate_held_to_its_bound_says_so_to_the_planner_and_the_person`
 `verified-by: bravebot_agent::turn::a_delegate_that_answered_early_says_nothing_about_a_limit`
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
+`verified-by: bravebot_agent::turn::a_delegate_that_spent_its_bound_and_failed_says_the_bound_was_spent`
+`verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
 
 <a id="DELEGATE-7"></a>
 ### DELEGATE-7: a delegate may delegate, to a fixed depth and under one ceiling for the turn

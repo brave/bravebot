@@ -1472,8 +1472,11 @@ before backoff does not count until it starts. Cancelling that wait retains the 
 
 Categories come from structured errors. Error bodies, headers, credentials, URLs, and raw transport
 messages do not enter these details. Processor failures use a fixed category in their tool results;
-delegate failures tell the planner only that the delegate did not finish. Compaction failure
-messages also use the category. These paths do not copy raw backend errors into the conversation.
+delegate failures tell the planner that the delegate did not finish, and nothing about the failure
+beyond that. Where the run had spent its round bound, the driver's own count of that bound is said
+too ([DELEGATE-26](delegation.md#DELEGATE-26)), which is a number this process fixed before the run
+started rather than anything read out of the answer that failed. Compaction failure messages also
+use the category. These paths do not copy raw backend errors into the conversation.
 
 Cancellation is distinct from failure. A processor carries cancellation and its attempt count
 separately from its tool-result text, so the parent can report the stop without parsing that text.
