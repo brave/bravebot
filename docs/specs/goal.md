@@ -395,9 +395,10 @@ the key names nothing. The key, the layers it is read from and the refusal for a
 sign-in are [COMPACT-14](compaction.md#COMPACT-14)'s; one setting names the model for both side
 requests, so a person capping what background work costs caps it once.
 
-A model needing a sign-in this machine has not made sends no check. The goal ends, as it does for
-every other request that failed ([GOAL-6](#GOAL-6)), and the reason says which model could not be
-reached.
+A model needing a sign-in this machine has not made sends no check, and neither does one the
+machine-level layer excludes. The goal ends, as it does for every other request that failed
+([GOAL-6](#GOAL-6)), and the reason says which model could not be reached and which of the two it
+was.
 
 **What does not change with the model.** The verdict is still read as [GOAL-4](#GOAL-4) has it, and
 still only where the gate lets the driver hold it ([GOAL-5](#GOAL-5)): the judge is given the
@@ -408,6 +409,7 @@ model that answered. The judge is still offered no tools and still gets one roun
 `verified-by: bravebot_agent::turn::a_check_runs_on_the_summary_model_the_settings_name`
 `verified-by: bravebot_agent::turn::a_check_with_no_summary_model_runs_on_the_sessions_own`
 `verified-by: bravebot_agent::turn::a_summary_model_needing_a_sign_in_sends_no_check`
+`verified-by: bravebot_agent::compact::a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on`
 
 ## Known costs
 

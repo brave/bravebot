@@ -618,6 +618,10 @@ the session's model instead. A compaction refused this way leaves the conversati
 goal check refused this way ends the goal. Naming a cheaper model is a limit on what background work
 costs, and quietly falling back would spend exactly what the key was set to avoid.
 
+A model your administrator refuses is not used here either. The managed settings on a machine rule a
+model out for every route that could name one, and this key is a route, so it is reported the same
+way rather than sent.
+
 **The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
 other.** The model is sent the conversation, so a `.bravebot/settings.json` or
 `.bravebot/settings.local.json` that names one is ignored and reported by `bravebot doctor`, as a

@@ -2699,6 +2699,10 @@ delegate-model-substituted = { $definition } asked for { $model } and was answer
 # is refused rather than sent to the session's model, since the setting is a cost boundary.
 summary-model-needs-sign-in =
     { $model } is set as the summary model and needs a sign-in first, so nothing was sent
+# The same setting naming a model this machine's managed layer excludes (BACKEND-48). Refused rather
+# than sent, and rather than fallen back from, for the same reason.
+summary-model-refused =
+    { $model } is set as the summary model and this machine's managed settings do not allow it, so nothing was sent
 # A definition's skills line named skills this session did not find. The definition is its file's
 # path and the skills are that file's own words, joined with a comma, both from a vouched-for file.
 delegate-skills-not-found =

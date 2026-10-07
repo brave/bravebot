@@ -212,10 +212,10 @@ pub enum GoalError {
     Denied(Denial),
     /// The call failed or was refused in transit.
     Chat(crate::backend::BackendError),
-    /// The configured summary model needs a sign-in this machine has not made, so nothing was sent.
+    /// The configured summary model cannot be used, so nothing was sent.
     ///
-    /// Holds the resolved model name, for a sentence naming what could not be reached.
-    NeedsSignIn(String),
+    /// Holds why and the resolved model name, for a sentence naming what could not be reached.
+    SummaryModel(crate::compact::SideModelRefusal),
 }
 
 impl fmt::Display for GoalError {
@@ -223,11 +223,18 @@ impl fmt::Display for GoalError {
         match self {
             Self::Denied(d) => write!(f, "{d}"),
             Self::Chat(e) => write!(f, "{e}"),
-            Self::NeedsSignIn(model) => {
+            Self::SummaryModel(crate::compact::SideModelRefusal::NeedsSignIn(model)) => {
                 write!(
                     f,
                     "{}",
                     bravebot_i18n::t!(summary_model_needs_sign_in, model = model)
+                )
+            }
+            Self::SummaryModel(crate::compact::SideModelRefusal::Refused(model)) => {
+                write!(
+                    f,
+                    "{}",
+                    bravebot_i18n::t!(summary_model_refused, model = model)
                 )
             }
         }
@@ -236,11 +243,9 @@ impl fmt::Display for GoalError {
 
 impl std::error::Error for GoalError {}
 
-/// The resolved name of a summary model this machine has no sign-in for, from
-/// [`crate::compact::side_request_model`].
-impl From<String> for GoalError {
-    fn from(value: String) -> Self {
-        Self::NeedsSignIn(value)
+impl From<crate::compact::SideModelRefusal> for GoalError {
+    fn from(value: crate::compact::SideModelRefusal) -> Self {
+        Self::SummaryModel(value)
     }
 }
 

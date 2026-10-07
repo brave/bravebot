@@ -101,27 +101,44 @@ fn instruction(focus: Option<&str>) -> String {
 /// The model a side request runs on: the `summaryModel` setting where it names one, and the
 /// session's own model otherwise.
 ///
-/// Shared by compaction and the goal judge so one setting means one model for both. `Err` holds the
-/// resolved name the machine has no sign-in for, which the caller refuses on rather than falling
-/// back: the setting is a cost boundary, and a summary quietly sent to the session's expensive
-/// model spends exactly what naming a cheaper one was meant to cap (COMPACT-14, GOAL-19).
+/// Shared by compaction and the goal judge so one setting means one model for both. `Err` says why
+/// the named model cannot be used, which the caller refuses on rather than falling back: the setting
+/// is a cost boundary, and a summary quietly sent to the session's expensive model spends exactly
+/// what naming a cheaper one was meant to cap (COMPACT-14, GOAL-19).
 ///
-/// Nothing here reads a model's output. The name comes from the person's own settings file and the
-/// sign-in question is asked of this machine, so the decision is made from what the driver already
-/// had.
+/// Nothing here reads a model's output. The name comes from the person's own settings file, and both
+/// questions are asked of this machine, so the decision is made from what the driver already had.
 pub fn side_request_model<'a>(
     config: &'a bravebot_config::Config,
     session_model: Option<&'a str>,
-) -> Result<std::borrow::Cow<'a, str>, String> {
+) -> Result<std::borrow::Cow<'a, str>, SideModelRefusal> {
     let Some(named) = config.summary() else {
         return Ok(std::borrow::Cow::Borrowed(
             session_model.unwrap_or(&config.default_model),
         ));
     };
+    // Asked here as well as wherever a run's own model was settled, because a model the
+    // machine-level layer refuses is refused whichever route named it (BACKEND-48), and this is a
+    // route that names one. The same place `advisor::consult` asks it, for the same reason.
+    if config.model_refused(&named).is_some() {
+        return Err(SideModelRefusal::Refused(named));
+    }
     match crate::backend::Backend::needs_sign_in(config, &named) {
-        true => Err(named),
+        true => Err(SideModelRefusal::NeedsSignIn(named)),
         false => Ok(std::borrow::Cow::Owned(named)),
     }
+}
+
+/// Why the model `summaryModel` named cannot be the one a side request runs on.
+///
+/// Each holds the resolved name. A named type rather than the name alone, so a `?` added later over
+/// some other `Result<_, String>` cannot be read as one of these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SideModelRefusal {
+    /// The machine-level layer excludes it (BACKEND-48).
+    Refused(String),
+    /// This machine has made no sign-in that reaches it.
+    NeedsSignIn(String),
 }
 
 /// What one compaction did.
@@ -142,11 +159,11 @@ pub enum CompactError {
     Denied(Denial),
     /// The call failed or was refused in transit.
     Chat(crate::backend::BackendError),
-    /// The configured summary model needs a sign-in this machine has not made, so nothing was sent.
+    /// The configured summary model cannot be used, so nothing was sent.
     ///
-    /// Holds the resolved model name, for a sentence naming what could not be reached. The
+    /// Holds why and the resolved model name, for a sentence naming what could not be reached. The
     /// conversation is left as it was, as it is for every other refusal here.
-    NeedsSignIn(String),
+    SummaryModel(SideModelRefusal),
 }
 
 impl CompactError {
@@ -154,7 +171,7 @@ impl CompactError {
     pub fn completed_usage(&self) -> Option<Usage> {
         match self {
             Self::Chat(error) => error.completed_usage(),
-            Self::Denied(_) | Self::NeedsSignIn(_) => None,
+            Self::Denied(_) | Self::SummaryModel(_) => None,
         }
     }
 
@@ -162,7 +179,11 @@ impl CompactError {
     pub fn category(&self) -> crate::outcome::Category {
         match self {
             Self::Chat(error) => error.diagnosis().category,
-            Self::Denied(_) | Self::NeedsSignIn(_) => crate::outcome::Category::Blocked,
+            Self::Denied(_) => crate::outcome::Category::Blocked,
+            // Nothing local could send the request: no sign-in reaches the model, or this machine
+            // excludes it. No gate in this process refused to let one leave, which is what
+            // `Blocked` says, and the category name is often the whole of what a caller shows.
+            Self::SummaryModel(_) => crate::outcome::Category::Unconfigured,
         }
     }
 }
@@ -172,8 +193,11 @@ impl fmt::Display for CompactError {
         match self {
             Self::Denied(d) => write!(f, "{d}"),
             Self::Chat(e) => write!(f, "{e}"),
-            Self::NeedsSignIn(model) => {
+            Self::SummaryModel(SideModelRefusal::NeedsSignIn(model)) => {
                 write!(f, "{}", t!(summary_model_needs_sign_in, model = model))
+            }
+            Self::SummaryModel(SideModelRefusal::Refused(model)) => {
+                write!(f, "{}", t!(summary_model_refused, model = model))
             }
         }
     }
@@ -187,11 +211,9 @@ impl From<Denial> for CompactError {
     }
 }
 
-/// The resolved name of a summary model this machine has no sign-in for, from
-/// [`side_request_model`].
-impl From<String> for CompactError {
-    fn from(value: String) -> Self {
-        Self::NeedsSignIn(value)
+impl From<SideModelRefusal> for CompactError {
+    fn from(value: SideModelRefusal) -> Self {
+        Self::SummaryModel(value)
     }
 }
 
@@ -349,7 +371,7 @@ mod tests {
         // here and the sign-in is the test below's.
         let resolved = match side_request_model(&config, Some("a-session-model")) {
             Ok(model) => model.to_string(),
-            Err(model) => model,
+            Err(SideModelRefusal::NeedsSignIn(model) | SideModelRefusal::Refused(model)) => model,
         };
         assert_eq!(resolved, "haiku-arn", "the tier word did not resolve");
     }
@@ -373,16 +395,58 @@ mod tests {
         let refused = side_request_model(&config, Some("a-session-model"));
         assert_eq!(
             refused.expect_err("a model with no sign-in must refuse"),
-            "haiku-arn",
+            SideModelRefusal::NeedsSignIn("haiku-arn".to_string()),
             "the refusal did not name the model that could not be reached"
         );
 
         // And the sentence the caller shows names the model and the sign-in, since a notice saying
         // only that something failed leaves nobody knowing which model to sign in to.
-        let said = CompactError::NeedsSignIn("haiku-arn".to_string()).to_string();
+        let said =
+            CompactError::from(SideModelRefusal::NeedsSignIn("haiku-arn".to_string())).to_string();
         assert!(
             said.contains("haiku-arn") && said.contains("sign-in"),
             "{said}"
+        );
+    }
+
+    /// BACKEND-48 over this route. A model the machine-level layer excludes is refused whichever
+    /// route named it, and `summaryModel` is a route that names one: without the check here a
+    /// person's own settings file would send the whole older conversation, and every goal check,
+    /// to a model an administrator ruled out.
+    ///
+    /// Refused rather than fallen back from, as the sign-in case above is, so the two failures are
+    /// the same shape to a caller.
+    #[test]
+    fn a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on() {
+        let managed = std::env::temp_dir().join(format!(
+            "bravebot-summary-refused-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&managed, r#"{"models": {"deny": ["an-excluded-model"]}}"#)
+            .expect("write the managed file");
+        let mut config = bravebot_config::Config::from_lookup(aichat_only).expect("configured");
+        config.models = bravebot_config::Managed::at(&managed).models().clone();
+        let _ = std::fs::remove_file(&managed);
+
+        config.summary_model = Some("an-excluded-model".to_string());
+        assert_eq!(
+            side_request_model(&config, Some("a-session-model"))
+                .expect_err("a model the machine refuses must refuse here too"),
+            SideModelRefusal::Refused("an-excluded-model".to_string()),
+            "the excluded model was handed back as the one to summarise on"
+        );
+
+        // The sentence names the model, since a person reading it has to know which key to change.
+        let said = CompactError::from(SideModelRefusal::Refused("an-excluded-model".to_string()))
+            .to_string();
+        assert!(said.contains("an-excluded-model"), "{said}");
+
+        // A model the layer does not exclude still comes back, so the check refuses what it names
+        // and nothing else.
+        config.summary_model = Some("a-permitted-model".to_string());
+        assert_eq!(
+            side_request_model(&config, Some("a-session-model")).expect("not excluded"),
+            "a-permitted-model"
         );
     }
 

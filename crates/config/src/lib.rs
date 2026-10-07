@@ -1597,10 +1597,13 @@ impl Config {
     /// The model compaction summaries and goal checks run on, resolved like `--model`.
     ///
     /// `None` where the settings name none, which leaves both on the session's own model.
+    ///
     /// Unlike [`Config::fallback`], a model the machine-level layer refuses is still returned here,
-    /// so the caller refuses the request rather than quietly summarising on the session's model: a
-    /// cheaper model is a cost boundary, and falling back past it spends what the person meant to
-    /// cap.
+    /// because the two want different answers to it: a fallback that cannot be used leaves the turn
+    /// on the model it already had, while a summary model that cannot be used has to stop the
+    /// request rather than quietly spend the rate the person named this key to cap. So the refusal
+    /// is the caller's to make, and `agent::compact::side_request_model` makes it, next to the
+    /// sign-in question and for BACKEND-48's reason.
     pub fn summary(&self) -> Option<String> {
         self.summary_model
             .as_deref()
