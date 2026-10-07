@@ -491,6 +491,17 @@ fn draw(frame: &mut ratatui::Frame, request: &WriteRequest, scroll: u16, seen: &
         lines.push(Line::raw(""));
     }
 
+    // What the write does to the file's line terminators. The diff below compares lines without
+    // them, so a write that only swaps `\r\n` for `\n` shows no changed line, and an edit that
+    // matched the file's `\r\n` for the model has to say it did.
+    if let Some(note) = request.line_endings_note() {
+        lines.push(Line::from(Span::styled(
+            format!("  {note}"),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::raw(""));
+    }
+
     // What `a` and `r` would settle, where they are offered, under the findings they settle and
     // above a diff that may push anything below it out of sight: which file, how long, and that
     // the rest of the write's question is untouched. Where `r` is written down is part of what it
@@ -6426,6 +6437,33 @@ mod tests {
             drawn(true)
         );
         assert!(!drawn(false).contains("in the working directory"));
+    }
+
+    /// The diff compares lines without their terminators, so an edit that keeps a file's CRLF
+    /// endings looks the same as one that does not. The prompt says which it is.
+    #[test]
+    fn an_edit_to_a_crlf_file_says_its_line_endings_are_kept() {
+        let drawn = |before: &str, after: &str| {
+            rendered(&WriteRequest {
+                written_since_checkout: false,
+                path: "out.txt".into(),
+                diff: Diff::compute(before, after),
+                contents: after.into(),
+                existing: Some(before.into()),
+                intent: Intent::Edit,
+                untrusted: false,
+                remark: None,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+            })
+        };
+        assert!(
+            drawn("a\r\nb\r\n", "a\r\nc\r\n").contains("line endings: CRLF kept"),
+            "the question does not say it: {}",
+            drawn("a\r\nb\r\n", "a\r\nc\r\n")
+        );
+        assert!(!drawn("a\nb\n", "a\nc\n").contains("line endings"));
     }
 
     /// The reason this exists: a one-line change to a large file must show that one line

@@ -139,6 +139,32 @@ impl WriteRequest {
         self.existing.is_some()
     }
 
+    /// What the write does to the file's line terminators, where a person would want to be told.
+    ///
+    /// Read from the comparison, which saw both sides before either was released, so this reads no
+    /// content. The diff compares lines without their terminators, so a change that only swaps
+    /// `\r\n` for `\n` has no added or removed line and would otherwise show nothing. A write
+    /// between files that both end in `\n` has nothing to say.
+    pub fn line_endings_note(&self) -> Option<String> {
+        use crate::diff::LineEnding::{Crlf, Lf, Mixed};
+        let name = |ending| match ending {
+            Lf => "LF",
+            Crlf => "CRLF",
+            Mixed => "LF+CRLF",
+        };
+        let (before, after) = self.diff.line_endings();
+        match (before, after) {
+            (_, None) | (Some(Lf), Some(Lf)) | (None, Some(Lf)) => None,
+            (Some(kept), Some(now)) if kept == now => {
+                Some(t!(write_line_endings_kept, ending = name(now)).to_string())
+            }
+            (Some(was), Some(now)) => {
+                Some(t!(write_line_endings_changed, from = name(was), to = name(now)).to_string())
+            }
+            (None, Some(now)) => Some(t!(write_line_endings_new, ending = name(now)).to_string()),
+        }
+    }
+
     /// A short description for a prompt line.
     ///
     /// Formats the counts the comparison already carries. It reads no content: a create has
@@ -1975,6 +2001,63 @@ mod tests {
             may_always: false,
             record: None,
         }
+    }
+
+    fn a_write_of(existing: &str, contents: &str) -> WriteRequest {
+        WriteRequest {
+            existing: Some(existing.to_string()),
+            contents: contents.to_string(),
+            diff: Diff::compute(existing, contents),
+            ..a_write()
+        }
+    }
+
+    #[test]
+    fn an_edit_that_keeps_crlf_says_so() {
+        let write = a_write_of("a\r\nb\r\n", "a\r\nc\r\n");
+        assert_eq!(
+            write.line_endings_note().as_deref(),
+            Some("line endings: CRLF kept")
+        );
+    }
+
+    #[test]
+    fn a_write_that_swaps_the_terminators_says_which_way() {
+        // The lines are the same, so the diff has nothing to show: only this note does.
+        let write = a_write_of("a\r\nb\r\n", "a\nb\n");
+        assert_eq!((write.diff.added(), write.diff.removed()), (0, 0));
+        assert_eq!(
+            write.line_endings_note().as_deref(),
+            Some("line endings: CRLF to LF")
+        );
+    }
+
+    #[test]
+    fn a_write_between_lf_files_has_nothing_to_say() {
+        assert_eq!(a_write_of("a\nb\n", "a\nc\n").line_endings_note(), None);
+        assert_eq!(a_write().line_endings_note(), None);
+    }
+
+    #[test]
+    fn a_new_crlf_file_says_it_has_crlf() {
+        let write = WriteRequest {
+            contents: "a\r\n".to_string(),
+            diff: Diff::compute("", "a\r\n"),
+            ..a_write()
+        };
+        assert_eq!(
+            write.line_endings_note().as_deref(),
+            Some("line endings: CRLF")
+        );
+    }
+
+    #[test]
+    fn a_file_that_mixes_terminators_is_named_as_mixed() {
+        let write = a_write_of("a\r\nb\n", "a\r\nc\n");
+        assert_eq!(
+            write.line_endings_note().as_deref(),
+            Some("line endings: LF+CRLF kept")
+        );
     }
 
     fn an_output() -> OutputRequest {

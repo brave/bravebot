@@ -13,8 +13,16 @@
 //! Matching is exact and byte-for-byte. Fuzzy correction, meaning trimming whitespace or
 //! re-indenting to fit, is deliberately absent: it turns "this is what I am replacing" into a guess, and
 //! the guess is the part that would not be shown to the reviewer.
+//!
+//! The one adjustment is to line terminators, and only where the file has a single kind. A file
+//! whose every terminator is `\r\n` has no place an LF passage could match, so `\n` in the passage
+//! and in its replacement is read as that file's `\r\n`. That is a rule about the file rather than a
+//! guess about the passage, it never changes a terminator the file already has, and the approval
+//! says the ending was kept ([`crate::diff::Diff::line_endings`]).
 
 use std::fmt;
+
+use crate::diff::LineEnding;
 
 /// Why a replacement was not performed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,10 +76,20 @@ pub struct Replaced {
 /// Replace `old` with `new` in `source`.
 ///
 /// With `all` false, refuses unless exactly one occurrence exists.
+///
+/// Where every terminator in `source` is `\r\n`, a bare `\n` in `old` or `new` is read as `\r\n`.
 pub fn replace(source: &str, old: &str, new: &str, all: bool) -> Result<Replaced, ReplaceError> {
     if old.is_empty() {
         return Err(ReplaceError::EmptyPattern);
     }
+    let (old, new) = if LineEnding::of(source) == Some(LineEnding::Crlf) {
+        (to_crlf(old), to_crlf(new))
+    } else {
+        (old.to_string(), new.to_string())
+    };
+    let (old, new) = (old.as_str(), new.as_str());
+    // Compared after the terminators are applied: two texts that differ only in them are the same
+    // edit in this file.
     if old == new {
         return Err(ReplaceError::Unchanged);
     }
@@ -89,6 +107,11 @@ pub fn replace(source: &str, old: &str, new: &str, all: bool) -> Result<Replaced
         }),
         many => Err(ReplaceError::Ambiguous { occurrences: many }),
     }
+}
+
+/// `text` with every bare `\n` written as `\r\n`, leaving a `\r\n` it already has alone.
+fn to_crlf(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
 }
 
 /// How many unchanged lines are shown either side of what changed.
@@ -369,5 +392,71 @@ mod tests {
                 .to_string()
                 .contains("write_file")
         );
+    }
+
+    /// A planner writes `\n`; a CRLF file holds `\r\n`. The passage is found, and what replaces it
+    /// carries the file's terminator, so the file ends up with no bare `\n` in it.
+    #[test]
+    fn an_lf_passage_is_found_in_a_crlf_file_and_replaced_with_crlf() {
+        let result = replace("a\r\nb\r\nc\r\n", "a\nb", "x\ny", false).expect("matched");
+        assert_eq!(result.contents, "x\r\ny\r\nc\r\n");
+    }
+
+    /// The replacement is converted because of the file, not because the passage it replaces
+    /// spans lines: a one-line passage replaced by two lines must not leave a bare `\n`.
+    #[test]
+    fn a_multi_line_replacement_of_one_line_takes_the_files_terminator() {
+        let result = replace("a\r\nb\r\n", "b", "b1\nb2", false).expect("matched");
+        assert_eq!(result.contents, "a\r\nb1\r\nb2\r\n");
+    }
+
+    #[test]
+    fn text_that_already_has_crlf_is_not_doubled() {
+        let result = replace("a\r\nb\r\nc\r\n", "a\r\nb", "x\r\ny", false).expect("matched");
+        assert_eq!(result.contents, "x\r\ny\r\nc\r\n");
+        let mixed_in_the_text = replace("a\r\nb\r\n", "a", "x\r\ny\nz", false).expect("matched");
+        assert_eq!(mixed_in_the_text.contents, "x\r\ny\r\nz\r\nb\r\n");
+    }
+
+    #[test]
+    fn every_occurrence_in_a_crlf_file_is_matched_and_converted() {
+        let result = replace("k\r\nv\r\nk\r\nv\r\n", "k\nv", "a\nb", true).expect("all");
+        assert_eq!(result.contents, "a\r\nb\r\na\r\nb\r\n");
+        assert_eq!(result.occurrences, 2);
+    }
+
+    /// A passage that differs from its replacement only in terminators is the same passage once
+    /// the file's terminator is applied, so the edit changes nothing and says so.
+    #[test]
+    fn an_edit_that_differs_only_in_terminators_changes_nothing_in_a_crlf_file() {
+        assert_eq!(
+            replace("a\r\nb\r\n", "a\nb", "a\r\nb", false).expect_err("same once converted"),
+            ReplaceError::Unchanged
+        );
+    }
+
+    /// A file whose terminators are LF is left exactly as the planner wrote the edit. `\r\n` in
+    /// the passage is not converted down, so it is not found.
+    #[test]
+    fn an_lf_file_is_not_converted() {
+        let result = replace("a\nb\nc\n", "a\nb", "x\ny", false).expect("matched");
+        assert_eq!(result.contents, "x\ny\nc\n");
+        assert_eq!(
+            replace("a\nb\nc\n", "a\r\nb", "x", false).expect_err("not converted down"),
+            ReplaceError::NotFound
+        );
+    }
+
+    /// A file with both terminators gives no single ending to match to, so it is matched exactly
+    /// and the replacement is written as given.
+    #[test]
+    fn a_file_that_mixes_terminators_is_matched_exactly() {
+        let source = "a\r\nb\nc\r\n";
+        assert_eq!(
+            replace(source, "a\nb", "x", false).expect_err("a\\r\\n is what the file holds"),
+            ReplaceError::NotFound
+        );
+        let result = replace(source, "b\nc", "x\ny", false).expect("exact");
+        assert_eq!(result.contents, "a\r\nx\ny\r\n");
     }
 }

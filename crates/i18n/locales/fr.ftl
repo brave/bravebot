@@ -1122,6 +1122,9 @@ write-since-checkout =
     cette session a écrit dans ce fichier du répertoire de travail après la création de
     l'extraction : il peut contenir des changements que la copie de l'extraction n'a pas. Lisez la
     différence avant d'approuver
+write-line-endings-kept = fins de ligne : { $ending } conservées
+write-line-endings-changed = fins de ligne : de { $from } à { $to }
+write-line-endings-new = fins de ligne : { $ending }
 write-unchanged = { $count ->
     [one] … { $count } ligne inchangée
    *[other] … { $count } lignes inchangées

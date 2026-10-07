@@ -442,12 +442,16 @@ prefers this to rewriting a whole body.
 | Parameter | |
 |---|---|
 | `path` / `path_ref` | the file |
-| `old_text` | the exact text to replace, matched byte for byte |
+| `old_text` | the exact text to replace, matched byte for byte (a file whose lines all end in `\r\n` is the one exception, below) |
 | `new_text` | what goes in its place |
 | `replace_all` | replace every occurrence instead of requiring exactly one |
 
 `old_text` must occur exactly once unless `replace_all` is set. An edit **refuses rather than
 guesses**.
+
+In a file whose every line ends in `\r\n`, the agent's `\n` is read as `\r\n`, both in the passage it
+looks for and in what it puts there, so the file keeps one terminator throughout. The approval says
+`line endings: CRLF kept`. A file that mixes `\n` and `\r\n` is matched exactly as given.
 
 An edit requires a **trusted** file, because locating a passage to replace is a decision and a
 decision may be taken only from trusted content. To change a file the agent may not read, the route
