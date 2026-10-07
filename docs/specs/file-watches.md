@@ -343,6 +343,7 @@ armed it to learn.
 
 `verified-by: bravebot_tui::state::a_watch_is_ended_by_the_number_the_report_gave_it`
 `verified-by: bravebot_tui::state::stopping_a_fires_turn_ends_the_watch_that_fired`
+`verified-by: bravebot_tui::app::stopping_a_fires_turn_through_the_driver_ends_the_watch_that_fired`
 `verified-by: bravebot_tui::state::stopping_a_turn_that_was_not_a_fire_ends_no_watch`
 `verified-by: bravebot_tui::state::a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended`
 `verified-by: bravebot_tui::state::a_watch_that_ends_itself_says_which_of_the_two_endings_it_was`
