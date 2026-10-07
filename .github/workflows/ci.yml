@@ -170,9 +170,18 @@ jobs:
       # even though the Rust half needs none. Nothing is linked: clippy stops before that, which is
       # what makes a Windows host unnecessary.
       - name: Install the cross compiler ring builds with
+        # Each attempt is killed after 3 minutes, since a stalled apt mirror connection otherwise
+        # holds the job until the 6 hour default. One attempt and up to three retries fit in the step limit.
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64
+          for attempt in 1 2 3 4; do
+            if sudo timeout 180 sh -c 'apt-get update && apt-get install -y gcc-mingw-w64-x86-64'; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed or timed out" >&2
+            sleep 5
+          done
+          exit 1
 
       - name: Clippy
         # --locked where the two sibling clippy jobs do without it: they each run a locked
@@ -455,9 +464,17 @@ jobs:
           key: leo-${{ runner.os }}-${{ steps.leo.outputs.commit }}-${{ hashFiles('ui/scripts/patch-leo-types.mjs') }}
 
       - name: Install desktop test dependencies
+        # Retried with a per-attempt limit for the reason given on the Windows lint job's apt step.
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64
+          for attempt in 1 2 3 4; do
+            if sudo timeout 180 sh -c 'apt-get update && apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64'; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed or timed out" >&2
+            sleep 5
+          done
+          exit 1
 
       - name: Build and test the desktop UI
         run: make check-ui-build UI_INSTALL="ui/scripts/ci-install.sh $HOME/.cache/bravebot-leo"
