@@ -21273,6 +21273,138 @@ fn a_conversation_past_the_budget_is_summarised_before_the_next_request() {
     );
 }
 
+/// The first round after a large read, or a switch to a smaller window, is refused by the service
+/// before any figure has said the conversation was large. The turn shortens the conversation once
+/// and sends the same request again, so the person is not left to run `/compact` and type the
+/// prompt a second time.
+#[test]
+fn a_request_refused_as_too_large_is_sent_again_after_one_compaction() {
+    let scratch = Scratch::new("compact-after-refusal");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // The refusal, the client's own resend without breakpoints, which is refused the same way, then
+    // the summary and the answer.
+    let (endpoint, received) = serve_script(vec![
+        Served::Status(400),
+        Served::Status(400),
+        Served::Reply(reply_with(
+            "they are porting the parser and widened the error type",
+        )),
+        Served::Reply(reply_with("done")),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000_000);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it"),
+    )
+    .expect("the retried request is answered");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 4, "{bodies:#?}");
+    assert!(
+        bodies[0].contains("port the parser to the new lexer"),
+        "the refused request was not the whole conversation"
+    );
+    assert!(
+        bodies[2].contains("Summarise everything above"),
+        "the third request was not the summariser's: {}",
+        bodies[2]
+    );
+    assert!(
+        bodies[3].contains("widened the error type")
+            && !bodies[3].contains("port the parser to the new lexer"),
+        "the request sent again did not carry the summary in place of the exchange: {}",
+        bodies[3]
+    );
+}
+
+/// A refusal after the compaction is the turn's failure, and compacting again would be a request per
+/// refusal for as long as a service kept refusing. The turn between the two refusals reads enough
+/// files for there to be rounds a second cut could give up, so the only thing stopping a second
+/// summary is the rule that there is one a turn.
+#[test]
+fn a_second_refusal_is_reported_and_compacts_nothing_more() {
+    let scratch = Scratch::new("compact-after-refusal-twice");
+    for n in 1..=15 {
+        std::fs::write(scratch.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut script = vec![
+        Served::Status(400),
+        Served::Status(400),
+        Served::Reply(reply_with("they are porting the parser")),
+    ];
+    script.extend((1..=15).map(|n| {
+        Served::Reply(tool_request(
+            "read_file",
+            &format!(r#"{{"path":"f{n}.txt"}}"#),
+        ))
+    }));
+    script.extend([
+        Served::Status(400),
+        Served::Status(400),
+        Served::Reply(reply_with("a second summary nobody should ask for")),
+        Served::Reply(reply_with("done")),
+    ]);
+    let (endpoint, received) = serve_script(script);
+    let config = config_with_budget(&endpoint, 1_000_000);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read f1.txt through f15.txt, one at a time"),
+    )
+    .expect_err("a refusal after compacting is reported");
+
+    let summaries = received
+        .try_iter()
+        .filter(|body| body.contains("Summarise everything above"))
+        .count();
+    assert_eq!(summaries, 1, "a second refusal compacted again");
+}
+
+/// A conversation with nothing COMPACT-5 would cut has nothing to give, so the refusal is reported
+/// as it was and no summariser is asked.
+#[test]
+fn a_refusal_with_nothing_to_cut_is_reported_without_a_summary() {
+    let scratch = Scratch::new("compact-after-refusal-nothing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_script(vec![
+        Served::Status(400),
+        Served::Status(400),
+        Served::Reply(reply_with("a summary nobody should ask for")),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000_000);
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it"),
+    )
+    .expect_err("the refusal is reported");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("Summarise everything above")),
+        "a summariser was asked with nothing to cut: {bodies:#?}"
+    );
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+}
+
 /// The exchange in a summariser's request is the part compaction gives up, so a breakpoint on the
 /// end of it asks a service to store a prefix nothing sends again. A cache write is charged above
 /// the tokens it covers, which makes that a premium on one of the longest prefixes a session sends,

@@ -201,6 +201,25 @@ impl BackendError {
         }
     }
 
+    /// Whether the service answered with a status it uses to say the body is not one it will take
+    /// (COMPACT-14).
+    ///
+    /// Decided from the status alone, never from what the reply wrote. The same statuses cover a
+    /// field the service dislikes as readily as a prompt too long, so this says only that the request
+    /// as written was refused, and a caller acting on it has to be one for whom a wrong guess costs
+    /// little.
+    pub fn refused_the_body(&self) -> bool {
+        use bravebot_net::EgressError;
+        match self {
+            Self::Aichat(ChatError::Egress(EgressError::Status { status, .. }))
+            | Self::Bedrock(BedrockError::Egress(EgressError::Status { status, .. })) => {
+                matches!(status, 400 | 422)
+            }
+            Self::Attempted { cause, .. } => cause.refused_the_body(),
+            _ => false,
+        }
+    }
+
     /// Whether the model finished its reply and said nothing in it: no text and no calls.
     ///
     /// Apart from every other unreadable reply because the conversation, not the connection, is
