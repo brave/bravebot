@@ -6622,6 +6622,50 @@ fn the_model_can_ask_for_a_later_page() {
     );
 }
 
+/// What the planner reads is the rendered page, so the cut by size has to be said there, with the
+/// offset to continue from, or a minified file reads as if it ended where the cut fell.
+#[test]
+fn a_read_cut_by_size_says_where_to_continue() {
+    let scratch = Scratch::new("read-size-cap-turn");
+    let body: String = (1..=300)
+        .map(|n| format!("{n:04}{}\n", "x".repeat(995)))
+        .collect();
+    std::fs::write(scratch.path.join("wide.txt"), body).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"wide.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("read wide.txt");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("showing lines 1-100 of 300")
+            && second.contains("continue with offset 101"),
+        "the cut was not reported with where to continue: {second}"
+    );
+    assert!(
+        second.contains("0100x") && !second.contains("0101x"),
+        "the page did not end after line 100: {second}"
+    );
+}
+
 /// A small file must come back with no paging chatter at all.
 #[test]
 fn a_small_read_has_no_paging_notice() {

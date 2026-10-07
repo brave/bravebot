@@ -2003,6 +2003,89 @@ fn the_cap_keeps_two_thousand_characters_of_a_multi_byte_line() {
     );
 }
 
+/// The line cap and the line limit leave a page of long lines at a million characters, which is one
+/// read filling the context and being paid for again on every later round. The page also ends at
+/// a size, on a whole line, with the offset that continues from there.
+#[test]
+fn a_page_of_long_lines_ends_at_the_size_cap_on_a_whole_line() {
+    let scratch = Scratch::new("read-size-cap");
+    // 999 characters and a newline: exactly 1000 per line, so a budget of 100,000 holds 100 of
+    // them and the 101st is the first that does not fit.
+    let lines: Vec<String> = (1..=300)
+        .map(|n| format!("{n:04}{}", "x".repeat(995)))
+        .collect();
+    std::fs::write(scratch.path.join("a.txt"), lines.join("\n") + "\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let page = workspace.page("a.txt", 1, usize::MAX).expect("read");
+
+    assert_eq!(
+        page.lines.len(),
+        100,
+        "the page did not end at the size cap"
+    );
+    assert_eq!(
+        page.lines,
+        lines[..100],
+        "the last line was cut, not left out"
+    );
+    assert_eq!(page.total_lines, 300);
+    assert_eq!(page.next_line(), Some(101), "no way to reach the rest");
+    assert_eq!(page.long_lines, 0);
+    let single = workspace.page("a.txt", 1, 1).expect("one line");
+    assert_eq!(
+        page.change_token, single.change_token,
+        "a page cut by size carries a different token from the whole file's"
+    );
+}
+
+/// The reported offset has to return the lines the cut left out, with none repeated and none
+/// skipped, or following the pages loses text.
+#[test]
+fn paging_by_the_reported_offset_reads_a_file_cut_by_size_whole() {
+    let scratch = Scratch::new("read-size-cap-follow");
+    let lines: Vec<String> = (1..=300)
+        .map(|n| format!("{n:04}{}", "x".repeat(995)))
+        .collect();
+    std::fs::write(scratch.path.join("a.txt"), lines.join("\n") + "\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut gathered: Vec<String> = Vec::new();
+    let mut offset = 1;
+    loop {
+        let page = workspace.page("a.txt", offset, usize::MAX).expect("read");
+        assert_eq!(page.first_line, offset);
+        gathered.extend(page.lines.iter().cloned());
+        match page.next_line() {
+            Some(next) => offset = next,
+            None => break,
+        }
+    }
+
+    assert_eq!(gathered, lines);
+}
+
+/// The size is a count of characters, as the line cap is, so a page of Japanese holds as many
+/// characters as a page of English. A count of bytes would fit a third as many lines.
+#[test]
+fn the_size_cap_counts_characters_of_a_multi_byte_page() {
+    let scratch = Scratch::new("read-size-cap-multibyte");
+    // 900 characters and a newline: 901 per line, so 110 fit in 100,000 and 111 do not.
+    let line: String = "あ".repeat(900);
+    let body: String = (0..200).map(|_| format!("{line}\n")).collect();
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let page = workspace.page("a.txt", 1, usize::MAX).expect("read");
+
+    assert_eq!(
+        page.lines.len(),
+        110,
+        "the size cap did not count characters"
+    );
+    assert_eq!(page.next_line(), Some(111));
+}
+
 /// Reading past the end is not an error, but it must not look like an empty file.
 #[test]
 fn an_offset_past_the_end_returns_nothing_and_says_the_length() {

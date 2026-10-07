@@ -71,7 +71,9 @@ Reads a UTF-8 text file from the workspace and returns its lines.
 | `offset` | 1-based line to start at |
 | `limit` | maximum lines to return, capped so one read cannot fill the conversation |
 
-Long files come back one page at a time. The result says so and gives the offset to continue from. A
+Long files come back one page at a time, at most 500 lines and 100,000 characters, with each line
+shortened to 2,000 characters. A page of long lines ends at the last whole line that fits under the
+character cap. The result says so and gives the offset to continue from. A
 file that is not text is reported as binary, a picture being the exception.
 
 **A picture is quarantined whatever the trust map says, and leaves quarantine only through

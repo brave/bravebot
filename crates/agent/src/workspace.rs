@@ -2095,10 +2095,20 @@ impl Workspace {
 
         let mut lines = Vec::new();
         let mut long_lines = 0usize;
+        let mut spent = 0usize;
         for line in contents.lines().skip(start).take(limit) {
             let mut text = line.to_string();
-            if truncate_to_chars(&mut text, MAX_LINE) {
+            let shortened = truncate_to_chars(&mut text, MAX_LINE);
+            if shortened {
                 text.push_str(" … (line truncated)");
+            }
+            // The newline after the line counts, so a page of empty lines is bounded too.
+            let cost = text.chars().count() + 1;
+            if spent + cost > MAX_PAGE_CHARS {
+                break;
+            }
+            spent += cost;
+            if shortened {
                 long_lines += 1;
             }
             lines.push(text);
@@ -2733,6 +2743,11 @@ const MAX_SEARCH_TIME: Duration = Duration::from_secs(10);
 /// bytes a page of ASCII does.
 const MAX_PAGE_LINES: usize = 500;
 const MAX_LINE: usize = 2_000;
+/// Characters in a whole page, counting a newline after each line. Without it the worst page is
+/// `MAX_PAGE_LINES` x `MAX_LINE`, a million characters, which a minified bundle reaches in one read.
+const MAX_PAGE_CHARS: usize = 100_000;
+// A shortened line and its notice always fit, so a page is never empty because of the budget.
+const _: () = assert!(MAX_LINE + 64 < MAX_PAGE_CHARS);
 
 /// Bytes inspected when deciding whether a file is text.
 const SNIFF_BYTES: usize = 8_192;
@@ -2950,7 +2965,8 @@ pub(crate) fn window_of(offset: usize, limit: usize) -> (usize, usize) {
 /// A bounded window of a file's lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
-    /// The lines in this window, each capped at [`MAX_LINE`] characters.
+    /// The lines in this window, each capped at [`MAX_LINE`] characters and all together at
+    /// [`MAX_PAGE_CHARS`], so a page can end before the line limit does.
     pub lines: Vec<String>,
     /// Whether the file ends with a newline.
     ///
