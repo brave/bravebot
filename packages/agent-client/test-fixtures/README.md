@@ -8,7 +8,7 @@ runner plays the `steps` in order:
 
 | Step | Meaning |
 |---|---|
-| `start` + `call` (+ `session`, `args`) | begin a client operation without waiting for it: `describe`, `createSession`, `raw`, `unsupported`, `answerTrust`, `send`, `cancel`, `close` |
+| `start` + `call` (+ `session`, `args`) | begin a client operation without waiting for it: `describe`, `createSession`, `raw`, `unsupported`, `answerTrust`, `send`, `decide`, `answer`, `cancel`, `close` |
 | `expectRequest` + `method`, `params` | the next request the client wrote must match exactly; its id is bound to the name |
 | `expectNoRequest` | the client has written nothing since |
 | `send` | server lines to deliver; `"$name"` stands for a bound request id; a string is delivered as a raw line |

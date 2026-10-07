@@ -26,6 +26,9 @@ export interface CloseOutcome {
 }
 
 /** A listener may be async; a thrown error or rejection is reported and goes no further. */
+/** One answer to an `ask` question, in the bridge's existing shape. `null` declines. */
+export type AskAnswer = { typed: string } | { chosen: number[] } | null
+
 export type ViewListener = (view: ViewState) => void
 
 /** One fresh session with a view. Every method addresses exactly this session. */
@@ -40,6 +43,10 @@ export interface AgentSession {
   /** Answer the startup trust question. Never sent unless a caller asks; never remembered. */
   answerTrust(trusted: boolean): Promise<void>
   send(text: string): Promise<SendResult>
+  /** Approve or reject the displayed `confirm`, `run` (once, never remembered) or `fetch` question. */
+  decide(request: number, decision: 'approve' | 'reject'): Promise<void>
+  /** Answer the displayed `ask` question. */
+  answer(request: number, answers: AskAnswer[]): Promise<void>
   /** Ask the bridge to cancel the running turn, which also refuses a pending question. The view reports the outcome. */
   cancel(): Promise<void>
   close(): Promise<CloseOutcome>

@@ -1,6 +1,6 @@
 # Client interface and prototype contract
 
-Status: the first Rust session-view block and the stdio TypeScript client's session lifecycle are implemented. Approval replies, the local client program and the remaining stage 1–2a evidence are outstanding, so stages 1–2a are incomplete. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
+Status: the first Rust session-view block and the stdio TypeScript client's session lifecycle and approval replies are implemented. The local client program and the remaining stage 1–2a evidence are outstanding, so stages 1–2a are incomplete. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
 
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
@@ -89,12 +89,20 @@ released content.
 - list the configured workspaces by id and name;
 - create a fresh session in one of them with the view started (`createSession` never accepts a path);
 - answer startup trust when asked to, after which the question is no longer offered;
-- send, cancel, and close.
+- send, cancel, and close;
+- approve or reject a `confirm`, `run` or `fetch` question, and answer an `ask` question.
 
 Raw dispatch of arbitrary bridge methods is not part of the package. The entry points export no `raw`, no connection class, and no way to reach the client's connection, because dispatch is not confined to configured workspaces and could answer a question the client never offered. Tests reach it through an internal module that the package's `exports` map does not expose.
 
+A reply addresses the question on screen. The method comes from the pending kind Rust reports, not
+from anything in its payload; a reply for a request that is not displayed is refused without
+sending (`StaleActionError`); a question Rust does not mark supported, a decision given to an `ask`
+question, and answers given to an approval are refused without sending. A `run` is answered once
+and the request never carries `remember`. Rust still checks every reply and refuses a wrong-kind,
+duplicate or late one, which the client reports with its code.
+
 `attach`, `takeControl` and `messageStatus` fail locally. A question a turn asks appears in the
-view and can be cancelled, which refuses it. Answering it is not yet supported.
+view, and cancelling the turn refuses it.
 
 A runtime without version 1 of the capability is refused before any session is created. A close
 reports the view as detached, ending it on the bridge's response even if the detach update has
@@ -123,12 +131,17 @@ unsupported kind. The real-process tests use a model service of the test's own, 
 a scratch project. They show:
 
 - trust deciding whether a write is asked about;
-- two sessions with turns in flight together keeping their own rows;
+- an approved write landing and a rejected one not, and the same for a command;
+- two sessions with turns in flight together keeping their own rows, and two waiting sessions
+  answered in the opposite order to their questions;
 - a cancelled write not landing, and its late approval refused;
+- a fetched page arriving with its label in the view and never reaching a planner request, with a
+  rejected fetch sending nothing;
+- a typed answer to a user question reaching the planner and a declined one not;
 - close, EOF, a killed process and unreadable input.
 
-**Not established.** Answering questions, a local program, real-process evidence for labelled
-released content, native rendering, remote security, reconnect and recovery, send deduplication,
+**Not established.** A local program, fetched bytes copied into a file, a write that lands while the
+session cannot be saved, native rendering, remote security, reconnect and recovery, send deduplication,
 controller ownership, a stronger stale-action guarantee than the bridge's, a persistent host, and
 operating systems other than macOS.
 

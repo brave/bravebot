@@ -100,6 +100,8 @@ export async function runScenario(scenario: Scenario, chunking: Chunking): Promi
     raw: (args) => rawRequest(client, args.method, args.params),
     answerTrust: (args, target) => target().answerTrust(args.trusted),
     send: (args, target) => target().send(args.text),
+    decide: (args, target) => target().decide(args.request, args.decision),
+    answer: (args, target) => target().answer(args.request, args.answers),
     cancel: (_args, target) => target().cancel(),
     close: (_args, target) => target().close(),
   }

@@ -1,7 +1,7 @@
 import { describeThrown, isolate } from './isolate.js'
 import { CapabilityError, ProtocolError, RpcError, UnsupportedError } from './errors.js'
 import { RpcConnection, type Deadlines, type LineSink, type Outcome } from './connection.js'
-import type { AgentClient, AgentSession, CloseOutcome, SendResult, TargetInfo, ViewListener } from './interface.js'
+import type { AgentClient, AgentSession, AskAnswer, CloseOutcome, SendResult, TargetInfo, ViewListener } from './interface.js'
 import { applyUpdate, endView, startView, type ViewState } from './view.js'
 import {
   SESSION_VIEW_START,
@@ -12,6 +12,14 @@ import {
   type JsonValue,
   type SessionViewCapability,
 } from './wire.js'
+
+/** A refusal made here, without sending, because the displayed question no longer matches. */
+export class StaleActionError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'StaleActionError'
+  }
+}
 
 /** A workspace a client may open: the id and name are shown, the directory stays inside the client. */
 export interface Workspace {
@@ -116,6 +124,30 @@ class Session implements AgentSession {
     const result = await this.connection.request('turn.send', this.params({ prompt: text }))
     if (!isRecord(result) || typeof result.turn !== 'number') throw new ProtocolError('turn.send did not report a turn')
     return { turn: result.turn }
+  }
+
+  /** The question on screen, if it is the one being answered and this client can answer it. */
+  private target(request: number): NonNullable<ViewState['pending']> {
+    const pending = this.live('reply').pending
+    if (pending === null || pending.request !== request) {
+      throw new StaleActionError(`request ${request} is not the question on screen`)
+    }
+    if (!pending.supported) throw new UnsupportedError(`a ${pending.kind} question cannot be answered here`)
+    return pending
+  }
+
+  async decide(request: number, decision: 'approve' | 'reject'): Promise<void> {
+    const pending = this.target(request)
+    if (pending.kind !== 'confirm' && pending.kind !== 'run' && pending.kind !== 'fetch') {
+      throw new UnsupportedError(`a ${pending.kind} question is not an approval to approve or reject`)
+    }
+    await this.connection.request(`${pending.kind}.reply`, this.params({ request, decision }))
+  }
+
+  async answer(request: number, answers: AskAnswer[]): Promise<void> {
+    const pending = this.target(request)
+    if (pending.kind !== 'ask') throw new UnsupportedError(`a ${pending.kind} question takes a decision, not answers`)
+    await this.connection.request('ask.reply', this.params({ request, answers }))
   }
 
   async cancel(): Promise<void> {
