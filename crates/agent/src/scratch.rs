@@ -48,6 +48,12 @@ impl SessionScratch {
         Self::made(SERVER)
     }
 
+    /// One on the same terms, to make a session's checkouts in where it keeps no state directory
+    /// to put them in (CHECKOUT-6).
+    pub fn for_checkouts() -> std::io::Result<Self> {
+        Self::made(CHECKOUTS)
+    }
+
     /// Where it is.
     pub fn path(&self) -> &Path {
         &self.path
@@ -252,12 +258,15 @@ const SESSION: &str = "session";
 /// The kind a local MCP server is given as its home.
 const SERVER: &str = "server";
 
+/// The kind a session's checkouts are made in, where it has no state directory to put them in.
+const CHECKOUTS: &str = "checkouts";
+
 /// Every kind [`reserved_name`] is asked for, and so every kind the sweep may take.
 ///
-/// Neither is a word a build before the lock gave its directories, so a session of one of those
+/// None is a word a build before the lock gave its directories, so a session of one of those
 /// still running is never taken for a leftover of this one's.
 #[cfg(unix)]
-const KINDS: [&str; 2] = [SESSION, SERVER];
+const KINDS: [&str; 3] = [SESSION, SERVER, CHECKOUTS];
 
 /// A name for a directory nothing has taken.
 ///

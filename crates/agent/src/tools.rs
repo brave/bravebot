@@ -8054,7 +8054,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
 
         // Compared only once the gate above has passed, which is when this run has met nothing a
         // name could be steered by (CHECKOUT-1).
-        let state = match wants_checkout(arguments, &spec, tools) {
+        let place = match wants_checkout(arguments, &spec, tools) {
             Ok(state) => state,
             // Approved by the gate and refused here, so it starts nothing and takes no place
             // under the turn's ceiling (DELEGATE-7).
@@ -8067,9 +8067,16 @@ fn spawn_agent<S: Sink, R: Reporter>(
                 break;
             }
         };
-        let made = match state {
+        let made = match place {
             None => None,
-            Some(state) => match tools.workspace.checkout_for_cause(policy, state, id) {
+            Some(place) => match match place {
+                CheckoutPlace::State(state) => {
+                    tools.workspace.checkout_for_cause(policy, state, id)
+                }
+                CheckoutPlace::Temporary => tools
+                    .workspace
+                    .checkout_in_temporary_directory_cause(policy, id),
+            } {
                 Ok(made) => {
                     if let Some(checkout) = made.checkout() {
                         crate::workspace::record_checkout(
@@ -8205,7 +8212,7 @@ fn wants_checkout<'a>(
     arguments: &Value,
     spec: &bravebot_core::delegate::DelegateSpec,
     tools: &Tools<'a>,
-) -> Result<Option<&'a std::path::Path>, (CheckoutRefusal, String)> {
+) -> Result<Option<CheckoutPlace<'a>>, (CheckoutRefusal, String)> {
     let called = match arguments.get("isolation") {
         None | Some(Value::Null) => false,
         Some(Value::String(value)) if value == "checkout" => true,
@@ -8246,13 +8253,19 @@ fn wants_checkout<'a>(
             ),
         ));
     }
-    match tools.home {
-        Some(state) if !bravebot_core::incognito::engaged() => Ok(Some(state)),
-        _ => Err((
-            CheckoutRefusal::NoStateDirectory,
-            format!("refused: {whose}this session keeps no state directory to make a checkout in"),
-        )),
-    }
+    Ok(Some(match tools.home {
+        Some(state) if !bravebot_core::incognito::engaged() => CheckoutPlace::State(state),
+        _ => CheckoutPlace::Temporary,
+    }))
+}
+
+/// Where a checkout is made (CHECKOUT-6).
+enum CheckoutPlace<'a> {
+    /// Under the state directory, where it outlasts the session.
+    State(&'a std::path::Path),
+    /// Under the system temporary directory, for a session that keeps no record or has no state
+    /// directory, and gone when it ends.
+    Temporary,
 }
 
 /// The most delegates one call may fan a task out over.

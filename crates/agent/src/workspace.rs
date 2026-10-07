@@ -511,6 +511,10 @@ pub struct Workspace {
     session_checkouts: Arc<Mutex<Vec<Made>>>,
     /// The number the next checkout takes, shared for the reason `checkouts` is.
     checkout_numbers: Arc<AtomicU64>,
+    /// The directory checkouts are made in where the session has no state directory to put them
+    /// in, made when the first is asked for (CHECKOUT-6). Shared for the reason `checkouts` is,
+    /// so it goes with the last clone and not with the first delegate's.
+    temporary_checkouts: Arc<Mutex<Option<TemporaryCheckouts>>>,
     /// The writes the session made to the working directory by a name the planner typed, in the
     /// order they were made (CHECKOUT-14). Shared for the reason `checkouts` is.
     working_writes: Arc<Mutex<WorkingWrites>>,
@@ -637,6 +641,32 @@ impl Made {
             listed.retain(|root| root != &self.path);
         }
         Ok(())
+    }
+}
+
+/// The system temporary directory's share of a session's checkouts, for a session with no state
+/// directory to keep them in (CHECKOUT-6).
+///
+/// Taking it takes every checkout under it with the entry each has in the repository's
+/// `worktrees/`, which taking the directory alone would leave naming a checkout that is gone.
+#[derive(Debug)]
+struct TemporaryCheckouts {
+    directory: crate::scratch::SessionScratch,
+    git_dir: PathBuf,
+}
+
+impl Drop for TemporaryCheckouts {
+    /// A failure is not reported, as [`crate::scratch::SessionScratch`]'s is not: what is left is
+    /// what a session killed outright leaves.
+    fn drop(&mut self) {
+        let Ok(entries) = std::fs::read_dir(self.directory.path()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if let Some(id) = entry.file_name().to_str() {
+                let _ = crate::git::checkout::remove(&self.git_dir, &entry.path(), id);
+            }
+        }
     }
 }
 
@@ -1115,6 +1145,7 @@ impl Workspace {
             checkouts: Arc::default(),
             session_checkouts: Arc::default(),
             checkout_numbers: Arc::new(AtomicU64::new(1)),
+            temporary_checkouts: Arc::default(),
             working_writes: Arc::default(),
         })
     }
@@ -4126,6 +4157,27 @@ impl Workspace {
         state: &Path,
         made_for: bravebot_core::delegate::DelegateId,
     ) -> Result<Workspace, (CheckoutRefusal, String)> {
+        self.checkout_in(policy, Some(state), made_for)
+    }
+
+    /// [`Workspace::checkout_for_cause`] for a session with no state directory to make checkouts
+    /// in, which makes them in a directory of its own under the system temporary directory
+    /// (CHECKOUT-6). They go when the session ends.
+    pub fn checkout_in_temporary_directory_cause<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        made_for: bravebot_core::delegate::DelegateId,
+    ) -> Result<Workspace, (CheckoutRefusal, String)> {
+        self.checkout_in(policy, None, made_for)
+    }
+
+    /// `state` is where the checkout is made, or `None` for the session's temporary directory.
+    fn checkout_in<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        state: Option<&Path>,
+        made_for: bravebot_core::delegate::DelegateId,
+    ) -> Result<Workspace, (CheckoutRefusal, String)> {
         let refused =
             |cause: CheckoutRefusal, why: &str| (cause, format!("No checkout was made: {why}"));
         if self.checkout.is_some() {
@@ -4140,11 +4192,29 @@ impl Workspace {
                 "the directory for checkouts could not be made",
             )
         };
-        let directory = state
-            .canonicalize()
-            .map_err(|_| unmade())?
-            .join("checkouts")
-            .join(crate::home::key_for(&self.root));
+        let directory = match state {
+            Some(state) => state
+                .canonicalize()
+                .map_err(|_| unmade())?
+                .join("checkouts")
+                .join(crate::home::key_for(&self.root)),
+            None => {
+                let mut held = self
+                    .temporary_checkouts
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if held.is_none() {
+                    *held = Some(TemporaryCheckouts {
+                        directory: crate::scratch::SessionScratch::for_checkouts()
+                            .map_err(|_| unmade())?,
+                        git_dir: self.root.join(".git"),
+                    });
+                }
+                held.as_ref()
+                    .map(|held| held.directory.path().to_path_buf())
+                    .ok_or_else(unmade)?
+            }
+        };
         if let Some(overlap) = self.checkout_overlap(&directory) {
             return Err(refused(overlap.cause(), &overlap.describe()));
         }

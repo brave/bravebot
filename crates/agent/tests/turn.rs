@@ -27316,10 +27316,10 @@ fn a_definition_asking_for_a_checkout_inside_one_is_refused() {
 }
 
 /// CHECKOUT-2, CHECKOUT-6. A project's definition asking for a checkout in a session keeping no
-/// state directory starts nothing, rather than start in the working directory its author meant to
-/// keep the work out of.
+/// state directory is given one in the temporary directory, rather than start in the working
+/// directory its author meant to keep the work out of.
 #[test]
-fn a_definition_asking_for_a_checkout_with_no_state_directory_is_refused() {
+fn a_definition_asking_for_a_checkout_with_no_state_directory_is_given_a_temporary_one() {
     let scratch = Scratch::new("checkout-definition-no-home");
     repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
     std::fs::create_dir_all(scratch.path.join(".bravebot/agents")).unwrap();
@@ -27360,15 +27360,16 @@ fn a_definition_asking_for_a_checkout_with_no_state_directory_is_refused() {
 
     let asked = every_request(&received);
     assert!(
-        asked.iter().any(|body| body.contains(
-            "the migrator definition asks for a checkout of its own, and this session keeps no \
-             state directory"
-        )),
-        "the planner was not told why the definition's delegate did not start"
+        asked
+            .iter()
+            .all(|body| !body.contains("keeps no state directory")),
+        "the planner was told a checkout needs a state directory"
     );
     assert!(
-        asked.iter().all(|body| !body.contains("\"ran\"")),
-        "the definition's delegate started in the working directory"
+        asked
+            .iter()
+            .any(|body| body.contains("It works in a checkout of commit")),
+        "the definition's delegate was not given a checkout"
     );
 }
 
