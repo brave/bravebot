@@ -198,6 +198,10 @@ fn head(session: &Session, text: usize) -> Vec<Line<'static>> {
         let rows = wrapped(goal.condition(), text)
             .into_iter()
             .map(|condition| row(condition, Style::default()))
+            .chain(
+                goal.is_paused()
+                    .then(|| row(t!(panel_goal_paused).to_string(), dim())),
+            )
             .collect();
         section(&mut body, t!(panel_goal).to_string(), rows);
     }
@@ -744,6 +748,29 @@ mod tests {
         assert!(
             !drawn.iter().any(|row| row.contains("REPLYTEXT")),
             "the reply reached the panel: {drawn:#?}"
+        );
+    }
+
+    /// A held goal is still drawn, with its condition, and says it is held.
+    #[test]
+    fn a_paused_goal_is_drawn_and_says_it_is_paused() {
+        let mut session = Session::new("none");
+        session.start_goal("the tests pass".to_string());
+        let running = texts(&lines(&session, WIDTH, 30));
+        assert!(
+            !running.iter().any(|row| row == t!(panel_goal_paused)),
+            "{running:#?}"
+        );
+
+        session.pause_goal();
+        let drawn = texts(&lines(&session, WIDTH, 30));
+        assert!(
+            drawn.iter().any(|row| row.contains("the tests pass")),
+            "{drawn:#?}"
+        );
+        assert!(
+            drawn.iter().any(|row| row.contains(t!(panel_goal_paused))),
+            "{drawn:#?}"
         );
     }
 
