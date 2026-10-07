@@ -4291,4 +4291,72 @@ mod tests {
             "it asked all over again"
         );
     }
+
+    /// The whole-reply path gives up a refused lifetime the same way the streamed one does, ahead
+    /// of the breakpoints.
+    #[test]
+    fn a_whole_reply_request_gives_up_a_refused_lifetime_before_the_breakpoints() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let model = "a-model-that-refuses-a-lifetime-in-a-whole-reply";
+        let config = config_for(model).with_cache_ttl(Some(bravebot_config::CacheTtl::OneHour));
+        let request = ChatRequest::new(model, vec![Message::user("write fish.py")]);
+        let body = serde_json::json!({
+            "output": {"message": {"content": [{"text": "done"}]}},
+            "usage": {"inputTokens": 100, "outputTokens": 7}
+        })
+        .to_string();
+        let mut answer = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        answer.extend(body.into_bytes());
+        let (http, received) =
+            scripted_responses(vec![refused_with(REFUSED_CACHING_STATUS), answer]);
+        let egress = Egress::new();
+        let mut client = BedrockClient::new(&config, &egress);
+        client.test_request = Some(http);
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+
+        client
+            .complete(&mut policy, &request)
+            .expect("the request without the lifetime answers");
+
+        let sent: Vec<serde_json::Value> = (0..client.attempts())
+            .map(|_| {
+                serde_json::from_slice(
+                    &received
+                        .recv_timeout(Duration::from_secs(2))
+                        .expect("an attempt the server read"),
+                )
+                .expect("a JSON body")
+            })
+            .collect();
+        let point =
+            |body: &serde_json::Value| body.pointer("/messages/0/content/1/cachePoint").cloned();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(
+            point(&sent[0]),
+            Some(json!({"type": "default", "ttl": "1h"}))
+        );
+        assert_eq!(
+            point(&sent[1]),
+            Some(json!({"type": "default"})),
+            "the retry gave up the breakpoints with the lifetime, or kept the lifetime"
+        );
+        assert!(refusals(model).cache_ttl);
+    }
 }

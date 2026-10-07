@@ -2607,3 +2607,48 @@ fn a_lifetime_a_gateway_refuses_is_given_up_before_the_breakpoints_and_remembere
         );
     }
 }
+
+/// The whole-reply path gives up a refused lifetime the same way the streamed one does, ahead of
+/// the breakpoints.
+#[test]
+fn a_whole_reply_gives_up_a_lifetime_a_gateway_refuses_before_the_breakpoints() {
+    let model = "a-model-that-refuses-a-lifetime-in-a-whole-reply";
+    let (endpoint, received) =
+        serve_attempts(vec![Attempt::Status(400), Attempt::Json(REPLY.to_string())]);
+    let mut config = config_for(&endpoint);
+    config.prompt_cache_ttl = Some(bravebot_config::CacheTtl::OneHour);
+    let gateway = gateway_naming(&endpoint, model);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .complete(
+            &mut policy,
+            &ChatRequest::new(model, vec![Message::user("hi")]),
+        )
+        .expect("the turn survives the refusal");
+
+    let mark = |body: &str| {
+        let body: serde_json::Value = serde_json::from_str(body).expect("a JSON body");
+        body.pointer("/messages/0/content/0/cache_control").cloned()
+    };
+    let first = received.recv().expect("a first request");
+    let second = received.recv().expect("a second request");
+    assert_eq!(
+        mark(&first.body),
+        Some(serde_json::json!({"type": "ephemeral", "ttl": "1h"}))
+    );
+    assert_eq!(
+        mark(&second.body),
+        Some(serde_json::json!({"type": "ephemeral"})),
+        "the retry gave up the breakpoints with the lifetime, or kept the lifetime"
+    );
+}
