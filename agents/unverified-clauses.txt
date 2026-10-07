@@ -18,10 +18,6 @@ docs/specs/background-sessions.md:BG-11: a person can stop a session, and there 
 docs/specs/background-sessions.md:BG-12: a process that ends between turns is restarted, and one that ends in a turn is not repeated
 docs/specs/background-sessions.md:BG-13: an idle session is stopped after an hour and wakes on the next reply
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
-docs/specs/credential-protection.md:CRED-4: nothing climbs a tier without the arrangement changing
-docs/specs/credential-protection.md:CRED-6: a handle the agent can redeem alone is not a handle
-docs/specs/credential-protection.md:CRED-7: a bound is decided before issue and enforced beyond the agent's reach
-docs/specs/credential-protection.md:CRED-8: a bound with no end does not pass gate 2
 docs/specs/credential-protection.md:CRED-17: no gate passes because the scan ran
 docs/specs/credential-protection.md:CRED-18: no part of the scan discloses the tree off this machine
 docs/specs/credential-protection.md:CRED-22: the baseline is not writable by a turn
