@@ -3806,6 +3806,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // Cleared only by a failure. A summary that could not be made once will not be made on the
         // next round either, and a turn should not spend a request per round finding that out.
         let mut may_compact = true;
+        // Whether a request the service refused has already been answered with a compaction this turn
+        // (COMPACT-14). Once, and not reset: a second refusal is the turn's failure.
+        let mut compacted_after_a_refusal = false;
+        // The refusal waiting on a compaction, which the next pass of the loop makes before it asks
+        // again, and which is the turn's failure if there turns out to be nothing to cut.
+        let mut refused: Option<crate::backend::BackendError> = None;
         // Whether the last request went out because the one before it came back empty (TURN-6).
         let mut asked_after_an_empty_reply = false;
         // Whether it went out because the one before it reached the output ceiling (TURN-7).
@@ -3895,7 +3901,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // Before the request rather than after the reply that overflowed. The figure being
                     // compared is the last round's, so this is one round late by construction, which is why
                     // the budget sits below any window rather than at it.
-                    if may_compact && context_tokens >= config.context_budget {
+                    let mut shortened = false;
+                    if refused.is_some() || may_compact && context_tokens >= config.context_budget {
                         reporter.phase(Phase::Compacting);
                         let mut chat = crate::processor::Chat {
                             config,
@@ -3935,6 +3942,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         }
                         match summary {
                             Ok(Some(done)) => {
+                                shortened = true;
                                 tokens += done.usage.total();
                                 output_tokens += done.usage.completion_tokens;
                                 cached.add(done.usage.cached);
@@ -3979,6 +3987,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             ));
                             }
                         }
+                    }
+
+                    // A request the service refused, and nothing to cut: the refusal is reported as it
+                    // always was, with no second request to repeat it (COMPACT-14).
+                    if let Some(error) = refused.take()
+                        && !shortened
+                    {
+                        return Err(error.into());
                     }
 
                     // Said before the request goes out, so the longest silence in a turn is explained
@@ -4100,6 +4116,19 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // turn adds a line and asks once. Two in a row is a model with nothing to say here,
                     // and asking a third time would only spend another request finding that out.
                     let mut completion = match completion {
+                        // The service would not take the request as written, and this turn has not yet
+                        // answered one that way. Decided from the status and from the turn's own state,
+                        // so nothing the refusal said reaches it. A refusal for some other reason costs
+                        // one summary, which COMPACT-5 bounds, and is then reported as it was.
+                        Err(error)
+                            if error.refused_the_body()
+                                && may_compact
+                                && !compacted_after_a_refusal =>
+                        {
+                            compacted_after_a_refusal = true;
+                            refused = Some(error);
+                            continue;
+                        }
                         Err(error) if error.is_empty_reply() && !asked_after_an_empty_reply => {
                             asked_after_an_empty_reply = true;
                             conversation.push_from(Message::user(format!(
