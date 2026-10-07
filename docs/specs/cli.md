@@ -496,7 +496,7 @@ A run given the flag writes one object, on one line, whether it finished, failed
 began, or was refused something along the way. It holds how the run ended, the status and
 identifier of CLI-6, the message where there is one, the reply, the model that answered, the
 definition the turn was addressed to where there was one (CLI-17), the session it wrote down where
-it wrote one (CLI-23), how many rounds it took, what it
+it wrote one (CLI-25), how many rounds it took, what it
 cost in tokens, every tool it called with what it acted on and whether that call was refused, and every refusal with the principle it upholds. A tool is named as the driver
 matched it rather than by the word a person is shown. What a call acted on is the name it was given
 rather than a resolved path, since the driver carries that argument without reading it.
