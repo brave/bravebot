@@ -1489,7 +1489,7 @@ fn mark_for(outcome: &bravebot_agent::report::Outcome) -> (&'static str, ratatui
     use bravebot_agent::report::Outcome;
     match outcome {
         Outcome::Succeeded => ("✓", theme::ok()),
-        Outcome::Failed(_) => ("✗", theme::fail()),
+        Outcome::Failed { .. } => ("✗", theme::fail()),
         Outcome::Stopped(_) | Outcome::StoppedByTheUser(_) | Outcome::Running { .. } => {
             ("●", theme::running())
         }
@@ -4122,7 +4122,10 @@ mod tests {
                 true,
                 &["ok"],
                 1,
-                bravebot_agent::report::Outcome::Failed("step 1 exited 101".to_string()),
+                bravebot_agent::report::Outcome::Failed {
+                    detail: "step 1 exited 101".to_string(),
+                    confinement: None,
+                },
             );
             session.watch();
 
@@ -4151,7 +4154,10 @@ mod tests {
                 true,
                 &["a line"],
                 1,
-                bravebot_agent::report::Outcome::Failed("step 1 exited 101".to_string()),
+                bravebot_agent::report::Outcome::Failed {
+                    detail: "step 1 exited 101".to_string(),
+                    confinement: None,
+                },
             );
             session.watch();
             assert!(

@@ -47,7 +47,7 @@ impl Toolchain {
         }
     }
 
-    /// The name a person knows this toolchain by, for a prompt to show.
+    /// The name a person and the planner know this toolchain by.
     pub fn name(self) -> &'static str {
         match self {
             Self::Cargo => "cargo",

@@ -1430,6 +1430,21 @@ pub fn offer_advisor(tools: &mut Vec<Tool>) {
     tools.push(advisor);
 }
 
+/// Say in the `run` description what its programs are held to, for a turn that confines them.
+///
+/// Appended to the table's description rather than a parameter of it, so the many callers that
+/// build a table for another reason are untouched. Nothing where the list does not offer `run` or
+/// the turn does not confine, since a planner is not told of a boundary its programs do not have.
+pub fn state_confinement(tools: &mut [Tool], confine_runs: bool) {
+    let Some(stated) = crate::confine::stated_to_the_planner(confine_runs) else {
+        return;
+    };
+    if let Some(run) = tools.iter_mut().find(|tool| tool.function.name == "run") {
+        run.function.description.push(' ');
+        run.function.description.push_str(stated);
+    }
+}
+
 /// Replace which names `spawn_agent` accepts, and what each is for, with the kinds this turn
 /// resolved. Nothing where the list does not offer the tool.
 fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definitions) {
@@ -1892,6 +1907,9 @@ struct Job {
     /// How long it had run when the person's stop was carried out, so a look after the account
     /// says the person stopped it and not how a killed program exited.
     stopped_by_the_person: Option<std::time::Duration>,
+    /// What its programs were confined to, where they were, told with a failure so the planner
+    /// reads a refusal as the sandbox's and not the file's.
+    confinement: Option<String>,
 }
 
 impl Job {
@@ -2001,9 +2019,17 @@ impl Jobs {
                 covered_by_record,
                 stop: stop.clone(),
                 stopped_by_the_person: None,
+                confinement: None,
             },
         );
         (name, stop)
+    }
+
+    /// Record what the job named was confined to, for the account of a failed finish.
+    fn confined_as(&mut self, name: &str, confinement: Option<String>) {
+        if let Some(job) = self.running.get_mut(name) {
+            job.confinement = confinement;
+        }
     }
 
     /// Every job that has ended and whose finish nobody has been told about yet (CMDLINE-14).
@@ -2032,7 +2058,7 @@ impl Jobs {
             let outcome = if job.stop_asked() {
                 crate::report::Outcome::StoppedByTheUser(job.stop_for_the_person())
             } else if job.running.ended() {
-                how_it_ended(job.running.codes())
+                how_it_ended(job.running.codes(), job.confinement.as_deref())
             } else {
                 continue;
             };
@@ -2086,7 +2112,7 @@ impl Jobs {
             let event = if job.running.steps_exited() {
                 crate::report::JobEvent::Ended {
                     name,
-                    outcome: how_it_ended(job.running.codes()),
+                    outcome: how_it_ended(job.running.codes(), job.confinement.as_deref()),
                 }
             } else if job.stop.is_requested() {
                 let ran_for = job.running.ran_for();
@@ -2110,7 +2136,7 @@ impl Jobs {
 /// than succeeded where a step did not exit zero, because a planner that waited for a build and was
 /// told it exited 0 reports a red build as green, and where the output is quarantined that sentence
 /// is the only account of it the planner ever gets.
-fn how_it_ended(codes: &[Option<i32>]) -> crate::report::Outcome {
+fn how_it_ended(codes: &[Option<i32>], confinement: Option<&str>) -> crate::report::Outcome {
     let failed: Vec<String> = codes
         .iter()
         .enumerate()
@@ -2123,7 +2149,10 @@ fn how_it_ended(codes: &[Option<i32>]) -> crate::report::Outcome {
     if failed.is_empty() {
         crate::report::Outcome::Succeeded
     } else {
-        crate::report::Outcome::Failed(failed.join(", "))
+        crate::report::Outcome::Failed {
+            detail: failed.join(", "),
+            confinement: confinement.map(str::to_string),
+        }
     }
 }
 
@@ -7011,6 +7040,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                     started_revision,
                     covered_by_record,
                 );
+                tools.jobs.confined_as(
+                    &name,
+                    confinement
+                        .as_ref()
+                        .map(|confinement| confinement.profile(&plan.steps())),
+                );
                 reporter.job(crate::report::JobEvent::Started {
                     name: name.clone(),
                     line: displayed.clone(),
@@ -7088,6 +7123,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                     authority.clone(),
                     started_revision,
                     covered_by_record,
+                );
+                tools.jobs.confined_as(
+                    &name,
+                    confinement
+                        .as_ref()
+                        .map(|confinement| confinement.profile(&plan.steps())),
                 );
                 policy.record_handoff(&name, moved.after);
                 reporter.job(crate::report::JobEvent::Started {
@@ -7283,7 +7324,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                         None => format!("step {at} was killed"),
                     })
                     .collect();
-                crate::report::Outcome::Failed(failed.join(", "))
+                crate::report::Outcome::Failed {
+                    detail: failed.join(", "),
+                    confinement: confinement
+                        .as_ref()
+                        .map(|confinement| confinement.profile(&plan.steps())),
+                }
             };
             let lines = text.lines().count();
             let mut note = format!("{}, {}", outcome.summary(), tally(lines, "line", "lines"));
@@ -7614,7 +7660,7 @@ fn job_output<S: Sink, R: Reporter>(
     let outcome = if let Some(after) = job.stopped_by_the_person {
         crate::report::Outcome::StoppedByTheUser(after)
     } else if ended {
-        how_it_ended(job.running.codes())
+        how_it_ended(job.running.codes(), job.confinement.as_deref())
     } else if kill {
         crate::report::Outcome::Stopped(ran_for)
     } else {
@@ -14097,6 +14143,53 @@ mod tests {
                     "{root:?} is not written in {policy:?}"
                 );
             }
+        }
+
+        /// The statement lands on `run` and on no other tool, and only on a turn that confines.
+        /// The regressions it rejects are a statement appended to every description, and one
+        /// appended on a turn that does not confine.
+        #[test]
+        fn the_confinement_statement_is_appended_to_run_on_a_confining_turn_only() {
+            let table = || {
+                for_planner(
+                    Scheduling::ArrangingALook,
+                    Arming::Allowed { free: 1 },
+                    &bravebot_core::delegate::Definitions::default(),
+                    Deadlines::BUILT_IN,
+                    Running::Offered,
+                )
+            };
+            let described = |tools: &[Tool]| -> Vec<(String, String)> {
+                tools
+                    .iter()
+                    .map(|tool| {
+                        (
+                            tool.function.name.clone(),
+                            tool.function.description.clone(),
+                        )
+                    })
+                    .collect()
+            };
+            let plain = described(&table());
+            let mut not_confining = table();
+            state_confinement(&mut not_confining, false);
+            let mut confining = table();
+            state_confinement(&mut confining, true);
+
+            assert_eq!(described(&not_confining), plain);
+            let confining = described(&confining);
+            assert_eq!(confining.len(), plain.len());
+            for ((name, before), (_, after)) in plain.iter().zip(&confining) {
+                if name == "run" {
+                    assert!(
+                        after.starts_with(before.as_str()) && after.len() > before.len(),
+                        "run was not given the statement: {after}"
+                    );
+                } else {
+                    assert_eq!(after, before, "{name} was changed");
+                }
+            }
+            assert!(plain.iter().any(|(name, _)| name == "run"));
         }
 
         pub(super) fn told(

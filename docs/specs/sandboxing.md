@@ -671,6 +671,51 @@ open the home.
 `verified-by: bravebot_agent::confine::a_program_at_the_top_of_the_home_is_granted_as_a_file_and_not_as_the_home`
 `verified-by: bravebot_agent::confine::the_path_outside_the_home_is_read_and_the_homes_own_bin_brings_no_parent`
 
+<a id="SANDBOX-19"></a>
+### SANDBOX-19: the planner is told its programs are confined, and a failed step says what it ran under
+
+On a turn that confines `run` ([SANDBOX-17](#SANDBOX-17)), the `run` tool's description says that
+the programs it starts are confined: to the directories the session was opened on, the scratch
+directory and the temporary directory, the system and program directories and git's configuration
+files for reading, the caches of the toolchain a program belongs to and the credential scope its
+command names. It says that a path outside those is refused by the operating system as `Operation
+not permitted` or `Permission denied`, and that only the person widens the reach (`/add-dir`,
+`--add-dir`). On a platform with no base the description says programs are not confined. On a turn
+that does not confine runs it says nothing about confinement, since a planner told of a boundary its
+programs do not have stops reaching for paths they can reach.
+
+A result whose step did not exit zero, from a run or from a job left running, carries one more
+sentence from the driver after the account of how it ended ([RUN-13](tools/run.md#RUN-13)): the
+directories the programs could read and write, that beyond those they reached only what a
+toolchain list or credential scope added for the steps that named one, the toolchain lists the plan
+brought by name and the credential scopes it brought by name, or `none`. A result whose steps all
+exited zero carries no such sentence. The sentence is composed from the same two decisions the policy is
+([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
+
+**Why.** A refused step reports `exited 1` and its standard error is quarantined, so the planner
+cannot see that the sandbox refused it. One session took the refusal for a fault in the machine,
+spent five turns and about 780k tokens on causes that did not apply, and asked the person to run
+diagnostics in their own terminal, until the person asked whether the sandbox was the cause.
+
+**It branches on no output.** The inputs are the session's directories, the compiled step and the
+exit status the result already reports ([RUN-13](tools/run.md#RUN-13)). Nothing a program printed
+reaches the sentence, and it names no path a program chose, so the same sentence follows a refusal,
+a failing test and a typo. It adds no branch on the exit status beyond the one that already
+chooses `It failed` over `It exited 0`.
+
+`verified-by: bravebot_agent::confine::a_confining_turn_tells_the_planner_what_a_refusal_means`
+`verified-by: bravebot_agent::confine::a_turn_that_does_not_confine_says_nothing_of_confinement`
+`verified-by: bravebot_agent::confine::a_platform_with_no_base_says_its_programs_are_not_confined`
+`verified-by: bravebot_agent::confine::the_profile_line_names_the_session_directories_the_lists_and_the_scope`
+`verified-by: bravebot_agent::confine::a_step_with_no_list_and_no_scope_says_none_for_both`
+`verified-by: bravebot_agent::confine::the_profile_line_is_the_same_whatever_paths_the_step_was_given`
+`verified-by: bravebot_agent::confine::the_profile_line_agrees_with_the_policy_on_the_lists_and_the_scope`
+`verified-by: bravebot_agent::tools::the_confinement_statement_is_appended_to_run_on_a_confining_turn_only`
+`verified-by: bravebot_agent::turn::a_failed_run_on_a_confining_turn_says_what_it_ran_under`
+`verified-by: bravebot_agent::turn::a_run_that_succeeded_on_a_confining_turn_carries_no_profile_line`
+`verified-by: bravebot_agent::turn::a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_failure`
+`verified-by: bravebot_agent::turn::a_failed_job_on_a_confining_turn_says_what_it_ran_under`
+
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is confined on Linux and macOS

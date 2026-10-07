@@ -976,7 +976,10 @@ mod tests {
         });
         session.job(JobEvent::Ended {
             name: "job:2".to_string(),
-            outcome: bravebot_agent::report::Outcome::Failed("exit 3".to_string()),
+            outcome: bravebot_agent::report::Outcome::Failed {
+                detail: "exit 3".to_string(),
+                confinement: None,
+            },
         });
 
         let mut facts = facts(&config, &trust);

@@ -30,6 +30,16 @@ pub enum Scope {
 }
 
 impl Scope {
+    /// The name a person and the planner know the scope by.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Remote => "remote",
+            Self::Aws => "aws",
+            Self::Kubernetes => "kubernetes",
+            Self::Docker => "docker",
+        }
+    }
+
     /// The scope a stage carries, from the file its program resolved to, its argument vector, and
     /// the `NAME=value` assignments written in front of it.
     ///
