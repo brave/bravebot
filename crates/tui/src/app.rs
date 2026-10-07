@@ -21584,6 +21584,64 @@ mod tests {
         assert!(session.caret() < before, "Alt-Left did not move the caret");
     }
 
+    /// A turn can begin while a stored prompt is on screen, and the chords mean the same there as
+    /// at rest: Ctrl-Right widens and stays on the prompt, Ctrl-Left comes back.
+    #[test]
+    fn the_scope_chords_work_while_a_turn_runs() {
+        let mut session = with_earlier_sessions();
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "mine");
+        session.status = Status::Working;
+
+        handle_key_while_working(&mut session, ctrl_key(KeyCode::Right));
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
+        assert_eq!(session.input(), "mine");
+        assert_eq!(session.history.position(), Some((3, 3)));
+
+        handle_key_while_working(&mut session, ctrl_key(KeyCode::Left));
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        assert_eq!(session.history.position(), Some((1, 1)));
+    }
+
+    /// A prompt queued behind a running turn is one the person has sent, so Up in a session that
+    /// sent nothing else finds it rather than saying nothing was sent.
+    #[test]
+    fn a_prompt_queued_during_a_turn_is_one_this_session_sent() {
+        let mut session = Session::new("none");
+        session.history =
+            crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
+                "old one", None,
+            )]);
+        assert!(session.history.only_earlier_sessions());
+        session.status = Status::Working;
+        type_line(&mut session, "queued one");
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.queued.len(), 1);
+        assert!(!session.history.only_earlier_sessions());
+
+        session.queued.clear();
+        session.status = Status::Idle;
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "queued one");
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(
+            session.input(),
+            "queued one",
+            "Up walked past this session's prompt"
+        );
+    }
+
+    /// `/clear` starts a new conversation, whose own prompts are none yet, so Up does not bring
+    /// back what was sent before it.
+    #[test]
+    fn clearing_the_session_empties_the_scope_up_walks() {
+        let mut session = with_earlier_sessions();
+        session.clear();
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "");
+        assert!(session.offered_all_prompts);
+    }
+
     /// A new session has nothing of its own: Up recalls nothing, and the hint line names the key
     /// that reaches the stored ones, which then walks them.
     #[test]

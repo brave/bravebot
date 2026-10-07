@@ -1923,14 +1923,18 @@ one of the nine a settings file can move (INPUT-32).
 `bravebot --incognito` stores nothing, so there are no earlier prompts there and the session scope
 is all there is.
 
-**Why.** A person who presses Up wants the last thing said in this conversation first, and the walk
-went on into other sessions' prompts without a mark where this one's ended. The wide list is still
-one chord away, and the search is where an old prompt is found by a word.
+**Why.** A person who presses Up wants the last thing said in this conversation first. A walk
+across every session mixes this conversation's prompts with other sessions' and gives no mark where
+this one's end, so a person reaching for what they just said can land on a prompt from last week.
+The wide list stays one chord away, and the search is where an old prompt is found by a word.
 
 `verified-by: bravebot_tui::app::ctrl_right_widens_the_walk_to_every_stored_prompt_and_ctrl_left_narrows_it`
 `verified-by: bravebot_tui::app::switching_scope_keeps_a_prompt_that_is_in_both`
 `verified-by: bravebot_tui::app::the_word_keys_still_move_the_caret_outside_a_recalled_prompt`
 `verified-by: bravebot_tui::app::up_in_a_new_session_says_why_it_recalled_nothing`
+`verified-by: bravebot_tui::app::the_scope_chords_work_while_a_turn_runs`
+`verified-by: bravebot_tui::app::a_prompt_queued_during_a_turn_is_one_this_session_sent`
+`verified-by: bravebot_tui::app::clearing_the_session_empties_the_scope_up_walks`
 `verified-by: bravebot_tui::render::the_border_names_the_scope_and_the_hint_line_the_way_to_earlier_prompts`
 `verified-by: bravebot_tui::state::a_resumed_sessions_own_prompts_are_in_its_session_scope`
 `verified-by: bravebot_tui::history::stored_prompts_are_not_this_sessions`

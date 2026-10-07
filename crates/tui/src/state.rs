@@ -14777,9 +14777,9 @@ mod tests {
         }
     }
 
-    /// An index into the transcript belongs to the process that drew it. A resumed session draws
-    /// another, opening with a line saying it was resumed, so a point read off a record has to
-    /// find its place again or a rewind would take the transcript back further than the turn.
+    /// The prompts a resumed record holds are this session's own, since the person is carrying on
+    /// the conversation they were sent in; without them Up would find nothing and send the person
+    /// to the wide scope for the prompt they typed a minute before quitting.
     #[test]
     fn a_resumed_sessions_own_prompts_are_in_its_session_scope() {
         use bravebot_aichat::protocol::Message;
@@ -14823,6 +14823,9 @@ mod tests {
         );
     }
 
+    /// An index into the transcript belongs to the process that drew it. A resumed session draws
+    /// another, opening with a line saying it was resumed, so a point read off a record has to
+    /// find its place again or a rewind would take the transcript back further than the turn.
     #[test]
     fn a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into() {
         use bravebot_aichat::protocol::Message;
