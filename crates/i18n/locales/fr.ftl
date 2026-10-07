@@ -50,6 +50,12 @@ cli-usage-auth-logout = Oublier un abonnement Leo Premium importé ou une clé d
 cli-usage-auth-status = Dire si une connexion est utilisable, avec le code de sortie 0 seulement si elle l'est
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 cli-usage-completion = Afficher un script de complétion pour le shell
+cli-usage-sessions = Lister les sessions qui continuent après la fermeture du terminal
+cli-usage-sessions-stop = En arrêter une
+cli-usage-sessions-import = Copier les sessions qu'un autre agent a gardées pour ce répertoire
+cli-usage-bg = Démarrer une session qui continue après la fermeture du terminal
+cli-usage-attach = Rejoindre le terminal d'une session en arrière-plan
+cli-usage-reply = Envoyer une invite à une session en arrière-plan inactive
 
 cli-keys-heading = Touches interactives :
 cli-key-send = Envoyer
@@ -87,6 +93,9 @@ cli-plain-trusting-kept =
     { $directory } approuvé (vous avez demandé de le retenir { $when } ; pour que la question
     soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
     lignes qui le nomment)
+# Dit quand une session en arrière-plan est relancée et que sa conversation précédente a été relue
+# depuis son enregistrement (BG-1).
+cli-plain-resumed = Reprise de la conversation précédente de cette session ({ $count }).
 
 mode-ask = ◇ demande avant d'agir
 mode-accept-edits = ⏵ modifications acceptées
@@ -104,6 +113,7 @@ cli-option-append-system-prompt =
     Ajouter ce texte aux instructions permanentes du planificateur à chaque tour, après AGENTS.md
 cli-option-mode = turn (par défaut) décide étape par étape ; manifest planifie tout le déroulement d'abord
 cli-option-model = Le modèle demandé par cette exécution, à la place de celui mémorisé ou configuré
+cli-option-advisor = Un modèle auquel l'agent peut poser une question, proposé comme l'outil advisor
 cli-option-effort = L'effort de réflexion demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en quarantaine
 cli-option-trace = Afficher le journal d'audit
@@ -161,6 +171,8 @@ cli-bypass-unreachable =
     ce mode inaccessible ici. Retirez-le de ce fichier, ou lancez sans l'option.
 cli-mode-needs-a-name = --mode demande l'un de : { $names }
 cli-model-needs-a-name = --model demande le nom d'un modèle
+cli-advisor-needs-a-name = --advisor exige le nom d'un modèle
+cli-advisor-not-with-a-manifest = --advisor est incompatible avec --mode manifest, qui exécute son plan sans planificateur à interroger
 cli-effort-needs-a-level = --effort demande l'un de : { $levels }
 cli-unexpected-argument = argument inattendu : { $argument }
 cli-task-required = une tâche est requise
@@ -1610,6 +1622,15 @@ session-resume-nothing-else = aucune autre session à reprendre dans ce réperto
 session-resume-already-here = c'est la session déjà ouverte
 session-resume-no-such = aucune session avec cet identifiant dans ce répertoire
 session-resume-held-by-background = cette session est tenue par une session d'arrière-plan en cours, elle ne peut donc pas être reprise ici
+session-branch-nothing-written = rien à dupliquer pour l'instant : la session n'a aucun enregistrement avant la fin de son premier tour
+# Laissé dans la transcription quand /branch est tapé là où les enregistrements de session ne sont pas écrits.
+session-branch-unwritable = /branch a besoin d'un enregistrement de session à copier, et cette session n'en écrit pas
+# Laissé dans la transcription quand /branch est tapé dans une session qui ne peut pas être dupliquée.
+session-branch-refused = cette session ne peut pas être dupliquée
+session-branch-keeps-checkouts = { $count ->
+    [one] la session garde la copie de travail { $ids }, qu'une copie ne porterait pas ; supprimez-la avec /checkouts remove avant /branch
+   *[other] la session garde les copies de travail { $ids }, qu'une copie ne porterait pas ; supprimez-les avec /checkouts remove avant /branch
+    }
 session-branch-moved =
     cette session tournait sur { $was } ; cette copie de travail est sur { $now }
 session-branch-gone =
@@ -1716,6 +1737,7 @@ command-config = Choisir le mode d'édition de la zone de saisie
 command-add-dir = Ouvrir un autre répertoire et l'approuver pour cette session, ou en fermer un
 command-cd = Travailler désormais dans un autre répertoire, et l'approuver pour cette session
 command-rename = Appeler cette conversation autrement
+command-branch = Copier cette session et continuer dans la copie, en gardant l'originale pour y revenir
 command-issue = Dire pour quel ticket est cette session, l'afficher ou l'effacer
 command-pr = Dire pour quelle pull request est cette session, l'afficher ou l'effacer
 command-compact = Résumer la conversation jusqu'ici, en gardant la partie récente
@@ -1728,11 +1750,13 @@ command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fix
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
+command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
 command-plan = Passer en mode plan, et commencer une tâche si vous en donnez une
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
 command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
 command-memory = Lister la mémoire de chaque définition, où elle est gardée et si elle est retenue
+command-init = Faire rédiger par le planificateur un AGENTS.md pour ce projet
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-copy = Copier la dernière réponse dans le presse-papiers, ou une plus ancienne en reculant d'autant de réponses
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
@@ -1788,6 +1812,10 @@ session-pull-request-refused =
     /pr prend un seul lien http ou https sur une ligne, en ASCII sans espace, comme
     /pr https://github.com/brave/bravebot/pull/1. Rien n'a été fixé
 session-cleared = effacée : une nouvelle session, la précédente restant reprenable
+# Laissé dans la transcription par /branch, qui a déplacé la session sur une copie d'elle-même.
+session-branched =
+    dupliquée : cette session est maintenant une copie, { $title }. L'originale est restée telle
+    quelle. Pour y revenir, lancez `bravebot --resume { $id }` dans { $directory }
 session-rewound = session rembobinée avant le tour { $turn }
 session-rewound-partly =
     session rembobinée avant le tour { $turn }, mais ces fichiers gardent ce qui a été
@@ -2082,6 +2110,20 @@ watches-cleared = { $count ->
 ## Les copies de travail gardées par un délégué
 
 checkouts-listed = { $id } : faite pour le délégué { $delegate } du commit { $commit }, dans { $path }
+# La taille est un nombre de kilo-octets, de méga-octets ou de giga-octets.
+checkouts-size = { $id } : elle a pris { $size } sur le disque à la fin de son délégué
+checkouts-size-partial =
+    { $id } : elle a pris au moins { $size } sur le disque à la fin de son délégué, car tout n'a pas pu être mesuré
+checkouts-size-unmeasured = { $id } : sa taille est mesurée à la fin de son délégué
+# La branche distante est nommée comme git la nomme, par exemple origin/main.
+checkouts-pushed =
+    { $id } : sur la branche { $branch }, et { $remote } est au même commit, donc ce commit est poussé
+checkouts-detached-pushed =
+    { $id } : sur aucune branche, et { $remote } est au même commit, donc ce commit est poussé
+checkouts-unpushed = { $id } : sur la branche { $branch }, à un commit où aucune branche distante ne se trouve
+checkouts-detached-unpushed = { $id } : sur aucune branche, à un commit où aucune branche distante ne se trouve
+checkouts-head-unread =
+    { $id } : le commit où elle se trouve n'a pas pu être lu, donc on ne sait pas si ce commit est poussé
 checkouts-nothing-done = { $id } : rien n'y a été fait, d'après ce qui est enregistré
 checkouts-written = { $id } : fichiers écrits : { $paths }
 checkouts-more = { $count } de plus
@@ -2161,7 +2203,9 @@ paste-invisible-removed = { $count ->
     [one] { $count } caractère invisible a été retiré de ce texte collé
    *[other] { $count } caractères invisibles ont été retirés de ce texte collé
     }
+kilobytes = { $size } Ko
 megabytes = { $size } Mo
+gigabytes = { $size } Go
 
 
 ## Exécuter une commande que la personne a tapée
@@ -2193,6 +2237,8 @@ manifest-began = la tâche entière est planifiée d'abord ; la session attend i
 manifest-ended-unexpectedly = l'exécution s'est terminée de façon inattendue
 manifest-failed = l'exécution s'est arrêtée : { $problem }
 manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume { $id }
+# Ce que /init dit quand le projet a déjà le fichier qu'il écrirait.
+init-already-there = { $file } existe déjà ici, donc /init n'y touche pas
 
 # Ce que la session dit d'une définition qu'une personne a désignée avec /agent. Chaque nom ici a
 # été résolu par la session depuis une source que quelqu'un a approuvée ; il peut donc être affiché,
@@ -2250,6 +2296,7 @@ verb-job-output = Tâche
 verb-spawn-agent = Déléguer
 verb-schedule-next = Programmer
 verb-watch-file = Surveiller
+verb-advisor = Conseiller
 verb-mcp-call = MCP
 verb-unknown = Outil
 
@@ -2364,6 +2411,22 @@ jobs-command-takes =
 panel-hint = { $chord } infos
 panel-hide = { $chord } masquer le panneau
 panel-too-narrow = Le panneau d'informations demande un terminal d'au moins { $columns } colonnes.
+# Laissé dans la transcription par le premier /caffeinate, qui n'active encore rien.
+caffeinate-explained =
+    /caffeinate empêche l'ordinateur de se mettre en veille pendant qu'un tour s'exécute ou qu'une
+    boucle attend son prochain passage, et le laisse se rendre en veille dès que plus rien n'est en
+    attente. L'écran peut quand même s'éteindre et se verrouiller, mais la machine continue de
+    tourner, vos identifiants dessus, pendant votre absence. Ne l'activez que là où la politique de
+    votre appareil l'autorise. Tapez /caffeinate de nouveau pour l'activer.
+# Laissé dans la transcription quand /caffeinate s'active, et quand il se désactive.
+caffeinate-on = l'ordinateur reste éveillé pendant qu'un tour s'exécute ou qu'une boucle attend
+caffeinate-off = l'ordinateur peut de nouveau se mettre en veille
+# Laissé dans la transcription quand le programme qui empêche la veille n'a pas pu démarrer, ce qui
+# désactive /caffeinate.
+caffeinate-unavailable = /caffeinate est indisponible : `{ $program }` n'a pas pu être démarré ({ $reason })
+# Laissé dans la transcription quand ce programme s'est arrêté de lui-même, ce qui désactive
+# /caffeinate.
+caffeinate-ended = /caffeinate est désactivé : `{ $program }` a cessé de garder l'ordinateur éveillé
 panel-session = Session
 panel-goal = Objectif
 panel-goal-paused = suspendu
@@ -2395,3 +2458,63 @@ doctor-direnv-ok = disponible dans le PATH
 doctor-direnv-missing = introuvable dans le PATH ; consultez https://direnv.net/ ou lancez `brew install direnv`
 
 status-undecided = non décidé
+sessions-usage = sessions accepte --json, stop et l'identifiant d'une session, ou import et le nom d'un outil
+sessions-none = Aucune session en arrière-plan.
+sessions-no-home = Il n'y a pas de répertoire d'état où chercher des sessions en arrière-plan.
+sessions-missing = Aucune session en arrière-plan { $id }.
+sessions-ambiguous = Plusieurs sessions en arrière-plan commencent par { $id }.
+sessions-stopped = { $name } est arrêtée.
+sessions-not-running = { $name } n'était pas en cours d'exécution.
+sessions-stop-failed = Impossible d'enregistrer l'arrêt : { $problem }
+sessions-import-usage = sessions import accepte claude-code ou opencode, puis --project <répertoire> s'il ne s'agit pas de celui-ci, puis --all ou les premiers caractères de chaque session à copier
+sessions-import-opencode = opencode garde ses sessions dans une base de données que cette version ne lit pas, donc rien n'a été copié. Celles de claude-code peuvent l'être.
+sessions-import-no-project = { $path } n'est pas un répertoire.
+sessions-import-no-source = Il n'y a pas de répertoire de profil où chercher les sessions de Claude Code.
+sessions-import-none = Claude Code n'a gardé aucune session à copier pour { $directory }.
+sessions-import-row = { $id }  { $when }  { $title }
+sessions-import-row-there = { $id }  { $when }  { $title }  (déjà copiée)
+sessions-import-how = Nommez celles à copier par leurs premiers caractères, ou passez --all.
+sessions-import-copied = « { $title } » copiée sous { $id }. Reprenez-la avec : bravebot --resume { $id }
+sessions-import-there = « { $title } » est déjà ici, et a été laissée telle quelle.
+sessions-import-missing = Aucune session Claude Code ici ne commence par { $id }.
+sessions-import-ambiguous = Plusieurs sessions Claude Code ici commencent par { $id }.
+sessions-import-failed = Impossible d'écrire « { $title } » : { $problem }
+sessions-state-working = au travail
+sessions-state-idle = inactive
+sessions-state-stopped = arrêtée
+sessions-state-interrupted = interrompue
+sessions-state-needs-input = attend une réponse ({ $kind })
+sessions-state-needs-input-unnamed = attend une réponse
+sessions-held-write = écriture
+sessions-held-run = exécution
+sessions-held-read = lecture
+sessions-held-fetch = récupération
+sessions-held-server = serveur
+sessions-held-vouch = approbation
+sessions-held-tools = outils
+sessions-held-move = déplacement
+sessions-held-manifest = manifeste
+sessions-held-question = question
+bg-needs-a-prompt = --bg exige l'invite par laquelle commencer
+bg-needs-a-terminal = --bg démarre une session depuis un terminal, et ceci n'en est pas un
+bg-takes-nothing-else = --bg accepte une invite et aucune autre option, et { $flag } ne peut pas atteindre la session qu'il démarre
+bg-bypass-refused = --dangerously-skip-permissions est refusé pour une session en arrière-plan, car personne n'est là pour remarquer ce qu'elle fait
+bg-not-started = La session en arrière-plan n'a pas démarré.
+bg-started = { $id } est démarrée. Rejoignez-la avec : bravebot attach { $id }
+bg-spawn-failed = Impossible de démarrer la session en arrière-plan : { $problem }
+bg-unsupported = Les sessions en arrière-plan ne sont pas disponibles sur cette plateforme.
+attach-usage = attach exige l'identifiant d'une session
+attach-needs-a-terminal = attach répond aux questions d'une session avec les lignes tapées, et ceci n'est pas un terminal
+reply-usage = reply exige l'identifiant d'une session et l'invite à envoyer
+attach-not-running = { $name } n'est pas en cours d'exécution.
+attach-unreachable = Impossible de joindre { $name } : { $problem }
+attach-taken = Un terminal est déjà attaché à { $name }.
+attach-joined = Attaché à { $name }. Ctrl-C la laisse en cours d'exécution.
+attach-line-not-sent = Non envoyée : la session n'attend pas de ligne.
+attach-left = La session est terminée.
+reply-sent = Envoyée à { $name }.
+reply-working = { $name } travaille et n'accepte pas d'invite maintenant. Répondez quand elle est inactive.
+reply-needs-input = { $name } attend la réponse à une question. Répondez-y avec : bravebot attach { $id }
+reply-not-sent = { $name } n'a pas pris l'invite.
+bg-restart-needs-a-terminal = { $name } est arrêtée, et seul un terminal peut la redémarrer.
+resume-held-by-background = { $name } est tenue par une session en arrière-plan en cours d'exécution. Rejoignez-la avec : bravebot attach { $id }
