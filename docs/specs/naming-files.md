@@ -124,6 +124,25 @@ reference rather than sending the fragment.
 `verified-by: bravebot_tui::references::a_paste_returns_the_cursor_to_the_top_so_enter_sends_a_finished_reference`
 `verified-by: bravebot_tui::state::a_recalled_prompt_returns_the_cursor_to_the_top`
 
+<a id="NAME-8"></a>
+### NAME-8: a backslash before a space keeps the space in the name
+
+`@My\ Documents/notes.md` names the file `My Documents/notes.md`: a space written after a backslash
+belongs to the reference, and any other whitespace ends it. A backslash anywhere else is an ordinary
+character, so prose containing one still names nothing. Completing an entry whose name holds a space
+writes the escaped form, so the line reads back as the path that was chosen. NAME-5 applies to the
+unescaped path.
+
+**Why.** A reference ended at the first space, so a file such as `My Documents/notes.md` was offered
+by the picker and then completed to text that named a different path. Where a reference ends is
+decided from the line the user typed, not from file contents.
+
+`verified-by: bravebot_tui::entries::a_backslash_before_a_space_continues_a_reference`
+`verified-by: bravebot_tui::entries::an_escaped_path_reads_back_unchanged`
+`verified-by: bravebot_tui::entries::a_name_with_a_space_is_listed_and_finished`
+`verified-by: bravebot_tui::references::a_name_with_a_space_completes_to_a_reference_that_names_it`
+`verified-by: bravebot_tui::references::enter_completes_a_half_typed_reference_past_an_escaped_space`
+
 ## Known costs
 
 - **Content you have not read is content you are vouching for.** Be as careful naming a file as

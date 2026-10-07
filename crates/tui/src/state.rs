@@ -5943,7 +5943,7 @@ impl Session {
         }
         match crate::entries::typed_reference(&self.input) {
             Some(typed) => {
-                let entries = crate::entries::matching(&self.workspace, typed);
+                let entries = crate::entries::matching(&self.workspace, &typed);
                 if entries.is_empty() {
                     Offered::Nothing
                 } else {
@@ -6042,7 +6042,7 @@ impl Session {
                 // forty directories sharing the prefix sort above the file and cut it from the
                 // list, and scanning the list would then complete a finished name away into a
                 // directory nobody chose.
-                if self.completion == 0 && crate::entries::names_a_file(&self.workspace, typed) {
+                if self.completion == 0 && crate::entries::names_a_file(&self.workspace, &typed) {
                     return false;
                 }
                 self.highlighted_entry()
@@ -6108,13 +6108,15 @@ impl Session {
                 // not the last `@` in the line. A file may have one in its name, and cutting
                 // there rebuilds the line around a path nobody chose: `@logo@2` plus the
                 // offered `logo@2x.png` becomes `@logo@logo@2x.png`.
-                let start = self.last_word_starts_at();
+                let start = crate::entries::last_word_starts_at(&self.input);
                 if !self.input[start..].starts_with('@') {
                     return;
                 }
                 let kept = self.input[..start].to_string();
                 let trailing = if entry.is_directory { "" } else { " " };
-                self.put_in_the_box(format!("{kept}@{}{trailing}", entry.path));
+                // Escaped, so a name holding a space is still one word when the line is read back.
+                let path = crate::entries::escape(&entry.path);
+                self.put_in_the_box(format!("{kept}@{path}{trailing}"));
             }
             Offered::Nothing | Offered::Shortcuts => return,
         }
