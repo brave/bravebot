@@ -2052,6 +2052,25 @@ impl Session {
         self.permission_mode = self.permission_mode.cycle(self.bypass_reachable);
     }
 
+    /// Set plan mode, from whichever mode the session is in, and say nothing for the reason
+    /// [`Session::cycle_permission_mode`] gives.
+    ///
+    /// Plan mode only narrows what is permitted, so this grants nothing the key would not, and no
+    /// word reaches bypassing (MODE-5).
+    pub fn enter_plan_mode(&mut self) {
+        self.permission_mode = bravebot_agent::PermissionMode::Plan;
+    }
+
+    /// Start a turn on a person's task, after [`Session::enter_plan_mode`] (MODE-12).
+    pub fn start_planned(
+        &mut self,
+        task: &str,
+        pasted: Vec<AttachedImage>,
+        attached: Vec<Attached>,
+    ) -> String {
+        self.begin_turn(task.to_string(), (attached, pasted), Vec::new())
+    }
+
     /// Load history from disk and keep writing to it.
     ///
     /// Separate from [`Session::new`] so persistence is a deliberate choice at one call site
