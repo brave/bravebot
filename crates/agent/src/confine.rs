@@ -87,8 +87,8 @@ impl Confinement {
     /// The toolchain list and the credential scope a step brings to its profile.
     ///
     /// The one place either is decided, read by [`Confinement::policy`] to build the rows and by
-    /// [`Confinement::describe`] to tell a person which rows there are. Neither is brought where
-    /// the session names no home directory, since both are rows under it.
+    /// [`Confinement::describe`] and [`Confinement::profile`] to say which rows there are. Neither
+    /// is brought where the session names no home directory, since both are rows under it.
     fn carries(&self, step: &Step) -> (Option<Toolchain>, Option<Scope>) {
         if self.home.is_none() {
             return (None, None);
@@ -192,6 +192,45 @@ impl Confinement {
         policy.starting_in(directory)
     }
 
+    /// The one sentence that says what the programs of `steps` ran under, for a result whose
+    /// steps did not exit zero.
+    ///
+    /// Composed from this confinement and the compiled steps, which a person read, and from
+    /// nothing a program printed or exited with: the same line follows a refusal, a failing test
+    /// and a typo. It names the directories the session owns and the lists by name, and no path a
+    /// program chose, since a program's error text is not where the profile is decided.
+    pub fn profile(&self, steps: &[&Step]) -> String {
+        let mut directories: Vec<String> = Vec::new();
+        for directory in self.roots.iter().chain(self.scratch.as_ref()) {
+            let shown = directory.display().to_string();
+            if !directories.contains(&shown) {
+                directories.push(shown);
+            }
+        }
+        let mut toolchains = std::collections::BTreeSet::new();
+        let mut scopes = std::collections::BTreeSet::new();
+        for step in steps {
+            let (toolchain, scope) = self.carries(step);
+            toolchains.extend(toolchain.map(Toolchain::name));
+            scopes.extend(scope.map(Scope::name));
+        }
+        let named = |names: std::collections::BTreeSet<&str>| match names.is_empty() {
+            true => "none".to_string(),
+            false => names.into_iter().collect::<Vec<_>>().join(", "),
+        };
+        format!(
+            "Confinement: programs could read and write {} and the temporary directory, and read \
+             the system and program directories and git's configuration files; beyond those \
+             they reached only what a toolchain list or credential scope added for the steps \
+             that named one (toolchain lists: {}; credential scopes: {}). Any other path is \
+             refused by the operating system as `Operation not permitted` or `Permission \
+             denied`.",
+            directories.join(", "),
+            named(toolchains),
+            named(scopes),
+        )
+    }
+
     /// `command`, confined to what its step may reach, or the reason it cannot be.
     ///
     /// Refused rather than started unconfined where the platform's mechanism is missing or will
@@ -252,6 +291,37 @@ impl Confinement {
             ))
         }
     }
+}
+
+/// What the planner is told about the programs `run` starts, for a turn that asks for them to be
+/// confined, or `None` for one that does not.
+///
+/// A turn that does not confine says nothing, so a planner is never told of a boundary its
+/// programs do not have. Where the platform has no base to confine on, it is told the opposite.
+pub fn stated_to_the_planner(confine_runs: bool) -> Option<&'static str> {
+    stated(confine_runs, Prelude::current())
+}
+
+fn stated(confine_runs: bool, prelude: Option<Prelude>) -> Option<&'static str> {
+    if !confine_runs {
+        return None;
+    }
+    Some(match prelude {
+        Some(_) => {
+            "Programs this tool starts are confined. Each may reach only the directories the \
+             session was opened on, the scratch directory and the temporary directory, all read \
+             and written, the system and program directories and git's configuration files, \
+             read, the caches of the toolchain it belongs to, and the credential scope its \
+             command names. A path outside those is refused by the operating system as \
+             `Operation not permitted` or `Permission denied`, so a program that reports either \
+             for such a path was stopped by the sandbox and not by a fault in the machine. Only \
+             the person widens it (`/add-dir`, `--add-dir`); a command cannot ask for more."
+        }
+        None => {
+            "Programs this tool starts are not confined on this platform: they run with the \
+             access of the person's own account."
+        }
+    })
 }
 
 /// The variables `command` will start with: this process's, less the names removed and with the
@@ -666,6 +736,116 @@ mod tests {
         assert!(rows.contains(&PathBuf::from("/opt/tools/bin")));
         assert!(rows.contains(&PathBuf::from("/opt/tools")));
         assert!(!rows.contains(&PathBuf::from(format!("{HOME}/.cargo"))));
+    }
+
+    /// A planner not told that its programs are confined reads `Operation not permitted` as a fault
+    /// in the machine. The sentence has to name both spellings of the refusal and say who widens it.
+    #[test]
+    fn a_confining_turn_tells_the_planner_what_a_refusal_means() {
+        let said = stated(true, Some(Prelude::Linux)).expect("a confining turn says something");
+
+        assert!(said.contains("confined"), "{said}");
+        assert!(said.contains("`Operation not permitted`"), "{said}");
+        assert!(said.contains("`Permission denied`"), "{said}");
+        assert!(
+            said.contains("/add-dir") && said.contains("--add-dir"),
+            "{said}"
+        );
+    }
+
+    /// A planner told of a boundary its programs do not have would stop reaching for paths they
+    /// can reach, so a turn that does not confine says nothing, whatever the platform.
+    #[test]
+    fn a_turn_that_does_not_confine_says_nothing_of_confinement() {
+        assert_eq!(stated(false, Some(Prelude::Linux)), None);
+        assert_eq!(stated(false, Some(Prelude::MacOs)), None);
+        assert_eq!(stated(false, None), None);
+    }
+
+    /// Windows has no base, so the same sentence would be false there. The regression it rejects
+    /// is the confined sentence on a platform whose programs run with the person's own access.
+    #[test]
+    fn a_platform_with_no_base_says_its_programs_are_not_confined() {
+        let said = stated(true, None).expect("a confining turn says something");
+
+        assert!(said.contains("not confined"), "{said}");
+        assert!(!said.contains("Operation not permitted"), "{said}");
+    }
+
+    /// The line a failed step carries names what the session owns, the lists by name and the
+    /// scope its argv named, so a planner can tell a path outside them from a fault.
+    #[test]
+    fn the_profile_line_names_the_session_directories_the_lists_and_the_scope() {
+        let confined = confinement(&["/work/project", "/work/added"]);
+        let cargo = step("/usr/bin/cargo", &["build"]);
+        let push = step("/usr/bin/git", &["push"]);
+
+        let line = confined.profile(&[&cargo, &push]);
+
+        for named in [
+            "/work/project",
+            "/work/added",
+            "/var/scratch",
+            "toolchain lists: cargo;",
+            "credential scopes: remote)",
+        ] {
+            assert!(line.contains(named), "{named} is not in {line}");
+        }
+    }
+
+    /// A step that brings no list and no scope says `none`, rather than leaving the planner to
+    /// wonder whether the line left them out.
+    #[test]
+    fn a_step_with_no_list_and_no_scope_says_none_for_both() {
+        let confined = confinement(&["/work/project"]);
+
+        let line = confined.profile(&[&step("/bin/ls", &[]), &step("/usr/bin/git", &["status"])]);
+
+        assert!(
+            line.contains("toolchain lists: none; credential scopes: none)"),
+            "{line}"
+        );
+    }
+
+    /// The line is composed from the session and the compiled step. Two steps whose arguments name
+    /// different paths a program chose get the same line, and neither path is in it.
+    #[test]
+    fn the_profile_line_is_the_same_whatever_paths_the_step_was_given() {
+        let confined = confinement(&["/work/project"]);
+
+        let one = confined.profile(&[&step("/bin/cat", &["/elsewhere/one"])]);
+        let two = confined.profile(&[&step("/bin/cat", &["/elsewhere/two"])]);
+
+        assert_eq!(one, two);
+        assert!(!one.contains("/elsewhere"), "{one}");
+    }
+
+    /// The line and the policy read the same table: a step the policy gives the cargo cache and
+    /// the remote scope is named as having both, and one it gives neither is not.
+    #[test]
+    fn the_profile_line_agrees_with_the_policy_on_the_lists_and_the_scope() {
+        let confined = confinement(&["/work/project"]);
+        let registry = format!("{HOME}/.cargo/registry");
+        let known_hosts = format!("{HOME}/.ssh/known_hosts");
+
+        for (program, args, granted) in [
+            ("/usr/bin/cargo", vec!["build"], (true, false)),
+            ("/usr/bin/git", vec!["push"], (false, true)),
+            ("/usr/bin/make", vec!["build"], (false, false)),
+        ] {
+            let step = step(program, &args);
+            let policy = confined.policy(&step, Path::new("/work"), &[]);
+            let line = confined.profile(&[&step]);
+
+            assert_eq!(writes(&policy, &registry), granted.0, "{program}");
+            assert_eq!(line.contains("cargo;"), granted.0, "{program}: {line}");
+            assert_eq!(reads(&policy, &known_hosts), granted.1, "{program}");
+            assert_eq!(
+                line.contains("scopes: remote)"),
+                granted.1,
+                "{program}: {line}"
+            );
+        }
     }
 
     /// A session directory under the build directory, which no row of the base reaches, and a

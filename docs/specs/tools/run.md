@@ -599,6 +599,9 @@ the clock: that it exited 0, which stages did not and with what code, or that it
 limit and was stopped. It stands in front of what the program printed, and it is there in the same
 words where the output is quarantined and the caller holds a reference to it instead.
 
+On a turn that confines the programs `run` starts, a result with a step that did not exit zero
+adds the sentence [SANDBOX-19](../sandboxing.md#SANDBOX-19) describes, after this one.
+
 **Why.** A program's own bytes do not say whether it did what it was asked. A test run prints much
 the same lines whether it passed or failed, a command that fails silently prints nothing at all,
 and a caller left to infer the verdict from the output either re-runs everything or believes

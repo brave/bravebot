@@ -15835,6 +15835,160 @@ fn the_planner_is_told_how_a_run_it_may_not_read_ended() {
     );
 }
 
+/// What a planner is sent when it runs `command` once on a turn that does or does not confine
+/// runs: the first request, which carries the tool descriptions, and the second, which carries the
+/// result. The workspace root is returned so a test can look for the session's own directory.
+fn requests_for_one_run(
+    name: &str,
+    command: &str,
+    confining: bool,
+) -> (String, String, std::path::PathBuf) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", &format!(r#"{{"command":"{command}"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it").with_confined_runs(confining),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    (first, second, workspace.root().to_path_buf())
+}
+
+const TOLD_CONFINED: &str = "Programs this tool starts are confined";
+
+fn cannot_confine_here() -> bool {
+    bravebot_sandbox::base::Prelude::current().is_none()
+        || !bravebot_sandbox::confinement_works_here()
+}
+
+/// A planner that meets `Operation not permitted` with nothing said about confinement looks for a
+/// fault in the machine, which one session spent 780k tokens doing. A turn that confines says in the
+/// `run` description that its programs are, and a failed step carries the profile it ran under,
+/// built from the session and not from what the program printed: the program here names a path of
+/// its own on standard error, and the line does not name it.
+#[test]
+fn a_failed_run_on_a_confining_turn_says_what_it_ran_under() {
+    if cannot_confine_here() {
+        return;
+    }
+    let (first, second, root) = requests_for_one_run(
+        "run-confined-failed",
+        "sh -c 'echo /elsewhere/chosen >&2; exit 1'",
+        true,
+    );
+
+    assert!(
+        first.contains(TOLD_CONFINED),
+        "the run description does not say programs are confined: {first}"
+    );
+    let result = message_from(&second, "Result of run");
+    let said = format!(
+        "exited 1. Confinement: programs could read and write {}",
+        root.display()
+    );
+    assert!(result.contains(&said), "{said} is not in {result}");
+    assert!(
+        result.contains("toolchain lists: none; credential scopes: none)"),
+        "{result}"
+    );
+    let line = &result[result.find("Confinement:").expect("the line")..];
+    let line = &line[..line.find("`Permission denied`.").expect("its end")];
+    assert!(!line.contains("/elsewhere"), "{line}");
+}
+
+/// The line follows a step that did not exit zero, so a run that worked is told nothing more than
+/// it was, while the description still says what its programs are held to.
+#[test]
+fn a_run_that_succeeded_on_a_confining_turn_carries_no_profile_line() {
+    if cannot_confine_here() {
+        return;
+    }
+    let (first, second, _) = requests_for_one_run("run-confined-ok", "mkdir made", true);
+
+    assert!(first.contains(TOLD_CONFINED), "{first}");
+    let result = message_from(&second, "Result of run");
+    assert!(result.contains("It exited 0."), "{result}");
+    assert!(!result.contains("Confinement:"), "{result}");
+}
+
+/// A turn that does not confine runs its programs with the person's own access, so neither the
+/// description nor a failed result may claim otherwise.
+#[test]
+fn a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_failure() {
+    let (first, second, _) = requests_for_one_run("run-unconfined-failed", "sh -c 'exit 1'", false);
+
+    assert!(!first.contains(TOLD_CONFINED), "{first}");
+    assert!(!first.contains("not confined on this platform"), "{first}");
+    let result = message_from(&second, "Result of run");
+    assert!(result.contains("exited 1"), "{result}");
+    assert!(!result.contains("Confinement:"), "{result}");
+}
+
+/// A job's failure reaches the planner in a later round, from the turn's own account of it, and
+/// that is a second place the line has to be attached.
+#[test]
+fn a_failed_job_on_a_confining_turn_says_what_it_ran_under() {
+    if cannot_confine_here() {
+        return;
+    }
+    let scratch = Scratch::new("background-confined-failed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"false","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and get on with something else").with_confined_runs(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains(JOB_1_FINISHED))
+        .expect("the turn was never told the job ended");
+    let account = message_from(told, JOB_1_FINISHED);
+    assert!(
+        account.contains("It failed: step 1 exited 1. Confinement: programs could read and write"),
+        "{account}"
+    );
+}
+
 /// A command that printed nothing has nothing to keep from anybody. Handed a reference to its
 /// empty output with the ways to process, vet and read it, a planner that had only made a
 /// directory went looking for something to do with the reference. It still hears how the run

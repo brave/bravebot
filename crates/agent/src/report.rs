@@ -278,7 +278,13 @@ pub enum Outcome {
     /// Every stage exited zero, or a line with branches did what it was told.
     Succeeded,
     /// A stage exited non-zero or was killed, named as the driver names them.
-    Failed(String),
+    Failed {
+        detail: String,
+        /// What the programs were confined to, where they were, for the planner to read beside
+        /// the exit codes. Left out of [`Outcome::summary`]: a person watching chose the
+        /// confinement, and the planner is the reader who does not know it applies.
+        confinement: Option<String>,
+    },
     /// It outstayed the limit and was stopped, with what it had run for by then.
     Stopped(std::time::Duration),
     /// A background job the person asked to stop, with what it had run for by then.
@@ -319,7 +325,14 @@ impl Outcome {
     pub fn describe(&self) -> String {
         match self {
             Self::Succeeded => "It exited 0.".to_string(),
-            Self::Failed(detail) => format!("It failed: {detail}."),
+            Self::Failed {
+                detail,
+                confinement: None,
+            } => format!("It failed: {detail}."),
+            Self::Failed {
+                detail,
+                confinement: Some(confinement),
+            } => format!("It failed: {detail}. {confinement}"),
             Self::Stopped(after) => format!(
                 "It was still running after {} seconds and was stopped, so this is what it had \
                  printed by then and not the whole of what it would print.",
@@ -379,7 +392,7 @@ impl Outcome {
                 seconds(*waited)
             ),
             Self::Succeeded => "succeeded".to_string(),
-            Self::Failed(detail) => detail.clone(),
+            Self::Failed { detail, .. } => detail.clone(),
         }
     }
 }
