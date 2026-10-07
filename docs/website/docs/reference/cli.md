@@ -564,8 +564,8 @@ each. It takes no arguments, needs a terminal to ask on, and refuses in an incog
 ## `mcp`
 
 ```sh
-bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--stdio] -- <program> [args...]
-bravebot mcp add <alias> [-s <scope>] --http <url>
+bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--stdio] -- <program> [args...]
+bravebot mcp add <alias> [-s <scope>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
 bravebot mcp approve <alias>

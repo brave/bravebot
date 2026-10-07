@@ -709,6 +709,7 @@ mcp-problem-url = l'url n'est pas en http ou en https avec un hôte
 mcp-problem-credentials =
     l'url porte un utilisateur ou un mot de passe, ce qui garderait un identifiant en clair
 mcp-problem-remote = un serveur distant ne prend pas de { $key }
+mcp-problem-timeout = { $key } n'est pas un nombre entier de secondes de 1 à { $most }
 mcp-unreadable = { $path } ne peut pas être lu : { $reason }
 mcp-unreadable-too-large = il est plus gros qu'un fichier de déclarations n'a de raison de l'être
 mcp-unreadable-not-read = il n'a pas pu être lu comme du texte
@@ -728,6 +729,7 @@ mcp-variables = variables : { $names }
 mcp-variable-stored = { $name } (enregistrée)
 mcp-may-read = peut lire : { $path }
 mcp-directory = répertoire, où il peut écrire : { $path }
+mcp-timeouts = temps accordé : { $startup } secondes pour démarrer, { $tool } secondes par appel
 mcp-digest = empreinte : { $digest }
 mcp-changed = champs modifiés : { $fields }
 mcp-question = Utiliser ce serveur MCP ?

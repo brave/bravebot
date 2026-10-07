@@ -863,6 +863,7 @@ mcp-problem-url = the url is not http or https with a host
 mcp-problem-credentials =
     the url carries a user or a password, which would keep a credential in plain text
 mcp-problem-remote = a remote server takes no { $key }
+mcp-problem-timeout = { $key } is not a whole number of seconds from 1 to { $most }
 mcp-unreadable = { $path } cannot be read: { $reason }
 mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
 mcp-unreadable-not-read = it could not be read as text
@@ -883,6 +884,8 @@ mcp-variable-stored = { $name } (stored)
 # A file a stored value or an argument names, which the server is let read.
 mcp-may-read = may read: { $path }
 mcp-directory = directory, which it may write: { $path }
+# The seconds a server has for its handshake and for each call, where a declaration gives either.
+mcp-timeouts = time allowed: { $startup } seconds to start, { $tool } seconds for each call
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
 mcp-changed = changed: { $fields }
