@@ -28019,6 +28019,123 @@ fn a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status() {
     );
 }
 
+/// CHECKOUT-13, CHECKOUT-14. `/checkouts apply` offers a file a program wrote in a kept checkout
+/// although the driver recorded no write to it, because the checkout's status lists it. A person
+/// who types the path of a file the status lists as deleted is refused before anything is asked,
+/// and a bare apply names the deletion and leaves the working directory's file. A typed path the
+/// status does not list is refused as before, so reading the status adds no path a person did not
+/// have reason to name.
+#[test]
+fn a_typed_checkouts_apply_brings_back_a_file_only_the_status_lists() {
+    let scratch = Scratch::new("checkout-typed-status-apply");
+    let home = Scratch::new("checkout-typed-status-apply-home");
+    let committed = [("README", "committed\n"), ("gone.txt", "bye\n")];
+    repository::commit_files(&scratch.path, &committed, "first");
+    repository::check_out(&scratch.path, &committed);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "PARENT-OF-A-TYPED-STATUS-APPLY",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"RUN-TWO-PROGRAMS-TO-APPLY","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "RUN-TWO-PROGRAMS-TO-APPLY",
+            vec![
+                tool_request("run", r#"{"command":"cp README copied.txt"}"#),
+                tool_request("run", r#"{"command":"rm gone.txt"}"#),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let task = Task::new("PARENT-OF-A-TYPED-STATUS-APPLY").with_home(Some(home.path.clone()));
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes(),
+        &mut RecordingSink::new(),
+        trust,
+    )
+    .expect("turn runs");
+    let apply = |paths: &[&str], confirmer: &mut RecordingConfirmer| {
+        let paths: Vec<String> = paths.iter().map(|path| path.to_string()).collect();
+        turn::apply_checkout_asked_for(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            "c1",
+            &paths,
+            confirmer,
+            &mut RecordingSink::new(),
+            outcome.trust.clone(),
+        )
+    };
+
+    let mut deleted = RecordingConfirmer::approving();
+    let refused = apply(&["copied.txt", "gone.txt"], &mut deleted);
+    assert!(
+        refused.is_err_and(|why| why.contains("lists gone.txt as deleted there")),
+        "a path the status lists as deleted was not refused as one"
+    );
+    assert!(deleted.seen.is_empty(), "a refused apply asked");
+    assert!(
+        !scratch.path.join("copied.txt").exists(),
+        "the listed path beside a deleted one was brought back"
+    );
+
+    let mut unlisted = RecordingConfirmer::approving();
+    let refused = apply(&["copied.txt", "README"], &mut unlisted);
+    assert!(
+        refused.is_err_and(|why| why.contains("README")),
+        "a path neither recorded nor listed was not refused by name"
+    );
+    assert!(unlisted.seen.is_empty(), "a refused apply asked");
+
+    let mut approving = RecordingConfirmer::approving();
+    let done = apply(&["copied.txt"], &mut approving).expect("a path the status lists");
+    assert_eq!(
+        approving
+            .seen
+            .iter()
+            .map(|r| r.path.as_str())
+            .collect::<Vec<_>>(),
+        ["copied.txt"],
+        "the person was not asked about the one file typed"
+    );
+    assert!(done.applied);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("copied.txt")).ok(),
+        Some("committed\n".to_string()),
+        "a file only the status listed did not come back"
+    );
+
+    let mut bare = RecordingConfirmer::approving();
+    let everything = apply(&[], &mut bare).expect("a bare apply");
+    assert!(
+        everything.text.contains("`gone.txt`") && everything.text.contains("as deleted there"),
+        "a bare apply did not name the deletion: {}",
+        everything.text
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("gone.txt")).ok(),
+        Some("bye\n".to_string()),
+        "a deletion in the checkout removed the working directory's file"
+    );
+}
+
 /// CHECKOUT-9. A delegate in a checkout reads the working directory's standing instructions, as
 /// they are there, including those nobody has committed.
 #[test]
