@@ -186,7 +186,7 @@ class CheckTargets(unittest.TestCase):
         (self.root / "packages/agent-client/test-fixtures/scenarios/fixture.json").unlink()
         result = self.run_make("check-agent-client")
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.log.read_text().splitlines(), ["cargo build -p bravebot-ui-bridge --bin bravebot-rpc"])
+        self.assertEqual(self.log.read_text().splitlines(), [])
 
     def test_extension_tests_that_are_no_longer_there_fail_the_gate(self):
         """`node --test` given a pattern matching nothing passes having run nothing."""

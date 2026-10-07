@@ -21,7 +21,7 @@ import { connectStdio } from '@brave/agent-client/node'
 
 const connection = connectStdio({
   command: '/path/to/bravebot-rpc',
-  env: process.env,
+  env: { HOME: process.env.HOME ?? '', PATH: process.env.PATH ?? '' }, // the child's whole environment
   workspaces: [{ id: 'project', name: 'Project', directory: '/path/to/project' }],
 })
 const session = await connection.client.createSession({ workspace: 'project' })
@@ -47,3 +47,11 @@ service of their own, and read no credentials or settings.
 If the Rust view types change, regenerate the contract file with
 `WRITE_WIRE_CONTRACT=1 cargo test -p bravebot-ui-bridge --lib the_client_wire_contract`, then update
 `src/common/wire.ts`.
+
+## Notes for embedders
+
+- `env` is the child's whole environment. Pass only what `bravebot-rpc` needs, not `process.env`.
+- Row and question `data` is released content that can come from untrusted sources. Show it as plain
+  text with its label, and never as markup. The client does not read it or enforce this.
+- `stderr()` keeps the last 64 KB the bridge wrote, which can include paths. Treat it as sensitive in logs.
+- The bridge is the authority on what a session may do; the client only keeps callers to configured workspaces.

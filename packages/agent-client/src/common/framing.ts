@@ -14,13 +14,16 @@ export class LineFramer {
 
   /** Feed a chunk and return the complete lines it finished, in order. */
   push(chunk: string): string[] {
+    // What was held before this chunk has no newline, so the search starts at the new text.
+    let from = this.pending.length
     this.pending += chunk
     const lines: string[] = []
-    let newline = this.pending.indexOf('\n')
+    let newline = this.pending.indexOf('\n', from)
     while (newline !== -1) {
       const line = this.pending.slice(0, newline)
       this.pending = this.pending.slice(newline + 1)
       if (line.trim() !== '') lines.push(line)
+      from = 0
       newline = this.pending.indexOf('\n')
     }
     if (this.pending.length > this.maxLine) {

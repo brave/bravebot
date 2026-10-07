@@ -12,7 +12,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 
 /** The built `bravebot-rpc`: BRAVEBOT_RPC, or the workspace's debug build. It is never built implicitly. */
 export function rpcBinary(): string {
-  const path = process.env.BRAVEBOT_RPC ?? join(here, '../../../../../target/debug/bravebot-rpc')
+  const path = process.env.BRAVEBOT_RPC ?? join(here, `../../../../../target/debug/bravebot-rpc${process.platform === 'win32' ? '.exe' : ''}`)
   assert.ok(existsSync(path), `bravebot-rpc is not built at ${path}; run \`make check-agent-client\` or set BRAVEBOT_RPC`)
   return path
 }

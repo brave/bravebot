@@ -25,3 +25,9 @@ test('a message that never ends is refused rather than buffered without bound', 
   assert.throws(() => framer.push('x'.repeat(17)), ProtocolError)
   assert.deepEqual(framer.push('ok\n'), ['ok'])
 })
+
+test('a newline that opens a chunk finishes the line held from the one before', () => {
+  const framer = new LineFramer()
+  assert.deepEqual(framer.push('held'), [])
+  assert.deepEqual(framer.push('\nnext\n'), ['held', 'next'])
+})

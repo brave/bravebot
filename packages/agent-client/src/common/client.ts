@@ -131,11 +131,13 @@ class Session implements AgentSession {
       throw error
     }
     this.forget(this.id)
+    // The bridge detaches the view when it closes the session. Its update normally arrives first;
+    // if it arrives after this response it is no longer routed here, so the view ends now.
+    if (this.current !== null && this.current.ended === null) this.set(endView(this.current, 'detached', 'the bridge closed the session'))
     return { viewDetached: this.current?.ended?.reason === 'detached', workerTerminated: 'unknown', saved: 'unknown' }
   }
 }
 
-/** The typed client over one connection to a `bravebot-rpc` process. */
 type RawAccess = (client: RpcAgentClient, method: string, params: Record<string, unknown>) => Promise<unknown>
 let rawAccess: RawAccess | undefined
 
@@ -149,6 +151,7 @@ export function rawRequest(client: RpcAgentClient, method: string, params: Recor
   return rawAccess!(client, method, params)
 }
 
+/** The typed client over one connection to a `bravebot-rpc` process. */
 export class RpcAgentClient implements AgentClient {
   static {
     rawAccess = (client, method, params) => client.#connection.request(method, params)

@@ -419,8 +419,8 @@ check-extension:
 # workspace. `ls` first for the reason check-extension gives.
 .PHONY: check-agent-client
 check-agent-client:
-	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo build -p bravebot-ui-bridge --bin bravebot-rpc
 	ls packages/agent-client/test-fixtures/scenarios/*.json >/dev/null
+	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo build -p bravebot-ui-bridge --bin bravebot-rpc
 	npm --prefix packages/agent-client ci --ignore-scripts
 	npm --prefix packages/agent-client run check
 

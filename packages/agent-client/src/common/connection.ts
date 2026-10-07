@@ -117,7 +117,8 @@ export class RpcConnection {
     try {
       parsed = JSON.parse(line)
     } catch {
-      this.diagnose(`unparseable line: ${line.slice(0, 200)}`)
+      // The text is not echoed: a line the bridge garbled may hold prompt or transcript content.
+      this.diagnose(`unparseable line of ${line.length} characters`)
       return
     }
     let incoming

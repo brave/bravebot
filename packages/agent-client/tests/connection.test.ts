@@ -124,3 +124,15 @@ test('a diagnostic hook that throws cannot discard the responses and events that
   assert.equal(await pending, 'answered')
   assert.deepEqual(events, ['agent.ready'])
 })
+
+test('an unreadable line is reported by length and its text is not echoed', () => {
+  const reports: string[] = []
+  const connection = new RpcConnection({ write: () => undefined }, {
+    onEvent: () => undefined,
+    onClosed: () => undefined,
+    onDiagnostic: (message) => reports.push(message),
+  })
+  connection.receive('transcript text SECRET-PROMPT-CONTENT, not json\n')
+  assert.equal(reports.length, 1)
+  assert.equal(reports[0]!.includes('SECRET-PROMPT-CONTENT'), false)
+})
