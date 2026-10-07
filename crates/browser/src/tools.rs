@@ -95,6 +95,19 @@ pub const TOOLS: &[Tool] = &[
             })
         },
     },
+    Tool {
+        name: "open_tab",
+        description: "Open this HTTP or HTTPS URL in a new background tab and say the URL the \
+            tab loaded. The tab is closed and the call fails if the page is on another host. It \
+            returns no page content.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+            })
+        },
+    },
 ];
 
 /// The tool of this name, if there is one.
@@ -137,6 +150,16 @@ mod tests {
         let frames = named("list_frames").unwrap().listed()["inputSchema"].clone();
         assert_eq!(frames["required"], json!(["url"]));
         assert_eq!(frames["properties"]["url"]["type"], "string");
+    }
+
+    /// The question before a call shows its arguments, so the tab that opens is named by the one
+    /// URL a person reads there, and a call without it is not valid.
+    #[test]
+    fn a_tab_is_opened_by_its_url_alone() {
+        let schema = named("open_tab").unwrap().listed()["inputSchema"].clone();
+        assert_eq!(schema["required"], json!(["url"]));
+        assert_eq!(schema["properties"]["url"]["type"], "string");
+        assert_eq!(schema["properties"].as_object().unwrap().len(), 1);
     }
 
     /// Every schema is an object schema, which is what an MCP client expects of `inputSchema`.

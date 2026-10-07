@@ -31,7 +31,13 @@ export const DEFAULT_SETTINGS = Object.freeze({
   read_page: false,
   search_history: false,
   search_bookmarks: false,
+  open_tab: false,
 });
+
+// How long open_tab waits for the new tab to commit a page, in milliseconds.
+// It is under the 30 seconds the host waits for any reply, so a page that never
+// commits is answered with why and the tab is closed.
+export const OPEN_TIMEOUT_MS = 20_000;
 
 // JSON-RPC's code for a method there is no such thing as.
 const METHOD_NOT_FOUND = -32601;
@@ -98,6 +104,46 @@ async function framesAt(chrome, tab, url) {
     throw new ToolError(`the tab left ${url} before its frames were read`);
   }
   return frames;
+}
+
+// Creates a tab with `start` and waits for its top frame to commit or fail to
+// load, or for OPEN_TIMEOUT_MS to pass. Gives the tab and what happened to it,
+// which is nothing where time ran out. The listeners are in place before the
+// tab exists, since a fast page can commit before the call that created it
+// returns, so each event is kept by tab id until the id is known.
+async function openedTab(chrome, start) {
+  const seen = new Map();
+  let wake = () => {};
+  const record = (kind) => (details) => {
+    if (details.frameId === 0 && !seen.has(details.tabId)) {
+      seen.set(details.tabId, { kind, url: details.url });
+      wake();
+    }
+  };
+  const onCommitted = record("committed");
+  const onError = record("error");
+  chrome.webNavigation.onCommitted.addListener(onCommitted);
+  chrome.webNavigation.onErrorOccurred.addListener(onError);
+  let timer;
+  try {
+    const tab = await start();
+    const timedOut = new Promise((resolve) => {
+      timer = setTimeout(resolve, OPEN_TIMEOUT_MS, "timeout");
+    });
+    while (!seen.has(tab.id)) {
+      const woken = new Promise((resolve) => {
+        wake = () => resolve("event");
+      });
+      if ((await Promise.race([woken, timedOut])) === "timeout") {
+        break;
+      }
+    }
+    return { tab, event: seen.get(tab.id) };
+  } finally {
+    clearTimeout(timer);
+    chrome.webNavigation.onCommitted.removeListener(onCommitted);
+    chrome.webNavigation.onErrorOccurred.removeListener(onError);
+  }
 }
 
 // The first `limit` UTF-16 code units of `text`, one fewer where the last of
@@ -273,6 +319,37 @@ export const TOOLS = {
       .filter((node) => typeof node.url === "string")
       .slice(0, count(params))
       .map((node) => ({ title: node.title ?? "", url: node.url }));
+  },
+
+  // Opens `url` in a new background tab, which is a request to that site with
+  // the person's cookies, so the URL is the one they read in the question. The
+  // tab is closed and the call fails if the page that commits is on another
+  // host: a redirect to a host nobody was shown is not what was approved. The
+  // reply carries the committed URL and no page content.
+  async open_tab(chrome, params) {
+    const url = text(params, "url");
+    if (!webUrl(url)) {
+      throw new ToolError("url must be an HTTP or HTTPS URL", INVALID_PARAMS);
+    }
+    const { tab, event } = await openedTab(chrome, () =>
+      chrome.tabs.create({ url, active: false }),
+    );
+    const close = () => chrome.tabs.remove(tab.id).catch(() => {});
+    if (!event) {
+      await close();
+      throw new ToolError(`the tab opened for ${url} did not load in time`);
+    }
+    if (event.kind === "error") {
+      await close();
+      throw new ToolError(`the page at ${url} failed to load`);
+    }
+    if (!webUrl(event.url) || new URL(event.url).host !== new URL(url).host) {
+      await close();
+      throw new ToolError(
+        `the tab opened for ${url} went to another host, so it was closed`,
+      );
+    }
+    return { url: event.url };
   },
 };
 

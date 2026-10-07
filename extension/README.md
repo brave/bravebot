@@ -39,7 +39,7 @@ On macOS or Linux, from the repository root:
    **Extension options**. A switch saves as soon as it changes, and the next call uses it.
 
 A session offers `brave:get_platform_info`, `brave:list_tabs`, `brave:list_frames`,
-`brave:read_page`, `brave:search_history` and `brave:search_bookmarks`. It asks you to accept that
+`brave:read_page`, `brave:search_history`, `brave:search_bookmarks` and `brave:open_tab`. It asks you to accept that
 list the first time, and again whenever the list changes, then asks you before each call, as it does
 for any server.
 
@@ -54,7 +54,12 @@ before the browser is asked anything.
 URLs of its frames. Its result is shown to you and kept out of the session's planner: choose one URL
 and provide it in your next message. `read_page` reads the top page, or the exact `frame_url` you
 provided after `list_frames`, and returns up to 100,000 characters of its text, saying when it cut
-the text short. A duplicate frame URL is refused because it does not identify one frame. Brave's
+the text short. A duplicate frame URL is refused because it does not identify one frame.
+
+`open_tab` opens the HTTP or HTTPS URL you approved in a background tab, signed in as you are, and
+returns the URL the tab loaded and no page content. If the page that loads is on a different host,
+for example after a redirect, it closes the tab and fails. It starts off like the other tools. To
+read what it opened, provide that URL in a later message for `read_page`. Brave's
 own pages, such as settings, and the Web Store cannot be read.
 
 What the extension returns reaches the session as any server's result does: untrusted, and private.
