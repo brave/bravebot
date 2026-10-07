@@ -843,4 +843,88 @@ mod tests {
 
         assert_eq!(store.recorded(), [finding]);
     }
+
+    /// CRED-22: recording a finding, which is what a turn does, adds no acceptance, so the finding
+    /// stays open until a person accepts it. A record call that also accepted would let a turn
+    /// clear its own leak by finding it.
+    #[test]
+    fn recording_a_finding_accepts_nothing() {
+        let scratch = Scratch::new("findings-record-accepts-nothing");
+        let store = scratch.store("/work");
+        let finding = found("config.yml", 1);
+        store.record(&[&finding], Some("a-session"));
+
+        assert!(
+            !store.accepted_path.exists(),
+            "recording a finding wrote an acceptance for it"
+        );
+        assert_eq!(store.open_at(0), [finding]);
+    }
+
+    /// CRED-22: nothing a turn runs calls [`Store::accept`]. The method is public so that the
+    /// person's own command can reach it, and a call from the code that runs a turn would let the
+    /// model's session clear a finding by naming it.
+    ///
+    /// Read off the source because the property is which code can call it. Every shipped file in
+    /// the workspace that mentions findings is held to it, so the call is not hidden in another
+    /// crate that the turn reaches; the person's command, when it exists, is the one place to name
+    /// here.
+    #[test]
+    fn no_shipped_code_that_handles_findings_accepts_one() {
+        fn sources(directory: &Path, found: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(directory).expect("a source directory") {
+                let path = entry.expect("a directory entry").path();
+                if path.is_dir() {
+                    sources(&path, found);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    found.push(path);
+                }
+            }
+        }
+
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crates directory");
+        let mut files = Vec::new();
+        for member in std::fs::read_dir(crates).expect("the crates directory") {
+            let source = member.expect("a member").path().join("src");
+            if source.is_dir() {
+                sources(&source, &mut files);
+            }
+        }
+
+        let own = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/findings.rs");
+        let mut handling = 0;
+        for file in files.iter().filter(|file| **file != own) {
+            let text = std::fs::read_to_string(file).expect("a source file");
+            let mut end = text.len();
+            let mut from = 0;
+            while let Some(found) = text[from..].find("#[cfg(test)]\nmod ") {
+                let start = from + found;
+                if text[start..]
+                    .lines()
+                    .nth(1)
+                    .is_some_and(|line| line.ends_with('{'))
+                {
+                    end = start;
+                    break;
+                }
+                from = start + 1;
+            }
+            let code = &text[..end];
+            if !code.contains("findings::") {
+                continue;
+            }
+            handling += 1;
+            assert!(
+                !code.contains(".accept("),
+                "{} handles findings and calls `accept`, which a turn must not reach",
+                file.display()
+            );
+        }
+        assert!(
+            handling > 0,
+            "no shipped file outside this one mentions findings, so this read nothing"
+        );
+    }
 }

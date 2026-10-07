@@ -744,7 +744,8 @@ credential between tiers.
 be lied to about what the tree holds. The scan defends against the person not knowing what is in
 their own repository, which is worth doing and is not a control.
 
-`verified-by: none`
+`verified-by: bravebot_config::lib::no_tier_is_computed_from_a_scan_result`
+`verified-by: bravebot_config::lib::removing_denying_or_accepting_changes_no_tier`
 
 <a id="CRED-18"></a>
 ### CRED-18: no part of the scan discloses the tree off this machine
@@ -756,7 +757,8 @@ works.
 **Why.** A scan that ships content to a model discloses the credential to that model and becomes the
 leak it was checking for. Testing a key is a use of that key, from this machine, at this time.
 
-`verified-by: none`
+`verified-by: bravebot_core::credentials::the_classifier_can_reach_nothing_outside_this_process`
+`verified-by: bravebot_agent::turn::scanning_a_write_sends_no_model_a_question_about_it`
 
 <a id="CRED-19"></a>
 ### CRED-19: a finding carries no credential value, and is written where the planner does not read
@@ -846,7 +848,12 @@ record exists; what an entry cannot yet be matched on is a fingerprint, which is
 obvious target: a turn that can add to the baseline can clear its own leak. A fingerprint that no
 longer matches is a new finding rather than a renewed acceptance.
 
-`verified-by: none`
+`verified-by: bravebot_agent::findings::recording_a_finding_accepts_nothing`
+`verified-by: bravebot_agent::findings::no_shipped_code_that_handles_findings_accepts_one`
+`verified-by: bravebot_agent::turn::a_turn_that_finds_a_credential_leaves_it_unaccepted`
+`verified-by: bravebot_agent::turn::a_turn_cannot_write_an_acceptance_with_the_file_tool`
+`verified-by: bravebot_agent::findings::an_acceptance_lapses_into_a_finding_when_its_expiry_passes`
+`verified-by: bravebot_agent::findings::an_acceptance_covers_only_the_finding_it_names`
 
 <a id="CRED-23"></a>
 ### CRED-23: credential buffers are cleared, and kept out of crash artifacts
@@ -1009,7 +1016,7 @@ person never sees it, and this is the opposite case: an argument is shown at the
 approving it prevents nothing, because the disclosure is to every other account on the machine
 rather than to the program. It needs no attacker and no mistake by the model.
 
-`verified-by: none`
+`verified-by: bravebot_cli::credential_arguments::no_file_that_starts_a_process_reads_a_credential`
 
 <a id="CRED-25"></a>
 ### CRED-25: every held credential names what would end it

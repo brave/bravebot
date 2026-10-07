@@ -1253,4 +1253,57 @@ mod tests {
             assert!(!said.contains(piece), "{piece} of the value is in {said}");
         }
     }
+
+    /// CRED-18: the classifier reaches nothing outside the process. Asking a hosted model whether
+    /// bytes are a credential, or trying a key against its issuer, needs a socket, a child
+    /// process, a file or the environment, and none of those is a name this module can use
+    /// without importing it or spelling the path out. The crate has no dependencies, so no
+    /// library supplies one behind a name this scan does not contain.
+    ///
+    /// Read off the module's own source, up to its tests, because the property is what the code
+    /// can reach and an assertion over one scan's output cannot see a call that was never made.
+    #[test]
+    fn the_classifier_can_reach_nothing_outside_this_process() {
+        let source = include_str!("credentials.rs");
+        let code = source
+            .split("#[cfg(test)]\nmod ")
+            .next()
+            .expect("a module has a beginning");
+
+        for line in code.lines().map(str::trim) {
+            if let Some(imported) = line.strip_prefix("use ") {
+                assert!(
+                    imported.starts_with("std::hash::") || imported.starts_with("std::sync::"),
+                    "the classifier imports {imported}, which is not a hasher or a once-cell"
+                );
+            }
+        }
+        for reaching in [
+            "std::net",
+            "std::process",
+            "std::fs",
+            "std::env",
+            "std::thread",
+            "std::os",
+            "extern crate",
+        ] {
+            assert!(
+                !code.contains(reaching),
+                "the classifier names {reaching}, which reaches outside this process"
+            );
+        }
+
+        let manifest = include_str!("../Cargo.toml");
+        let dependencies = manifest
+            .split("[dependencies]")
+            .nth(1)
+            .expect("the manifest has a dependencies section")
+            .split("\n[")
+            .next()
+            .unwrap_or_default();
+        assert!(
+            dependencies.trim().is_empty(),
+            "the crate the classifier lives in gained a dependency:\n{dependencies}"
+        );
+    }
 }
