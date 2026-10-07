@@ -1,0 +1,8 @@
+[package]
+name = "bravebot-filetype"
+description = "Whether the start of a file says it is text, shared by the agent and the file helper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true

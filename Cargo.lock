@@ -141,6 +141,7 @@ dependencies = [
  "bravebot-bedrock",
  "bravebot-config",
  "bravebot-core",
+ "bravebot-filetype",
  "bravebot-i18n",
  "bravebot-lsp",
  "bravebot-mcp",
@@ -224,6 +225,10 @@ dependencies = [
 
 [[package]]
 name = "bravebot-core"
+version = "0.14.0"
+
+[[package]]
+name = "bravebot-filetype"
 version = "0.14.0"
 
 [[package]]
@@ -358,6 +363,7 @@ dependencies = [
 name = "bravebot-ui-files"
 version = "0.14.0"
 dependencies = [
+ "bravebot-filetype",
  "rustix 1.1.4",
  "serde",
  "serde_json",

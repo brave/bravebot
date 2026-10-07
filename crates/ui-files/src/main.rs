@@ -22,6 +22,7 @@ use posix as sys;
 #[cfg(windows)]
 use windows as sys;
 
+use bravebot_filetype::{SNIFF_BYTES, looks_binary};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fs::File;
@@ -98,29 +99,6 @@ fn read_at(parent: &File, leaf: &str, limit: usize) -> io::Result<(String, bool)
     let truncated = bytes.len() > limit;
     bytes.truncate(limit);
     Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))
-}
-/// How much of a file the binary test reads, the agent's own `SNIFF_BYTES`.
-const SNIFF_BYTES: usize = 8192;
-
-/// Whether the start of a file says it is binary: any NUL, or more than 30% control characters
-/// other than tab, newline, form feed and carriage return.
-///
-/// The test the agent applies to a named file before it reads one into a turn (`looks_binary` in
-/// `crates/agent/src/workspace.rs`), restated because this helper depends on no agent crate. An
-/// attachment this passes is one the turn will read rather than refuse as binary.
-fn looks_binary(bytes: &[u8]) -> bool {
-    let head = &bytes[..bytes.len().min(SNIFF_BYTES)];
-    if head.is_empty() {
-        return false;
-    }
-    if head.contains(&0) {
-        return true;
-    }
-    let control = head
-        .iter()
-        .filter(|b| **b < 32 && !matches!(**b, 9 | 10 | 12 | 13))
-        .count();
-    control * 100 / head.len() > 30
 }
 
 /// Whether a file may go to the agent as a named file: a regular file that does not look binary.

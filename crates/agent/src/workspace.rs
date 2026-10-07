@@ -23,6 +23,7 @@ use bravebot_core::policy::{Denial, Policy};
 use bravebot_core::spelling::to_key;
 use bravebot_core::trust::is_absolute_key;
 use bravebot_core::value::Labelled;
+use bravebot_filetype::{SNIFF_BYTES, looks_binary};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -2734,9 +2735,6 @@ const MAX_SEARCH_TIME: Duration = Duration::from_secs(10);
 const MAX_PAGE_LINES: usize = 500;
 const MAX_LINE: usize = 2_000;
 
-/// Bytes inspected when deciding whether a file is text.
-const SNIFF_BYTES: usize = 8_192;
-
 /// Directories skipped when walking a tree.
 ///
 /// Version control, build output and vendored dependencies would dominate a listing without
@@ -2855,11 +2853,6 @@ fn truncate_to_chars(text: &mut String, limit: usize) -> bool {
     }
 }
 
-/// Whether a byte run looks like binary rather than text.
-///
-/// A null byte is decisive, since no text file contains one. Beyond that, a high proportion of
-/// control characters means the same thing without needing a file-type list to be kept up
-/// to date. Only the head is inspected, since the answer does not improve by reading more.
 /// Fill as much of `buffer` as the file has, since one read is not obliged to return it all.
 fn read_up_to(file: &mut std::fs::File, buffer: &mut [u8]) -> std::io::Result<usize> {
     use std::io::Read;
@@ -2871,23 +2864,6 @@ fn read_up_to(file: &mut std::fs::File, buffer: &mut [u8]) -> std::io::Result<us
         }
     }
     Ok(filled)
-}
-
-fn looks_binary(bytes: &[u8]) -> bool {
-    let head = &bytes[..bytes.len().min(SNIFF_BYTES)];
-    if head.is_empty() {
-        return false;
-    }
-    if head.contains(&0) {
-        return true;
-    }
-    // Tab, newline, carriage return and form feed are expected in text; other low bytes
-    // are not.
-    let control = head
-        .iter()
-        .filter(|b| **b < 32 && !matches!(**b, 9 | 10 | 12 | 13))
-        .count();
-    control * 100 / head.len() > 30
 }
 
 /// A token that differs after a file is written, for comparing one look at it with the next.
