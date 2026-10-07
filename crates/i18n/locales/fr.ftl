@@ -1549,6 +1549,22 @@ cost-share = { $percent } %
 cost-turn = Tour { $number }
 cost-before-the-first-turn = Avant le tour 1
 cost-nothing-spent = rien de dépensé pour l'instant
+request-none-yet = Aucune requête n'a encore été envoyée au modèle dans cette session.
+request-title = La dernière requête envoyée à { $model }, lue dans la requête elle-même
+request-tools = Outils proposés : { $names }
+request-no-tools = Outils proposés : aucun
+request-trusted = { $what } (fiable)
+request-bytes-mark = [une image ou un fichier, envoyé en octets]
+request-label-typed = saisi
+request-label-typed-with-files = saisi, avec des fichiers déposés
+request-label-driver = pilote
+request-label-planner = planificateur
+request-label-trusted-file = fichier fiable { $path }
+request-label-setting = réglage
+request-label-released = libéré : { $from }
+request-label-vetted = vérifié { $token }
+request-label-summary = résumé
+request-label-unrecorded = non enregistré
 cost-unattributed = non imputé à un tour
 
 
@@ -1686,6 +1702,7 @@ scroller-footer-search = / rechercher
 
 command-status = Décrire cette session, ce qu'elle peut toucher, et ce qu'elle a dépensé
 command-cost = Montrer ce que chaque tour de cette session a dépensé
+command-request = Montrer la dernière requête envoyée au modèle, et l'origine de chacune de ses parties
 command-model = Choisir avec quel modèle réfléchir
 command-theme = Choisir quel thème habille l'interface
 command-effort = Choisir l'effort de réflexion avant de répondre

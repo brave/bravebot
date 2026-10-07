@@ -83,6 +83,8 @@ impl Interjections {
 pub enum ToMain {
     /// The submitted prompt entered the conversation at this recounted position.
     PromptRecorded(usize),
+    /// The request the turn is about to send the planner. No reply.
+    RequestBuilt(Box<bravebot_agent::request_view::RequestView>),
     /// A write needs approval. The main thread must reply.
     Write(WriteRequest),
     /// A pipeline needs approval before it runs. The main thread must reply.
@@ -349,6 +351,14 @@ impl RemoteReporter {
 }
 
 impl Reporter for RemoteReporter {
+    fn wants_request_view(&self) -> bool {
+        true
+    }
+
+    fn request_built(&mut self, view: bravebot_agent::request_view::RequestView) {
+        let _ = self.outbound.send(ToMain::RequestBuilt(Box::new(view)));
+    }
+
     fn prompt_recorded(&mut self, at: usize) {
         let _ = self.outbound.send(ToMain::PromptRecorded(at));
     }
@@ -946,6 +956,24 @@ mod tests {
         }
     }
 
+    /// The worker hands the request across as it was built, for the thread that draws it.
+    #[test]
+    fn the_request_a_turn_built_travels_to_the_thread_that_draws_it() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let mut reporter = RemoteReporter::new(outbound);
+        assert!(reporter.wants_request_view());
+        let view = bravebot_agent::request_view::RequestView {
+            model: "m".to_string(),
+            spans: Vec::new(),
+            tools: vec!["read_file".to_string()],
+        };
+        reporter.request_built(view.clone());
+        match inbound.recv().expect("a message arrived") {
+            ToMain::RequestBuilt(sent) => assert_eq!(*sent, view),
+            other => panic!("expected a request, got {other:?}"),
+        }
+    }
+
     /// The asymmetry that matters: nobody watching is not a failure. A write refuses when the
     /// channel is gone, but a report has no answer to withhold and must not block or panic.
     #[test]
@@ -994,6 +1022,7 @@ mod tests {
                     ToMain::Todos(_) => seen.push("todos"),
                     ToMain::Spent(_) => seen.push("spent"),
                     ToMain::PromptRecorded(_) => seen.push("prompt"),
+                    ToMain::RequestBuilt(_) => seen.push("request"),
                     ToMain::Written(_) => seen.push("written"),
                     ToMain::Phase(_) => seen.push("phase"),
                     ToMain::Narration(_) => seen.push("narration"),

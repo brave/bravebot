@@ -218,6 +218,18 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         held.inference_interval(interval);
     }
 
+    fn wants_request_view(&self) -> bool {
+        self.from.is_none() && self.lent.hold().wants_request_view()
+    }
+
+    /// Only the turn's own request: a delegate's is a different conversation with a different
+    /// prompt.
+    fn request_built(&mut self, view: crate::request_view::RequestView) {
+        if self.from.is_none() {
+            self.lent.hold().request_built(view);
+        }
+    }
+
     fn prompt_recorded(&mut self, at: usize) {
         // A delegate has its own conversation; its offsets do not describe the parent turn.
         if self.from.is_none() {

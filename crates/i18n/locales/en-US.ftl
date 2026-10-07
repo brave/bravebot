@@ -1777,6 +1777,23 @@ cost-turn = Turn { $number }
 # number.
 cost-before-the-first-turn = Before turn 1
 cost-nothing-spent = nothing spent yet
+request-none-yet = No request has been sent to the model in this session yet.
+# The first row of the view /request opens. The words below it are the request as it went.
+request-title = The last request sent to { $model }, read from the request itself
+request-tools = Tools offered: { $names }
+request-no-tools = Tools offered: none
+request-trusted = { $what } (trusted)
+request-bytes-mark = [a picture or file, sent as bytes]
+request-label-typed = typed
+request-label-typed-with-files = typed, with dropped files
+request-label-driver = driver
+request-label-planner = planner
+request-label-trusted-file = trusted file { $path }
+request-label-setting = setting
+request-label-released = released: { $from }
+request-label-vetted = vetted { $token }
+request-label-summary = summary
+request-label-unrecorded = unrecorded
 # What the total holds that no turn's figure accounts for. A record written before turns were
 # charged separately keeps the whole of it here, and a session resumed from one keeps the part it
 # spent before the resume. Reported as a figure rather than left out, because the rows are read
@@ -2037,6 +2054,7 @@ jobs-command-takes =
 
 command-status = Report this session, what it may touch, and what it has spent
 command-cost = Show what each turn of this session has spent
+command-request = Show the last request sent to the model, and where each part of it came from
 command-model = Choose which model to think with
 command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering

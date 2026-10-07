@@ -122,6 +122,9 @@ const STATUS_COMMAND: &str = "/status";
 /// every time somebody checks which directory they are in.
 const COST_COMMAND: &str = "/cost";
 
+/// The line that opens a read-only view of the last request built for the planner.
+const REQUEST_COMMAND: &str = "/request";
+
 /// The line that summarises the conversation so far, in place of sending all of it.
 const COMPACT_COMMAND: &str = "/compact";
 
@@ -259,7 +262,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 34] {
+pub fn commands() -> [Command; 35] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -445,6 +448,12 @@ pub fn commands() -> [Command; 34] {
             name: COPY_COMMAND,
             argument: "[n]",
             description: t!(command_copy),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: REQUEST_COMMAND,
+            argument: "",
+            description: t!(command_request),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -1257,7 +1266,11 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             session.toggle_scroller_help();
             Action::Redraw
         }
-        KeyCode::Char('v') if !ctrl && session.status != Status::Working => Action::Show,
+        KeyCode::Char('v')
+            if !ctrl && session.status != Status::Working && !session.viewing_request() =>
+        {
+            Action::Show
+        }
 
         _ => Action::None,
     }
@@ -1841,6 +1854,10 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if line.trim() == COST_COMMAND {
         session.report_spend();
+        return Action::Redraw;
+    }
+    if line.trim() == REQUEST_COMMAND {
+        session.show_request();
         return Action::Redraw;
     }
     // What the summary must keep is typed by the person and goes to the summariser as it was
@@ -7683,6 +7700,9 @@ fn run_turn_animated(
     for file in files_named_in(prompt, wrote) {
         task = task.with_file(file);
     }
+    if session.take_init_prompt() || wrote == Wrote::TheDriver {
+        task = task.written_by_the_driver();
+    }
     task = with_submitted_attachments(task, session);
     task = with_session_advisor(task, session);
     // The worker shares file decisions so errors cannot return the pre-write map.
@@ -8026,6 +8046,9 @@ fn run_turn_animated(
                 crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
                 crate::remote_confirm::ToMain::Spent(spent) => session.progressed(spent),
                 crate::remote_confirm::ToMain::PromptRecorded(at) => session.prompt_recorded(at),
+                crate::remote_confirm::ToMain::RequestBuilt(view) => {
+                    session.set_last_request(*view)
+                }
                 crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
                 crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
                 crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
@@ -8297,6 +8320,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         ToMain::Move(_) => Reply::Move(Decision::Reject),
         ToMain::Ask(_) => Reply::Ask(Vec::new()),
         ToMain::PromptRecorded(_)
+        | ToMain::RequestBuilt(_)
         | ToMain::Todos(_)
         | ToMain::Written(_)
         | ToMain::Spent(_)
@@ -14675,6 +14699,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// `/request` opens the last request built, and nothing else: no turn starts and no prompt is
+    /// recorded.
+    #[test]
+    fn the_request_command_opens_the_view_and_starts_no_turn() {
+        let mut session = Session::new("none");
+        assert_eq!(enter_line(&mut session, "/request"), Action::Redraw);
+        assert!(!session.viewing_request(), "there was nothing to show yet");
+
+        session.set_last_request(bravebot_agent::request_view::RequestView {
+            model: "m".to_string(),
+            spans: Vec::new(),
+            tools: Vec::new(),
+        });
+        assert_eq!(enter_line(&mut session, "/request"), Action::Redraw);
+        assert!(session.viewing_request());
+        assert_eq!(session.turns, 0);
+    }
+
+    /// The word takes no argument, so words after it are a prompt, as for every other command
+    /// that takes none.
+    #[test]
+    fn words_after_the_request_command_make_a_prompt() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            enter_line(&mut session, "/request why"),
+            Action::Submit("/request why".to_string())
+        );
+    }
+
+    /// `v` writes the transcript to a file for a pager, and a request is not the transcript, so the
+    /// key does nothing here and the view cannot reach the disk.
+    #[test]
+    fn the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view() {
+        let mut session = Session::new("none");
+        session.set_last_request(bravebot_agent::request_view::RequestView {
+            model: "m".to_string(),
+            spans: Vec::new(),
+            tools: Vec::new(),
+        });
+        session.show_request();
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Char('v'))),
+            Action::None
+        );
+        session.close_scroller();
+        session.open_scroller();
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Char('v'))),
+            Action::Show,
+            "the key stopped working in the transcript"
+        );
+    }
+
     /// CMD-2: the word takes no argument, so words after it make a prompt and none of them reach
     /// the one the driver wrote.
     #[test]
@@ -19242,6 +19319,7 @@ mod tests {
                 PANEL_COMMAND,
                 PR_COMMAND,
                 RENAME_COMMAND,
+                REQUEST_COMMAND,
                 STATUS_COMMAND,
                 THEME_COMMAND,
                 WATCH_COMMAND,
