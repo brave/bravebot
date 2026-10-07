@@ -559,7 +559,7 @@ No scope names a private key or `~/.ssh` as a directory. The remote scope reads 
 would use: `GH_CONFIG_DIR` if the environment the stage starts with sets it, else
 `$XDG_CONFIG_HOME/gh`, else `~/.config/gh`, and it is read and never written. That directory is
 refused, and the stage keeps `~/.config/gh`, where it is relative or holds `..`, is the home or
-above it, is `~/.ssh` or inside it, or is `~/.config`, `~/.cache` or `~/Library`. A tool's directory is read and never written. A scope is
+above it, is `~/.ssh` or inside it, or is `~/.config`, `~/.cache` or `~/Library`; a link is judged by where it leads. A tool's directory is read and never written. A scope is
 added to the policy it is given and takes nothing from it. `run` adds the scope for each stage it
 starts ([SANDBOX-18](#SANDBOX-18)).
 
@@ -597,6 +597,7 @@ the scope, so a model-written `GH_CONFIG_DIR=` moves nothing.
 `verified-by: bravebot_sandbox::scope::a_scope_leaves_the_policy_it_is_added_to_as_it_was`
 `verified-by: bravebot_sandbox::scope::gh_reads_the_configuration_directory_its_environment_names`
 `verified-by: bravebot_sandbox::scope::a_gh_directory_that_is_too_wide_or_not_a_path_is_refused`
+`verified-by: bravebot_sandbox::scope::a_gh_directory_that_is_a_link_is_judged_by_where_it_leads`
 `verified-by: bravebot_agent::confine::a_gh_stage_reads_the_configuration_directory_its_environment_names`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_what_ssh_reads_and_never_a_private_key`
 

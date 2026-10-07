@@ -104,14 +104,20 @@ pub fn gh_configuration(home: &Path, environment: &[(String, String)]) -> Option
     {
         return None;
     }
-    // Where it is a link, what it leads to is what a program opens, and what is judged.
-    let directory = std::fs::canonicalize(&directory).unwrap_or(directory);
-    let refused = home.starts_with(&directory)
-        || directory.starts_with(under(home, ".ssh"))
-        || [".config", ".cache", "Library"]
-            .iter()
-            .any(|whole| directory == under(home, whole));
-    (!refused).then_some(directory)
+    // Where it is a link, what it leads to is what a program opens, and both spellings are judged,
+    // against both spellings of the home: a prefix of either may be a link (`/home` on macOS).
+    let resolved = std::fs::canonicalize(&directory).unwrap_or_else(|_| directory.clone());
+    let real_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    let refused = [&directory, &resolved].iter().any(|directory| {
+        [home, real_home.as_path()].iter().any(|home| {
+            home.starts_with(directory)
+                || directory.starts_with(under(home, ".ssh"))
+                || [".config", ".cache", "Library"]
+                    .iter()
+                    .any(|whole| **directory == under(home, whole))
+        })
+    });
+    (!refused).then_some(resolved)
 }
 
 /// The hosts ssh has verified, the one row of the remote scope that is also written.
@@ -279,6 +285,7 @@ mod tests {
     use super::*;
     use crate::base::{Prelude, base};
     use crate::policy::PathKind;
+    use crate::testutil::scratch_dir;
     use std::path::PathBuf;
 
     const A_HOME: &str = "/home/a-person";
@@ -802,5 +809,33 @@ mod tests {
             None
         );
         assert_eq!(gh_reads(&[("XDG_CONFIG_HOME", "relative")]), None);
+    }
+
+    /// A link is judged by where it leads, so one into `~/.ssh` or to the home is refused though
+    /// its own spelling is neither.
+    #[cfg(unix)]
+    #[test]
+    fn a_gh_directory_that_is_a_link_is_judged_by_where_it_leads() {
+        use std::os::unix::fs::symlink;
+        let home = scratch_dir("gh-configuration-links");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(home.join("second")).unwrap();
+        symlink(home.join(".ssh"), home.join("to-ssh")).unwrap();
+        symlink(&home, home.join("to-home")).unwrap();
+        symlink(home.join("second"), home.join("to-second")).unwrap();
+        let reads = |directory: &Path| {
+            gh_configuration(
+                &home,
+                &the_environment(&[("GH_CONFIG_DIR", directory.to_str().unwrap())]),
+            )
+        };
+        assert_eq!(reads(&home.join("to-ssh")), None);
+        assert_eq!(reads(&home.join("to-home")), None);
+        assert_eq!(
+            reads(&home.join("to-second")),
+            Some(std::fs::canonicalize(home.join("second")).unwrap())
+        );
+        std::fs::remove_dir_all(&home).unwrap();
     }
 }
