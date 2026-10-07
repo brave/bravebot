@@ -477,22 +477,63 @@ pub fn resolved<S: Sink>(
     permissions: bravebot_core::permissions::Permissions,
     sink: &mut S,
 ) -> Definitions {
+    let Some(mut policy) = discovery_policy(workspace, trust, permissions, sink) else {
+        return Definitions::default();
+    };
+    discover(&mut policy, workspace, home).0
+}
+
+/// Where each definition that keeps a memory keeps it, and what the map says of it ([MEMORY-12]).
+///
+/// The set is the one [`resolved`] reads, and the map is the one a turn starting now works from:
+/// the session's, with every path the record names distrusted. Each standing comes from
+/// [`crate::memory::standing`], which asks the map by the path alone and the filesystem only what
+/// kind of thing is there, so nothing a file holds reaches the driver.
+///
+/// [MEMORY-12]: ../../../docs/specs/definition-memory.md
+pub fn memories<S: Sink>(
+    workspace: &Workspace,
+    home: Option<&Path>,
+    trust: &bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+    sink: &mut S,
+) -> Vec<crate::memory::Listed> {
+    let trust = crate::memory::with_recorded(trust, workspace, home);
+    let Some(mut policy) = discovery_policy(workspace, trust, permissions, sink) else {
+        return Vec::new();
+    };
+    let (definitions, _) = discover(&mut policy, workspace, home);
+    let recorded = crate::memory::recorded(workspace, home);
+    definitions
+        .iter()
+        .filter(|definition| definition.keeps_memory())
+        .map(|definition| crate::memory::listed(&policy, workspace, definition.name(), &recorded))
+        .collect()
+}
+
+/// The policy definitions are read through: only the read and the turn's rules.
+fn discovery_policy<'a, S: Sink>(
+    workspace: &Workspace,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+    sink: &'a mut S,
+) -> Option<Policy<'a, S>> {
     let mut routing = bravebot_core::policy::Routing::new();
     routing.insert_trusted("agents", WORKSPACE_AGENTS);
-    let Ok(policy) = Policy::begin(
+    let policy = Policy::begin(
         routing,
         bravebot_core::policy::ReleasePlan::new(),
         bravebot_core::capability::CapabilitySet::from_iter([Capability::FileRead]),
         sink,
-    ) else {
-        return Definitions::default();
-    };
-    let mut policy = policy
-        .with_trust(trust)
-        .with_permissions(permissions)
-        .with_root(workspace.root())
-        .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
-    discover(&mut policy, workspace, home).0
+    )
+    .ok()?;
+    Some(
+        policy
+            .with_trust(trust)
+            .with_permissions(permissions)
+            .with_root(workspace.root())
+            .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES),
+    )
 }
 
 /// How many definition files the project holds that [`resolved`] counted and did not read.

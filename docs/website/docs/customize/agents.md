@@ -197,6 +197,9 @@ memory too. Saying yes when a read of it is quarantined, naming it with `@`, dro
 it, or a later write that leaves it trusted, takes it out of that record. A write that cannot be
 recorded there is refused.
 
+[`/memory`](../reference/commands.md#memory) lists each memory with its path and whether it is
+withheld, without reading any of them.
+
 ## A checkout of its own
 
 A `checker` or `worker` definition with `isolation: checkout` has each of its delegates work in a

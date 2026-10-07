@@ -615,6 +615,36 @@ All of it is built:
 `verified-by: bravebot_ui_bridge::definitions::a_refused_migration_writes_nothing`
 `verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: a bot with no definition is migrated through bot.migrate with the folder its first conversation ran in or its home folder, the row keeps only a name the agent answers with that is a slug, a failed migration leaves the row as it was, a bot with a definition is not migrated again, the compaction's composed prompt names the definition's memory and never the old path, the carry-over prompt names both the old file and the definition's memory, and a turn owes the carry-over only for a bot with no definition in the folder its old notes were recorded under; make check-ui runs it)`
 
+## Seeing it
+
+<a id="MEMORY-12"></a>
+### MEMORY-12: `/memory` lists each definition's memory by path and standing, and reads no file
+
+`/memory` draws one note for each definition the session resolves that keeps a memory
+([MEMORY-2](#MEMORY-2)): its name, the path [MEMORY-4](#MEMORY-4) tells a run, and the standing
+that table gives the path. A withheld memory says the map does not trust the path, and says a write
+left it untrusted where the record [MEMORY-5](#MEMORY-5) keeps names it. Where no definition keeps a
+memory, it says so. The word takes no argument, so `/memory` followed by words is a prompt
+([CMD-2](commands.md#CMD-2)).
+
+The set is resolved afresh, as a turn starting now resolves it, and the map is the one that turn
+works from: the session's, with every path the record names distrusted. The standing is the one a
+run is told, from the same function, so the listing and the run cannot disagree about a path.
+
+The command draws paths and standings and nothing a file holds. It decides nothing with a byte of
+the file, since the map is asked by the path alone and the filesystem only what kind of thing is
+there, and a memory the map does not trust is listed as withheld whether or not a file is there. It
+caches no copy ([MEMORY-4](#MEMORY-4)) and does not open the file for the person: reading a
+withheld memory is a read of untrusted content, and a person's own editor is theirs to start.
+
+**Why.** Without a listing, the only place a memory's standing is said is the sentence given to the
+run, so a person has to read `.bravebot/memory/` and `~/.bravebot/untrusted/` by hand to learn which
+definitions keep one, where it is, or that it is withheld.
+
+`verified-by: bravebot_agent::memory::a_listed_memory_is_withheld_when_the_map_does_not_trust_it_whatever_is_on_disk`
+`verified-by: bravebot_tui::app::the_memory_command_lists_and_takes_no_argument`
+`verified-by: bravebot_tui::app::the_memory_listing_says_each_standing_with_its_path`
+
 ## Open questions
 
 - **Whether a memory may live in the person's own directory.** `memory: user` needs a run to write
