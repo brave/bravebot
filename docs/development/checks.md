@@ -178,7 +178,8 @@ shape of the one this repository already has: the required lower-case `security`
 organisation's scan, supplied by a workflow that is in no checkout here, and it is a different
 check run from CI's `Security`. What is left is comparing the file against what the protection
 actually requires, which needs the network and a token; the file carries the two `gh` queries
-for it.
+for it. The review settings of the same protection are recorded in
+[branch-protection.md](branch-protection.md).
 
 `make check-locales` holds every message catalog to
 [../../contrib/untranslated-messages.txt](../../contrib/untranslated-messages.txt), the record of what each
