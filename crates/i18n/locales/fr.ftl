@@ -1199,6 +1199,7 @@ run-carries-remote = { $program } lit aussi vos identifiants git et gh, votre co
 run-carries-aws = { $program } lit aussi vos identifiants aws dans ~/.aws
 run-carries-kubernetes = { $program } lit aussi vos identifiants kubernetes dans ~/.kube
 run-carries-docker = { $program } lit aussi vos identifiants docker dans ~/.docker
+run-carries-reach = { $program } lit aussi { $path }, où pointe votre { $variable }
 run-spends-authority =
     elle dépense aussi des accès qui sont déjà les vôtres ailleurs, que personne ne redemande et que rien ici ne reprend :
 run-authority-container = { $named } : le démon de conteneurs, qui exécute n'importe quoi en root sur cette machine

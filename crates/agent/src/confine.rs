@@ -14,7 +14,7 @@ use bravebot_core::command::Step;
 use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base};
 use bravebot_sandbox::policy::SandboxPolicy;
-use bravebot_sandbox::scope::{Scope, gh_configuration};
+use bravebot_sandbox::scope::{Reach, Scope, environment_reach};
 use bravebot_sandbox::toolchain::Toolchain;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -101,6 +101,11 @@ impl Confinement {
     /// What the profile of each step of `steps` holds beyond the base and the places its programs
     /// are installed, for the prompt a person approves from.
     pub fn describe(&self, steps: &[&Step]) -> Confined {
+        self.describe_in(steps, &process_environment())
+    }
+
+    /// [`Confinement::describe`] for a stage that starts with `environment`.
+    fn describe_in(&self, steps: &[&Step], environment: &[(String, String)]) -> Confined {
         Confined {
             directories: self
                 .roots
@@ -112,10 +117,19 @@ impl Confinement {
                 .iter()
                 .filter_map(|step| {
                     let (toolchain, scope) = self.carries(step);
+                    // The process's own environment is what the executor starts a step with, and a
+                    // step with an assignment in front of it carries no scope to move.
+                    let reaches = match (scope, self.home.as_deref()) {
+                        (Some(scope), Some(home)) => {
+                            reaches(&step.resolved, scope, home, environment)
+                        }
+                        _ => Vec::new(),
+                    };
                     (toolchain.is_some() || scope.is_some()).then(|| Carried {
                         program: step.program.clone(),
                         toolchain,
                         scope,
+                        reaches,
                     })
                 })
                 .collect(),
@@ -155,11 +169,8 @@ impl Confinement {
             }
             if let Some(scope) = scope {
                 policy = scope.grant(policy, home);
-                if scope == Scope::Remote
-                    && resolved.file_name().is_some_and(|name| name == "gh")
-                    && let Some(directory) = gh_configuration(home, environment)
-                {
-                    policy = policy.allow_read(directory);
+                for reach in reaches(resolved, scope, home, environment) {
+                    policy = policy.allow_read(reach.path);
                 }
                 if scope == Scope::Remote
                     && let Some(socket) = variable(environment, "SSH_AUTH_SOCK")
@@ -486,6 +497,25 @@ fn same_variable(left: &std::ffi::OsStr, right: &std::ffi::OsStr, fold_case: boo
     } else {
         left == right
     }
+}
+
+/// Where `environment` moves what the scope of the step that resolved to `resolved` reads.
+fn reaches(
+    resolved: &Path,
+    scope: Scope,
+    home: &Path,
+    environment: &[(String, String)],
+) -> Vec<Reach> {
+    let program = resolved
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    environment_reach(scope, program, home, environment)
+}
+
+/// This process's variables, those whose name and value are text.
+fn process_environment() -> Vec<(String, String)> {
+    std::env::vars().collect()
 }
 
 fn variable(environment: &[(String, String)], name: &str) -> Option<String> {
@@ -888,6 +918,92 @@ mod tests {
         assert!(!reads(&assigned, &hosts));
         assert!(reads(&unset, &format!("{HOME}/.config/gh")));
         assert!(!reads(&unset, &hosts));
+    }
+
+    /// A tool whose configuration a variable moves reads it where the variable says, for the tool
+    /// that reads the variable and no other, and not where an assignment in front of it removed the
+    /// scope.
+    #[test]
+    fn a_stage_reads_the_configuration_its_variable_moves() {
+        let confined = confinement(&["/work/project"]);
+        let moved = |name: &str, path: &str| vec![(name.to_string(), path.to_string())];
+        for (program, args, name, path, default) in [
+            (
+                "/usr/bin/aws",
+                &["s3", "ls"][..],
+                "AWS_CONFIG_FILE",
+                "/elsewhere/aws-config",
+                ".aws",
+            ),
+            (
+                "/usr/bin/docker",
+                &["ps"][..],
+                "DOCKER_CONFIG",
+                "/elsewhere/docker",
+                ".docker",
+            ),
+            (
+                "/usr/bin/kubectl",
+                &["get", "pods"][..],
+                "KUBECONFIG",
+                "/elsewhere/kubeconfig",
+                ".kube",
+            ),
+            (
+                "/usr/bin/git",
+                &["push"][..],
+                "GIT_CONFIG_GLOBAL",
+                "/elsewhere/gitconfig",
+                ".gitconfig",
+            ),
+        ] {
+            let environment = moved(name, path);
+            let moved_to = confined.policy(&step(program, args), Path::new("/work"), &environment);
+            let unset = confined.policy(&step(program, args), Path::new("/work"), &[]);
+            assert!(reads(&moved_to, path), "{program} {name}");
+            assert!(!reads(&unset, path), "{program} unset");
+            assert!(
+                reads(&unset, &format!("{HOME}/{default}")),
+                "{program} keeps its fixed row"
+            );
+            let mut assigned = step(program, args);
+            assigned.environment = vec![("GIT_SSH_COMMAND".to_string(), "ssh".to_string())];
+            let assigned = confined.policy(&assigned, Path::new("/work"), &environment);
+            assert!(!reads(&assigned, path), "{program} with an assignment");
+        }
+        let docker = moved("DOCKER_CONFIG", "/elsewhere/docker");
+        let push = confined.policy(
+            &step("/usr/bin/git", &["push"]),
+            Path::new("/work"),
+            &docker,
+        );
+        assert!(!reads(&push, "/elsewhere/docker"));
+    }
+
+    /// The location the environment moved a scope to is in the prompt with the variable that moved
+    /// it, from the same reading as the profile, and a stage with the default location has none.
+    #[test]
+    fn the_prompt_names_a_location_the_environment_moved() {
+        let confined = confinement(&["/work/project"]);
+        let docker = step("/usr/bin/docker", &["ps"]);
+        let environment = vec![("DOCKER_CONFIG".to_string(), "/elsewhere/docker".to_string())];
+
+        let moved = confined.describe_in(&[&docker], &environment);
+        let default = confined.describe_in(&[&docker], &[]);
+
+        let reach = &moved.carried[0].reaches;
+        assert_eq!(reach.len(), 1);
+        assert_eq!(reach[0].variable, "DOCKER_CONFIG");
+        assert_eq!(reach[0].path, PathBuf::from("/elsewhere/docker"));
+        let sentences = moved.sentences();
+        assert!(
+            sentences
+                .iter()
+                .any(|line| line.contains("DOCKER_CONFIG") && line.contains("/elsewhere/docker")),
+            "{sentences:?}"
+        );
+        assert!(default.carried[0].reaches.is_empty());
+        assert_eq!(default.sentences().len(), 1);
     }
 
     /// A program installed at the top of the home is read as the file a person read, and the home

@@ -4151,11 +4151,22 @@ mod tests {
                     program: "git".into(),
                     toolchain: None,
                     scope: Some(bravebot_sandbox::scope::Scope::Remote),
+                    reaches: Vec::new(),
+                },
+                bravebot_agent::Carried {
+                    program: "docker".into(),
+                    toolchain: None,
+                    scope: Some(bravebot_sandbox::scope::Scope::Docker),
+                    reaches: vec![bravebot_sandbox::scope::Reach {
+                        variable: "DOCKER_CONFIG",
+                        path: "/home/someone/.local/share/docker-work".into(),
+                    }],
                 },
                 bravebot_agent::Carried {
                     program: "sed".into(),
                     toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Cargo),
                     scope: None,
+                    reaches: Vec::new(),
                 },
             ],
         });
@@ -4170,6 +4181,12 @@ mod tests {
             "{drawn}"
         );
         assert!(drawn.contains("never a private key"), "{drawn}");
+        assert!(
+            drawn.contains(
+                "docker also reads /home/someone/.local/share/docker-work, where your DOCKER_CONFIG points"
+            ),
+            "{drawn}"
+        );
         assert!(
             drawn.contains("sed also reaches the install and the cache of the cargo toolchain"),
             "{drawn}"
