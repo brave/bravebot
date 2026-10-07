@@ -137,6 +137,7 @@ impl Bridge {
             "session.delete" => self.delete_session(request),
             "session.close" => self.close_session(request),
             "session.mode" => self.set_permission_mode(request),
+            "session.rewind" => self.rewind_session(request),
             "turn.send" => self.send_turn(request),
             "turn.cancel" => self.cancel_turn(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
@@ -306,6 +307,11 @@ impl Bridge {
         let mut opened = self.recount(&handle, &directory, &record, auto_vetting);
         opened["settingsRules"] = rules;
         opened["scratch"] = self.scratch_report(&handle);
+        if let Some(open) = self.open.get(&handle)
+            && let Ok(state) = open.state.lock()
+        {
+            opened["rewind"] = json!(rewind_json(&state, &directory));
+        }
         if let Some(settled) = settled {
             opened["trust"] = settled;
         }
@@ -924,12 +930,7 @@ impl Bridge {
         let watches = Arc::clone(&open.watches);
         let (turn_number, directories, scratch) = state
             .lock()
-            .map(|mut s| {
-                for point in &mut s.rewind {
-                    point
-                        .coverage
-                        .record([bravebot_agent::rewind::CoverageGap::Desktop]);
-                }
+            .map(|s| {
                 (
                     s.turns + 1,
                     s.directories.clone(),
@@ -1107,11 +1108,8 @@ impl Bridge {
             .lock()
             .map(|mut s| {
                 // A run writes files as a turn does, so the same coverage gap applies.
-                for point in &mut s.rewind {
-                    point
-                        .coverage
-                        .record([bravebot_agent::rewind::CoverageGap::Desktop]);
-                }
+                s.rewind
+                    .record_gap(bravebot_agent::rewind::CoverageGap::Desktop);
                 s.runs += 1;
                 (
                     s.runs,
@@ -1174,6 +1172,137 @@ impl Bridge {
         });
 
         Ok(json!({ "run": run }))
+    }
+
+    /// Put the session back to where it stood `steps` turns ago, on disk and in the conversation
+    /// together (SESSION-19), as the terminal's `/undo` and `/rewind` do.
+    ///
+    /// Refused while a turn runs, for the reason a fork is: the worker holds the state, and only
+    /// a turn that has finished has joined its delegates and kept its backups.
+    fn rewind_session(&mut self, request: &Request) -> Result<Value, Failure> {
+        use bravebot_agent::rewind::CoverageGap;
+        let handle = request.string("session")?;
+        let steps = request.number("steps")? as usize;
+        self.reap(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if open.running.is_some() {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "Stop the current turn before undoing one.",
+            ));
+        }
+        let project = open.project.clone();
+        let settings = crate::settings::layers(Some(&project), self.settings.as_deref());
+        let mut workspace = turn_workspace(
+            project.clone(),
+            &settings,
+            &bravebot_config::Managed::load(),
+        )
+        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+        let mut guard = open
+            .state
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::Internal, "session state is poisoned"))?;
+        let state = &mut *guard;
+        // Opened as a turn opens them, so a path a rewound turn wrote in one goes back there.
+        for directory in &state.directories {
+            let _ = workspace.add_directory(&directory.display().to_string());
+        }
+
+        state.rewind.bind_coverage(&workspace);
+        let Some(point) = state.rewind.take(steps) else {
+            return Err(Failure::bad_request(match state.rewind.points().len() {
+                0 => "There is nothing to undo.".to_string(),
+                1 => "This session can go back 1 turn at most.".to_string(),
+                kept => format!("This session can go back {kept} turns at most."),
+            }));
+        };
+        if let Some(stored) = state.handle.as_mut() {
+            stored.retain_rewind_coverage(&point.coverage);
+        }
+        let gaps = point.coverage.gaps();
+        let snapshot = point.snapshot;
+        let refused = bravebot_agent::rewind::restore(
+            &workspace,
+            point.backups,
+            &mut state.trust,
+            &snapshot.trust,
+            &mut state.servers,
+            bravebot_agent::home::directory().as_deref(),
+        );
+        if !refused.is_empty() {
+            state.rewind.record_gap(CoverageGap::BackupUnavailable);
+        }
+
+        state.conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
+        state.turns = snapshot.turns;
+        state.tokens = snapshot.tokens;
+        state.spend = snapshot.spend;
+        state.timing = snapshot.timing;
+        // The snapshot's approvals that are still held. The terminal takes the snapshot's whole,
+        // which is the same set there, since its approvals only grow; here one can be revoked
+        // after the turn that is being undone, and a rewind must not hand it back.
+        let mut programs = snapshot.programs;
+        let revoked: Vec<_> = programs
+            .iter()
+            .filter(|command| !state.programs.iter().any(|held| held == *command))
+            .cloned()
+            .collect();
+        for command in &revoked {
+            programs.forget(command);
+        }
+        state.programs = programs;
+        if let Some(history) = state.history.as_mut() {
+            history.retain(|turn| turn.number <= snapshot.turns);
+        }
+        state.todos.retain(|turn, _| *turn <= snapshot.turns);
+
+        let discard = snapshot.turns == 0
+            && !snapshot.was_wrote
+            && refused.is_empty()
+            && gaps.is_empty()
+            && state.trust == snapshot.trust;
+        if let Some(stored) = state.handle.as_mut() {
+            stored.truncate_audit(snapshot.turns + 1);
+            if discard {
+                stored.discard_unwritten(&snapshot.title);
+            }
+        }
+        if discard {
+            // The record is gone, so the next prompt names the session again.
+            state.first_prompt = None;
+        } else if state.handle.is_some() {
+            save(
+                &project,
+                state,
+                snapshot.turns,
+                &bravebot_session::audit::Trail::default(),
+            );
+        }
+
+        let standing = state.conversation.snapshot();
+        Ok(json!({
+            "session": handle,
+            // The turn the session now stands before, and the prompt that began it, which a
+            // window can offer to send again.
+            "turn": snapshot.turns + 1,
+            "text": point.prompt,
+            "refused": refused
+                .iter()
+                .map(|path| shown_path(path, &project))
+                .collect::<Vec<_>>(),
+            "gaps": gaps,
+            "said": wire::recounted(&state.conversation.recounted()),
+            "context": standing.context,
+            "contextTokens": standing.measured,
+            "archived": standing.archive.len(),
+            "todos": todos_json(&state.todos),
+            "trust": { "rules": rules_json(&state.trust) },
+            "rewind": rewind_json(state, &project),
+        }))
     }
 
     /// Ask the turn to stop.
@@ -1766,6 +1895,58 @@ fn prompt_ordinal(conversation: &bravebot_agent::Conversation, prompt: &str) -> 
         .rposition(|said| *said == prompt)
 }
 
+/// The points `state` can rewind to, newest first, as a window offers them.
+///
+/// `prompt` is the ordinal `session.fork` uses, found after the prompts the point's snapshot
+/// already held, so a prompt asked twice anchors on the turn that asked it. `null` where the
+/// conversation no longer holds it.
+fn rewind_json(state: &State, project: &Path) -> Vec<Value> {
+    let recounted = state.conversation.recounted();
+    let prompts = crate::fork::prompts(&recounted);
+    state
+        .rewind
+        .points()
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(back, point)| {
+            let before =
+                bravebot_agent::Conversation::restored(point.snapshot.conversation.clone())
+                    .recounted();
+            let before = crate::fork::prompts(&before).len();
+            let ordinal = prompts
+                .iter()
+                .skip(before)
+                .position(|said| *said == point.prompt)
+                .map(|at| at + before);
+            json!({
+                "steps": back + 1,
+                "turn": point.snapshot.turns + 1,
+                "prompt": ordinal,
+                "text": point.prompt,
+                "paths": point
+                    .backups
+                    .iter()
+                    .map(|backup| shown_path(&backup.path, project))
+                    .collect::<Vec<_>>(),
+                "gaps": point.coverage.gaps(),
+            })
+        })
+        .collect()
+}
+
+/// A path as a person reads it: under the project where it is, whole where it is not.
+///
+/// Backups are named under the workspace root, which is the project with its links resolved.
+fn shown_path(path: &Path, project: &Path) -> String {
+    let resolved = std::fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf());
+    path.strip_prefix(&resolved)
+        .or_else(|_| path.strip_prefix(project))
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
 /// Run one turn to its end, whatever that end is.
 ///
 /// The worker owns the whole of it: the call, writing the record afterwards, and saying
@@ -1908,6 +2089,7 @@ fn work(work: Work) {
     // cannot reach it. The screening value is the task's, so the confirmer and the tools that fill
     // in a verdict read the same answer.
     let mut confirmer = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
+    open_rewind_point(&mut state, &workspace, &prompt);
     let completed = agent_turn::resume(
         &config,
         &egress,
@@ -1925,6 +2107,8 @@ fn work(work: Work) {
     // Put the set back even if the turn failed or was cancelled. Otherwise its servers would
     // stop here, and the next turn would ask about the same language again.
     state.servers = Some(servers);
+    // Kept whatever the outcome: a failed or cancelled turn may still have written.
+    state.rewind.keep_backups(workspace.take_backups());
 
     // Cleanup has finished on every return, including cancellation and request errors.
     // Taken apart with no `..`, so an answer a turn learns to remember does not build until this
@@ -2035,6 +2219,8 @@ fn work(work: Work) {
                     // not hold it, which is a prompt that cannot be forked rather than one to
                     // guess a place for.
                     "prompt": prompt_ordinal(&state.conversation, &prompt),
+                    // The turns this session can now be put back to (SESSION-19).
+                    "rewind": rewind_json(&state, &project),
                 }),
             )
         }
@@ -2055,6 +2241,7 @@ fn work(work: Work) {
                     // As on `turn.done`. A turn that failed still said what it was asked, so the
                     // prompt is in the conversation and is still a place a fork can be cut at.
                     "prompt": prompt_ordinal(&state.conversation, &prompt),
+                    "rewind": rewind_json(&state, &project),
                     "id": state.handle.as_ref().map(|handle| handle.id()) }),
             );
             Event::new("turn.error", &session, data)
@@ -2166,6 +2353,52 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         "attempts": attempts, "status": diagnosis.and_then(|d| d.status) })
 }
 
+/// Open the point the turn about to run can be rewound to (SESSION-19), as the terminal does.
+///
+/// The workspace is built per turn, so a language server an earlier turn started is not on it.
+/// The record remembers one, and the warning is put back before the point binds to it.
+fn open_rewind_point(state: &mut State, workspace: &Workspace, prompt: &str) {
+    use bravebot_agent::rewind::CoverageGap;
+    if state
+        .handle
+        .as_ref()
+        .is_some_and(Handle::server_children_may_run)
+    {
+        workspace.mark_rewind_gap(CoverageGap::LanguageServer);
+    }
+    let snapshot = bravebot_session::sessions::TurnSnapshot {
+        conversation: state.conversation.snapshot(),
+        turns: state.turns,
+        tokens: state.tokens,
+        spend: state.spend.clone(),
+        timing: state.timing.clone(),
+        cached: None,
+        cached_prompt_tokens: None,
+        // With the record's rules, so a yes this turn gives to a recorded memory does not outlive
+        // rewinding past it.
+        trust: bravebot_agent::memory::with_recorded(
+            &state.trust,
+            workspace,
+            bravebot_agent::home::directory().as_deref(),
+        ),
+        programs: state.programs.clone(),
+        // A terminal index the desktop has no transcript for. Not stored; a terminal resuming the
+        // record places each point again.
+        transcript_len: 0,
+        title: state
+            .handle
+            .as_ref()
+            .map(|handle| handle.title().to_string())
+            .unwrap_or_default(),
+        was_wrote: state
+            .handle
+            .as_ref()
+            .is_some_and(|handle| handle.resumable().is_some()),
+    };
+    state.rewind.open(snapshot, prompt.to_string());
+    state.rewind.bind_coverage(workspace);
+}
+
 /// Add the turn that just ran to the session's history, if it keeps one (SESSION-23).
 ///
 /// `begins` is the length of the recounted conversation before the turn, and `prompt_at` where the
@@ -2230,7 +2463,7 @@ fn save(
             model: state.model.as_deref(),
             todos: &state.todos,
             asides: &state.asides,
-            rewind: &state.rewind,
+            rewind: state.rewind.points(),
             trust: &state.trust,
             programs: &state.programs,
             directories: &state.directories,
@@ -2406,6 +2639,95 @@ mod test_profile;
 #[cfg(test)]
 mod coverage_tests {
     use super::*;
+
+    /// A command approval revoked after a turn stays revoked when that turn is undone, though the
+    /// point the turn opened was taken while the approval held.
+    #[test]
+    fn undoing_a_turn_does_not_hand_back_a_revoked_command() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("rewind-revoked-command");
+        std::fs::create_dir_all(&directory).unwrap();
+        let command = bravebot_core::programs::Command::new("/bin/ls", Vec::new(), &directory);
+        let mut state = State::fresh(TrustStore::new(&directory));
+        state.programs.trust(command.clone());
+        let workspace = Workspace::new(&directory).unwrap();
+        open_rewind_point(&mut state, &workspace, "list the files");
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open {
+            project: directory.clone(),
+            state: Arc::new(Mutex::new(state)),
+            answered_trust: true,
+            keeping: None,
+            running: None,
+            model: None,
+            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            auto_vetting: false,
+            definition: None,
+            permission_mode: PermissionMode::Ask,
+        });
+        let call = |bridge: &mut Bridge, method: &str, params: Value| {
+            let line = json!({"id": 1, "method": method, "params": params}).to_string();
+            bridge.dispatch(&Request::parse(&line).unwrap()).unwrap()
+        };
+        call(
+            &mut bridge,
+            "permissions.revoke",
+            json!({"session": handle, "kind": "command", "command": {
+                "program": command.program, "startedAs": command.started_as, "args": command.args,
+            }}),
+        );
+
+        call(
+            &mut bridge,
+            "session.rewind",
+            json!({"session": handle, "steps": 1}),
+        );
+
+        let listed = call(&mut bridge, "permissions.list", json!({"session": handle}));
+        assert_eq!(
+            listed["commands"],
+            json!([]),
+            "the revoked command came back"
+        );
+    }
+
+    /// A turn's workspace is new, so the server warning the record kept has to reach the point a
+    /// later turn opens, even once every earlier point has been rewound past.
+    #[test]
+    fn a_desktop_turn_after_the_last_point_keeps_the_server_warning() {
+        use bravebot_agent::rewind::CoverageGap;
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("desktop-point-coverage");
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut state = State::fresh(TrustStore::new(&directory));
+        state.handle = Some(Handle::begin(
+            &directory,
+            crate::FRONT,
+            crate::agent_build(),
+        ));
+
+        let first = Workspace::new(&directory).unwrap();
+        open_rewind_point(&mut state, &first, "start a server");
+        state.rewind.record_gap(CoverageGap::LanguageServer);
+        let point = state.rewind.take(1).unwrap();
+        state
+            .handle
+            .as_mut()
+            .unwrap()
+            .retain_rewind_coverage(&point.coverage);
+
+        let second = Workspace::new(&directory).unwrap();
+        open_rewind_point(&mut state, &second, "after the rewind");
+
+        assert_eq!(
+            state.rewind.points()[0].coverage.gaps(),
+            [CoverageGap::LanguageServer].into()
+        );
+    }
 
     /// A fork cannot prove that server descendants from the parent stopped writing.
     #[test]

@@ -57,6 +57,10 @@ export interface CommandActions {
    * prompts, and what it said.
    */
   forkEntry: (id: string) => void
+  /** Ask to put the session back to before the turn a named prompt began. */
+  rewindEntry: (id: string) => void
+  /** Ask to put the session back to before its latest turn. */
+  undoTurn: () => void
   /** Write the open session's conversation to a file, in one of three formats. */
   exportSession: (format: ExportFormat) => void
   /** Flip whether an export carries the tool calls as well as the conversation. */
@@ -103,6 +107,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return context && act.copyEntry(context.id)
         case 'context.entry.fork':
           return context && act.forkEntry(context.id)
+        case 'context.entry.rewind':
+          return context && act.rewindEntry(context.id)
         case 'session.new':
           return act.create()
         case 'session.close':
@@ -121,6 +127,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.cancel()
         case 'mode.cycle':
           return act.cycleMode()
+        case 'turn.rewind':
+          return act.undoTurn()
         case 'view.fold-left':
           return act.toggle('left')
         case 'view.fold-right':

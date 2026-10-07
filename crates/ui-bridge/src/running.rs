@@ -85,7 +85,7 @@ pub struct State {
     /// Preserve terminal side conversations when continuing a session in the UI.
     pub asides: Vec<bravebot_session::sessions::Aside>,
     /// Imported terminal checkpoints stay available with a desktop coverage warning after execution.
-    pub rewind: Vec<bravebot_session::sessions::RewindPoint>,
+    pub rewind: bravebot_session::rewind::RewindStack,
     /// The first thing the user asked, which is what a list calls the session.
     pub first_prompt: Option<String>,
     /// The permission rules this session opened under (PERM-12). Empty until the session is
@@ -191,7 +191,7 @@ impl State {
             model: None,
             todos: BTreeMap::new(),
             asides: Vec::new(),
-            rewind: Vec::new(),
+            rewind: Default::default(),
             first_prompt: None,
             rules: Default::default(),
             runs: 0,
@@ -235,7 +235,7 @@ impl State {
             model: record.model.clone(),
             todos: record.todo_rows(),
             asides: bravebot_session::sessions::recall(project, record).asides,
-            rewind: record.rewind_points(project),
+            rewind: bravebot_session::rewind::RewindStack::of(record.rewind_points(project)),
             first_prompt: Some(record.title.clone()),
             rules: Default::default(),
             runs: 0,
@@ -299,7 +299,7 @@ impl State {
             model: None,
             todos,
             asides: Vec::new(),
-            rewind: Vec::new(),
+            rewind: Default::default(),
             first_prompt,
             rules: Default::default(),
             runs: 0,

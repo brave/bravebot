@@ -87,6 +87,25 @@
 .trust .aside { font: var(--type-caption); color: var(--ink-tertiary); }
 .trust .aside code { font: var(--type-caption); font-family: var(--font-mono); word-break: break-all; }
 
+/* ---------------------------------------------------------------- rewind */
+
+/* Every file a rewind overwrites, however many: scrolls rather than pushing the buttons away. */
+.rewind-paths {
+  max-height: 40vh;
+  margin: 0 0 var(--leo-spacing-l);
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+}
+.rewind-paths li + li { margin-top: var(--leo-spacing-xs); }
+.rewind-paths code { font: var(--type-code); color: var(--ink-primary); overflow-wrap: anywhere; }
+.rewind-warnings { display: block; margin-bottom: var(--leo-spacing-l); }
+.rewind-warnings ul { margin: 0; padding-left: var(--leo-spacing-l); }
+.modal .rewind-aside { font: var(--type-caption); color: var(--ink-tertiary); }
+
 /* ---------------------------------------------------------------- notice */
 
 /* Output from `bravebot doctor`, whose length nobody controls. */
@@ -250,7 +269,7 @@
   .modal.about { animation: none; }
 }
 @media (forced-colors: active) {
-  .grant-list, .bot-details .bot-memory { border-color: CanvasText; }
+  .grant-list, .bot-details .bot-memory, .rewind-paths { border-color: CanvasText; }
 }
 
 .settings-rules h4 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-xs); font: var(--type-meta-strong); }

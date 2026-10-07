@@ -2542,7 +2542,7 @@ mod preserved_history {
                 programs: &TrustedPrograms::new(),
                 directories: &[],
                 manifest: None,
-                rewind: session.rewind_points(),
+                rewind: session.rewind.points(),
                 checkouts: &[],
             },
         );
@@ -2598,7 +2598,7 @@ mod preserved_history {
                 was_wrote: true,
             };
             submit(&mut session, prompt);
-            session.open_rewind_point(snapshot, prompt.into());
+            session.rewind.open(snapshot, prompt.into());
             // A failure before the planner accepts a prompt leaves no conversation message.
             if n != 1 {
                 session.prompt_recorded(conversation.recounted().len());
@@ -2872,7 +2872,7 @@ mod preserved_history {
         let (original, conversation) = fixture();
         let record = save(&scratch.project, &original, &conversation);
         let mut session = reopen(&scratch.project, &record);
-        let snapshot = session.take_rewind(2).unwrap().snapshot;
+        let snapshot = session.rewind.take(2).unwrap().snapshot;
         assert_eq!(snapshot.turns, 2);
         assert_eq!(
             session.transcript[snapshot.transcript_len].text,
@@ -3073,7 +3073,7 @@ mod preserved_history {
             }],
             &conversation,
         );
-        let snapshot = session.take_rewind(1).unwrap().snapshot;
+        let snapshot = session.rewind.take(1).unwrap().snapshot;
         assert_eq!(
             snapshot.transcript_len, 1,
             "rewind must keep only the resume note"
@@ -3261,7 +3261,7 @@ mod preserved_history {
             was_wrote: true,
         };
         submit(&mut session, "worker failed");
-        session.open_rewind_point(point, "worker failed".into());
+        session.rewind.open(point, "worker failed".into());
         session.fail(
             "safe internal failure",
             Ending::Failed(Diagnosis::of(Category::Internal)),
@@ -3285,7 +3285,7 @@ mod preserved_history {
             was_wrote: true,
         };
         submit(&mut session, "after reset");
-        session.open_rewind_point(point, "after reset".into());
+        session.rewind.open(point, "after reset".into());
         session.prompt_recorded(conversation.recounted().len());
         conversation.push(Message::user("after reset"));
         conversation.push(Message::assistant("new context answer"));
@@ -3324,7 +3324,7 @@ mod preserved_history {
             ]
         );
         assert_eq!(session.todos_by_turn()[&1][0].content, "task 0");
-        let snapshot = session.take_rewind(2).unwrap().snapshot;
+        let snapshot = session.rewind.take(2).unwrap().snapshot;
         session.transcript.truncate(snapshot.transcript_len);
         session.turns = snapshot.turns;
         session.restore_spend(snapshot.tokens, snapshot.spend);

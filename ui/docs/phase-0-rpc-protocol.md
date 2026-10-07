@@ -529,6 +529,34 @@ renderer can read the list and ask for something on it, and has no way to write 
 Releases the handle. If a turn is running it is cancelled first and any pending
 confirmation is **refused** (§8.4). Returns `{}` once the worker has joined.
 
+#### `session.rewind`
+
+```json
+{ "id": 5, "method": "session.rewind", "params": { "session": "s1", "steps": 1 } }
+```
+
+Puts the session back to where it stood `steps` turns ago, on disk and in the conversation
+together, as the terminal's `/undo` and `/rewind` do (SESSION-19). Each file a rewound turn
+wrote goes back to what it held before the earliest of them, and the conversation, turn count,
+spend, task lists and audit trail go back with it. Refused with `turn_in_flight` while a turn
+runs, and with `bad_request` where the session holds fewer than `steps` points.
+
+```json
+{ "session": "s1", "turn": 3, "text": "rename the parser",
+  "refused": ["src/locked.rs"], "gaps": ["command"],
+  "said": [ … ], "context": "", "contextTokens": 0, "archived": 0, "todos": {},
+  "trust": { "rules": [ … ] }, "rewind": [ … ] }
+```
+
+`turn` is the turn the session now stands before, and `text` is the prompt that began it.
+`refused` names each path that did not go back. `gaps` names each kind of effect file backups
+do not cover (`command`, `hook`, `scratch`, `language-server`, `desktop`, `backup-unavailable`,
+`unknown`), so the window can say what may still differ. `said` and the fields after it are
+`session.open`'s, read off the session as it now stands, so the window draws it again rather
+than patching what it drew.
+
+`rewind` is the list `turn.done` carries (§8.2), after the rewind.
+
 ### 7.2 Turns
 
 #### `turn.send`
@@ -921,9 +949,17 @@ whose events all share one second cannot say which came first.
   "tokens": 51234, "outputTokens": 812,
   "notices": ["loaded AGENTS.md"],
   "trust": { "rules": [ { "path": "…", "integrity": "untrusted" } ] },
-  "id": "0f1c…", "archived": 0, "prompt": 4
+  "id": "0f1c…", "archived": 0, "prompt": 4,
+  "rewind": [ { "steps": 1, "turn": 5, "prompt": 4, "text": "…",
+                "paths": ["src/parse.rs"], "gaps": [] } ]
 } }
 ```
+
+`rewind` is every point the session can be put back to with `session.rewind`, newest first,
+at most five. `steps` is the value that reaches it, `turn` is the turn it undoes, `prompt` is
+that turn's prompt in the `Said.prompt` coordinate (`null` where the conversation no longer
+holds it), `paths` is what the turn wrote over, and `gaps` is as on `session.rewind`.
+`turn.error` and `session.open` carry the same list.
 
 `prompt` is where this turn's prompt landed among the things the user said, the same
 coordinate `Said.prompt` carries and the one `session.fork` cuts on. It is here because a

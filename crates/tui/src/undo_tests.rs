@@ -34,7 +34,7 @@ fn save(
             programs,
             directories: &[],
             manifest: None,
-            rewind: session.rewind_points(),
+            rewind: session.rewind.points(),
             checkouts: &[],
         },
     );
@@ -66,7 +66,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
     for prompt in ["earlier", "copy"] {
         session.paste(prompt);
         session.submit().unwrap();
-        session.open_rewind_point(
+        session.rewind.open(
             rewind_point(&session, &conversation, &trust, &programs, &stored),
             prompt.into(),
         );
@@ -77,7 +77,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
             session.record_turn(0, &conversation);
         }
     }
-    session.bind_rewind_coverage(&workspace);
+    session.rewind.bind_coverage(&workspace);
     let cancel = Cancel::new();
     let (config, requests, server) = endpoint::endpoint(
         vec![
@@ -150,10 +150,10 @@ fn oversized_undo(ending: &str, resumed: bool) {
     conversation = continued.conversation;
     assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Untrusted));
     session.record_turn(start, &conversation);
-    session.keep_backups(workspace.take_backups());
-    assert_eq!(session.rewind_points().len(), 2);
+    session.rewind.keep_backups(workspace.take_backups());
+    assert_eq!(session.rewind.points().len(), 2);
     assert_eq!(
-        session.rewind_points()[1].backups[0].was,
+        session.rewind.points()[1].backups[0].was,
         bravebot_agent::workspace::Before::NotKept
     );
     assert_eq!(
@@ -191,7 +191,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
     assert_eq!(trust, before);
     assert_eq!(session.turns, 1);
     assert_eq!(session.tokens, 17);
-    assert_eq!(session.rewind_points().len(), 1);
+    assert_eq!(session.rewind.points().len(), 1);
     assert_eq!(
         std::fs::read_to_string(root.join("output.txt")).unwrap(),
         SENTINEL
@@ -311,7 +311,7 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
             let start = conversation.recounted().len();
             session.paste(&format!("turn {index}"));
             session.submit().unwrap();
-            session.open_rewind_point(
+            session.rewind.open(
                 rewind_point(&session, &conversation, &trust, &programs, &stored),
                 format!("turn {index}"),
             );
@@ -321,7 +321,7 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
             session.record_turn(start, &conversation);
             if index > 0 {
                 let first = if index == 1 { "original" } else { "middle" };
-                session.keep_backups(vec![
+                session.rewind.keep_backups(vec![
                     Backup {
                         path: root.join("blocked"),
                         was: Before::Bytes(first.as_bytes().to_vec()),
@@ -410,7 +410,7 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
             trust.integrity_of("old-refusal"),
             Some(Integrity::Untrusted)
         );
-        assert_eq!(session.rewind_points().len(), 1);
+        assert_eq!(session.rewind.points().len(), 1);
         rewind(
             &mut session,
             &mut conversation,
@@ -461,7 +461,7 @@ fn undo_refuses_the_paths_a_directory_since_linked_out_of_the_workspace_would_ca
         let start = conversation.recounted().len();
         session.paste("edit the checkout");
         session.submit().unwrap();
-        session.open_rewind_point(
+        session.rewind.open(
             rewind_point(&session, &conversation, &trust, &programs, &stored),
             "edit the checkout".to_string(),
         );
@@ -469,7 +469,7 @@ fn undo_refuses_the_paths_a_directory_since_linked_out_of_the_workspace_would_ca
         conversation.push(Message::assistant("done"));
         session.complete("done", vec![], 11);
         session.record_turn(start, &conversation);
-        session.keep_backups(vec![
+        session.rewind.keep_backups(vec![
             Backup {
                 path: root.join("redirect/controlled.txt"),
                 was: Before::Bytes(b"what the checkout held".to_vec()),
@@ -508,7 +508,7 @@ fn undo_refuses_the_paths_a_directory_since_linked_out_of_the_workspace_would_ca
             session = reopened;
         }
         assert!(
-            session.rewind_points().last().is_some_and(|point| {
+            session.rewind.points().last().is_some_and(|point| {
                 point.backups.iter().any(|backup| {
                     backup.path.ends_with("redirect/controlled.txt")
                         && matches!(backup.was, Before::Bytes(_))
@@ -605,7 +605,7 @@ fn bridge_handoff(ending: &str) {
         let start = conversation.recounted().len();
         session.paste(prompt);
         session.submit().unwrap();
-        session.open_rewind_point(
+        session.rewind.open(
             rewind_point(&session, &conversation, &trust, &programs, &stored),
             prompt.into(),
         );
@@ -713,9 +713,16 @@ fn bridge_handoff(ending: &str) {
         SENTINEL
     );
     let record = sessions::load(root, stored.id()).unwrap();
-    assert_eq!(record.rewind.len(), 2);
-    assert!(record.rewind_points(root).iter().all(|p| {
-        p.coverage
+    // The desktop turn opened a point of its own and kept what it wrote over.
+    let points = record.rewind_points(root);
+    assert_eq!(points.len(), 3);
+    assert_eq!(points[2].prompt, "copy");
+    assert!(points[2].backups.iter().any(|backup| {
+        backup.path.ends_with("output.txt")
+            && backup.was == bravebot_agent::workspace::Before::Bytes(b"original".to_vec())
+    }));
+    assert!(points.iter().all(|p| {
+        !p.coverage
             .gaps()
             .contains(&bravebot_agent::rewind::CoverageGap::Desktop)
     }));
@@ -771,7 +778,11 @@ fn bridge_handoff(ending: &str) {
         &mut None,
         1,
     );
-    assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Untrusted));
+    assert_eq!(
+        std::fs::read_to_string(root.join("output.txt")).unwrap(),
+        "original"
+    );
+    assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Trusted));
     turn::resume(
         &config,
         &Egress::new(),
@@ -836,16 +847,17 @@ fn editing_then_running_a_program_keeps_undo_and_warns() {
             bravebot_stamp::BUILD,
         );
         for prompt in ["older", "newer"] {
-            session.open_rewind_point(
+            session.rewind.open(
                 rewind_point(&session, &conversation, &trust, &programs, &stored),
                 prompt.into(),
             );
         }
         std::fs::write(workspace.root().join("foo.rs"), "original").unwrap();
-        session.bind_rewind_coverage(&workspace);
+        session.rewind.bind_coverage(&workspace);
         let mut observe = Observe {
             points: session
-                .rewind_points()
+                .rewind
+                .points()
                 .iter()
                 .map(|point| point.coverage.clone())
                 .collect(),
@@ -882,8 +894,8 @@ fn editing_then_running_a_program_keeps_undo_and_warns() {
         .outcome
         .unwrap();
         assert!(observe.ran);
-        session.keep_backups(workspace.take_backups());
-        assert_eq!(session.rewind_points().len(), 2);
+        session.rewind.keep_backups(workspace.take_backups());
+        assert_eq!(session.rewind.points().len(), 2);
         trust = outcome.trust;
         programs = outcome.programs;
         rewind(
@@ -901,7 +913,7 @@ fn editing_then_running_a_program_keeps_undo_and_warns() {
             "original"
         );
         assert!(trust.is_trusted("foo.rs"));
-        assert_eq!(session.rewind_points().len(), 1);
+        assert_eq!(session.rewind.points().len(), 1);
         assert!(
             session
                 .transcript
@@ -965,12 +977,12 @@ fn matching_hooks_keep_undo_with_saved_coverage_warnings() {
         let mut stored =
             sessions::Handle::begin(root, sessions::Front::Terminal, bravebot_stamp::BUILD);
         for prompt in ["older", "newer"] {
-            session.open_rewind_point(
+            session.rewind.open(
                 rewind_point(&session, &conversation, &trust, &programs, &stored),
                 prompt.into(),
             );
         }
-        session.bind_rewind_coverage(&workspace);
+        session.rewind.bind_coverage(&workspace);
         let (config, requests, server) = endpoint::endpoint(
             vec![
                 endpoint::tool("read_file", json!({"path":"input.txt"})),
@@ -1004,7 +1016,8 @@ fn matching_hooks_keep_undo_with_saved_coverage_warnings() {
         );
         assert!(
             session
-                .rewind_points()
+                .rewind
+                .points()
                 .iter()
                 .all(|point| point.coverage.is_complete() != fires)
         );
@@ -1024,9 +1037,9 @@ fn matching_hooks_keep_undo_with_saved_coverage_warnings() {
                 .iter()
                 .all(|point| point.coverage.is_complete() != fires)
         );
-        session.keep_backups(Vec::new());
-        assert_eq!(session.rewind_points().len(), 2);
-        let gaps = session.take_rewind(1).unwrap().coverage.gaps();
+        session.rewind.keep_backups(Vec::new());
+        assert_eq!(session.rewind.points().len(), 2);
+        let gaps = session.rewind.take(1).unwrap().coverage.gaps();
         assert_eq!(
             gaps.contains(&bravebot_agent::rewind::CoverageGap::Hook),
             fires
@@ -1056,11 +1069,11 @@ fn immediate_undo_after_resume_keeps_server_warnings_for_later_turns() {
         sessions::Front::Terminal,
         bravebot_stamp::BUILD,
     );
-    session.open_rewind_point(
+    session.rewind.open(
         rewind_point(&session, &conversation, &trust, &programs, &stored),
         "earlier".into(),
     );
-    session.record_rewind_gap(CoverageGap::LanguageServer);
+    session.rewind.record_gap(CoverageGap::LanguageServer);
     save(&mut stored, &session, &conversation, &trust, &programs);
     let record = sessions::load(workspace.root(), stored.id()).unwrap();
     // Accept older records that only kept the warning in their checkpoint.
@@ -1090,19 +1103,19 @@ fn immediate_undo_after_resume_keeps_server_warnings_for_later_turns() {
         &mut None,
         1,
     );
-    assert!(resumed.rewind_points().is_empty());
+    assert!(resumed.rewind.points().is_empty());
     // Reopen the record written by undo with a new workspace, after all points are gone.
     let record = sessions::load(workspace.root(), stored.id()).unwrap();
     let workspace = Workspace::new(&root).unwrap();
     let mut resumed = Session::new("test");
     resumed.restore_rewind(&record, &workspace, &conversation);
-    resumed.open_rewind_point(
+    resumed.rewind.open(
         rewind_point(&resumed, &conversation, &trust, &programs, &stored),
         "next".into(),
     );
-    resumed.bind_rewind_coverage(&workspace);
+    resumed.rewind.bind_coverage(&workspace);
     assert_eq!(
-        resumed.rewind_points()[0].coverage.gaps(),
+        resumed.rewind.points()[0].coverage.gaps(),
         [CoverageGap::LanguageServer].into()
     );
     std::fs::remove_dir_all(root).unwrap();
@@ -1144,12 +1157,12 @@ fn undo_warnings_name_recorded_causes() {
             sessions::Front::Terminal,
             bravebot_stamp::BUILD,
         );
-        session.open_rewind_point(
+        session.rewind.open(
             rewind_point(&session, &conversation, &trust, &programs, &stored),
             "work".into(),
         );
         for gap in gaps {
-            session.record_rewind_gap(gap);
+            session.rewind.record_gap(gap);
         }
         rewind(
             &mut session,
@@ -1213,7 +1226,7 @@ fn resumed_undo_keeps_the_record_when_gap_evidence_is_missing() {
             sessions::Front::Terminal,
             bravebot_stamp::BUILD,
         );
-        session.open_rewind_point(
+        session.rewind.open(
             rewind_point(&session, &conversation, &trust, &programs, &stored),
             "work".into(),
         );
@@ -1240,7 +1253,7 @@ fn resumed_undo_keeps_the_record_when_gap_evidence_is_missing() {
             &mut None,
             1,
         );
-        assert!(resumed.rewind_points().is_empty());
+        assert!(resumed.rewind.points().is_empty());
         assert_eq!(
             std::fs::read_to_string(&unrestored).unwrap(),
             "current bytes"

@@ -6,7 +6,7 @@ import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
-import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
@@ -33,6 +33,7 @@ import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
 import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
 import { middleTruncate } from '../truncate'
+import { pointForPrompt, undoRow } from '../rewind'
 
 interface Live {
   model: string | null
@@ -56,6 +57,8 @@ interface Live {
   permissionMode: PermissionMode
   trustRemembered?: KeptTrust | null
   rules?: SettingsRules | null
+  /** The points this session can be put back to, newest first. */
+  rewind?: RewindPoint[]
 }
 
 /**
@@ -117,6 +120,8 @@ interface Props {
   onAnswer: AnswerQuestions
   /** Begin a session from what was said before a named prompt. */
   onFork: (id: string) => void
+  /** Ask to put the session back `steps` turns. */
+  onRewind: (steps: number) => void
   /** Show the session this one was forked out of, at the prompt it was cut in front of. */
   onOpenParent: () => void
   /** Said once the marked prompt has been scrolled to, so the mark can be let go of. */
@@ -284,6 +289,7 @@ export function Transcript({
   onDecide,
   onAnswer,
   onFork,
+  onRewind,
   onOpenParent,
   onFocused,
   canExport,
@@ -433,6 +439,7 @@ export function Transcript({
   const checkBackend = useEvent(onCheckBackend)
   const diagnostics = useEvent(onDiagnostics)
   const stableFork = useEvent(onFork)
+  const stableRewind = useEvent(onRewind)
   const recover = useEvent(() => {
     onDraft((draft.trim() ? `${draft}\n\n` : '') + 'Continue the previous task from the current project state. First check which actions already completed; do not repeat successful commands or writes. Resolve the last error before proceeding.')
     input.current?.focus()
@@ -688,6 +695,8 @@ export function Transcript({
           onDecide={stableDecide}
           onAnswer={stableAnswer}
           onFork={stableFork}
+          rewind={live.rewind ?? NO_POINTS}
+          onRewind={stableRewind}
         />
 
         {live.running && (
@@ -940,7 +949,7 @@ export function runs(entries: t.Entry[]): Run[] {
  */
 const EntryList = memo(function EntryList({
   entries, turns, running, focused, matched, marked,
-  onTurnDisclosure, onAudit, onRecover, onChooseModel, onDecide, onAnswer, onFork,
+  onTurnDisclosure, onAudit, onRecover, onChooseModel, onDecide, onAnswer, onFork, rewind, onRewind,
 }: {
   entries: t.Entry[]
   turns: Turns
@@ -955,6 +964,8 @@ const EntryList = memo(function EntryList({
   onDecide: Answer
   onAnswer: AnswerQuestions
   onFork: (id: string) => void
+  rewind: RewindPoint[]
+  onRewind: (steps: number) => void
 }): React.JSX.Element {
   const grouped = useMemo(() => runs(entries), [entries])
   // The current turn is everything after its `turn-start`; its runs are the ones still open.
@@ -965,6 +976,8 @@ const EntryList = memo(function EntryList({
     return new Set(entries.slice(from + 1).map((entry) => entry.id))
   }, [entries, running])
   const lastReply = useMemo(() => [...entries].reverse().find((entry) => entry.kind === 'assistant')?.id, [entries])
+  const undoing = useMemo(() => undoRow(entries, rewind), [entries, rewind])
+  const undo = useMemo(() => rewind[0] && { running, onUndo: () => onRewind(rewind[0]!.steps) }, [rewind, running, onRewind])
   return <>
     {grouped.map((run) =>
       run.kind === 'run' ? (
@@ -982,7 +995,8 @@ const EntryList = memo(function EntryList({
           // a fork can be cut in front of, so it is a different kind of thing to
           // right-click. The menu it gets is still decided in the main process.
           onContextMenu={contextMenu(
-            run.entry.kind === 'user' ? 'entry-user' : 'entry',
+            run.entry.kind !== 'user' ? 'entry'
+              : pointForPrompt(rewind, run.entry.prompt) ? 'entry-user-rewindable' : 'entry-user',
             run.entry.id,
           )}
         >
@@ -1001,7 +1015,8 @@ const EntryList = memo(function EntryList({
           />}
           {(run.entry.kind === 'assistant' || (run.entry.kind === 'error' && run.entry.turn !== undefined)) &&
             <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onDisclosure={onTurnDisclosure} onAudit={onAudit}
-              copy={run.entry.kind === 'assistant' ? run.entry.text : undefined} />}
+              copy={run.entry.kind === 'assistant' ? run.entry.text : undefined}
+              undo={run.entry.id === undoing ? undo : undefined} />}
         </div>
       ),
     )}
@@ -1009,6 +1024,7 @@ const EntryList = memo(function EntryList({
 })
 
 const nothing = (): undefined => undefined
+const NO_POINTS: RewindPoint[] = []
 
 /**
  * What a run did, in the agent's own verbs: "Read 3, Edit 1". Counted as sent rather than sorted

@@ -1873,6 +1873,11 @@ impl Handle {
         }
     }
 
+    /// Whether a language server this session started may have left processes that still write.
+    pub fn server_children_may_run(&self) -> bool {
+        self.server_children_may_run
+    }
+
     /// Forks discard checkpoints, but cannot stop server descendants that may still write.
     pub fn inherit_rewind_warnings(&mut self, parent: &Self) {
         self.server_children_may_run |= parent.server_children_may_run;

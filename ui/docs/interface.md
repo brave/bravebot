@@ -7,6 +7,7 @@ are in [setup](setup.md) and [development](development.md); the protocol underne
 - [What it looks like](#what-it-looks-like), [the header](#the-conversation-header) and [where notices go](#where-notices-go)
 - [Turn notices, usage and audit](#turn-notices-usage-and-audit)
 - [Forking, and export](#forking)
+- [Undo and rewind](#undo-and-rewind)
 - [Bots](#bots)
 - [The name in the menu bar](#the-name-in-the-menu-bar)
 - [Keys](#keys) and [tooltips](#tooltips)
@@ -211,6 +212,22 @@ the note, and the row — because they are the same idea. None of it can live in
 parent, and it is rewritten after every turn — so lineage is stored in the `forks`
 key beside `recents` in `bravebot-ui.json`. The main process writes it from the agent's answer rather than
 from anything the window asked for.
+
+### Undo and rewind
+
+A turn that wrote files can be put back, files and conversation together, as the terminal's
+`/undo` and `/rewind` do. There are three ways in: **Undo turn** on the latest reply's footer,
+**Rewind to Before This…** on the right-click of a prompt whose turn can still be reached, and
+Chat › **Undo Last Turn…**, which has no shortcut because `⌘Z` belongs to the text being edited.
+The chat keeps the five most recent points, as the agent lists them at the end of each turn.
+A fork starts with none.
+
+Each one asks first. The dialog names every file it puts back, says in plain words what the
+backups do not cover (a command the turn ran, a hook, a language server), and for a bot's
+conversation says that the bot's memory is not rolled back. Afterwards the transcript is drawn
+again from what the agent now holds, the prompt that began the earliest undone turn goes back in
+the composer, and a queued message waits rather than overtaking it. A file that could not be put
+back is named in the problem toast. Every entry point is greyed while a turn runs.
 
 The **Export** button in the conversation header, and File › Export, offer the same three formats:
 plain text, Markdown, or a PDF that keeps the window's own bubbles. What it writes by default
@@ -492,6 +509,7 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 | `⌘↩` | Chat › Send | Send the draft; greyed while a turn runs or the draft is empty |
 | `⌘.` | Chat › Cancel Turn | Cancel the running turn; greyed when nothing is running |
 | `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Ask again; needs a session |
+| | Chat › Undo Last Turn… | [Undo](#undo-and-rewind) the latest turn; greyed while a turn runs or with nothing to undo |
 | `⌥⌘←` / `⌥⌘→` | View › Hide/Show Chat List / Context Panel | Fold the chat list / the context panel |
 | `Enter` | | In the message box: send, or queue the message while a turn is running |
 | `Shift+Enter` | | In the message box: insert a new line |

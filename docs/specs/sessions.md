@@ -584,7 +584,7 @@ checkpoints. Save the resulting file decisions. Do not compare file contents to 
 
 Every attempted tracked mutation records coverage, including same-label writes, partial failures
 and files whose original bytes were not kept. Programs, matching hooks, scratch writes, language
-servers, desktop execution and backup-lock failures record coverage gaps without discarding points.
+servers, desktop plan runs and backup-lock failures record coverage gaps without discarding points.
 The persistent server warning is also saved outside the checkpoint list, so consuming the final
 point and reopening again cannot erase it. Forks discard checkpoints but retain this warning,
 since forking cannot stop those processes. These reasons survive save/resume, rebinding to a workspace and repeated undo, including undo
@@ -641,13 +641,13 @@ whether or not it is ever read.
 `verified-by: bravebot_session::sessions::discarding_keeps_a_name_chosen_before_the_turn`
 `verified-by: bravebot_tui::app::a_rewind_point_excludes_the_turn_it_undoes`
 `verified-by: bravebot_tui::state::clearing_drops_the_transcript_and_what_it_spent`
-`verified-by: bravebot_tui::state::closing_the_rewind_window_leaves_nothing_to_rewind_to`
-`verified-by: bravebot_tui::state::a_rewind_reaches_past_the_turn_that_just_ended`
-`verified-by: bravebot_tui::state::going_back_further_than_the_session_remembers_rewinds_nothing`
-`verified-by: bravebot_tui::state::a_path_written_in_two_undone_turns_goes_back_to_before_the_first`
-`verified-by: bravebot_tui::state::a_session_keeps_no_more_points_than_it_may`
-`verified-by: bravebot_tui::state::one_turns_writes_can_cost_the_session_the_turns_behind_it`
-`verified-by: bravebot_tui::state::backups_with_no_point_to_hang_them_on_are_dropped`
+`verified-by: bravebot_session::rewind::closing_the_rewind_window_leaves_nothing_to_rewind_to`
+`verified-by: bravebot_session::rewind::a_rewind_reaches_past_the_turn_that_just_ended`
+`verified-by: bravebot_session::rewind::going_back_further_than_the_session_remembers_rewinds_nothing`
+`verified-by: bravebot_session::rewind::a_path_written_in_two_undone_turns_goes_back_to_before_the_first`
+`verified-by: bravebot_session::rewind::a_session_keeps_no_more_points_than_it_may`
+`verified-by: bravebot_session::rewind::one_turns_writes_can_cost_the_session_the_turns_behind_it`
+`verified-by: bravebot_session::rewind::backups_with_no_point_to_hang_them_on_are_dropped`
 `verified-by: bravebot_tui::app::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
 
 `verified-by: bravebot_tui::undo_tests::oversized_original_preserves_unrelated_grants_after_live_and_resumed_successful_undo`
@@ -656,6 +656,7 @@ whether or not it is ever read.
 `verified-by: bravebot_tui::undo_tests::immediate_undo_after_resume_keeps_server_warnings_for_later_turns`
 `verified-by: bravebot_ui_bridge::bridge::a_resumed_server_warning_survives_a_desktop_save_without_checkpoints`
 `verified-by: bravebot_ui_bridge::bridge::a_desktop_fork_keeps_the_server_warning_without_checkpoints`
+`verified-by: bravebot_ui_bridge::bridge::a_desktop_turn_after_the_last_point_keeps_the_server_warning`
 `verified-by: bravebot_tui::undo_tests::complete_and_failed_restores_keep_files_trust_programs_and_history_aligned`
 `verified-by: bravebot_tui::undo_tests::editing_then_running_a_program_keeps_undo_and_warns`
 `verified-by: bravebot_tui::undo_tests::matching_hooks_keep_undo_with_saved_coverage_warnings`
@@ -730,7 +731,7 @@ takes a number cannot also have it, so the number is on a word that has one.
 `verified-by: bravebot_tui::app::undo_with_something_after_it_is_still_a_prompt`
 `verified-by: bravebot_tui::app::the_list_names_what_each_point_would_put_back`
 `verified-by: bravebot_tui::app::the_list_of_a_session_with_no_points_says_there_is_nothing`
-`verified-by: bravebot_tui::state::going_back_further_than_the_session_remembers_rewinds_nothing`
+`verified-by: bravebot_session::rewind::going_back_further_than_the_session_remembers_rewinds_nothing`
 
 
 <a id="SESSION-22"></a>
@@ -934,10 +935,17 @@ resumed and continued by the other. Everything above decides what a record holds
 found, whichever surface is asking: one directory per working directory, the naming, the ordering,
 the modes, and degrading to nothing where there is no directory to write into.
 
-Before bridge engine execution begins, imported rewind points record a desktop coverage gap.
-The bridge does not collect the terminal's byte backups. It retains current file decisions on
-every turn ending. Later terminal undo keeps the points and applies the per-path trust rule,
-so an uncovered write cannot gain trust from an older snapshot.
+The desktop opens a rewind point before each turn and keeps that turn's byte backups, under the
+same depth and budget as the terminal, so a terminal resuming the record can undo a desktop turn
+as it would one of its own. A desktop plan run keeps no backups, so before one begins every point
+the session holds records a desktop coverage gap. Each turn ending retains current file
+decisions, and a later undo applies the per-path trust rule, so an uncovered write cannot gain
+trust from an older snapshot.
+
+The desktop rewinds as the terminal does, with what it puts back and what it reports the same.
+One difference follows from what the desktop can do that the terminal cannot: a command approval
+can be revoked between turns, so a desktop rewind returns to the snapshot's approvals that are
+still held rather than to all of them. A rewind never hands back an approval the person withdrew.
 
 A surface showing one list across every project asks a question a terminal never asks, and that
 question is the whole of what it adds. Which projects have sessions is read from the store rather
@@ -956,6 +964,10 @@ ask about. Adding the discovery and borrowing the listing is what keeps that dif
 place it genuinely is.
 
 `verified-by: bravebot_tui::undo_tests::terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions`
+`verified-by: bravebot_ui_bridge::rewind::undoing_a_desktop_turn_puts_back_its_file_and_its_conversation`
+`verified-by: bravebot_ui_bridge::rewind::undoing_two_desktop_turns_puts_a_file_back_to_before_the_first`
+`verified-by: bravebot_ui_bridge::rewind::a_session_with_no_turns_has_nothing_to_undo`
+`verified-by: bravebot_ui_bridge::bridge::undoing_a_turn_does_not_hand_back_a_revoked_command`
 `verified-by: bravebot_ui_bridge::interop::a_record_written_here_is_read_back_by_the_agents_own_reader`
 `verified-by: bravebot_ui_bridge::interop::resuming_a_session_writes_back_to_it_rather_than_forking`
 `verified-by: bravebot_ui_bridge::interop::every_project_is_listed_in_one_order_rather_than_project_by_project`

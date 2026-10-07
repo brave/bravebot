@@ -3345,7 +3345,8 @@ fn rewind_point(
 /// to go back is deciding about those files, and a count of them decides nothing.
 fn list_rewind_points(session: &mut Session) {
     let lines: Vec<String> = session
-        .rewind_points()
+        .rewind
+        .points()
         .iter()
         .rev()
         .enumerate()
@@ -3403,11 +3404,11 @@ fn rewind(
     servers: &mut Option<LanguageServers>,
     steps: usize,
 ) {
-    session.bind_rewind_coverage(workspace);
-    let Some(point) = session.take_rewind(steps) else {
+    session.rewind.bind_coverage(workspace);
+    let Some(point) = session.rewind.take(steps) else {
         // Saying how far back it does go rather than refusing in the abstract, since the next
         // thing the person types is that number.
-        match session.rewind_points().len() {
+        match session.rewind.points().len() {
             0 => session.note(t!(session_nothing_to_undo)),
             kept => session.note(t!(session_rewind_goes_no_further, kept = kept)),
         }
@@ -3425,7 +3426,9 @@ fn rewind(
         bravebot_agent::home::directory().as_deref(),
     );
     if !refused.is_empty() {
-        session.record_rewind_gap(bravebot_agent::rewind::CoverageGap::BackupUnavailable);
+        session
+            .rewind
+            .record_gap(bravebot_agent::rewind::CoverageGap::BackupUnavailable);
     }
 
     *conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
@@ -3468,7 +3471,7 @@ fn rewind(
                 programs,
                 directories: workspace.added_directories(),
                 manifest: None,
-                rewind: session.rewind_points(),
+                rewind: session.rewind.points(),
                 checkouts: &workspace.session_checkouts(),
             },
         );
@@ -4013,14 +4016,14 @@ fn event_loop(
             Action::AddDirectory(directory) => {
                 // The snapshot holds a trust map without this directory's rule in it, while the
                 // directory itself would stay open.
-                session.close_rewind_window();
+                session.rewind.close();
                 add_directory(&mut session, &mut workspace, &mut answers.trust, &directory);
             }
             Action::CloseDirectory(directory) => {
                 if close_directory(&mut session, &mut workspace, &mut answers.trust, &directory) {
                     // The snapshot holds a trust map with this directory's rule in it, while the
                     // directory itself would stay closed.
-                    session.close_rewind_window();
+                    session.rewind.close();
                     // Written now rather than at the end of the next turn: a session that closed
                     // a directory and then quit would otherwise resume with it open and trusted.
                     // Wherever a record is on disk, which a rewind to before the first turn can
@@ -4043,7 +4046,7 @@ fn event_loop(
                                 programs: &answers.programs,
                                 directories: workspace.added_directories(),
                                 manifest: None,
-                                rewind: session.rewind_points(),
+                                rewind: session.rewind.points(),
                                 checkouts: &workspace.session_checkouts(),
                             },
                         );
@@ -4053,7 +4056,7 @@ fn event_loop(
             Action::ChangeDirectory(directory) => {
                 // The record moves with the working directory, so the snapshot describes a
                 // session that is no longer written where it was.
-                session.close_rewind_window();
+                session.rewind.close();
                 let changed = change_directory(
                     &mut session,
                     &mut workspace,
@@ -4079,7 +4082,7 @@ fn event_loop(
                             programs: &answers.programs,
                             directories: workspace.added_directories(),
                             manifest: None,
-                            rewind: session.rewind_points(),
+                            rewind: session.rewind.points(),
                             checkouts: &workspace.session_checkouts(),
                         },
                     );
@@ -4241,7 +4244,7 @@ fn event_loop(
             }
             Action::Compact(focus) => {
                 // The snapshot holds the conversation as it was before it was shortened.
-                session.close_rewind_window();
+                session.rewind.close();
                 let events;
                 (conversation, events) = compact_animated(
                     terminal,
@@ -4271,7 +4274,7 @@ fn event_loop(
                         programs: &answers.programs,
                         directories: workspace.added_directories(),
                         manifest: None,
-                        rewind: session.rewind_points(),
+                        rewind: session.rewind.points(),
                         checkouts: &workspace.session_checkouts(),
                     },
                 );
@@ -4285,7 +4288,7 @@ fn event_loop(
                     // The snapshot holds the spend and the timing as they were before the turn,
                     // and an aside is charged to that turn: rewinding to it would un-charge a
                     // request that really went out. The same reason `/compact` closes it.
-                    session.close_rewind_window();
+                    session.rewind.close();
                     let events = aside_animated(
                         terminal,
                         &mut session,
@@ -4323,7 +4326,7 @@ fn event_loop(
                                 programs: &answers.programs,
                                 directories: workspace.added_directories(),
                                 manifest: None,
-                                rewind: session.rewind_points(),
+                                rewind: session.rewind.points(),
                                 checkouts: &workspace.session_checkouts(),
                             },
                         );
@@ -4340,7 +4343,7 @@ fn event_loop(
                     // and this run is charged to that turn, exactly as an aside is: rewinding to
                     // it would un-charge requests that really went out, and steps that really
                     // wrote to the tree are not something the rewind window covers.
-                    session.close_rewind_window();
+                    session.rewind.close();
                     let events = manifest_animated(
                         terminal,
                         &mut session,
@@ -4357,7 +4360,7 @@ fn event_loop(
                     )?;
 
                     // Taken off the workspace rather than kept for anything: a run is not a turn of
-                    // this conversation, and `close_rewind_window` above already shut the window
+                    // this conversation, and `rewind.close` above already shut the window
                     // that could have rewound to one, so nothing will put these back. What the
                     // drain is for is the *next* turn, which takes whatever the workspace is
                     // holding as its own. Left here, the run's writes would be attributed to that
@@ -4388,7 +4391,7 @@ fn event_loop(
                             // record is a conversation that can be resumed; the run has a
                             // record of its own where that field is filled.
                             manifest: None,
-                            rewind: session.rewind_points(),
+                            rewind: session.rewind.points(),
                             checkouts: &workspace.session_checkouts(),
                         },
                         &events,
@@ -4483,8 +4486,8 @@ fn event_loop(
                         &stored,
                     );
                     let _ = workspace.take_backups();
-                    session.open_rewind_point(point, prompt.clone());
-                    session.bind_rewind_coverage(&workspace);
+                    session.rewind.open(point, prompt.clone());
+                    session.rewind.bind_coverage(&workspace);
 
                     // Everything the session holds is lent for the turn and taken back: a turn that
                     // writes untrusted data into a trusted path records that, and the next turn must
@@ -4531,7 +4534,7 @@ fn event_loop(
                     answers.exposed = exposed;
 
                     session.record_turn(history_start, &conversation);
-                    session.keep_backups(workspace.take_backups());
+                    session.rewind.keep_backups(workspace.take_backups());
 
                     // Written after each turn rather than at the end, because the end may never
                     // come: the session worth resuming is the one whose machine slept and never
@@ -4552,7 +4555,7 @@ fn event_loop(
                             programs: &answers.programs,
                             directories: workspace.added_directories(),
                             manifest: None,
-                            rewind: session.rewind_points(),
+                            rewind: session.rewind.points(),
                             checkouts: &workspace.session_checkouts(),
                         },
                     );
@@ -4575,7 +4578,7 @@ fn event_loop(
             }
             Action::Run(line) => {
                 // Shell effects have no file-tool journal, but older edits can still be undone.
-                session.bind_rewind_coverage(&workspace);
+                session.rewind.bind_coverage(&workspace);
                 workspace.mark_rewind_gap(bravebot_agent::rewind::CoverageGap::Command);
                 let events =
                     run_command(terminal, &mut session, &workspace, &line, &mut conversation)?;
@@ -4598,7 +4601,7 @@ fn event_loop(
                         programs: &answers.programs,
                         directories: workspace.added_directories(),
                         manifest: None,
-                        rewind: session.rewind_points(),
+                        rewind: session.rewind.points(),
                         checkouts: &workspace.session_checkouts(),
                     },
                 );
@@ -5522,7 +5525,7 @@ fn rename_session(
     } else if stored.rename(name) {
         // Every point holds the name the session had before it was renamed, the one a turn running
         // now opened among them (SESSION-19). A refused name changes nothing, so it gives up none.
-        session.close_rewind_window();
+        session.rewind.close();
         session.note(t!(session_renamed, title = stored.title()));
     } else {
         session.note(t!(session_rename_needs_something));
@@ -5598,7 +5601,7 @@ fn branch_session(
     }
     match stored.branch_off(name) {
         Ok(original) => {
-            session.close_rewind_window();
+            session.rewind.close();
             session.stop_loop();
             session.clear_goal();
             session.stop_watches();
@@ -5619,7 +5622,7 @@ fn branch_session(
                     programs: &answers.programs,
                     directories: workspace.added_directories(),
                     manifest: None,
-                    rewind: session.rewind_points(),
+                    rewind: session.rewind.points(),
                     checkouts: &workspace.session_checkouts(),
                 },
             );
@@ -19799,7 +19802,7 @@ mod tests {
             return;
         }
         let mut session = a_turn_running_on("first");
-        session.open_rewind_point(a_point_before(0), "first".to_string());
+        session.rewind.open(a_point_before(0), "first".to_string());
 
         nothing_beside(|beside| {
             typed_during_a_turn(
@@ -19811,7 +19814,7 @@ mod tests {
         });
 
         assert!(
-            session.rewind_points().is_empty(),
+            session.rewind.points().is_empty(),
             "a point holding the old name outlived the rename"
         );
     }
@@ -19821,7 +19824,7 @@ mod tests {
     #[test]
     fn a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point() {
         let mut session = a_turn_running_on("first");
-        session.open_rewind_point(a_point_before(0), "first".to_string());
+        session.rewind.open(a_point_before(0), "first".to_string());
 
         nothing_beside(|beside| {
             typed_during_a_turn(&mut session, RENAME_COMMAND, key(KeyCode::Enter), beside)
@@ -19832,7 +19835,7 @@ mod tests {
             vec![t!(session_rename_needs_a_name)]
         );
         assert_eq!(
-            session.rewind_points().len(),
+            session.rewind.points().len(),
             1,
             "a rename that renamed nothing gave up the running turn's point"
         );
@@ -22784,7 +22787,7 @@ mod tests {
                     programs: &TrustedPrograms::new(),
                     directories: &[],
                     manifest: None,
-                    rewind: session.rewind_points(),
+                    rewind: session.rewind.points(),
                     checkouts: &[],
                 },
             );
@@ -22821,7 +22824,7 @@ mod tests {
             type_line(&mut session, &prompt);
             session.submit().expect("the prompt is sent");
             let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
-            session.open_rewind_point(point, prompt.clone());
+            session.rewind.open(point, prompt.clone());
             session.prompt_recorded(conversation.recounted().len());
             conversation.push(Message::user(&prompt));
             conversation.push(Message::assistant("said"));
@@ -22839,7 +22842,8 @@ mod tests {
         );
         assert_eq!(
             session
-                .rewind_points()
+                .rewind
+                .points()
                 .last()
                 .map(|point| point.snapshot.cached),
             Some(Some(figures[0])),
@@ -22848,7 +22852,8 @@ mod tests {
         );
         assert_eq!(
             session
-                .rewind_points()
+                .rewind
+                .points()
                 .last()
                 .and_then(|point| point.snapshot.cached_prompt_tokens),
             Some(1_000),
@@ -23053,7 +23058,7 @@ mod tests {
             &answers.programs,
             &stored,
         );
-        session.open_rewind_point(point, prompt.to_string());
+        session.rewind.open(point, prompt.to_string());
         session.prompt_recorded(conversation.recounted().len());
         conversation.push(Message::user(prompt));
         conversation.push(Message::assistant("written"));
@@ -23075,13 +23080,13 @@ mod tests {
                 programs: &answers.programs,
                 directories: &[],
                 manifest: None,
-                rewind: session.rewind_points(),
+                rewind: session.rewind.points(),
                 checkouts: &[],
             },
         );
         session.start_goal("cargo test exits 0".to_string());
         session.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
-        assert!(!session.rewind_points().is_empty());
+        assert!(!session.rewind.points().is_empty());
         (workspace, session, stored, conversation, answers)
     }
 
@@ -23139,7 +23144,7 @@ mod tests {
             "a loop carried over to the copy"
         );
         assert!(
-            session.rewind_points().is_empty(),
+            session.rewind.points().is_empty(),
             "the copy kept the original's rewind points"
         );
         let said = session.transcript.last().expect("a note").text.clone();
@@ -23378,7 +23383,7 @@ mod tests {
         type_line(&mut session, prompt);
         session.submit().expect("the prompt is sent");
         let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
-        session.open_rewind_point(point, prompt.to_string());
+        session.rewind.open(point, prompt.to_string());
         session.prompt_recorded(conversation.recounted().len());
         conversation.push(Message::user(prompt));
         conversation.push(Message::assistant("written"));
@@ -23400,7 +23405,7 @@ mod tests {
                 programs: &programs,
                 directories: &[],
                 manifest: None,
-                rewind: session.rewind_points(),
+                rewind: session.rewind.points(),
                 checkouts: &workspace.session_checkouts(),
             },
         );
@@ -23430,7 +23435,7 @@ mod tests {
         let mut conversation = conversation;
 
         assert!(
-            resumed.rewind_points().is_empty(),
+            resumed.rewind.points().is_empty(),
             "the resumed session was handed a point the rename gave up"
         );
 
@@ -23521,13 +23526,19 @@ mod tests {
     #[test]
     fn the_list_names_what_each_point_would_put_back() {
         let mut session = Session::new("none");
-        session.open_rewind_point(a_point_before(0), "add a line to notes.md".into());
-        session.keep_backups(vec![bravebot_agent::workspace::Backup {
-            captured_trust: bravebot_core::label::Integrity::Trusted,
-            path: std::path::PathBuf::from("/work/notes.md"),
-            was: bravebot_agent::workspace::Before::Nothing,
-        }]);
-        session.open_rewind_point(a_point_before(1), "read the notes back".into());
+        session
+            .rewind
+            .open(a_point_before(0), "add a line to notes.md".into());
+        session
+            .rewind
+            .keep_backups(vec![bravebot_agent::workspace::Backup {
+                captured_trust: bravebot_core::label::Integrity::Trusted,
+                path: std::path::PathBuf::from("/work/notes.md"),
+                was: bravebot_agent::workspace::Before::Nothing,
+            }]);
+        session
+            .rewind
+            .open(a_point_before(1), "read the notes back".into());
 
         list_rewind_points(&mut session);
 
@@ -25148,7 +25159,7 @@ mod tests {
                     programs: &TrustedPrograms::new(),
                     directories: &[],
                     manifest: None,
-                    rewind: session.rewind_points(),
+                    rewind: session.rewind.points(),
                     checkouts: &[],
                 },
             );
@@ -25196,7 +25207,7 @@ mod tests {
             type_line(&mut session, prompt);
             session.submit().unwrap();
             let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
-            session.open_rewind_point(point, prompt.into());
+            session.rewind.open(point, prompt.into());
             session.prompt_recorded(conversation.recounted().len());
             conversation.push(Message::user(prompt));
             conversation.push(Message::assistant(format!("working {prompt}")));
