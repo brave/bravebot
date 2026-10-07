@@ -273,6 +273,7 @@ label is a claim about authority, so it comes from where the text was composed.
 `verified-by: bravebot_agent::turn::no_view_of_the_request_is_built_for_a_reporter_that_does_not_ask`
 `verified-by: bravebot_agent::turn::the_view_of_the_request_does_not_call_a_dropped_file_typed`
 `verified-by: bravebot_agent::turn::the_view_of_the_request_does_not_call_released_output_trusted`
+`verified-by: bravebot_agent::turn::the_view_of_the_request_is_the_parents_when_a_delegate_ran_and_labels_its_report`
 `verified-by: bravebot_tui::state::clearing_the_conversation_forgets_the_request_it_sent`
 `verified-by: bravebot_agent::conversation::a_message_is_labelled_by_what_was_recorded_and_never_guessed_at`
 `verified-by: bravebot_agent::request_view::pieces_that_are_not_the_prompt_sent_are_not_trusted_to_describe_it`

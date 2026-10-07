@@ -42459,3 +42459,247 @@ fn the_view_of_the_request_does_not_call_released_output_trusted() {
         "{view:#?}"
     );
 }
+
+/// A delegate asks the backend too, with a prompt of its own. `/request` is of the turn the person
+/// is watching, so every view published is of a request the parent sent, and what the delegate
+/// reported is labelled as news from a delegate rather than as anything typed.
+#[test]
+fn the_view_of_the_request_is_the_parents_when_a_delegate_ran_and_labels_its_report() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-delegate");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-SOMETHING",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("SAY-SOMETHING-SHORT", vec![reply_with("REPORTED BACK")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-SOMETHING"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    // The parent's own prompt tells its requests from the delegate's, as in the interjection test.
+    let asked = every_request(&received);
+    let (mine, delegated): (Vec<&String>, Vec<&String>) = asked
+        .iter()
+        .partition(|body| body.contains("DELEGATE-SOMETHING"));
+    assert!(
+        !delegated.is_empty(),
+        "no delegate asked the backend, so the test shows nothing"
+    );
+    assert_eq!(
+        reporter.requests.len(),
+        mine.len(),
+        "a view was published for a request that was not the parent's: {:#?}",
+        reporter.requests
+    );
+    for view in &reporter.requests {
+        assert!(
+            view.spans
+                .iter()
+                .any(|span| span.provenance == Provenance::Typed
+                    && span.text == "DELEGATE-SOMETHING"),
+            "a view is not of a request the parent sent: {view:#?}"
+        );
+    }
+
+    let report = reporter
+        .requests
+        .iter()
+        .flat_map(|view| &view.spans)
+        .find(|span| span.text.contains("REPORTED BACK"))
+        .expect("the delegate's report is in no view");
+    assert_eq!(
+        report.provenance,
+        Provenance::Trusted("delegate report"),
+        "{report:?}"
+    );
+}
+
+/// A line typed while the turn runs is what a person typed, and the view says so from the line
+/// being pushed rather than from its words.
+#[test]
+fn the_view_of_the_request_labels_a_line_typed_mid_turn_as_typed() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-interjection");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request("read_file", r#"{"path":"a.txt"}"#),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK"),
+        &mut SaysOnce::said_after_one_asking("no, the other file"),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let line = reporter
+        .requests
+        .iter()
+        .flat_map(|view| &view.spans)
+        .find(|span| span.text == "no, the other file")
+        .expect("the line typed mid-turn is in no view");
+    assert_eq!(line.provenance, Provenance::Typed, "{line:?}");
+}
+
+/// Output of a job that the kernel let through is named for what it is, not as anything a person
+/// typed or the driver wrote.
+#[test]
+fn the_view_of_the_request_names_a_finished_jobs_visible_output_as_job_output() {
+    use bravebot_agent::request_view::Provenance;
+
+    let reporter = reporter_after_a_background_job("request-view-job-visible");
+    let account = reporter
+        .requests
+        .iter()
+        .flat_map(|view| &view.spans)
+        .find(|span| span.text.contains(JOB_1_FINISHED))
+        .expect("the end of the job is in no view");
+    assert_eq!(
+        account.provenance,
+        Provenance::Trusted("job output"),
+        "{account:?}"
+    );
+    assert!(account.text.contains("SENTINEL-JOB"), "{account:?}");
+}
+
+fn reporter_after_a_background_job(name: &str) -> bravebot_agent::report::RecordingReporter {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"echo SENTINEL-JOB","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and get on with something else"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    reporter
+}
+
+/// What a background job printed is held back like any program's output, so the account of its end
+/// is labelled by the reference the planner was given and holds none of the output.
+#[test]
+fn the_view_of_the_request_labels_a_finished_jobs_held_back_output_by_its_reference() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-job-held");
+    let script = scratch.path.join("noisy");
+    std::fs::write(&script, "#!/bin/sh\necho SENTINEL-JOB\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"./noisy","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let account = reporter
+        .requests
+        .iter()
+        .flat_map(|view| &view.spans)
+        .find(|span| span.text.contains(JOB_1_FINISHED))
+        .expect("the end of the job is in no view");
+    assert!(
+        matches!(&account.provenance, Provenance::Reference(token) if token.starts_with("ref:")),
+        "{account:?}"
+    );
+    assert!(
+        !account.text.contains("SENTINEL-JOB"),
+        "the job's output is in the view: {account:?}"
+    );
+}
