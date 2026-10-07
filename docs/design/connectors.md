@@ -924,12 +924,12 @@ write. A possible rule applies the read floor only to content flowing into a wri
 
 ### Data-dependent branches
 
-Some refused tasks know every possible act in advance but need what is read to pick one: approve or
-request changes, file an email or reply to it. [manifest-choose.md](manifest-choose.md) proposes a
-`choose` step for them: the plan fixes every branch and its acts, and only a trusted selector, such
-as the person, picks one. An act in the chosen branch still goes through its popup. That proposal
-makes one choice per `choose`, so choosing per item of a set, as in labelling each issue by its
-kind, needs more.
+Some refused tasks know every possible act in advance, but the right one can be decided only after
+reading service content: approve or request changes, file an email or reply to it.
+[manifest-choose.md](manifest-choose.md) proposes a `choose` step for them. The plan fixes every
+branch and its acts before anything is read, and at run time only a trusted selector, such as the
+person, picks one. What was read may inform that choice but cannot make it. An act in the chosen
+branch still passes its usual checks and its popup.
 
 ### Turn mode
 
