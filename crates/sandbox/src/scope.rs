@@ -285,6 +285,7 @@ mod tests {
     use super::*;
     use crate::base::{Prelude, base};
     use crate::policy::PathKind;
+    #[cfg(unix)]
     use crate::testutil::scratch_dir;
     use std::path::PathBuf;
 
