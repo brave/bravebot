@@ -693,9 +693,9 @@ exited zero carries no such sentence. The sentence is composed from the same two
 ([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
 
 **Why.** A refused step reports `exited 1` and its standard error is quarantined, so the planner
-cannot see that the sandbox refused it. One session took the refusal for a fault in the machine,
-spent five turns and about 780k tokens on causes that did not apply, and asked the person to run
-diagnostics in their own terminal, until the person asked whether the sandbox was the cause.
+cannot see that the sandbox refused it. Without this sentence it cannot tell a sandbox refusal from
+a fault in the machine, so it chases causes that do not apply and sends the person to run
+diagnostics that cannot show the boundary.
 
 **It branches on no output.** The inputs are the session's directories, the compiled step and the
 exit status the result already reports ([RUN-13](tools/run.md#RUN-13)). Nothing a program printed
