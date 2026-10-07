@@ -232,7 +232,7 @@ fn drawn(alias: &str, declaration: &Declaration) -> Value {
         Declaration::Stdio {
             argv, directory, ..
         } => (Some(argv.clone()), None, directory.clone()),
-        Declaration::Http { url } => (None, Some(url.clone()), None),
+        Declaration::Http { url, .. } => (None, Some(url.clone()), None),
     };
     let variables: Vec<Value> = declaration
         .stored()
@@ -264,6 +264,19 @@ fn drawn(alias: &str, declaration: &Declaration) -> Value {
 /// settings page can change other fields without the person typing a token again. A program given
 /// by a bare name is given `PATH` where nothing names it, as `bravebot mcp add` gives it.
 fn resolve(
+    request: &Request,
+    directory: &Path,
+    existing: Option<&Declaration>,
+) -> Result<Declaration, Failure> {
+    let declaration = resolved(request, directory, existing)?;
+    // The form has no field for the bounds, so a declaration the page edits keeps the ones it had.
+    Ok(match existing {
+        Some(existing) => declaration.timing(existing.timeouts()),
+        None => declaration,
+    })
+}
+
+fn resolved(
     request: &Request,
     directory: &Path,
     existing: Option<&Declaration>,

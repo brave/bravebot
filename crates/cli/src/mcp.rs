@@ -20,7 +20,7 @@ use bravebot_config::Managed;
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::mcp::{
     self, Approvals, Declaration, Declarations, Entry, Field, Problem, Projects, Standing,
-    Unreadable,
+    Timeouts, Unreadable,
 };
 use bravebot_i18n::t;
 use std::collections::BTreeMap;
@@ -313,6 +313,8 @@ fn declared(
     let mut env = BTreeMap::new();
     let mut directory = None;
     let mut transport = None;
+    let mut startup = None;
+    let mut tool = None;
     let mut index = 0;
     while index < flags.len() {
         let flag = flags[index].as_str();
@@ -347,6 +349,12 @@ fn declared(
             "--dir" => {
                 let path = value.ok_or_else(|| argument(t!(mcp_dir_needs_a_path)))?;
                 directory = Some(place(path)?);
+            }
+            "--startup-timeout" => {
+                startup = Some(seconds(value, Timeouts::STARTUP_KEY)?);
+            }
+            "--tool-timeout" => {
+                tool = Some(seconds(value, Timeouts::TOOL_KEY)?);
             }
             "--http" => {
                 let url = value.ok_or_else(|| argument(t!(mcp_http_needs_a_url)))?;
@@ -383,6 +391,7 @@ fn declared(
         }
         index += taken;
     }
+    let timeouts = Timeouts::new(startup, tool).map_err(Refusal::Problem)?;
     match transport {
         None => Err(argument(t!(mcp_needs_a_transport)).into()),
         Some(Transport::Stdio(argv)) => {
@@ -393,6 +402,7 @@ fn declared(
             }
             Declaration::stdio(argv, variables, directory)
                 .and_then(|declaration| declaration.storing(env))
+                .map(|declaration| declaration.timing(timeouts))
                 .map_err(Refusal::Problem)
         }
         Some(Transport::Http(_)) if !variables.is_empty() => {
@@ -404,8 +414,18 @@ fn declared(
         Some(Transport::Http(_)) if directory.is_some() => {
             Err(Refusal::Problem(Problem::Remote("directory")))
         }
-        Some(Transport::Http(url)) => Declaration::http(url).map_err(Refusal::Problem),
+        Some(Transport::Http(url)) => Declaration::http(url)
+            .map(|declaration| declaration.timing(timeouts))
+            .map_err(Refusal::Problem),
     }
+}
+
+/// The whole number of seconds a timeout flag was given, which is a problem named by the key the
+/// file spells it with where there is none or it is not a number. Its range is the declaration's to
+/// check.
+fn seconds(word: Option<&String>, key: &'static str) -> Result<u64, Refusal> {
+    word.and_then(|word| word.parse().ok())
+        .ok_or(Refusal::Problem(Problem::Timeout(key)))
 }
 
 /// One word an `-e` took. `NAME=value` is stored, split at its first `=`. A name alone is a
@@ -2156,6 +2176,56 @@ mod tests {
         }
         let remote = ["--http", "https://mcp.example.com/mcp", "-e", "A=1"];
         assert_eq!(found(&remote), Problem::Remote("env"));
+    }
+
+    /// `--startup-timeout` and `--tool-timeout` take whole seconds, on either transport, and a word
+    /// that is not a number of seconds in range is refused naming the key the file spells it with.
+    #[test]
+    fn the_timeout_flags_set_the_declarations_bounds_and_refuse_what_is_not_seconds() {
+        let timeouts = |flags: &[&str]| {
+            declared(&words(flags), 1, &mut None)
+                .unwrap_or_else(|_| panic!("{flags:?} was refused"))
+                .timeouts()
+        };
+        let local = timeouts(&[
+            "--startup-timeout",
+            "5",
+            "--tool-timeout",
+            "300",
+            "--",
+            "/opt/srv",
+        ]);
+        assert_eq!((local.startup, local.tool), (Some(5), Some(300)));
+        let remote = timeouts(&[
+            "--http",
+            "https://mcp.example.com/mcp",
+            "--tool-timeout",
+            "9",
+        ]);
+        assert_eq!((remote.startup, remote.tool), (None, Some(9)));
+        assert!(timeouts(&["--", "/opt/srv"]).is_default());
+
+        let found = |flags: &[&str]| match declared(&words(flags), 1, &mut None) {
+            Err(Refusal::Problem(found)) => found,
+            _ => panic!("{flags:?} spelled no problem"),
+        };
+        for flags in [
+            &["--tool-timeout", "soon", "--", "/opt/srv"][..],
+            &["--tool-timeout", "0", "--", "/opt/srv"],
+            &["--tool-timeout", "3601", "--", "/opt/srv"],
+            &["--tool-timeout", "-5", "--", "/opt/srv"],
+            &["--http", "https://mcp.example.com/mcp", "--tool-timeout"],
+        ] {
+            assert_eq!(
+                found(flags),
+                Problem::Timeout("tool_timeout_secs"),
+                "{flags:?}"
+            );
+        }
+        assert_eq!(
+            found(&["--startup-timeout", "0", "--", "/opt/srv"]),
+            Problem::Timeout("startup_timeout_secs")
+        );
     }
 
     /// SERVERS-10: `-e` before the alias is refused as `claude mcp add` refuses it, where its run

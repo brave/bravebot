@@ -553,7 +553,7 @@ impl Session {
         replace(&records::tools_file(directory), standing.to_text())
     }
 
-    fn call<S: Sink>(
+    pub(crate) fn call<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
         egress: &bravebot_net::Egress,
@@ -592,8 +592,8 @@ impl Session {
         let Some(server) = self.0.servers.iter().find(|server| server.alias == alias) else {
             return false;
         };
-        let declared = match &*held(&server.connection) {
-            Connection::Http(http) => http.url().to_string(),
+        let (declared, startup, bound) = match &*held(&server.connection) {
+            Connection::Http(http) => (http.url().to_string(), http.startup(), http.bound()),
             Connection::Stdio(_) => return false,
         };
         let from = *held(&server.declaration);
@@ -646,7 +646,7 @@ impl Session {
             return false;
         }
 
-        let mut moved = HttpServer::new(alias, url.as_str());
+        let mut moved = HttpServer::new(alias, url.as_str()).starting_within(startup);
         if let Err(error) = moved.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))
         {
             match policy.take_server_hop() {
@@ -660,6 +660,7 @@ impl Session {
             return false;
         }
 
+        moved.set_bound(bound);
         if let (Some(directory), true) = (&self.0.directory, self.0.writable) {
             match record_a_move(directory, alias, &from, &declaration) {
                 Ok(()) => reporter.notice(t!(mcp_move_moved, alias = alias)),
@@ -722,13 +723,15 @@ pub fn record_a_move(
             .to_string(),
         )
     })?;
-    let still = declarations
+    let Some(current) = declarations
         .get(alias)
         .and_then(|entry| entry.declaration.ok())
-        .is_some_and(|declaration| declaration.digest() == *from);
-    if !still {
+        .filter(|declaration| declaration.digest() == *from)
+    else {
         return Err(Unmoved::Edited);
-    }
+    };
+    // Where it is reached is what moved: the bounds the person gave it are still theirs.
+    let to = &to.clone().timing(current.timeouts());
     let mut approvals = Approvals::to_change(directory).map_err(|why| {
         Unmoved::NotWritten(
             t!(

@@ -2418,9 +2418,9 @@ mod tests {
     fn a_server_question_is_held_as_its_own_kind_and_read_as_the_foreground_reads_it() {
         use bravebot_agent::servers::{Answer, Asker, Question};
 
-        let declaration = bravebot_config::mcp::Declaration::Http {
-            url: "https://news.example/mcp".to_string(),
-        };
+        let declaration =
+            bravebot_config::mcp::Declaration::http("https://news.example/mcp".to_string())
+                .expect("declaration");
         for (typed, expected) in [
             (&b"1\n"[..], Answer::Once),
             (b"2\n", Answer::Project),

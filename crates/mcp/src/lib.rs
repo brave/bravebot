@@ -29,6 +29,7 @@ use bravebot_core::label::Label;
 use bravebot_core::policy::Denial;
 use bravebot_core::value::Labelled;
 use std::fmt;
+use std::time::Duration;
 
 /// The label the words a server describes its tools with arrive under.
 ///
@@ -72,6 +73,11 @@ pub enum McpError {
         tool: String,
         detail: Labelled<String>,
     },
+    /// The server did not answer within the bound its declaration gave, or the default.
+    ///
+    /// What was being asked and how long it was given are both this process's: a method or a tool
+    /// the planner named, and a clock reading, so nothing here is a server's word. MCP-5, MCP-8.
+    TimedOut { what: String, after: Duration },
 }
 
 impl fmt::Display for McpError {
@@ -89,11 +95,25 @@ impl fmt::Display for McpError {
                  text and is not reported here"
             ),
             Self::ToolFailed { tool, .. } => write!(f, "tool '{tool}' failed"),
+            Self::TimedOut { what, after } => {
+                write!(f, "{what} timed out after {} seconds", after.as_secs())
+            }
         }
     }
 }
 
 impl std::error::Error for McpError {}
+
+/// `error`, with a call's timeout naming the tool rather than the method.
+pub(crate) fn named(error: McpError, tool: &str) -> McpError {
+    match error {
+        McpError::TimedOut { after, .. } => McpError::TimedOut {
+            what: format!("tool '{tool}'"),
+            after,
+        },
+        other => other,
+    }
+}
 
 /// A reply that would not parse, reported as what was being read and how the parser classified it.
 ///
