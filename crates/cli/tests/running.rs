@@ -7138,7 +7138,7 @@ fn an_attach_from_a_terminal_starts_a_stopped_session() {
     assert!(second.contains("fix the build"), "{second}");
 }
 
-/// BG-9 and CLI-24: `--resume` and `--continue`, with or without a task, name a record a running
+/// BG-9 and CLI-25: `--resume` and `--continue`, with or without a task, name a record a running
 /// background session holds, and say to attach, instead of opening a second writer on it.
 #[cfg(unix)]
 #[test]
@@ -8002,7 +8002,7 @@ fn a_task_that_cannot_carry_on_a_session_is_refused_before_anything_is_sent() {
     );
 }
 
-/// CLI-24 and SESSION-10: a record a manifest run wrote has no conversation to carry on, so a task
+/// CLI-25 and SESSION-10: a record a manifest run wrote has no conversation to carry on, so a task
 /// naming it by id is refused before anything is sent, and `--continue` does not take it for the
 /// latest session.
 #[test]
