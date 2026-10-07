@@ -68,6 +68,12 @@ NAMED_NOT_READ = {
     "docs/development/agent-configuration.md": "a marker doctor checks exists, likewise",
 }
 
+# What a project directory holds for the package manager. The npm names stay so that deleting a
+# leftover lockfile still counts as a change to the install.
+PACKAGE_FILES = (
+    "package.json", "package-lock.json", "pnpm-lock.yaml", "pnpm-workspace.yaml",
+)
+
 # Read by nothing heavier than the checks that always run.
 QUIET = (
     "README.md", "CHANGELOG.md", "LICENSE", ".gitignore", ".envrc.example",
@@ -102,6 +108,8 @@ def classify(path, desktop):
         return frozenset({"rust", "ui", "build", "deps"})
     if path in ("deny.toml", "contrib/check-deny-reasons.py"):
         return frozenset({"deps"})
+    if path == "contrib/check-pnpm-lockfiles.py":
+        return frozenset({"npm"})
     if path == "Dockerfile.cross":
         return frozenset({"build"})
     parts = path.split("/")
@@ -130,14 +138,14 @@ def classify(path, desktop):
         found = {"ui"}
         if name == "test-fixtures/wire-contract.json":
             found.add("rust")
-        if name in ("package.json", "package-lock.json"):
+        if name in PACKAGE_FILES:
             found.add("npm")
         return frozenset(found)
     for under, area in (("docs/website/", "docs"), ("ui/", "ui")):
         if path.startswith(under):
-            lockfile = path[len(under):] in ("package.json", "package-lock.json")
+            lockfile = path[len(under):] in PACKAGE_FILES
             return frozenset({area, "npm"} if lockfile else {area})
-    if path in ("package.json", "package-lock.json") or path.startswith("npm/"):
+    if path in PACKAGE_FILES or path.startswith("npm/"):
         return frozenset({"npm"})
     if path in QUIET or path.startswith(QUIET_UNDER):
         return NOTHING
@@ -302,8 +310,12 @@ CASES = (
     ("docs/specs/routing.md", NOTHING),
     ("docs/website/docs/intro.md", {"docs"}),
     ("docs/website/package-lock.json", {"docs", "npm"}),
+    ("docs/website/pnpm-lock.yaml", {"docs", "npm"}),
+    ("docs/website/pnpm-workspace.yaml", {"docs", "npm"}),
     ("ui/src/App.tsx", {"ui"}),
     ("ui/package.json", {"ui", "npm"}),
+    ("ui/pnpm-lock.yaml", {"ui", "npm"}),
+    ("ui/pnpm-workspace.yaml", {"ui", "npm"}),
     ("ui/scripts/windows-installer.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/check-windows-install.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/package.mjs", {"ui", "build", "installers"}),
@@ -312,11 +324,16 @@ CASES = (
     ("packages/agent-client/src/common/client.ts", {"ui"}),
     ("packages/agent-client/test-fixtures/wire-contract.json", {"rust", "ui"}),
     ("packages/agent-client/package-lock.json", {"ui", "npm"}),
+    ("packages/agent-client/pnpm-lock.yaml", {"ui", "npm"}),
+    ("packages/agent-client/pnpm-workspace.yaml", {"ui", "npm"}),
+    ("contrib/check-pnpm-lockfiles.py", {"npm"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("npm/scripts/postinstall.js", {"npm", "rust"}),
     ("install.sh", {"rust"}),
     ("package-lock.json", {"npm"}),
+    ("pnpm-lock.yaml", {"npm"}),
+    ("pnpm-workspace.yaml", {"npm"}),
     ("agents/skills/rebase/SKILL.md", NOTHING),
     ("contrib/check-locales.py", NOTHING),
     ("README.md", NOTHING),

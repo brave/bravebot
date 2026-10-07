@@ -26,19 +26,12 @@
     "LICENSE"
   ],
   "scripts": {
-    "postinstall": "node npm/scripts/postinstall.js",
-    "lint:lockfile": "lockfile-lint --path package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity",
-    "lint:lockfile:website": "lockfile-lint --path docs/website/package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity --allowed-package-name-aliases image-size:image-size-next react-helmet-async:@slorber/react-helmet-async react-loadable:@docusaurus/react-loadable",
-    "lint:lockfile:agent-client": "lockfile-lint --path packages/agent-client/package-lock.json --type npm --allowed-hosts npm --validate-https --validate-package-names --validate-integrity",
-    "lint:lockfile:ui": "lockfile-lint --path ui/package-lock.json --type npm --allowed-hosts npm --allowed-schemes \"https:\" \"git+ssh:\" --allowed-urls \"git+ssh://git@github.com/brave/leo.git#3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d\" --validate-package-names --validate-integrity"
+    "postinstall": "node npm/scripts/postinstall.js"
   },
   "engines": {
     "node": ">=18"
   },
   "publishConfig": {
     "access": "public"
-  },
-  "devDependencies": {
-    "lockfile-lint": "^5.0.1"
   }
 }

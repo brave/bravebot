@@ -76,7 +76,7 @@ The structure is set in `styles/shell.css` and `columns.ts`. New surfaces fit in
 1. **Nala only.** Import components only from `ui/src/renderer/nala.ts`. Use `--leo-*` tokens or
    the semantic layer in `styles/tokens.css` that aliases them for colour, type, spacing, radius,
    elevation and motion. No raw hex, no raw `box-shadow`, no odd pixel values.
-   `node scripts/check-nala.mjs` (run by `npm run typecheck`) must pass. It only gets stricter.
+   `node scripts/check-nala.mjs` (run by `pnpm run typecheck`) must pass. It only gets stricter.
    Never loosen it or raise a ratchet to make a change pass.
 2. **Icons are Leo `Icon`s.** Sizes are 12 (caption), 14 (meta), 16 (controls) and 20 (empty
    states and dialog headers), from one stroke family. No inline `<svg>` except the pixel avatar
@@ -244,7 +244,7 @@ does not regress them.
 The current commands are in `ui/package.json` and `ui/docs/testing.md`, which win over this list if
 they differ. From `ui/`:
 
-- `npm run typecheck` (includes `check-nala`) and `npm run build`. Warnings count.
+- `pnpm run typecheck` (includes `check-nala`) and `pnpm run build`. Warnings count.
 - `node --test scripts/*.test.mjs`, including `marking.test.mjs` and `ux-state.test.mjs`.
 - The non-paid drivers that touch what you changed, for example `drive`, `drive:columns`,
   `drive:panels`, `drive:models`, `drive:menu`, `drive:export`, `drive:fork`, `drive:tree`,

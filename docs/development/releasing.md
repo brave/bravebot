@@ -36,9 +36,9 @@ ledger's commit date is only a lower bound on when the advisory check last ran, 
 finds nothing new commits nothing, which is why the comment is preferred.
 
 `bump-version` rewrites the version in `Cargo.toml`, `Cargo.lock`, `package.json`,
-`package-lock.json`, `ui/package.json`, and `ui/package-lock.json`, commits exactly those six as
+and `ui/package.json`, commits exactly those four as
 `Bump version to <version>`, and stops there: nothing is pushed and nothing is tagged. It refuses
-if any of the six is already modified, rather than committing changes it did not write, and it
+if any of the four is already modified, rather than committing changes it did not write, and it
 runs `make check-versions` before committing, so a bump that misses one fails there rather than
 at the tag. `github-release` refuses to tag unless the tree is clean, every file that states the
 version agrees, and HEAD is `main` at the release remote's `main`, then pushes `v<version>` there.
@@ -139,7 +139,7 @@ consumes it.
 
 `make app-bundle` is the same app for the machine it runs on, from this checkout's own release
 build rather than from `dist/`, left in `ui/dist/` with no image. It refuses a build with no
-backend credentials in it, which the front end's own `npm run bridge` allows on purpose: a bundle
+backend credentials in it, which the front end's own `pnpm run bridge` allows on purpose: a bundle
 built from an unconfigured shell starts, lists sessions, opens them, and fails at the first
 inference request, and Finder loads no shell configuration for the person who would then report
 that. So the credentials have to be in the environment `make` runs in, as they are for the

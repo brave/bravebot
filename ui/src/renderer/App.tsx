@@ -204,7 +204,7 @@ const METHOD: Record<Asked, string> = t.REPLY
 async function call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
   const answer = await window.bravebot.request<T>(method, params)
   if (answer.error) {
-    // `config` is `Config::from_env` failing, which for a packaged or npm-launched app
+    // `config` is `Config::from_env` failing, which for a packaged app or one launched from a checkout
     // means the credentials were not baked in at compile time. It is not recoverable
     // from here and needs saying properly.
     if (answer.error.code === 'config') throw new Unconfigurable(answer.error.message)

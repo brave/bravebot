@@ -1,0 +1,5 @@
+allowBuilds:
+  "@brave/leo@https://codeload.github.com/brave/leo/tar.gz/3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d": true
+  electron-winstaller: false
+  esbuild: false
+  svelte-preprocess: false
