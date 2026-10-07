@@ -21,6 +21,7 @@ use crate::diff::Diff;
 use bravebot_core::Pipeline;
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::vetting::Verdict;
+use bravebot_i18n::t;
 use std::fmt;
 
 /// How a proposed write came about.
@@ -213,6 +214,77 @@ pub struct RunRequest {
     /// written, so there is nothing of the content in it. What the contents are is
     /// `read_output`'s question and is asked separately.
     pub stdin: Option<String>,
+    /// What the programs of this plan are confined to, or `None` where the turn starts them with
+    /// the access the user's own shell has.
+    ///
+    /// Built by the same [`crate::confine::Confinement`] that builds each stage's profile, from
+    /// the same steps, so the prompt cannot say a program is confined when the executor starts it
+    /// unconfined, nor the other way. `None` is the one thing a front end may describe as not
+    /// sandboxed.
+    pub confined: Option<Confined>,
+}
+
+/// What a confined `run` is held to, in the words a prompt needs.
+///
+/// Only paths, program names and the kinds of access: nothing a program printed and nothing the
+/// model supplied beyond the plan a person is reading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Confined {
+    /// The directories every stage reads and writes: those the session was opened on and its
+    /// scratch directory.
+    pub directories: Vec<std::path::PathBuf>,
+    /// What a stage carries beyond them, in step order. A stage that carries nothing is absent.
+    pub carried: Vec<Carried>,
+}
+
+/// What one stage of a confined plan carries beyond the session's directories.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Carried {
+    /// The program as the step names it.
+    pub program: String,
+    /// The toolchain list its resolved binary brings.
+    pub toolchain: Option<bravebot_sandbox::toolchain::Toolchain>,
+    /// The credential scope its argv names.
+    pub scope: Option<bravebot_sandbox::scope::Scope>,
+}
+
+impl Confined {
+    /// The sentence that introduces the directories, for a front end to draw above them.
+    pub fn heading(&self) -> String {
+        t!(run_confined).to_string()
+    }
+
+    /// One sentence for each toolchain list and each credential scope a stage brings, in step
+    /// order, worded once here so no front end carries its own copy of them.
+    pub fn sentences(&self) -> Vec<String> {
+        use bravebot_sandbox::scope::Scope;
+        let mut sentences = Vec::new();
+        for stage in &self.carried {
+            let program = stage.program.as_str();
+            if let Some(toolchain) = stage.toolchain {
+                sentences.push(
+                    t!(
+                        run_carries_toolchain,
+                        program = program,
+                        toolchain = toolchain.name()
+                    )
+                    .to_string(),
+                );
+            }
+            if let Some(scope) = stage.scope {
+                sentences.push(
+                    match scope {
+                        Scope::Remote => t!(run_carries_remote, program = program),
+                        Scope::Aws => t!(run_carries_aws, program = program),
+                        Scope::Kubernetes => t!(run_carries_kubernetes, program = program),
+                        Scope::Docker => t!(run_carries_docker, program = program),
+                    }
+                    .to_string(),
+                );
+            }
+        }
+        sentences
+    }
 }
 
 impl RunRequest {
@@ -237,6 +309,7 @@ impl RunRequest {
             // A pipeline holds the label of what would be fed to its first stage and no reference
             // to name: this constructor is for shell mode, where the bytes are the user's own.
             stdin: None,
+            confined: None,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -265,11 +338,11 @@ impl RunRequest {
 
     /// The authorities this line reaches that nothing here holds, in the order it names them.
     ///
-    /// Drawn beside the line saying the command is not sandboxed rather than instead of it. That
+    /// Drawn beside the line saying what the command is confined to rather than instead of it. That
     /// line is true of every command and says what confinement there is; this says which
     /// particular access a yes hands over, which is the thing a person cannot work out from the
     /// argument list in front of them. Nothing is refused on it and nothing depends on the list
-    /// being complete: a container daemon nobody recognised is still unsandboxed and still said
+    /// being complete: a container daemon nobody recognised is still reached and still said
     /// to be.
     pub fn ambient_authority(&self) -> Vec<bravebot_core::ambient::Spent> {
         bravebot_core::ambient::spent_by(&self.plan)
@@ -2103,6 +2176,46 @@ mod tests {
             vec![Answer::Chosen(vec![0]), Answer::Declined],
             "a question with no options was answered with an option"
         );
+    }
+
+    /// Each toolchain and each credential scope a stage brings is named with the program that
+    /// brings it, and no scope is worded as another: reading `~/.aws` is not reading `~/.kube`.
+    #[test]
+    fn each_scope_and_toolchain_is_a_sentence_naming_the_program_and_what_it_reaches() {
+        use bravebot_sandbox::scope::Scope;
+        let carried = |program: &str, scope| Carried {
+            program: program.into(),
+            toolchain: None,
+            scope: Some(scope),
+        };
+        let confined = Confined {
+            directories: Vec::new(),
+            carried: vec![
+                carried("aws", Scope::Aws),
+                carried("kubectl", Scope::Kubernetes),
+                carried("docker", Scope::Docker),
+                carried("gh", Scope::Remote),
+                Carried {
+                    program: "npm".into(),
+                    toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Node),
+                    scope: None,
+                },
+            ],
+        };
+
+        let sentences = confined.sentences();
+
+        assert_eq!(sentences.len(), 5);
+        for (sentence, (program, reached)) in sentences.iter().zip([
+            ("aws", "~/.aws"),
+            ("kubectl", "~/.kube"),
+            ("docker", "~/.docker"),
+            ("gh", "never a private key"),
+            ("npm", "node toolchain"),
+        ]) {
+            assert!(sentence.starts_with(program), "{sentence}");
+            assert!(sentence.contains(reached), "{sentence}");
+        }
     }
 
     fn a_run() -> RunRequest {

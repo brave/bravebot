@@ -6847,6 +6847,8 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         policy.recall(lines.clone());
     }
 
+    let confinement = tools.confinement();
+
     let asking = policy.plan_needs_approval(&plan);
     // Whether the record is what stopped the question. Read where the result is quarantined: the
     // advice about vouching is advice about a prompt, and no prompt will return here for this line
@@ -6887,6 +6889,11 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             // The reference, so the person reads what is going in as well as that something is.
             // The driver's own name for a slot, never a byte of what the slot holds.
             stdin: fed.as_ref().map(|(slot, _, _)| slot.to_string()),
+            // Described by the confinement the executor starts these steps under, the same value,
+            // so the prompt names no confinement exactly where the steps start without one.
+            confined: confinement
+                .as_ref()
+                .map(|confinement| confinement.describe(&plan.steps())),
         };
         let answer = confirmer.confirm_run(&request);
         policy.record_answer(
@@ -6969,8 +6976,6 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // cannot name different things, and recorded below at each point the line actually starts: a
     // grant is a sentence somebody answered and a use is a thing that happened.
     let spends = bravebot_core::ambient::spent_by(&plan);
-
-    let confinement = tools.confinement();
 
     if in_the_background {
         // What has to be refused is what start_steps cannot honour, and it honours no route at

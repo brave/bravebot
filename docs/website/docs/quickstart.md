@@ -191,7 +191,9 @@ carries on and can try something else. Ctrl-C refuses and stops.
 A `run` prompt shows the compiled plan: every step, the binary each resolved to, the directory, and
 every file the line would write. A step whose name reached its binary through a link, such as a
 virtualenv's `python`, shows the link and then the binary, as `link -> binary`. The prompt also says
-that the command is not sandboxed:
+what the command is confined to, which is the directories the session was opened on and what each
+program in the line brings beyond them, such as the credentials a `git push` needs. On Windows,
+where nothing confines a program, it says the command is not sandboxed instead:
 
 ```
   y run it    a always    n don't    ctrl-c stop the turn

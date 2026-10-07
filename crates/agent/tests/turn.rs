@@ -22431,6 +22431,57 @@ fn a_delegate_of_a_confining_turn_cannot_write_outside_the_session() {
     }
 }
 
+/// The prompt describes the confinement the turn starts programs under, and only that one. The
+/// regression it rejects is a prompt built from anything but the executor's own decision: one that
+/// described a profile for a turn that starts programs unconfined, or none for a turn that confines
+/// them, would tell a person the opposite of what runs.
+#[test]
+fn a_run_prompt_describes_the_confinement_only_where_the_turn_confines() {
+    for confining in [false, true] {
+        let scratch = Scratch::new(&format!("prompt-confined-{confining}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve_by_marker(vec![(
+            "ASK-ABOUT-A-RUN",
+            vec![
+                tool_request("run", r#"{"command":"touch first.txt"}"#),
+                reply_with("declined"),
+            ],
+        )]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut answers = retention_answers::Answers::new(bravebot_agent::RunDecision::reject());
+
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("ASK-ABOUT-A-RUN").with_confined_runs(confining),
+            &mut answers,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        assert_eq!(answers.runs.len(), 1, "confining: {confining}");
+        let described = answers.runs[0].confined.as_ref();
+        if confining && bravebot_sandbox::base::Prelude::current().is_some() {
+            let described = described.expect("a confining turn described no profile");
+            assert!(
+                described
+                    .directories
+                    .iter()
+                    .any(|directory| directory == workspace.root()),
+                "{described:?}"
+            );
+        } else {
+            assert!(
+                described.is_none(),
+                "a turn that does not confine was described as confined: {described:?}"
+            );
+        }
+    }
+}
+
 /// Everything a delegate read and ran ends with it, so its report is the only thing that says
 /// what the run was for. Told nothing but the round count, a person is left with a number for
 /// work done in a directory they own: a delegate asked to pick a file said which one here.

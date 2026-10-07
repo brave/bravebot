@@ -1362,6 +1362,14 @@ run-line-sent = the model wrote:
 run-writes = it writes these files:
 run-is-fed = it is fed the contents of:
 run-not-sandboxed = this is not sandboxed: it runs with the access your own shell has
+# Said instead of the line above where the turn confines what a run starts, and followed by the
+# directories it is held to and by one sentence for each toolchain and credential a stage brings.
+run-confined = its files are confined to these directories, the system temporary directory and the system files every program needs:
+run-carries-toolchain = { $program } also reaches the install and the cache of the { $toolchain } toolchain
+run-carries-remote = { $program } also reads your git and gh logins, your ssh configuration and public keys, never a private key, and adds to your ssh known hosts
+run-carries-aws = { $program } also reads your aws credentials in ~/.aws
+run-carries-kubernetes = { $program } also reads your kubernetes credentials in ~/.kube
+run-carries-docker = { $program } also reads your docker credentials in ~/.docker
 # Said above the list of what a line reaches that nothing here holds: no credential is handed
 # over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
 # only where a line reaches one, so the list is never empty and never noise. The line above is

@@ -31,9 +31,10 @@ that decides the question has been drawn whole at the width of the box, and the 
 says how many are left. That covers writes, output, vetting, vouching, exposure, server, tool list,
 call and plan prompts. A refusal and ctrl-c work at every draw.
 
-A prompt also says what approving **does**, and what it does not. The run prompt says the command is
-not sandboxed, asks for the side effects and the output together, and names the exact command it would
-vouch for. The trust prompt explains the consequence and names both answers. The prompt about a
+A prompt also says what approving **does**, and what it does not. The run prompt says what the command is
+confined to (the directories and what each program brings beyond them), or that it is not sandboxed
+where nothing confines it. It asks for the side effects and the output together, and names the exact
+command it would vouch for. The trust prompt explains the consequence and names both answers. The prompt about a
 directory your settings file asked for says that opening it grants reach and trust, and that a file
 asked for it. The prompt over one quarantined slot says what approving does *not* do: no path is
 vouched for, so the same thing read again asks again.
@@ -177,11 +178,15 @@ set is empty at the start of every session. What holds is the label on the outpu
 the binary.
 :::
 
-Programs are not confined. They run with the access your own shell would give them, because `git push`
-needs `~/.ssh` and the set of programs someone might ask for cannot be listed in advance. The one
-exception is bravebot's **own** credentials, which are withheld from every program it runs: you
-approve an argv, never an environment, so a credential travelling alongside one would be handed over
-without your having seen it. See [`run`](../reference/run-tool.md#what-a-program-is-handed).
+On Linux and macOS a program's files are confined to the directories the session was opened on, its
+scratch directory and the system temporary directory, plus what its own command brings: the credentials a `git push` needs, never a private key,
+or a toolchain's cache. The run prompt lists them. A path outside them is refused by the system, so a
+`cat ~/notes.txt` fails until you add the directory. On Windows programs are not confined and run with
+the access your own shell would give them. The set of programs someone might ask for cannot be listed
+in advance, so the profile follows the command and not a list. A profile bounds files and not the
+environment. The one exception to what a program is handed is bravebot's **own** credentials, which
+are withheld from every program it runs: you approve an argv, never an environment, so a credential
+travelling alongside one would be handed over without your having seen it. See [`run`](../reference/run-tool.md#what-a-program-is-handed).
 
 ## Remembering a line past the session
 

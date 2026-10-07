@@ -42,10 +42,13 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   log` prints commit messages whoever contributed wrote.
 - **What lands in a trusted directory afterwards.** A rule is about a path, not about the files that
   were in it. See [Trusted directories](trust.md#known-costs).
-- **A program the agent was allowed to run.** Programs are not confined: they run with the access your
-  own shell would give them, because `git push` needs `~/.ssh`. Their own network requests do not go
-  through the one way out described below, so an approved `curl`, `git push` or package install can
-  read a private file and send it with nothing here routing or inspecting the traffic.
+- **A program the agent was allowed to run.** On Linux and macOS a program is confined to the
+  directories the session was opened on, its scratch directory, the system temporary directory and
+  the system files every program needs, plus what its own command brings: a `git push` is lent the
+  credentials a push needs, never a private key, and `cargo build` its toolchain's cache. On Windows programs are not confined and run
+  with the access your own shell would give them. Their own network requests do not go through the
+  one way out described below, so an approved `curl`, `git push` or package install can read what its
+  profile reaches and send it with nothing here routing or inspecting the traffic.
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
