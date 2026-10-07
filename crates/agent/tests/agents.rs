@@ -448,6 +448,43 @@ fn a_project_cannot_hand_back_a_server_a_persons_own_definition_left_off() {
     );
 }
 
+/// DELEGATE-26. `inherit` is how other agents spell "no level of my own", and `model: inherit` is
+/// already read that way, so the pair a ported definition writes means the same by both and neither
+/// is reported. Without this a person gets a notice on every discovery about behaviour they asked
+/// for and got.
+#[test]
+fn an_effort_of_inherit_names_the_spawning_turns_level_and_is_not_reported() {
+    let scratch = Scratch::new("definition-effort-inherit");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "ported",
+        &format!(
+            "{}\nmodel: inherit\neffort: inherit",
+            frontmatter("ported", "came from another agent", "reader")
+        ),
+        "read the diff and report the shape",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    let found = definitions.get("ported").expect("selectable");
+    assert_eq!(found.effort(), None, "inherit became a level of its own");
+    assert_eq!(found.model(), None, "inherit became a model of its own");
+
+    let said: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert!(
+        said.iter().all(|line| !line.contains("inherit")),
+        "inherit was reported as a word naming no level: {said:?}"
+    );
+}
+
 /// DELEGATE-26. An effort word naming none of the five levels is reported, naming the file and
 /// the word, and the definition still loads: a value that cannot be used is not a reason to drop
 /// a definition, and its delegate keeps the spawning turn's level.

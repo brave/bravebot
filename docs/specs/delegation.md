@@ -926,8 +926,12 @@ A later definition of the same name takes the key over, as it takes over the mod
 the rounds ([DELEGATE-20](#DELEGATE-20)), because how hard a model is asked to think changes what a
 run costs and never what it may do.
 
-A level is sent only to a model that reads one. The same check the turn's own level passes applies
-here, so a delegate on a model that reads none carries no level whatever its definition says.
+A model that answers a level it does not read is the backend's to handle, as it is for the level a
+turn asks for: a service that refuses the field has that refusal learned and the request made again
+without it. A front end does more before asking: it drops the level where the gateway's own listing says the
+session's model reads none. That is keyed on the session's model and is not applied here, so a
+definition on a model that reads no level still carries one into the request. Naming the level is this clause;
+what a service does with one is not.
 
 **Why report rather than refuse.** A definition with no usable level is still selectable, and
 dropping it would cost the delegate over a word that decides nothing about what it may reach. The
@@ -937,6 +941,7 @@ a service to send the conversation to.
 `verified-by: bravebot_agent::agents::a_definition_reads_the_effort_level_it_names`
 `verified-by: bravebot_agent::agents::an_effort_word_naming_no_level_leaves_the_definition_loading_without_one`
 `verified-by: bravebot_agent::agents::an_effort_word_naming_no_level_is_reported_and_the_definition_still_loads`
+`verified-by: bravebot_agent::agents::an_effort_of_inherit_names_the_spawning_turns_level_and_is_not_reported`
 `verified-by: bravebot_core::delegate::a_definition_may_name_an_effort_and_the_spec_carries_it`
 `verified-by: bravebot_agent::turn::a_delegate_asks_for_the_effort_its_definition_named`
 

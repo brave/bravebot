@@ -67,7 +67,7 @@ does not ask whether to trust the checkout, so it reads only the definitions in
 | `description` | yes | what the planner decides from, so say *when* to use it rather than what it does |
 | `kind` | yes | `reader`, `checker` or `worker` |
 | `model` | no | the model this delegate runs on (`haiku`, `sonnet`, `opus`, or an explicit model identifier); absent or `inherit` means the spawning turn's |
-| `effort` | no | how hard that model is asked to think (`low`, `medium`, `high`, `xhigh` or `max`); absent or empty means the spawning turn's level |
+| `effort` | no | how hard that model is asked to think (`low`, `medium`, `high`, `xhigh` or `max`); absent, empty or `inherit` means the spawning turn's level |
 | `tools` | no | fewer tools than the kind's; absent means the kind's own |
 | `skills` | no | the [skills](skills.md) this delegate is offered, out of the ones the turn found; absent means all of them, and an empty line none |
 | `mcpServers` | no | the [MCP servers](mcp-servers.md) a `worker` calls, by alias, out of the ones the turn may; absent means all of them unless `tools` is written, and an empty line none |
@@ -93,14 +93,16 @@ answered by a different model than the one named says so, so a misspelt name is 
 [`/effort`](configuration.md#choosing-how-hard-to-think): `low`, `medium`, `high`, `xhigh`
 and `max`. A checker that greps logs can ask for `low` while a worker doing a refactor asks for
 `high`, whatever the session is set to. Where `effort` is omitted the delegate asks for the level
-the turn that spawned it runs at, so a level you chose with `/effort` reaches your delegates. A word
+the turn that spawned it runs at, so a level you chose with `/effort` reaches your delegates. The key
+reaches a delegate the planner spawns; running a definition yourself with `/agent` or `@` is a turn of
+your own and keeps the session's level, as it keeps the session's model choice. A word
 naming none of the five levels leaves the definition loading without one, and the turn says so:
 
 ```
 ~/.bravebot/agents/eager.md asks for effort highest, which is none of low, medium, high, xhigh, max, so its delegate keeps the effort of the turn that spawns it
 ```
 
-A level is only sent to a model that reads one, exactly as the session's own level is.
+A model that does not read a level has the field refused and the request made again without it, as it is for the level a session asks for. `inherit`, or no line at all, means the level of the turn that spawned the delegate.
 
 **`kind` picks what the delegate may do, and your file never describes it.** A `reader` reads,
 lists and searches; a `checker` also runs programs and asks a language server; a `worker` also

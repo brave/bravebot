@@ -142,11 +142,15 @@ fn read_definition(text: &str, origin: &str) -> Read {
     // enumerates and an unrecognised word must not become a request field. The definition still
     // loads, as a skill naming one does: the word is said back to whoever wrote it, and the
     // delegate asks for the level the spawning turn runs at.
+    //
+    // `inherit` is filtered as it is for `model` above: a definition ported from another agent that
+    // writes the pair means "the spawning turn's" by both, and reporting one of them on every
+    // discovery would be a notice about behaviour the person asked for and got.
     let mut no_effort = None;
     if let Some(written) = declared
         .get("effort")
         .map(|effort| effort.trim())
-        .filter(|effort| !effort.is_empty())
+        .filter(|effort| !effort.is_empty() && !effort.eq_ignore_ascii_case("inherit"))
     {
         match Effort::named(written) {
             Some(level) => definition = definition.with_effort(level.as_str()),
