@@ -8359,6 +8359,56 @@ fn a_workspace_taking_the_records_checkouts_back_lists_them_with_their_candidate
     assert_eq!(third.checkout().unwrap().id(), "c3");
 }
 
+/// CHECKOUT-16. A sweep run beside a session leaves the checkouts that session made and the ones
+/// it took back from a record, even where no record lists them, and takes them once the session
+/// lets them go.
+///
+/// The failure this rejects is a session that makes or resumes a checkout without holding its
+/// lock, which a second session opening in the same directory then removes.
+#[cfg(unix)]
+#[test]
+fn a_sweep_leaves_the_checkouts_a_session_made_or_took_back() {
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-swept-beside", &[("README", "hello\n")]);
+    let beside = Workspace::new(&scratch.path).expect("workspace");
+    let recorded = {
+        let mut sink = RecordingSink::new();
+        let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+        for _ in 0..2 {
+            workspace
+                .checkout_for(&policy, &state.path, d1())
+                .expect("a checkout");
+        }
+        workspace.session_checkouts()
+    };
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(
+        beside.sweep_checkouts(&state.path, &|_| false),
+        Vec::<String>::new()
+    );
+    assert!(
+        recorded.iter().all(|one| one.path.join("README").exists()),
+        "a checkout the session still holds was taken"
+    );
+
+    drop(workspace);
+    let resumed = Workspace::new(&scratch.path).expect("workspace");
+    let unplaced = resumed.restore_session_checkouts(&state.path, &recorded[1..]);
+    assert_eq!(unplaced, Vec::<String>::new());
+    assert_eq!(
+        beside.sweep_checkouts(&state.path, &|_| false),
+        ["c1"],
+        "the checkout nobody holds was kept, or the resumed one was taken"
+    );
+    assert!(
+        recorded[1].path.join("README").exists(),
+        "a resumed checkout was taken"
+    );
+
+    drop(resumed);
+    assert_eq!(beside.sweep_checkouts(&state.path, &|_| false), ["c2"]);
+}
+
 /// CHECKOUT-16. A record is a claim: a checkout it names at any other path, under a number that
 /// is not its directory's, without its entry in the repository, at a commit that is not an object
 /// id, or as a link, is not taken back, and is named.

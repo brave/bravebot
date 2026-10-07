@@ -41,6 +41,9 @@ pub struct Made {
     pub commit: ObjectId,
     /// Repository-relative paths a deny rule covers, which were not written.
     pub left_out: Vec<String>,
+    /// The claim the session holds on the directory for as long as it holds this, which keeps an
+    /// opening session's sweep from taking it for a leftover (CHECKOUT-16). `None` on Windows.
+    pub claim: Option<std::sync::Arc<std::fs::File>>,
 }
 
 /// Why no checkout was made.
@@ -459,7 +462,7 @@ pub fn make(
         return Err(Declined::Linked.into());
     }
     let admin = worktrees.join(id);
-    create_dir(target).map_err(|e| taken_or(e, Refused::Taken))?;
+    let claim = create_claimed(target)?;
     let claimed = std::fs::create_dir_all(&worktrees)
         .map_err(|_| Refused::Unwritable)
         .and_then(|()| create_dir(&admin).map_err(|e| taken_or(e, Refused::Taken)));
@@ -485,7 +488,171 @@ pub fn make(
             .filter(|p| p.left_out)
             .map(|p| p.path)
             .collect(),
+        claim: claim.map(std::sync::Arc::new),
     })
+}
+
+/// The mode a checkout's directory is at while a session holds it, and the only one the sweep
+/// takes.
+#[cfg(unix)]
+const CLAIMED: u32 = 0o700;
+
+/// The mode it is made at, before its lock is held. A sweep arriving between the two steps finds
+/// a mode it leaves alone.
+#[cfg(unix)]
+const UNCLAIMED: u32 = 0o500;
+
+/// The mode a session keeps the directory at where it could not lock it, so no sweep takes it.
+#[cfg(unix)]
+const UNCLAIMABLE: u32 = 0o1700;
+
+/// Make the checkout's directory and, on Unix, lock it before anything is written there
+/// (CHECKOUT-16). It is made at [`UNCLAIMED`], locked, and only then opened to its owner.
+#[cfg(unix)]
+fn create_claimed(target: &Path) -> Result<Option<std::fs::File>, Refused> {
+    use rustix::fs::{FlockOperation, Mode, OFlags};
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(UNCLAIMED);
+    builder
+        .create(target)
+        .map_err(|e| taken_or(e, Refused::Taken))?;
+    let opened = rustix::fs::open(
+        target,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map(std::fs::File::from);
+    let directory = match opened {
+        Ok(directory) => directory,
+        Err(_) => {
+            let _ = std::fs::remove_dir(target);
+            return Err(Refused::Unwritable);
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let locked = loop {
+        match rustix::fs::flock(&directory, FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => break true,
+            Err(rustix::io::Errno::INTR) => {}
+            Err(rustix::io::Errno::WOULDBLOCK) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => break false,
+        }
+    };
+    let mode = if locked { CLAIMED } else { UNCLAIMABLE };
+    if directory
+        .set_permissions(std::fs::Permissions::from_mode(mode))
+        .is_err()
+    {
+        let _ = std::fs::remove_dir(target);
+        return Err(Refused::Unwritable);
+    }
+    Ok(Some(directory))
+}
+
+#[cfg(not(unix))]
+fn create_claimed(target: &Path) -> Result<Option<std::fs::File>, Refused> {
+    create_dir(target).map_err(|e| taken_or(e, Refused::Taken))?;
+    Ok(None)
+}
+
+/// Take the lock on a checkout's directory a resume brought back, so a session opening beside this
+/// one does not take it for a leftover. `None` where the directory is not one this account's
+/// session made, or on Windows.
+#[cfg(unix)]
+pub fn reclaim(target: &Path) -> Option<std::sync::Arc<std::fs::File>> {
+    use rustix::fs::{FlockOperation, Mode, OFlags};
+    let directory = std::fs::File::from(
+        rustix::fs::open(
+            target,
+            OFlags::RDONLY
+                | OFlags::DIRECTORY
+                | OFlags::NOFOLLOW
+                | OFlags::CLOEXEC
+                | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .ok()?,
+    );
+    rustix::fs::flock(&directory, FlockOperation::NonBlockingLockExclusive).ok()?;
+    Some(std::sync::Arc::new(directory))
+}
+
+#[cfg(not(unix))]
+pub fn reclaim(_target: &Path) -> Option<std::sync::Arc<std::fs::File>> {
+    None
+}
+
+/// Remove each directory under `directory`, a workspace's `checkouts/<key>`, that is a checkout
+/// no session record lists and no running session holds, with its `worktrees/<id>` entry in
+/// `git_dir` (CHECKOUT-16). Answers the ids it removed.
+///
+/// Takes only a plain `c<number>` name, a directory and not a link, owned by whoever owns
+/// `directory`, still at the mode a claimed checkout is left at, and whose lock it holds through
+/// the removal. Every failure leaves a directory where it is: the cost of that is disk, and the
+/// cost of the other answer is a live session's files. `git_dir` has to be a directory and not a
+/// link, since the removal reaches into it. Nothing is removed on Windows.
+#[cfg(unix)]
+pub fn sweep(git_dir: &Path, directory: &Path, listed: &dyn Fn(&str) -> bool) -> Vec<String> {
+    use rustix::fs::{FlockOperation, Mode, OFlags};
+    use std::os::unix::fs::MetadataExt;
+    let mut taken = Vec::new();
+    let is_dir =
+        |path: &Path| std::fs::symlink_metadata(path).is_ok_and(|found| found.file_type().is_dir());
+    if !is_dir(git_dir) || !is_dir(directory) {
+        return taken;
+    }
+    let Some(owner) = std::fs::symlink_metadata(directory).ok().map(|m| m.uid()) else {
+        return taken;
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return taken;
+    };
+    for entry in entries.flatten() {
+        let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let numbered = id
+            .strip_prefix('c')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if !numbered || listed(&id) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(held) = rustix::fs::open(
+            &path,
+            OFlags::RDONLY
+                | OFlags::DIRECTORY
+                | OFlags::NOFOLLOW
+                | OFlags::CLOEXEC
+                | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .map(std::fs::File::from) else {
+            continue;
+        };
+        // Held through the removal, so two sessions opening at once do not both take it.
+        if rustix::fs::flock(&held, FlockOperation::NonBlockingLockExclusive).is_err() {
+            continue;
+        }
+        let Ok(found) = held.metadata() else {
+            continue;
+        };
+        if found.uid() != owner || found.mode() & 0o7777 != CLAIMED {
+            continue;
+        }
+        if remove(git_dir, &path, &id).is_ok() {
+            taken.push(id);
+        }
+    }
+    taken
+}
+
+#[cfg(not(unix))]
+pub fn sweep(_git_dir: &Path, _directory: &Path, _listed: &dyn Fn(&str) -> bool) -> Vec<String> {
+    Vec::new()
 }
 
 /// Remove a checkout [`make`] made: its directory and its `worktrees/<id>` entry, and nothing else.

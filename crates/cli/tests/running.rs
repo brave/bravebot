@@ -135,6 +135,18 @@ fn run(
     environment: &[(&str, &str)],
     arguments: &[&str],
 ) -> Output {
+    prepared(home, cwd, environment, arguments)
+        .output()
+        .expect("the built binary runs")
+}
+
+/// The command [`run`] runs, for a test that has to act while the process is still going.
+fn prepared(
+    home: &Path,
+    cwd: Option<&Path>,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot"));
     command
         .env_clear()
@@ -149,7 +161,7 @@ fn run(
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    command.output().expect("the built binary runs")
+    command
 }
 
 /// What a run said, as the two streams it says it on.
@@ -7440,4 +7452,75 @@ fn a_safe_session_sends_no_agents_file_from_its_checkout_a_plain_one_sends() {
             if sent { "not " } else { "" }
         );
     }
+}
+
+/// CHECKOUT-16. A one-shot run removes the checkouts under its working directory that no record
+/// lists, and leaves one that another session holds.
+///
+/// The sweep runs on a thread the run does not wait for, so the backend here accepts the request
+/// and says nothing until the leftover is gone, which keeps the process alive for the sweep to
+/// finish. The held checkout is the control: it is just as unlisted and sits beside the one taken,
+/// so a sweep that skipped the lock check would take both.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_removes_the_checkouts_no_session_holds_and_leaves_a_held_one() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = Scratch::new("cli-running-checkout-sweep");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("create the project");
+    let initialised = Command::new("git")
+        .arg("init")
+        .arg("--quiet")
+        .current_dir(&project)
+        .status()
+        .expect("git runs");
+    assert!(initialised.success());
+    let project = project.canonicalize().expect("canonical project");
+
+    let under = scratch
+        .path
+        .join(".bravebot")
+        .join("checkouts")
+        .join(bravebot_agent::home::key_for(&project));
+    for id in ["c1", "c2"] {
+        let checkout = under.join(id);
+        std::fs::create_dir_all(&checkout).expect("create a checkout");
+        std::fs::write(checkout.join("README"), "left behind\n").expect("write a file");
+        std::fs::set_permissions(&checkout, std::fs::Permissions::from_mode(0o700))
+            .expect("narrow the checkout");
+    }
+    let held = std::fs::File::open(under.join("c2")).expect("open the held checkout");
+    held.lock().expect("lock the held checkout");
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let endpoint = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let mut child = prepared(
+        &scratch.path,
+        Some(&project),
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", &endpoint),
+        ],
+        &["-p", "say something"],
+    )
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()
+    .expect("the built binary runs");
+
+    let (connection, _) = listener.accept().expect("the run reached its backend");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while under.join("c1").exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let taken = !under.join("c1").exists();
+    let kept = under.join("c2").join("README").exists();
+    drop(connection);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(taken, "the run left a checkout no record lists");
+    assert!(kept, "the run took a checkout another session holds");
 }
