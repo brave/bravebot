@@ -269,3 +269,4 @@ produced ([PANEL-11](#PANEL-11)). [PANEL-4](#PANEL-4) holds: no marker is writte
 `verified-by: bravebot_tui::title::a_state_is_written_before_the_session_has_a_name`
 `verified-by: bravebot_tui::title::the_marker_leads_the_title_and_counts_toward_sixty_columns`
 `verified-by: bravebot_tui::title::no_state_is_written_when_the_title_is_turned_off`
+`verified-by: bravebot_tui::app::a_question_turns_the_title_to_waiting_and_other_messages_do_not`

@@ -2822,6 +2822,16 @@ const fn run_state(status: Status) -> crate::title::State {
     }
 }
 
+/// What the title says while `message` is handled: a question holds the run for the person, and
+/// anything else leaves the turn working.
+fn title_state_during(message: &crate::remote_confirm::ToMain) -> crate::title::State {
+    if refusal(message).is_some() {
+        crate::title::State::Waiting
+    } else {
+        crate::title::State::Working
+    }
+}
+
 /// Say in the title what the session is doing. A title that cannot be written is not a reason to
 /// stop a turn or leave a question unasked.
 fn mark_title(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, state: crate::title::State) {
@@ -7781,7 +7791,7 @@ fn run_turn_animated(
         let mut handle = |message: crate::remote_confirm::ToMain| {
             // Which prompt widget is open is the driver's own state, so a message that blocks the
             // worker on the person is what turns the title to waiting, and its answer turns it back.
-            let asks = refusal(&message).is_some();
+            let asks = title_state_during(&message) == crate::title::State::Waiting;
             if asks {
                 mark_title(terminal, crate::title::State::Waiting);
             }
@@ -14128,8 +14138,6 @@ mod tests {
         );
     }
 
-    /// The mode lasts one command. Leaving it on would send the next thing typed to a shell, which
-    /// is the sort of surprise that ends up running a sentence.
     /// A running turn or command is what the title marks as working, and anything else is the box
     /// waiting, whatever else the session holds.
     #[test]
@@ -14141,6 +14149,31 @@ mod tests {
         assert_eq!(run_state(Status::Quitting), State::Ready);
     }
 
+    /// A tab finds the session waiting for an answer by its marker, so every kind of question has
+    /// to turn the title to waiting, and a message that asks nothing must not: it would mark a run
+    /// that is only streaming as stuck on the person.
+    #[test]
+    fn a_question_turns_the_title_to_waiting_and_other_messages_do_not() {
+        use crate::remote_confirm::ToMain;
+        use crate::title::State;
+
+        assert_eq!(
+            title_state_during(&write_question("notes.md")),
+            State::Waiting
+        );
+        assert_eq!(title_state_during(&fetch_question()), State::Waiting);
+        assert_eq!(
+            title_state_during(&ToMain::Ask(bravebot_core::ask::Asking::default())),
+            State::Waiting
+        );
+        assert_eq!(
+            title_state_during(&ToMain::Streaming("text".into())),
+            State::Working
+        );
+    }
+
+    /// The mode lasts one command. Leaving it on would send the next thing typed to a shell, which
+    /// is the sort of surprise that ends up running a sentence.
     #[test]
     fn running_a_command_leaves_shell_mode() {
         let mut session = Session::new("none");
