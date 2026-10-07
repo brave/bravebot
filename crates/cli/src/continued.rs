@@ -81,15 +81,13 @@ pub fn keep(root: &Path, previous: Option<Record>, turn: Finished<'_>) -> Option
         }
         None => {
             let mut handle = Handle::begin(root, Front::Terminal, bravebot_stamp::BUILD);
-            let history = [bravebot_session::sessions::StoredTurn {
-                number: 1,
-                prompt: Some(turn.prompt.to_string()),
-                start: 0,
-                end: ends,
-                prompt_offset: turn.prompt_at.filter(|at| *at < ends),
-                reset_context: false,
-                outcome: Some(bravebot_session::sessions::StoredOutcome::Completed),
-            }];
+            let history = [bravebot_session::sessions::StoredTurn::completed(
+                1,
+                turn.prompt,
+                0,
+                ends,
+                turn.prompt_at,
+            )];
             handle.save(
                 turn.prompt,
                 Standing {

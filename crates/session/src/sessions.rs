@@ -460,6 +460,32 @@ pub struct StoredTurn {
     pub outcome: Option<StoredOutcome>,
 }
 
+impl StoredTurn {
+    /// The boundaries of a turn that completed, from the length of the recounted conversation
+    /// before and after it and where the prompt entered it. A conversation that got shorter lost its
+    /// context, so the turn starts again at 0.
+    pub fn completed(
+        number: usize,
+        prompt: &str,
+        begins: usize,
+        ends: usize,
+        prompt_at: Option<usize>,
+    ) -> Self {
+        let reset_context = ends < begins;
+        Self {
+            number,
+            prompt: Some(prompt.to_string()),
+            start: if reset_context { 0 } else { begins },
+            end: ends,
+            reset_context,
+            prompt_offset: prompt_at
+                .filter(|at| !reset_context && *at >= begins && *at < ends)
+                .map(|at| at - begins),
+            outcome: Some(StoredOutcome::Completed),
+        }
+    }
+}
+
 /// A recorded ending, with only the safe explanation already composed by the interface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1941,19 +1967,13 @@ impl Handle {
         };
         let number = record.turns + 1;
         if let Some(history) = record.history.as_mut() {
-            let reset_context = next.ends < next.begins;
-            history.push(StoredTurn {
+            history.push(StoredTurn::completed(
                 number,
-                prompt: Some(next.prompt.to_string()),
-                start: if reset_context { 0 } else { next.begins },
-                end: next.ends,
-                reset_context,
-                prompt_offset: next
-                    .prompt_at
-                    .filter(|at| !reset_context && *at >= next.begins && *at < next.ends)
-                    .map(|at| at - next.begins),
-                outcome: Some(StoredOutcome::Completed),
-            });
+                next.prompt,
+                next.begins,
+                next.ends,
+                next.prompt_at,
+            ));
         }
         record.turns = number;
         record.tokens += next.tokens;
@@ -4909,6 +4929,26 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_file(&outside);
+    }
+
+    #[test]
+    fn a_completed_turn_starts_over_when_the_conversation_got_shorter() {
+        let kept = StoredTurn::completed(2, "next", 4, 7, Some(5));
+        assert_eq!((kept.start, kept.end, kept.reset_context), (4, 7, false));
+        assert_eq!(kept.prompt_offset, Some(1));
+
+        let outside = StoredTurn::completed(2, "next", 4, 7, Some(9));
+        assert_eq!(outside.prompt_offset, None);
+
+        let first = StoredTurn::completed(1, "task", 0, 3, Some(0));
+        assert_eq!(
+            (first.start, first.end, first.prompt_offset),
+            (0, 3, Some(0))
+        );
+
+        let reset = StoredTurn::completed(3, "again", 8, 2, Some(1));
+        assert_eq!((reset.start, reset.end, reset.reset_context), (0, 2, true));
+        assert_eq!(reset.prompt_offset, None);
     }
 
     /// A one-shot run carrying on an interactive session holds none of what that session recorded

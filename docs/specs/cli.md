@@ -1314,3 +1314,4 @@ process that holds the record is known.
 `verified-by: bravebot_cli::main::a_resume_naming_no_session_is_refused`
 `verified-by: bravebot_session::sessions::continuing_a_record_adds_one_turn_and_leaves_what_it_held_as_read`
 `verified-by: bravebot_session::sessions::continuing_a_record_with_no_history_gives_it_none`
+`verified-by: bravebot_session::sessions::a_completed_turn_starts_over_when_the_conversation_got_shorter`
