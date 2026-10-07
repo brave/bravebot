@@ -2550,14 +2550,19 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 let kind = delegated.kind;
                 let rounds = ran.map_or(0, |(_, rounds)| rounds);
                 let tally = tools::tally(rounds, "round", "rounds");
-                let note = match (working.stop.was_honoured(), rounds >= working.rounds) {
+                // Two counts the driver already holds: the rounds this delegate made, and the
+                // bound its spec fixed before it started. Nothing here reads the report, so the
+                // comparison is between driver-held numbers and never between bytes a delegate
+                // wrote (DELEGATE-26).
+                let reached = rounds >= working.rounds;
+                let note = match (working.stop.was_honoured(), reached) {
                     (true, _) => format!(
                         "the person stopped a {kind} delegate after {tally} and it answered with \
                          what it had"
                     ),
                     (false, true) => format!(
                         "a {kind} delegate reached its limit of {tally} and answered with what it \
-                         had"
+                         had, so it may not be finished"
                     ),
                     (false, false) => format!("a {kind} delegate answered after {tally}"),
                 };
@@ -2568,6 +2573,17 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         format!("The person stopped the {kind} delegate {id} before it reported. ")
                     }
                     false => String::new(),
+                };
+                // Beside the report rather than inside it, so the planner reads the same sentence
+                // whether it is shown the words or handed a reference to them (AGENT-4). The
+                // delegate is told on its limiting round to say what stopped it (DELEGATE-6), and
+                // that is model text the planner may never see.
+                let bound = match (working.stop.was_honoured(), reached) {
+                    (false, true) => format!(
+                        " It stopped at its limit of {} and may not be finished.",
+                        tools::tally(working.rounds, "round", "rounds")
+                    ),
+                    _ => String::new(),
                 };
                 let slot = conversation.next_reference();
                 let presented = policy
@@ -2590,7 +2606,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         policy.heard_from_delegate(delegated.report.label());
                         (
                             format!(
-                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished. \
+                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished.{bound} \
                                  It reported:\n\n{text}"
                             ),
                             crate::report::Reported::Said(text.clone()),
@@ -2600,7 +2616,8 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         let shown = preview_for(policy, "delegate", &delegated.report);
                         (
                             format!(
-                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished. {}",
+                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished.{bound} \
+                                 {}",
                                 reference.describe()
                             ),
                             crate::report::Reported::Kept(crate::report::Shown {
@@ -2620,6 +2637,18 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 *tokens += partial.tokens;
                 *output_tokens += partial.output_tokens;
                 cached.add(partial.cached);
+                // The same comparison the answering arm makes, on the same two driver-held counts.
+                // A delegate that spent its whole budget and then failed to answer is the common
+                // way the bound is reached rather than a corner of it, and the planner told only
+                // that it did not finish retries the identical task (DELEGATE-26).
+                let reached = ran.is_some_and(|(_, rounds)| rounds >= working.rounds);
+                let bound = match reached {
+                    true => format!(
+                        " It had spent its limit of {}, so the same task will not get further.",
+                        tools::tally(working.rounds, "round", "rounds")
+                    ),
+                    false => String::new(),
+                };
                 // The same fixed name the trail records, and never the error's own text.
                 let note = match finish {
                     bravebot_core::delegate::Finish::Failed { why, .. } => {
@@ -2630,7 +2659,14 @@ fn collect_delegates<S: Sink, R: Reporter>(
                     }
                     _ => "the delegate could not finish".to_string(),
                 };
-                let body = format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish.");
+                let note = match reached {
+                    true => format!(
+                        "{note}, having spent its limit of {}",
+                        tools::tally(working.rounds, "round", "rounds")
+                    ),
+                    false => note,
+                };
+                let body = format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish.{bound}");
                 (note, body, true, None, Provenance::Driver)
             }
         };
@@ -5811,6 +5847,93 @@ mod tests {
                 "d2: ended without handing anything back, so how long it ran and how many of its \
                  60 rounds it made are not known",
             ]
+        );
+    }
+
+    /// DELEGATE-26 where the report is quarantined. The sentence about the bound is the driver's
+    /// own and sits beside the report, so the planner reads the same words whether it is shown the
+    /// text or handed a reference to it. An untrusted report is given here directly, since a
+    /// delegate's own context meets nothing untrusted on the ordinary paths.
+    #[test]
+    fn a_quarantined_report_carries_the_same_sentence_about_the_bound() {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+        );
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "collect a quarantined report");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let mut conversation = Conversation::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        // The label a delegate whose own context met untrusted bytes earns, taken from the kernel
+        // rather than written here, so the test cannot give a report a label the kernel would not.
+        let report = policy.label_piped_input("WHAT-THE-UNVOUCHED-LOOK-FOUND".to_string());
+        std::thread::scope(|scope| {
+            let handed = seeded.clone();
+            let answered = scope.spawn(move || -> Joined {
+                (
+                    crate::delegate::Ended {
+                        delegated: Ok(crate::delegate::Delegated {
+                            report,
+                            kind: "one-round".to_string(),
+                            usage: Default::default(),
+                        }),
+                        vouched: handed,
+                        notices: Vec::new(),
+                        rounds: 1,
+                        took: Duration::from_millis(900),
+                    },
+                    Default::default(),
+                    Vec::new(),
+                )
+            });
+            let mut delegates = vec![Working {
+                join_started: None,
+                id: DelegateId::nth(1),
+                seeded: seeded.clone(),
+                checkout: None,
+                rounds: 1,
+                stop: Default::default(),
+                handle: answered,
+            }];
+            collect_delegates(
+                &mut delegates,
+                &mut policy,
+                &mut conversation,
+                &mut reporter,
+                &mut 0,
+                &mut 0,
+                &mut Cached::default(),
+                true,
+                &mut crate::timing::DelegateWait::default(),
+                &mut Elapsed::default(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+        });
+
+        let told = conversation
+            .messages()
+            .iter()
+            .map(|stored| stored.message.content.text())
+            .find(|text| text.contains("The one-round delegate d1 has finished."))
+            .expect("the planner was never told the delegate finished");
+        assert!(
+            !told.contains("WHAT-THE-UNVOUCHED-LOOK-FOUND"),
+            "an untrusted report was shown to the planner, so nothing here was tested: {told}"
+        );
+        assert!(
+            told.contains("It stopped at its limit of 1 round and may not be finished."),
+            "a planner handed a reference was not told the delegate stopped at its bound: {told}"
         );
     }
 
