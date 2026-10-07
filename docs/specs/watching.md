@@ -379,6 +379,7 @@ press of enter into an exit.
 `verified-by: bravebot_tui::render::the_list_holds_the_session_above_the_delegates`
 `verified-by: bravebot_tui::state::moving_up_from_the_first_delegate_in_the_list_reaches_the_session`
 `verified-by: bravebot_tui::state::going_back_to_the_list_lands_on_the_delegate_that_was_open`
+`verified-by: bravebot_tui::state::moving_down_from_the_session_in_the_list_reaches_the_first_delegate`
 `verified-by: bravebot_tui::app::opening_the_session_row_goes_back_to_the_conversation`
 
 <a id="WATCH-15"></a>

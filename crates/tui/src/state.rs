@@ -9975,6 +9975,37 @@ mod tests {
             );
         }
 
+        /// The session is the row above the first delegate, so moving down from it lands on the
+        /// first delegate and not on the second, and the highlight sits one row below the session.
+        #[test]
+        fn moving_down_from_the_session_in_the_list_reaches_the_first_delegate() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            session.watch();
+            session.watch_previous();
+            session.watch_previous();
+            assert!(session.listing_on_the_session());
+
+            session.watch_next();
+            assert!(
+                !session.listing_on_the_session(),
+                "moving down from the session stayed on the session"
+            );
+            assert_eq!(
+                session.list_highlight(),
+                1,
+                "moving down from the session did not land on the first delegate"
+            );
+            assert_eq!(
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
+                Some("reader"),
+                "moving down from the session skipped the first delegate"
+            );
+        }
+
         /// What is on the screen changes when a person asks and not otherwise. A delegate that
         /// answers while somebody is reading it has not asked for anything.
         #[test]
