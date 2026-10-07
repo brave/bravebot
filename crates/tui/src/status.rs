@@ -566,6 +566,23 @@ pub fn report(facts: &Facts<'_>) -> Report {
                 lines.push(Line::new("", tokens(count)).with_note(note));
             }
         }
+        // The setting, not a reading: no reply says how long a service kept a prefix. Beside the
+        // figures because a read of zero after a pause reads differently once the lifetime is known.
+        lines.push(
+            Line::new(
+                "",
+                match facts.config.prompt_cache_ttl {
+                    Some(bravebot_config::CacheTtl::FiveMinutes) => {
+                        t!(status_cache_lifetime_five_minutes)
+                    }
+                    Some(bravebot_config::CacheTtl::OneHour) => {
+                        t!(status_cache_lifetime_one_hour)
+                    }
+                    None => t!(status_cache_lifetime_service_default),
+                },
+            )
+            .with_note(t!(status_cache_lifetime)),
+        );
     }
 
     // Last because it is the part that grows. What a write recorded is the thing nothing else
@@ -2350,6 +2367,41 @@ mod tests {
         assert!(shown.contains("last turn"), "{shown}");
     }
 
+    /// A read of zero after a pause means one thing under a five-minute lifetime and another under an
+    /// hour's, so the report has to say which the settings asked for. Each setting is checked against
+    /// the other two so a swapped or constant answer fails.
+    #[test]
+    fn the_panel_says_which_cache_lifetime_the_settings_asked_for() {
+        use bravebot_config::CacheTtl;
+
+        let words = ["5 minutes", "1 hour", "the service's own"];
+        let cases = [
+            (Some(CacheTtl::FiveMinutes), words[0]),
+            (Some(CacheTtl::OneHour), words[1]),
+            (None, words[2]),
+        ];
+        for (chosen, expected) in cases {
+            let mut config = config_for("http://127.0.0.1:1", None);
+            config.prompt_cache_ttl = chosen;
+            let trust = trusting();
+            let mut turn = facts(&config, &trust);
+            turn.cached = Some(bravebot_aichat::protocol::Cached {
+                read_tokens: 0,
+                written_tokens: 2_400,
+            });
+
+            let shown = rendered(&report(&turn));
+            assert!(shown.contains("lifetime asked of the service"), "{shown}");
+            for word in words {
+                assert_eq!(
+                    shown.contains(word),
+                    word == expected,
+                    "{chosen:?} should show {expected:?} and no other: {shown}"
+                );
+            }
+        }
+    }
+
     /// Every backend but Bedrock reports nothing about a cache. Presenting that as a session whose
     /// cache missed would be reporting a measurement nobody took, and it is the reading a person
     /// would take from two zeroes.
@@ -2363,6 +2415,7 @@ mod tests {
         let shown = rendered(&report(&silent));
         assert!(!shown.contains("served from the cache"), "{shown}");
         assert!(!shown.contains("Prompt cache"), "{shown}");
+        assert!(!shown.contains("lifetime"), "{shown}");
     }
 
     /// A turn that established a prefix and read nothing back reports the write alone, on the

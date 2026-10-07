@@ -650,6 +650,9 @@ A model that does not accept a lifetime refuses the request on it. That request 
 lifetime removed and the cache breakpoints kept, and the model is not sent one again in that process.
 A model that does not accept breakpoints at all is handled as before.
 
+`/status` shows the lifetime the setting asks for under the cache figures of the last turn. It is the
+setting and not a measurement, so it reads the same after a model has refused the lifetime.
+
 ### `editorMode`
 
 ```json
