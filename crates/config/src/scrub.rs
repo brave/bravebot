@@ -447,7 +447,7 @@ mod tests {
         );
         assert_eq!(
             names.len(),
-            3,
+            4,
             "a block naming no variable added to the set: {names:?}"
         );
     }
@@ -477,6 +477,7 @@ mod tests {
             [
                 "SERVICES_KEY_AICHAT",
                 "BRAVE_SERVICES_KEY_ID",
+                "BRAVE_AI_CHAT_API_KEY",
                 "GATEWAY_TOKEN"
             ]
         );
