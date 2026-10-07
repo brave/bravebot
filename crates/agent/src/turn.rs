@@ -810,6 +810,11 @@ pub struct Task {
     /// fine. So the interface passes `None`, and an unattended run passes
     /// [`MAX_TOOL_ROUNDS`], where nothing else can end a loop.
     pub rounds: Option<usize>,
+    /// The token a person sets to stop this one delegate, where the task is a delegate's.
+    ///
+    /// Read at a round boundary and treated as that round's limit: the delegate loses its tools
+    /// and answers with what it has (DELEGATE-25). `None` for a turn, which has the stop keys.
+    pub stop: Option<bravebot_core::cancel::DelegateStop>,
     /// How much of what a program printed may enter this turn's conversation, or `None` for the
     /// built-in cap.
     ///
@@ -1040,6 +1045,7 @@ impl Task {
             // and a default cannot know whether anybody is, so the default is the one that is
             // wrong in the cheaper direction.
             rounds: Some(MAX_TOOL_ROUNDS),
+            stop: None,
             // The built-in cap, which is a caller that read no settings file saying nothing about
             // what a command's output may spend.
             output_cap: None,
@@ -1211,6 +1217,12 @@ impl Task {
     /// [`Task::rounds`].
     pub fn with_rounds(mut self, rounds: Option<usize>) -> Self {
         self.rounds = rounds;
+        self
+    }
+
+    /// Let a person stop this delegate alone, without stopping the turn that started it.
+    pub fn stoppable_by(mut self, stop: bravebot_core::cancel::DelegateStop) -> Self {
+        self.stop = Some(stop);
         self
     }
 
@@ -2241,6 +2253,8 @@ struct Working<'scope> {
     /// The most rounds of tool calls its spec allows, which the record of how it ended counts
     /// against (TRACE-8).
     rounds: usize,
+    /// What a person set, where they stopped this delegate alone (DELEGATE-25).
+    stop: bravebot_core::cancel::DelegateStop,
     handle: std::thread::ScopedJoinHandle<
         'scope,
         (
@@ -2488,12 +2502,24 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 let kind = delegated.kind;
                 let rounds = ran.map_or(0, |(_, rounds)| rounds);
                 let tally = tools::tally(rounds, "round", "rounds");
-                let note = match rounds >= working.rounds {
-                    true => format!(
+                let note = match (working.stop.was_honoured(), rounds >= working.rounds) {
+                    (true, _) => format!(
+                        "the person stopped a {kind} delegate after {tally} and it answered with \
+                         what it had"
+                    ),
+                    (false, true) => format!(
                         "a {kind} delegate reached its limit of {tally} and answered with what it \
                          had"
                     ),
-                    false => format!("a {kind} delegate answered after {tally}"),
+                    (false, false) => format!("a {kind} delegate answered after {tally}"),
+                };
+                // Said before the report, in the driver's own words, as whose work a report is
+                // is (DELEGATE-14). The report keeps the label its own context earned.
+                let stopped = match working.stop.was_honoured() {
+                    true => {
+                        format!("The person stopped the {kind} delegate {id} before it reported. ")
+                    }
+                    false => String::new(),
                 };
                 let slot = conversation.next_reference();
                 let presented = policy
@@ -2516,8 +2542,8 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         policy.heard_from_delegate(delegated.report.label());
                         (
                             format!(
-                                "{TOOL_BUDGET_SPENT} The {kind} delegate {id} has finished. It \
-                                 reported:\n\n{text}"
+                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished. \
+                                 It reported:\n\n{text}"
                             ),
                             crate::report::Reported::Said(text.clone()),
                         )
@@ -2526,7 +2552,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         let shown = preview_for(policy, "delegate", &delegated.report);
                         (
                             format!(
-                                "{TOOL_BUDGET_SPENT} The {kind} delegate {id} has finished. {}",
+                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished. {}",
                                 reference.describe()
                             ),
                             crate::report::Reported::Kept(crate::report::Shown {
@@ -4162,7 +4188,22 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // the next request carries no tools at all, and the planner answers with what it has.
                     // Ending here instead would throw away the work and tell the user only that something
                     // went round in circles.
-                    if let Some(limit) = task
+                    //
+                    // A person stopping this one delegate is the same ending reached early: the round
+                    // the planner just asked for runs, and the request after it carries no tools
+                    // (DELEGATE-25).
+                    if may_call_tools
+                        && let Some(stop) = task.stop.as_ref().filter(|stop| stop.is_requested())
+                    {
+                        may_call_tools = false;
+                        stop.honour();
+                        reporter.narration(t!(delegate_stopped_narration).to_string());
+                        conversation.push(Message::user(format!(
+                            "{TOOL_BUDGET_SPENT} The person stopped you, and you have no more tool \
+                             calls. Answer now with what you know. If the work is not finished, say \
+                             what you found and what is left to do."
+                        )));
+                    } else if let Some(limit) = task
                         .rounds
                         .filter(|limit| steps >= *limit && may_call_tools)
                     {
@@ -4364,8 +4405,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             };
                             let spawning_model = spawning_model.clone();
                             let rounds = seeded.spec.rounds();
+                            let stop = seeded.stop.clone();
+                            let stopped_by = stop.clone();
                             let handle = scope.spawn(move || {
-                                let mut confirmer = confirming.delegate(id);
+                                let mut confirmer = confirming.delegate_stoppable(id, stopped_by);
                                 let mut reporter = reporting.delegate(id);
                                 let mut sink = recording.delegate(id);
                                 let ended = crate::delegate::run(
@@ -4400,6 +4443,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 seeded: vouched,
                                 checkout,
                                 rounds,
+                                stop,
                                 handle,
                             });
                         }
@@ -5468,6 +5512,7 @@ mod tests {
                 seeded,
                 checkout: None,
                 rounds: 60,
+                stop: Default::default(),
                 handle: worker,
             }];
             let mut tokens = 0;
@@ -5544,6 +5589,7 @@ mod tests {
                     seeded: seeded.clone(),
                     checkout: None,
                     rounds: 120,
+                    stop: Default::default(),
                     handle: stopped,
                 },
                 Working {
@@ -5552,6 +5598,7 @@ mod tests {
                     seeded: seeded.clone(),
                     checkout: None,
                     rounds: 60,
+                    stop: Default::default(),
                     handle: lost,
                 },
             ];

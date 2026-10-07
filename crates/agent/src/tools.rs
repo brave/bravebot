@@ -8106,7 +8106,9 @@ fn spawn_agent<S: Sink, R: Reporter>(
             let proof = policy.authorise_display_release("what a delegate was asked to do");
             task.clone().declassify(&proof)
         };
+        let stop = bravebot_core::cancel::DelegateStop::new();
         reporter.delegate_started(crate::report::Delegation {
+            stop: stop.clone(),
             id,
             // The definition's name rather than its kind's, because "a reader" stops telling the
             // person watching anything the moment two definitions are readers. Printable for the
@@ -8124,6 +8126,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
         // what lets the two run at the same time.
         let mut seeded =
             crate::delegate::seed(policy, spec, tools.remembering.filter(|_| made.is_none()));
+        seeded.stop = stop;
         if let Some(made) = made {
             if let Some(checkout) = made.checkout() {
                 seeded.file_authority = seeded.file_authority.rooted_at(checkout.key());

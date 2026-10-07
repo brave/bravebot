@@ -1032,7 +1032,9 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
     // holds both kinds and the row somebody stepped onto may not be the kind they came from.
     let (name, standing, colour) = match session.watched() {
         Some(Watched::Delegate(delegate)) => {
-            let (standing, colour) = if delegate.is_running() {
+            let (standing, colour) = if delegate.is_stopping() {
+                (t!(watching_stopping), theme::running())
+            } else if delegate.is_running() {
                 (t!(watching_working), theme::running())
             } else if delegate.failed {
                 (t!(watching_failed), theme::fail())
@@ -1112,6 +1114,15 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
     } else {
         spans.push(Span::styled(
             format!("  ·  {}", t!(watching_keys_one)),
+            dim(),
+        ));
+    }
+    if let Some(Watched::Delegate(delegate)) = session.watched()
+        && delegate.is_running()
+        && !delegate.is_stopping()
+    {
+        spans.push(Span::styled(
+            format!("  ·  {}", t!(watching_keys_stop)),
             dim(),
         ));
     }
@@ -3866,6 +3877,7 @@ mod tests {
         fn spawn(session: &mut Session, kind: &'static str, task: &str) -> DelegateId {
             let id = DelegateId::nth(session.delegates().len() as u32 + 1);
             session.delegate_started(Delegation {
+                stop: Default::default(),
                 id,
                 kind: kind.to_string(),
                 task: task.to_string(),
@@ -3913,6 +3925,33 @@ mod tests {
             assert!(
                 screen.contains("did not finish"),
                 "a delegate that failed was drawn as one that answered: {screen}"
+            );
+        }
+
+        /// The key is named where somebody who has gone looking for a way to stop one delegate
+        /// reads, only while there is something to stop, and the press is answered on the screen.
+        #[test]
+        fn the_footer_offers_the_stop_key_while_working_and_says_when_it_is_asked() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "checker", "run the build");
+            session.watch();
+
+            let screen = rendered(&session);
+            assert!(screen.contains("x stops it"), "{screen}");
+
+            assert!(session.stop_watched_delegate());
+            let screen = rendered(&session);
+            assert!(screen.contains("stopping"), "{screen}");
+            assert!(
+                !screen.contains("x stops it"),
+                "the key was offered again after it was pressed: {screen}"
+            );
+
+            session.delegate_finished(id, "answered".to_string(), false, None);
+            let screen = rendered(&session);
+            assert!(
+                !screen.contains("x stops it") && !screen.contains("stopping"),
+                "a delegate that had finished was drawn as one that could be stopped: {screen}"
             );
         }
 
@@ -6123,6 +6162,7 @@ mod tests {
             let ids = [1, 2].map(bravebot_agent::report::DelegateId::nth);
             for id in ids {
                 session.delegate_started(bravebot_agent::report::Delegation {
+                    stop: Default::default(),
                     id,
                     kind: "reader".to_string(),
                     task: "find the parser".to_string(),
@@ -7215,6 +7255,7 @@ mod tests {
 
         let id = bravebot_agent::report::DelegateId::nth(1);
         session.delegate_started(bravebot_agent::report::Delegation {
+            stop: Default::default(),
             id,
             kind: "reader".to_string(),
             task: "find the parser".to_string(),
@@ -7310,6 +7351,7 @@ mod tests {
 
         let id = bravebot_agent::report::DelegateId::nth(1);
         session.delegate_started(bravebot_agent::report::Delegation {
+            stop: Default::default(),
             id,
             kind: "reader".to_string(),
             task: "find the parser".to_string(),

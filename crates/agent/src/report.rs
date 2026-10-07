@@ -533,6 +533,8 @@ pub struct Delegation {
     pub kind: String,
     /// What it was asked to do.
     pub task: String,
+    /// The token that asks this delegate to stop, and no other and not the turn (DELEGATE-25).
+    pub stop: bravebot_core::cancel::DelegateStop,
 }
 
 pub trait Reporter {

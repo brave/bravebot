@@ -1032,6 +1032,9 @@ managed-model-denied =
 delegate-model-refused =
     { $definition } asks for { $model }, which this machine does not request: { $reason }
 
+# Said among a delegate's own lines when a person stopped it from the delegate view: the turn goes on.
+delegate-stopped-narration = you stopped this delegate, so it has to finish with what it has
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = offer these tools to the model?
@@ -1897,12 +1900,14 @@ scroller-footer-search = / search
 watching-footer = { $kind } delegate { $number }
 watching-footer-job = background { $name }
 watching-working = working
+watching-stopping = stopping
 watching-answered = answered
 watching-failed = did not finish
 watching-position = { $at } of { $total }
 watching-keys = q closes  ·  n / p another delegate
 watching-keys-one = q closes
 watching-keys-back = q goes back  ·  n / p another delegate
+watching-keys-stop = x stops it
 watching-nothing-yet = nothing yet
 # The list of every delegate this turn has spawned, with the session above them.
 watching-list-title = delegates

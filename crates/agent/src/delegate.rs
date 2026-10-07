@@ -404,6 +404,9 @@ pub struct Seeded {
     /// The workspace it runs in where that is a checkout of its own (CHECKOUT-7), and the
     /// spawning turn's own where it is not.
     pub workspace: Option<crate::workspace::Workspace>,
+    /// What a person sets to stop this delegate alone (DELEGATE-25). Minted with the delegate and
+    /// handed to the interface in the announcement that it started.
+    pub stop: bravebot_core::cancel::DelegateStop,
 }
 
 /// Names what it holds and never the task.
@@ -467,6 +470,7 @@ pub fn seed<S: Sink>(
         permissions: policy.permissions().clone(),
         remembering: remembering.map(str::to_string),
         workspace: None,
+        stop: bravebot_core::cancel::DelegateStop::new(),
     }
 }
 
@@ -612,7 +616,8 @@ pub fn run(
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(confine_runs)
-        .with_mcp(mcp.cloned());
+        .with_mcp(mcp.cloned())
+        .stoppable_by(seeded.stop.clone());
 
     task.file_authority = Some(seeded.file_authority.clone());
 

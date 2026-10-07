@@ -24567,6 +24567,212 @@ fn a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note() {
     );
 }
 
+/// Asks the delegate whose task names `stopping` to stop the moment it starts, as a person pressing
+/// the key in its view would, and keeps what the turn was told about each delegate when it ended.
+struct StopsOneDelegate {
+    stopping: &'static str,
+    notes: Vec<(bravebot_agent::report::DelegateId, String, bool)>,
+}
+
+impl bravebot_agent::report::Reporter for StopsOneDelegate {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn delegate_started(&mut self, delegation: bravebot_agent::report::Delegation) {
+        if delegation.task.contains(self.stopping) {
+            delegation.stop.request();
+        }
+    }
+
+    fn delegate_finished(
+        &mut self,
+        delegate: bravebot_agent::report::DelegateId,
+        note: String,
+        failed: bool,
+        _reported: Option<bravebot_agent::report::Reported>,
+    ) {
+        self.notes.push((delegate, note, failed));
+    }
+}
+
+/// DELEGATE-25: a person stopping one of two delegates ends that one at its next round, with its
+/// tools taken away and the answer it has, and leaves the other running to its own answer and the
+/// turn to answer after both. A stop that reached the turn's token would end all three, and one
+/// that reached the wrong delegate would stop the one the person was not looking at.
+#[test]
+fn stopping_one_delegate_leaves_the_other_and_the_turn_going() {
+    let scratch = Scratch::new("delegate-stop-one");
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "STOP-ONE-OF-TWO",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"THE-STOPPED-ONE"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"THE-UNTOUCHED-ONE"}"#,
+                ),
+                reply_with("waiting for both"),
+                reply_with("the turn answered"),
+            ],
+        ),
+        (
+            "THE-STOPPED-ONE",
+            vec![
+                tool_request("read_file", r#"{"path":"notes.txt"}"#),
+                reply_with("what the stopped one had"),
+            ],
+        ),
+        (
+            "THE-UNTOUCHED-ONE",
+            vec![
+                tool_request("read_file", r#"{"path":"notes.txt"}"#),
+                tool_request("read_file", r#"{"path":"notes.txt"}"#),
+                reply_with("what the untouched one found"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = StopsOneDelegate {
+        stopping: "THE-STOPPED-ONE",
+        notes: Vec::new(),
+    };
+    let cancel = bravebot_core::cancel::Cancel::new();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("STOP-ONE-OF-TWO"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &cancel,
+    )
+    .expect("the turn runs to its answer");
+
+    assert!(!cancel.is_cancelled(), "stopping a delegate ended the turn");
+    assert!(
+        outcome.steps >= 1,
+        "the turn did not go on to answer after the delegate was stopped"
+    );
+
+    let note = |id: u32| {
+        reporter
+            .notes
+            .iter()
+            .find(|(delegate, _, _)| *delegate == bravebot_agent::report::DelegateId::nth(id))
+            .unwrap_or_else(|| panic!("delegate d{id} was never collected: {:?}", reporter.notes))
+    };
+    let (_, stopped, failed) = note(1);
+    assert!(
+        stopped.starts_with("the person stopped a reader delegate"),
+        "the turn was not told the person stopped d1: {stopped}"
+    );
+    assert!(!failed, "a delegate that answered was drawn as a failure");
+    let (_, untouched, _) = note(2);
+    assert!(
+        untouched.starts_with("a reader delegate answered after 2 rounds"),
+        "the delegate that was not stopped did not run to its own answer: {untouched}"
+    );
+
+    let requests: Vec<String> = received.try_iter().collect();
+
+    // The stopped delegate's request after the stop carries no tools, and says why.
+    let after_stop = requests
+        .iter()
+        .find(|body| body.contains("THE-STOPPED-ONE") && body.contains("The person stopped you"))
+        .expect("the stopped delegate was never told it was stopped");
+    assert!(
+        !after_stop.contains("\"tools\""),
+        "a stopped delegate was still offered its tools: {after_stop}"
+    );
+
+    // Said before the report, about d1 alone, and never about d2.
+    let told = requests
+        .iter()
+        .filter(|body| body.contains("STOP-ONE-OF-TWO"))
+        .filter(|body| {
+            body.contains("The person stopped the reader delegate d1 before it reported.")
+        })
+        .count();
+    assert!(
+        told >= 1,
+        "the planner was never told the person stopped d1"
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|body| body.contains("The person stopped the reader delegate d2")),
+        "the planner was told the person stopped a delegate they did not"
+    );
+}
+
+/// A press after the delegate has answered changes how it ended by nothing, and the turn is not
+/// told it was stopped.
+#[test]
+fn a_stop_the_delegate_never_acted_on_is_not_reported_as_one() {
+    let scratch = Scratch::new("delegate-stop-late");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "STOP-TOO-LATE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"ANSWER-AT-ONCE"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "ANSWER-AT-ONCE",
+            vec![reply_with("answered with no tools used")],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = StopsOneDelegate {
+        stopping: "ANSWER-AT-ONCE",
+        notes: Vec::new(),
+    };
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("STOP-TOO-LATE"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let (_, note, _) = reporter.notes.first().expect("the delegate was collected");
+    assert!(
+        !note.contains("stopped"),
+        "a delegate that answered without ever reaching a round boundary was reported as stopped: {note}"
+    );
+    assert!(
+        !received
+            .try_iter()
+            .any(|body| body.contains("The person stopped the reader delegate")),
+        "the planner was told the person stopped a delegate that had already answered"
+    );
+}
+
 /// DELEGATE-11 over the whole path, for a delegate that stopped rather than reported: a person
 /// who answered "always" inside one has said the build may run, and the list they said it about
 /// belongs to the session. A delegate that fails a round later is the ordinary case rather than

@@ -220,6 +220,11 @@ view is not a press about it.
 There is no key for talking to a delegate and no box for it. A delegate is given one task, has
 nobody to ask, and takes no line typed mid-turn.
 
+`x` in a delegate's own view asks that delegate to stop and nothing else
+([DELEGATE-25](delegation.md#DELEGATE-25)): the view stays open, the turn goes on, and the footer
+says `stopping` until the delegate answers. It does nothing on the list, on a command's view, on a
+delegate that has finished or one already asked, and with Ctrl or Alt held.
+
 **Why.** What a person types while watching would otherwise wait in a line they cannot see, to be
 sent to a turn they are not looking at. A person stops the nearest thing, and somebody who went to
 look at what a delegate was doing is not asking for the turn to end when they come back out;
@@ -234,6 +239,10 @@ watching is also the mode most likely to be open while something is going wrong.
 `verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_turn_does`
 `verified-by: bravebot_tui::app::the_release_of_the_press_that_closed_the_view_is_not_a_second_press`
+`verified-by: bravebot_tui::app::x_stops_the_delegate_the_view_is_on_and_no_other`
+`verified-by: bravebot_tui::app::x_does_nothing_on_the_list_or_on_a_delegate_that_is_not_working`
+`verified-by: bravebot_tui::app::a_chord_on_x_does_not_stop_a_delegate`
+`verified-by: bravebot_tui::render::the_footer_offers_the_stop_key_while_working_and_says_when_it_is_asked`
 
 <a id="WATCH-10"></a>
 ### WATCH-10: what is on the screen changes when a person asks, and not otherwise

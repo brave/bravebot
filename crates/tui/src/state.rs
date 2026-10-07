@@ -121,6 +121,8 @@ pub struct Delegate {
     pub reported: Option<Reported>,
     /// Whether it ended by failing, so the line saying so can be coloured as such.
     pub failed: bool,
+    /// The token that asks this delegate to stop, and no other and not the turn (DELEGATE-25).
+    pub stop: bravebot_core::cancel::DelegateStop,
 }
 
 /// A command this session ran, and what it printed.
@@ -264,6 +266,11 @@ impl Delegate {
     /// Whether this one is still working.
     pub fn is_running(&self) -> bool {
         self.note.is_none()
+    }
+
+    /// Whether the person has asked it to stop and it has not yet finished doing so.
+    pub fn is_stopping(&self) -> bool {
+        self.is_running() && self.stop.is_requested()
     }
 
     /// The last few of its calls, which is what the block where it started draws.
@@ -2800,6 +2807,7 @@ impl Session {
             note: None,
             reported: None,
             failed: false,
+            stop: delegation.stop,
         });
         self.transcript.push(entry);
     }
@@ -3081,6 +3089,20 @@ impl Session {
         match self.watched() {
             Some(Watched::Delegate(delegate)) => Some(delegate),
             _ => None,
+        }
+    }
+
+    /// Ask the delegate the view is on to stop, leaving the turn and every other delegate going.
+    ///
+    /// Does nothing where the row is not a delegate, or where it has finished or been asked
+    /// already. Returns whether a stop was asked for.
+    pub fn stop_watched_delegate(&mut self) -> bool {
+        match self.watched_delegate() {
+            Some(delegate) if delegate.is_running() && !delegate.is_stopping() => {
+                delegate.stop.request();
+                true
+            }
+            _ => false,
         }
     }
 
@@ -9704,6 +9726,7 @@ mod tests {
         fn spawn(session: &mut Session, kind: &'static str, task: &str) -> DelegateId {
             let id = DelegateId::nth(session.delegates().len() as u32 + 1);
             session.delegate_started(bravebot_agent::report::Delegation {
+                stop: Default::default(),
                 id,
                 kind: kind.to_string(),
                 task: task.to_string(),
@@ -16488,6 +16511,7 @@ mod tests {
             let mut s = working();
             s.start_activity(Activity::running("Delegate", "a task").of_tool("spawn_agent"));
             s.delegate_started(Delegation {
+                stop: Default::default(),
                 id: DelegateId::nth(1),
                 kind: "reader".into(),
                 task: "a task".into(),
@@ -16533,11 +16557,13 @@ mod tests {
             let mut s = working();
             s.start_activity(Activity::running("Delegate", "fan-out").of_tool("spawn_agent"));
             s.delegate_started(Delegation {
+                stop: Default::default(),
                 id: DelegateId::nth(1),
                 kind: "reader".into(),
                 task: "task 1".into(),
             });
             s.delegate_started(Delegation {
+                stop: Default::default(),
                 id: DelegateId::nth(2),
                 kind: "reader".into(),
                 task: "task 2".into(),
@@ -16583,6 +16609,7 @@ mod tests {
             let mut s = working();
             s.start_activity(Activity::running("Delegate", "task").of_tool("spawn_agent"));
             s.delegate_started(Delegation {
+                stop: Default::default(),
                 id: DelegateId::nth(1),
                 kind: "reader".into(),
                 task: "task".into(),
@@ -17015,6 +17042,7 @@ mod tests {
         #[test]
         fn a_stopping_turn_says_how_many_delegates_it_waits_on() {
             let delegate = |n| Delegation {
+                stop: Default::default(),
                 id: DelegateId::nth(n),
                 kind: "reader".into(),
                 task: format!("task {n}"),
