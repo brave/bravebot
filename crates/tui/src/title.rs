@@ -1,4 +1,5 @@
-//! The terminal's title, named after the session, so a row of tabs running this can be told apart.
+//! The terminal's title, named after the session and marked with what it is doing, so a row of tabs
+//! running this can be told apart and the one waiting for an answer found.
 //!
 //! The title the terminal had is pushed before the first one is written and popped whenever the
 //! terminal is handed back, so the shell gets its own title again. The title is emptied just before
@@ -22,10 +23,36 @@ const POP: &str = "\x1b[23;0t";
 /// An empty title, written before the pop for a terminal that ignores the pop.
 const EMPTY: &str = "\x1b]0;\x07";
 
-/// One run's worth of title, kept between frames so an unchanged name is not written again.
+/// What the session is doing, as the title says it. Chosen by the driver from its own state: whether
+/// a turn is running or a prompt to the person is open, and never from anything a turn produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum State {
+    /// Nothing is running and nothing is asked: the box is waiting for a prompt.
+    Ready,
+    /// A turn or a command is running.
+    Working,
+    /// An approval, a question or a confirmation is open and the run is waiting for the person.
+    Waiting,
+}
+
+impl State {
+    /// The fixed text in front of the title, so a tab bar that cuts the title still shows it.
+    const fn marker(self) -> Option<&'static str> {
+        match self {
+            Self::Ready => None,
+            Self::Working => Some("✦"),
+            Self::Waiting => Some("[!]"),
+        }
+    }
+}
+
+/// One run's worth of title, kept between frames so an unchanged title is not written again.
 #[derive(Debug)]
 pub(crate) struct Title {
     on: bool,
+    /// The session's name as last given, trimmed.
+    name: String,
+    state: State,
     /// Whether a push is outstanding, which is the same as the terminal showing a title written here.
     pushed: bool,
     /// The text last written, kept across a handover so the title can be put back afterwards.
@@ -36,6 +63,8 @@ impl Title {
     pub(crate) const fn new() -> Self {
         Self {
             on: true,
+            name: String::new(),
+            state: State::Ready,
             pushed: false,
             shown: None,
         }
@@ -43,16 +72,31 @@ impl Title {
 
     /// Write the title for `name` where it differs from what the terminal shows.
     ///
-    /// Nothing is written until a session has a name. A session that loses its name, as `/clear`
-    /// does, is given the bare prefix rather than left showing the name of the one before it.
+    /// Nothing is written until a session has a name or something to say about its state. A session
+    /// that loses its name, as `/clear` does, is given the bare prefix rather than left showing the
+    /// name of the one before it.
     pub(crate) fn show<W: Write>(&mut self, out: &mut W, name: &str) -> io::Result<()> {
+        self.name = name.trim().to_string();
+        self.write(out)
+    }
+
+    /// Write the title for `state` where it differs from what the terminal shows.
+    ///
+    /// Called on every frame, so an unchanged state writes nothing: a title rewritten while a turn
+    /// runs makes some terminals tick, and none of them needs it.
+    pub(crate) fn mark<W: Write>(&mut self, out: &mut W, state: State) -> io::Result<()> {
+        self.state = state;
+        self.write(out)
+    }
+
+    fn write<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
         if !self.on {
             return Ok(());
         }
-        let text = match name.trim() {
-            "" if self.shown.is_none() => return Ok(()),
-            "" => PREFIX.to_string(),
-            name => text(name),
+        let text = match self.name.as_str() {
+            "" if self.shown.is_none() && self.state == State::Ready => return Ok(()),
+            "" => marked(PREFIX.to_string(), self.state),
+            name => text(name, self.state),
         };
         if self.pushed && self.shown.as_deref() == Some(text.as_str()) {
             return Ok(());
@@ -80,13 +124,24 @@ impl Title {
     }
 }
 
-/// The title for a session named `name`, safe to write inside an escape sequence.
+/// The title for a session named `name` in `state`, safe to write inside an escape sequence.
 ///
 /// Control characters are replaced by visible ones, as they are anywhere on the screen: an escape or
 /// a bell in a name would otherwise end the sequence early and let the rest act on the terminal.
-pub(crate) fn text(name: &str) -> String {
-    let name = crate::render::printable(name);
-    crate::status::cut(&format!("{PREFIX} · {name}"), MOST_COLUMNS)
+pub(crate) fn text(name: &str, state: State) -> String {
+    marked(
+        format!("{PREFIX} · {}", crate::render::printable(name)),
+        state,
+    )
+}
+
+/// `title` behind the marker for `state`, cut to the columns a title takes with the marker counted.
+fn marked(title: String, state: State) -> String {
+    let title = match state.marker() {
+        Some(marker) => format!("{marker} {title}"),
+        None => title,
+    };
+    crate::status::cut(&title, MOST_COLUMNS)
 }
 
 /// The run's title. One per process, because one process owns the terminal it is the title of.
@@ -110,6 +165,11 @@ fn wanted(setting: Option<bool>, incognito: bool) -> bool {
 /// [`Title::show`] for this run.
 pub(crate) fn show<W: Write>(out: &mut W, name: &str) -> io::Result<()> {
     title().show(out, name)
+}
+
+/// [`Title::mark`] for this run.
+pub(crate) fn mark<W: Write>(out: &mut W, state: State) -> io::Result<()> {
+    title().mark(out, state)
 }
 
 /// [`Title::give_back`] for this run.
@@ -157,14 +217,14 @@ mod tests {
     #[test]
     fn a_long_name_is_cut_to_sixty_columns() {
         let long = "a".repeat(200);
-        let cut = text(&long);
+        let cut = text(&long, State::Ready);
         assert_eq!(crate::wrap::display_width(&cut), MOST_COLUMNS);
         assert!(cut.starts_with("bravebot · aaa"));
         assert!(cut.ends_with('…'));
 
         let wide = "名".repeat(100);
-        assert!(crate::wrap::display_width(&text(&wide)) <= MOST_COLUMNS);
-        assert_eq!(text("short"), "bravebot · short");
+        assert!(crate::wrap::display_width(&text(&wide, State::Ready)) <= MOST_COLUMNS);
+        assert_eq!(text("short", State::Ready), "bravebot · short");
     }
 
     /// The push is what lets the shell have its own title back, so it has to come before anything
@@ -231,6 +291,73 @@ mod tests {
             written(&mut title, "named"),
             format!("{PUSH}\x1b]0;bravebot · named\x07")
         );
+    }
+
+    fn marked_as(title: &mut Title, state: State) -> String {
+        let mut out = Vec::new();
+        title.mark(&mut out, state).expect("mark");
+        String::from_utf8(out).expect("utf-8")
+    }
+
+    /// A person with many tabs open finds the one that stopped by its marker, so each change of
+    /// state has to reach the title, and the same state again, which the loop reports on every
+    /// frame, must not: a title rewritten while a turn runs makes some terminals tick.
+    #[test]
+    fn a_change_of_state_rewrites_the_title_and_a_repeated_state_does_not() {
+        let mut title = Title::new();
+        written(&mut title, "named");
+        assert_eq!(
+            marked_as(&mut title, State::Working),
+            "\x1b]0;✦ bravebot · named\x07"
+        );
+        assert_eq!(marked_as(&mut title, State::Working), "");
+        assert_eq!(
+            marked_as(&mut title, State::Waiting),
+            "\x1b]0;[!] bravebot · named\x07"
+        );
+        assert_eq!(marked_as(&mut title, State::Waiting), "");
+        assert_eq!(
+            marked_as(&mut title, State::Ready),
+            "\x1b]0;bravebot · named\x07"
+        );
+    }
+
+    /// The first turn of a session runs before it has a name, and that is when a tab most needs to
+    /// say it is waiting. A state is written without one, and a ready session with no name still
+    /// writes nothing, so the shell's title is not replaced for nothing.
+    #[test]
+    fn a_state_is_written_before_the_session_has_a_name() {
+        let mut title = Title::new();
+        assert_eq!(marked_as(&mut title, State::Ready), "");
+        assert_eq!(
+            marked_as(&mut title, State::Waiting),
+            format!("{PUSH}\x1b]0;[!] bravebot\x07")
+        );
+        assert_eq!(
+            written(&mut title, "named"),
+            "\x1b]0;[!] bravebot · named\x07"
+        );
+    }
+
+    /// The marker is the first thing in the title, so a tab bar that cuts it still shows it, and it
+    /// counts toward the sixty columns rather than being added to them.
+    #[test]
+    fn the_marker_leads_the_title_and_counts_toward_sixty_columns() {
+        let long = "a".repeat(200);
+        for state in [State::Working, State::Waiting] {
+            let marked = text(&long, state);
+            assert!(marked.starts_with(state.marker().expect("a marker")));
+            assert!(crate::wrap::display_width(&marked) <= MOST_COLUMNS);
+            assert!(marked.ends_with('…'));
+        }
+    }
+
+    /// Switched off means nothing is written for a state either.
+    #[test]
+    fn no_state_is_written_when_the_title_is_turned_off() {
+        let mut title = Title::new();
+        title.on = false;
+        assert_eq!(marked_as(&mut title, State::Waiting), "");
     }
 
     /// The setting turns the title off with a real `false` and leaves it on otherwise, since the

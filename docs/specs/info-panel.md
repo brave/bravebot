@@ -29,7 +29,8 @@ Once a session has a name, the terminal's title is `bravebot · {name}`. It foll
 written when the name is first known (after the first turn, or at once on a resume or a `/rename`),
 written again whenever the name changes, and set to the bare `bravebot` when the session loses its
 name, as a `/clear` does, rather than left naming the session before it. Nothing is written before a
-session has a name, and nothing is written again while the name stays the same.
+session has a name unless [PANEL-15](#PANEL-15) has a state to show, and nothing is written again
+while the name and the state stay the same.
 
 `verified-by: bravebot_tui::title::a_rename_rewrites_the_title_and_an_unchanged_name_does_not`
 `verified-by: bravebot_tui::title::no_title_is_written_before_a_name_and_a_lost_name_leaves_the_prefix`
@@ -250,3 +251,21 @@ is what tells two apart.
 
 `verified-by: bravebot_tui::panel::an_mcp_alias_is_drawn_pictured_and_cut_from_the_left`
 `verified-by: bravebot_tui::panel::the_sections_come_in_order_and_an_empty_one_leaves_no_heading`
+
+<a id="PANEL-15"></a>
+### PANEL-15: the title says what the session is doing
+
+A marker stands in front of the title, so a tab bar that cuts the title still shows it, and counts
+toward the 60 columns of [PANEL-2](#PANEL-2). While a turn or a command is running the marker is
+`✦`. While an approval, a question or a confirmation is open and the run is waiting for the person
+it is `[!]`. With neither, as at the box, there is no marker and the title is as PANEL-1 gives it.
+The marker is written before the session has a name, since the first turn is when a tab most needs
+to say it is waiting. It is written on a change of state and not again while the state stays the
+same, with no animation, so the title is not rewritten every frame. Which marker applies is the
+driver's own state, a turn running or a prompt open, and not anything read from what the turn
+produced ([PANEL-11](#PANEL-11)). [PANEL-4](#PANEL-4) holds: no marker is written where no title is.
+
+`verified-by: bravebot_tui::title::a_change_of_state_rewrites_the_title_and_a_repeated_state_does_not`
+`verified-by: bravebot_tui::title::a_state_is_written_before_the_session_has_a_name`
+`verified-by: bravebot_tui::title::the_marker_leads_the_title_and_counts_toward_sixty_columns`
+`verified-by: bravebot_tui::title::no_state_is_written_when_the_title_is_turned_off`

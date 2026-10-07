@@ -2808,7 +2808,24 @@ fn redraw(
         .draw(|frame| laid = render::draw(frame, session))
         .map_err(io::Error::other)?;
     session.note_layout(laid);
+    // Every frame, so a turn started or ended by any path reaches the title; an unchanged state
+    // writes nothing.
+    crate::title::mark(terminal.backend_mut(), run_state(session.status))?;
     Ok(())
+}
+
+/// What the title says the session is doing, from the driver's own status.
+const fn run_state(status: Status) -> crate::title::State {
+    match status {
+        Status::Working | Status::Running => crate::title::State::Working,
+        Status::Idle | Status::Quitting => crate::title::State::Ready,
+    }
+}
+
+/// Say in the title what the session is doing. A title that cannot be written is not a reason to
+/// stop a turn or leave a question unasked.
+fn mark_title(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, state: crate::title::State) {
+    let _ = crate::title::mark(terminal.backend_mut(), state);
 }
 
 fn copy_selection(
@@ -7056,7 +7073,9 @@ fn manifest_animated(
                 // a line, so a plan longer than the window can be walked back through before it is
                 // answered.
                 crate::remote_confirm::ToMain::Manifest(request) => {
+                    mark_title(terminal, crate::title::State::Waiting);
                     let answer = crate::confirm::ask_manifest(terminal, &request);
+                    mark_title(terminal, crate::title::State::Working);
                     if answer == crate::confirm::Answer::Interrupt {
                         stop_what_is_running(session, &cancel);
                     }
@@ -7759,236 +7778,256 @@ fn run_turn_animated(
 
         // A question that arrives once the work has been stopped is refused undrawn, by the
         // wrapper below; see [`drain_worker_until_stopped`].
-        let mut handle = |message| match message {
-            crate::remote_confirm::ToMain::Write(request) => {
-                let answer = crate::confirm::ask(terminal, &request);
-                // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
-                // Set before the answer goes back, so the worker sees it as soon as it wakes.
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                // A closed channel means the worker is already gone, so there is nothing to
-                // answer and the loop below will collect its result.
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Write(answer.decision()));
+        let mut handle = |message: crate::remote_confirm::ToMain| {
+            // Which prompt widget is open is the driver's own state, so a message that blocks the
+            // worker on the person is what turns the title to waiting, and its answer turns it back.
+            let asks = refusal(&message).is_some();
+            if asks {
+                mark_title(terminal, crate::title::State::Waiting);
             }
-            crate::remote_confirm::ToMain::Run(request) => {
-                let answer = crate::confirm::ask_run(terminal, &request);
-                // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
-                // Set before the answer goes back, so the worker sees it as soon as it wakes.
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                // What was vouched for travels back with the turn's outcome, exactly as the
-                // trust map does: the tool records it on the policy, and the policy carries it
-                // out. Recording it here as well would give the session a second copy to
-                // disagree with.
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Run(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::ReadOutput(request) => {
-                let answer = crate::confirm::ask_output(terminal, &request);
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                // The standing key, handled as at the other vetting prompt and for the same
-                // reasons: the approval itself leaves no rule behind, and turning the mode on is
-                // the interface's own standing decision rather than the turn's, so the answer the
-                // worker is waiting for is the same either way and this takes effect next turn.
-                if answer.turns_vetting_on() {
-                    session.choose_vetting(true);
-                    // Said on the transcript because the person will not otherwise see it
-                    // recorded anywhere, and what it changes is that later prompts do not appear.
-                    session.note(t!(session_vetting_on));
-                }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::ReadOutput(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::Vet(request) => {
-                let answer = crate::confirm::ask_vet(terminal, &request);
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                // The approval itself is noted nowhere: it covers the bytes that were on the
-                // screen and leaves no rule behind, so there is no standing decision to record.
-                // Turning the mode on is a standing decision, and it is the interface's own rather
-                // than the turn's: the answer the worker is waiting for is the same either way,
-                // and what this adds takes effect from the next turn.
-                if answer.turns_vetting_on() {
-                    session.choose_vetting(true);
-                    // Said on the transcript because the person will not otherwise see it
-                    // recorded anywhere, and what it changes is that later prompts do not appear.
-                    session.note(t!(session_vetting_on));
-                }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Vet(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::Fetch(request) => {
-                let answer = crate::confirm::ask_fetch(terminal, &request);
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                // Nothing is noted on the transcript: an approval covers this one URL and leaves
-                // no standing permission behind, so there is no decision to record.
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Fetch(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::Vouch(request) => {
-                let answer = crate::confirm::ask_vouch(terminal, &request);
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                if answer == crate::confirm::Answer::Approve {
-                    // Said on the transcript because it is a standing decision the user will not
-                    // otherwise see recorded anywhere until they ask for /status.
-                    session.note(t!(session_vouched_for, path = &request.path));
-                }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Vouch(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::Exposure(request) => {
-                let answer = crate::confirm::ask_exposure(terminal, &request);
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                if answer == crate::confirm::Answer::Approve {
-                    // Said on the transcript because it lasts the session and the box it was
-                    // answered in is gone: what is left otherwise is a read that looks like any
-                    // other, with nothing to say a credential went with it.
-                    session.note(t!(session_exposed, path = &request.path));
-                }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Exposure(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::Server(request) => {
-                let answer = crate::confirm::ask_server(terminal, &request);
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                if answer == crate::confirm::Answer::Approve {
-                    // Said on the transcript for the reason vouching for a file is: it lasts the
-                    // session, and a process running with the user's access is worth being able to
-                    // see they agreed to.
-                    session.note(t!(
-                        session_started_server,
-                        language = request.language,
-                        program = request.program.as_str()
-                    ));
-                }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Server(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::Manifest(request) => {
-                let answer = crate::confirm::ask_manifest(terminal, &request);
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                // Nothing is noted on the transcript. The answer covers this plan and no other, so
-                // there is no standing decision to record, and the plan itself is about to be
-                // walked in the open where the transcript will show every step of it.
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Manifest(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::ToolList(request) => {
-                let answer = crate::confirm::ask_tool_list(terminal, &request);
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                if answer == crate::confirm::Answer::Approve {
-                    // Said on the transcript because the planner reads these tools' descriptions
-                    // from here on, in this session and the ones after it.
-                    session.note(t!(
-                        session_offered_tools,
-                        alias = &request.alias,
-                        count = request.tools.len()
-                    ));
-                }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::ToolList(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::McpCall(request) => {
-                let answer = crate::confirm::ask_mcp_call(terminal, &request);
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                if answer == crate::confirm::CallAnswer::ApproveAndStand {
-                    // The one answer at this prompt that outlasts it, so the one worth being able
-                    // to find afterwards.
-                    session.note(t!(session_stands_for_tool, tool = request.name()));
-                }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::McpCall(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::Move(request) => {
-                let answer = crate::confirm::ask_move(terminal, &request);
-                if answer.stops_the_turn() {
-                    stop_what_is_running(session, &cancel);
-                }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Move(answer.decision()));
-            }
-            crate::remote_confirm::ToMain::Ask(asking) => {
-                // A planner that loops back over the same decision should not make the user
-                // restate it. The note is what keeps that from being invisible: an answer given
-                // once and reused silently would look like a question that was never asked.
-                let known: Vec<Option<bravebot_core::ask::Answer>> = asking
-                    .prompts
-                    .iter()
-                    .map(|prompt| session.recall_answer(&prompt.key))
-                    .collect();
-                for (prompt, earlier) in asking.prompts.iter().zip(&known) {
-                    if earlier.is_some() {
-                        session.note(t!(session_answered_already, question = &prompt.question));
+            match message {
+                crate::remote_confirm::ToMain::Write(request) => {
+                    let answer = crate::confirm::ask(terminal, &request);
+                    // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
+                    // Set before the answer goes back, so the worker sees it as soon as it wakes.
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
                     }
+                    // A closed channel means the worker is already gone, so there is nothing to
+                    // answer and the loop below will collect its result.
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Write(answer.decision()));
                 }
-
-                // Only what is still outstanding is drawn, so the count in the title is the
-                // number of questions the person actually has to answer.
-                let outstanding = bravebot_core::ask::Asking {
-                    prompts: asking
+                crate::remote_confirm::ToMain::Run(request) => {
+                    let answer = crate::confirm::ask_run(terminal, &request);
+                    // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
+                    // Set before the answer goes back, so the worker sees it as soon as it wakes.
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    // What was vouched for travels back with the turn's outcome, exactly as the
+                    // trust map does: the tool records it on the policy, and the policy carries it
+                    // out. Recording it here as well would give the session a second copy to
+                    // disagree with.
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Run(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::ReadOutput(request) => {
+                    let answer = crate::confirm::ask_output(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    // The standing key, handled as at the other vetting prompt and for the same
+                    // reasons: the approval itself leaves no rule behind, and turning the mode on is
+                    // the interface's own standing decision rather than the turn's, so the answer the
+                    // worker is waiting for is the same either way and this takes effect next turn.
+                    if answer.turns_vetting_on() {
+                        session.choose_vetting(true);
+                        // Said on the transcript because the person will not otherwise see it
+                        // recorded anywhere, and what it changes is that later prompts do not appear.
+                        session.note(t!(session_vetting_on));
+                    }
+                    let _ =
+                        answer_tx.send(crate::remote_confirm::Reply::ReadOutput(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::Vet(request) => {
+                    let answer = crate::confirm::ask_vet(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    // The approval itself is noted nowhere: it covers the bytes that were on the
+                    // screen and leaves no rule behind, so there is no standing decision to record.
+                    // Turning the mode on is a standing decision, and it is the interface's own rather
+                    // than the turn's: the answer the worker is waiting for is the same either way,
+                    // and what this adds takes effect from the next turn.
+                    if answer.turns_vetting_on() {
+                        session.choose_vetting(true);
+                        // Said on the transcript because the person will not otherwise see it
+                        // recorded anywhere, and what it changes is that later prompts do not appear.
+                        session.note(t!(session_vetting_on));
+                    }
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Vet(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::Fetch(request) => {
+                    let answer = crate::confirm::ask_fetch(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    // Nothing is noted on the transcript: an approval covers this one URL and leaves
+                    // no standing permission behind, so there is no decision to record.
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Fetch(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::Vouch(request) => {
+                    let answer = crate::confirm::ask_vouch(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    if answer == crate::confirm::Answer::Approve {
+                        // Said on the transcript because it is a standing decision the user will not
+                        // otherwise see recorded anywhere until they ask for /status.
+                        session.note(t!(session_vouched_for, path = &request.path));
+                    }
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Vouch(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::Exposure(request) => {
+                    let answer = crate::confirm::ask_exposure(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    if answer == crate::confirm::Answer::Approve {
+                        // Said on the transcript because it lasts the session and the box it was
+                        // answered in is gone: what is left otherwise is a read that looks like any
+                        // other, with nothing to say a credential went with it.
+                        session.note(t!(session_exposed, path = &request.path));
+                    }
+                    let _ =
+                        answer_tx.send(crate::remote_confirm::Reply::Exposure(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::Server(request) => {
+                    let answer = crate::confirm::ask_server(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    if answer == crate::confirm::Answer::Approve {
+                        // Said on the transcript for the reason vouching for a file is: it lasts the
+                        // session, and a process running with the user's access is worth being able to
+                        // see they agreed to.
+                        session.note(t!(
+                            session_started_server,
+                            language = request.language,
+                            program = request.program.as_str()
+                        ));
+                    }
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Server(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::Manifest(request) => {
+                    let answer = crate::confirm::ask_manifest(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    // Nothing is noted on the transcript. The answer covers this plan and no other, so
+                    // there is no standing decision to record, and the plan itself is about to be
+                    // walked in the open where the transcript will show every step of it.
+                    let _ =
+                        answer_tx.send(crate::remote_confirm::Reply::Manifest(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::ToolList(request) => {
+                    let answer = crate::confirm::ask_tool_list(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    if answer == crate::confirm::Answer::Approve {
+                        // Said on the transcript because the planner reads these tools' descriptions
+                        // from here on, in this session and the ones after it.
+                        session.note(t!(
+                            session_offered_tools,
+                            alias = &request.alias,
+                            count = request.tools.len()
+                        ));
+                    }
+                    let _ =
+                        answer_tx.send(crate::remote_confirm::Reply::ToolList(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::McpCall(request) => {
+                    let answer = crate::confirm::ask_mcp_call(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    if answer == crate::confirm::CallAnswer::ApproveAndStand {
+                        // The one answer at this prompt that outlasts it, so the one worth being able
+                        // to find afterwards.
+                        session.note(t!(session_stands_for_tool, tool = request.name()));
+                    }
+                    let _ =
+                        answer_tx.send(crate::remote_confirm::Reply::McpCall(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::Move(request) => {
+                    let answer = crate::confirm::ask_move(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Move(answer.decision()));
+                }
+                crate::remote_confirm::ToMain::Ask(asking) => {
+                    // A planner that loops back over the same decision should not make the user
+                    // restate it. The note is what keeps that from being invisible: an answer given
+                    // once and reused silently would look like a question that was never asked.
+                    let known: Vec<Option<bravebot_core::ask::Answer>> = asking
                         .prompts
                         .iter()
-                        .zip(&known)
-                        .filter(|(_, earlier)| earlier.is_none())
-                        .map(|(prompt, _)| prompt.clone())
-                        .collect(),
-                };
-                let fresh = crate::ask::ask(terminal, &outstanding);
+                        .map(|prompt| session.recall_answer(&prompt.key))
+                        .collect();
+                    for (prompt, earlier) in asking.prompts.iter().zip(&known) {
+                        if earlier.is_some() {
+                            session.note(t!(session_answered_already, question = &prompt.question));
+                        }
+                    }
 
-                let answers = crate::ask::in_order(known, fresh);
-                for (prompt, answer) in asking.prompts.iter().zip(&answers) {
-                    session.remember_answer(prompt.key.clone(), answer.clone());
+                    // Only what is still outstanding is drawn, so the count in the title is the
+                    // number of questions the person actually has to answer.
+                    let outstanding = bravebot_core::ask::Asking {
+                        prompts: asking
+                            .prompts
+                            .iter()
+                            .zip(&known)
+                            .filter(|(_, earlier)| earlier.is_none())
+                            .map(|(prompt, _)| prompt.clone())
+                            .collect(),
+                    };
+                    let fresh = crate::ask::ask(terminal, &outstanding);
+
+                    let answers = crate::ask::in_order(known, fresh);
+                    for (prompt, answer) in asking.prompts.iter().zip(&answers) {
+                        session.remember_answer(prompt.key.clone(), answer.clone());
+                    }
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(answers));
                 }
-                let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(answers));
+                // No reply: each of these is recorded and the next redraw, one iteration away,
+                // shows it. That is what makes a long turn legible while it runs.
+                crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
+                crate::remote_confirm::ToMain::Spent(spent) => session.progressed(spent),
+                crate::remote_confirm::ToMain::PromptRecorded(at) => session.prompt_recorded(at),
+                crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
+                crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
+                crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
+                crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
+                crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
+                crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
+                crate::remote_confirm::ToMain::Started(activity) => {
+                    session.start_activity(activity)
+                }
+                crate::remote_confirm::ToMain::Finished(activity) => {
+                    session.finish_activity(activity)
+                }
+                crate::remote_confirm::ToMain::Movable(handoff) => session.movable(handoff),
+                crate::remote_confirm::ToMain::Job(event) => session.job(event),
+                crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
+                crate::remote_confirm::ToMain::CheckFinished => session.checked(),
+                crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
+                crate::remote_confirm::ToMain::Printed(output) => session.command_printed(output),
+                crate::remote_confirm::ToMain::Returned(returned) => session.returned(returned),
+                crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),
+                // The turn has taken the oldest waiting prompt, so it stops being something waiting
+                // above the box and becomes something said. Which prompt is not named: the turn takes
+                // them in the order they were sent and this end hands them over in that order, so the
+                // oldest is the one that has gone.
+                crate::remote_confirm::ToMain::Interjected(_) => session.interjected(),
+                // Whose work the lines that follow are, as the driver said. Nothing here reads a line
+                // to find out: several delegates and the turn report at once.
+                crate::remote_confirm::ToMain::ReportingFor(delegate) => {
+                    session.reporting_for(delegate)
+                }
+                crate::remote_confirm::ToMain::DelegateStarted(delegation) => {
+                    session.delegate_started(delegation)
+                }
+                crate::remote_confirm::ToMain::DelegateFinished {
+                    id,
+                    note,
+                    failed,
+                    reported,
+                } => session.delegate_finished(id, note, failed, reported),
             }
-            // No reply: each of these is recorded and the next redraw, one iteration away,
-            // shows it. That is what makes a long turn legible while it runs.
-            crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
-            crate::remote_confirm::ToMain::Spent(spent) => session.progressed(spent),
-            crate::remote_confirm::ToMain::PromptRecorded(at) => session.prompt_recorded(at),
-            crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
-            crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
-            crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
-            crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
-            crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
-            crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
-            crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
-            crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
-            crate::remote_confirm::ToMain::Movable(handoff) => session.movable(handoff),
-            crate::remote_confirm::ToMain::Job(event) => session.job(event),
-            crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
-            crate::remote_confirm::ToMain::CheckFinished => session.checked(),
-            crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
-            crate::remote_confirm::ToMain::Printed(output) => session.command_printed(output),
-            crate::remote_confirm::ToMain::Returned(returned) => session.returned(returned),
-            crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),
-            // The turn has taken the oldest waiting prompt, so it stops being something waiting
-            // above the box and becomes something said. Which prompt is not named: the turn takes
-            // them in the order they were sent and this end hands them over in that order, so the
-            // oldest is the one that has gone.
-            crate::remote_confirm::ToMain::Interjected(_) => session.interjected(),
-            // Whose work the lines that follow are, as the driver said. Nothing here reads a line
-            // to find out: several delegates and the turn report at once.
-            crate::remote_confirm::ToMain::ReportingFor(delegate) => {
-                session.reporting_for(delegate)
+            if asks {
+                mark_title(terminal, crate::title::State::Working);
             }
-            crate::remote_confirm::ToMain::DelegateStarted(delegation) => {
-                session.delegate_started(delegation)
-            }
-            crate::remote_confirm::ToMain::DelegateFinished {
-                id,
-                note,
-                failed,
-                reported,
-            } => session.delegate_finished(id, note, failed, reported),
         };
         let carrying_on = drain_worker_until_stopped(
             &from_worker,
@@ -14091,6 +14130,17 @@ mod tests {
 
     /// The mode lasts one command. Leaving it on would send the next thing typed to a shell, which
     /// is the sort of surprise that ends up running a sentence.
+    /// A running turn or command is what the title marks as working, and anything else is the box
+    /// waiting, whatever else the session holds.
+    #[test]
+    fn a_running_turn_or_command_is_working_in_the_title() {
+        use crate::title::State;
+        assert_eq!(run_state(Status::Working), State::Working);
+        assert_eq!(run_state(Status::Running), State::Working);
+        assert_eq!(run_state(Status::Idle), State::Ready);
+        assert_eq!(run_state(Status::Quitting), State::Ready);
+    }
+
     #[test]
     fn running_a_command_leaves_shell_mode() {
         let mut session = Session::new("none");
