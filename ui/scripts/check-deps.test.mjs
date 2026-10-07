@@ -86,3 +86,10 @@ test('the committed lockfile yields a version for every direct dependency', () =
   const names = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })
   assert.deepEqual(names.filter((name) => !/^\d+\.\d+\.\d+/.test(locked.get(name) ?? '')), [])
 })
+
+// A Windows checkout with core.autocrlf converts the lockfile to CRLF, and every `$`-anchored
+// pattern then fails on the trailing \r, so every direct dependency read as "wants nothing".
+test('a lockfile with CRLF line endings reads the same as one with LF', () => {
+  assert.deepEqual(lockedVersions(LOCK.replace(/\n/g, '\r\n')), lockedVersions(LOCK))
+  assert.equal(lockedVersions(LOCK.replace(/\n/g, '\r\n')).get('react'), '19.1.0')
+})

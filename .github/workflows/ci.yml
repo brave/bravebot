@@ -276,6 +276,14 @@ jobs:
       - name: Test the installer, check the lockfiles against their manifests and lint them
         run: make check-npm
 
+      # check-reviewdog's npm-audit reads only package-lock.json, so the pnpm lockfiles get
+      # their advisory audit here. `pnpm audit` reads pnpm-lock.yaml and needs no install.
+      - name: Audit the lockfiles for known advisories
+        run: |
+          for dir in ui docs/website packages/agent-client; do
+            (cd "$dir" && pnpm audit --audit-level=high)
+          done
+
   # The documentation website under docs/website. Docusaurus throws on broken links or
   # broken anchors, so this job validates documentation correctness across the site. It links
   # to the rest of the tree by URL, which the build does not follow.

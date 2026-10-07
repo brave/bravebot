@@ -20,7 +20,7 @@ const unquote = (key) => key.replace(/^'(.*)'$/, '$1').replace(/^"(.*)"$/, '$1')
 // A version that is a URL (a git dependency) is resolved to the version its `packages:` entry
 // records, which is what lands in node_modules/<name>/package.json.
 export function lockedVersions(text) {
-  const lines = text.split('\n')
+  const lines = text.split(/\r?\n/)
   const locked = new Map()
   const urls = new Map()
   let area = ''
