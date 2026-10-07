@@ -8,7 +8,7 @@
 //! where it can be piped into something else; a progress log that shared that stream would
 //! corrupt it.
 
-use crate::json::Call;
+use crate::json::{self, Call, Stream, Tokens};
 use bravebot_agent::report::{Activity, Reporter, Shown};
 use bravebot_core::todo::Row;
 use bravebot_i18n::t;
@@ -87,6 +87,17 @@ fn marked(margin: &str, line: &str) -> Vec<String> {
     rows
 }
 
+/// The token counts of a usage report, as the result object holds them.
+fn tokens_of(spent: bravebot_agent::Spent) -> Tokens {
+    Tokens {
+        total: spent.tokens,
+        output: spent.output_tokens,
+        context: spent.context_tokens,
+        cache_read: spent.cached.read_tokens,
+        cache_written: spent.cached.written_tokens,
+    }
+}
+
 /// Writes progress as it arrives.
 ///
 /// Generic over the sink so a test can read back exactly what a run would have printed.
@@ -104,6 +115,8 @@ pub struct Progress<W: Write> {
     /// these on it and the ending prints them from there: written twice, a run that loaded a skill
     /// would say so once in the middle of its progress and once at the end.
     notices: Vec<String>,
+    /// Where each call and each finished request is written as it happens, for `--json-stream`.
+    stream: Option<Stream>,
 }
 
 impl<W: Write> Progress<W> {
@@ -113,7 +126,14 @@ impl<W: Write> Progress<W> {
             spent: Default::default(),
             calls: Vec::new(),
             notices: Vec::new(),
+            stream: None,
         }
+    }
+
+    /// Also write an event line for each finished call and each finished request.
+    pub fn streaming(mut self, stream: Option<Stream>) -> Self {
+        self.stream = stream;
+        self
     }
 
     pub fn spent(&self) -> bravebot_agent::Spent {
@@ -149,7 +169,15 @@ impl<W: Write> Progress<W> {
 
 impl<W: Write> Reporter for Progress<W> {
     fn spent(&mut self, spent: bravebot_agent::Spent) {
+        // Reported more often than the figure moves: at the start, with nothing, and again for a
+        // request already counted. Only a change is an event, since a line repeating the last one
+        // tells a caller following the stream nothing and reads as a request that did not happen.
+        let counted = tokens_of(spent);
+        let changed = counted != tokens_of(self.spent);
         self.spent = spent;
+        if let (true, Some(stream)) = (changed, self.stream.as_mut()) {
+            stream.line(&json::usage_event(&counted));
+        }
     }
 
     /// Left to the per-call lines. A task list redrawn in place is legible; the same list
@@ -187,11 +215,15 @@ impl<W: Write> Reporter for Progress<W> {
         // half of what a caller wants and is not known until then. A call dispatch named nothing
         // for is left out: an empty name is nothing a program can match on.
         if !activity.tool.is_empty() {
-            self.calls.push(Call {
+            let call = Call {
                 tool: activity.tool.clone(),
                 target: activity.target.clone(),
                 refused: activity.failed,
-            });
+            };
+            if let Some(stream) = self.stream.as_mut() {
+                stream.line(&json::call_event(&call));
+            }
+            self.calls.push(call);
         }
         if let Some(note) = &activity.note {
             // The same figure the interactive transcript puts here, from the same function, for

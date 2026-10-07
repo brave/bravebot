@@ -1135,6 +1135,125 @@ fn a_run_asked_for_a_result_object_puts_one_on_stdout() {
     );
 }
 
+/// A gateway whose model asks to write `out.txt` and, once that call has an answer in the
+/// conversation, says it is done. A one-shot run has nobody to approve the write, so the call is
+/// refused, and what the model says after it is the reply.
+fn a_gateway_asking_for_a_write() -> Gateway {
+    a_gateway(r#"["tools"]"#, |body| {
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}],
+                "usage":{"prompt_tokens":30,"completion_tokens":4}}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"write_file",
+                        "arguments":"{\"path\":\"out.txt\",\"contents\":\"hi\"}"}}]},
+                "finish_reason":"tool_calls"}],
+                "usage":{"prompt_tokens":12,"completion_tokens":5}}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// CLI-24: a run that is refused a write writes its events while it goes and ends on the result
+/// object. Streaming a gate's refusal is covered in `json.rs`: the approval a one-shot run lacks
+/// ends the call without a gate event.
+///
+/// Pinned against the object a `--json` run writes for the same task, so the last line is what a
+/// caller of the other flag would have read. The same gateway answers both runs, which is why the
+/// two objects can be equal. The events are checked as a sequence: a stream written all at the end,
+/// or one that left out a refusal or a call, has the right lines in the wrong number or order.
+#[test]
+fn a_stream_writes_each_event_as_it_happens_and_ends_on_the_result_object() {
+    let gateway = a_gateway_asking_for_a_write();
+    let scratch = Scratch::new("cli-running-json-stream").with_settings(&settings_for(&gateway));
+    let run_in = |flag: &str| {
+        let output = bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            AT_A_GATEWAY,
+            &[flag, "-p", "write out.txt"],
+        );
+        said(&output)
+    };
+
+    let (streamed, stderr) = run_in("--json-stream");
+    let (plain, _) = run_in("--json");
+
+    let lines: Vec<serde_json::Value> = streamed
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|_| panic!("{line}: {stderr}")))
+        .collect();
+    let kinds: Vec<&str> = lines
+        .iter()
+        .map(|line| line["event"].as_str().unwrap_or("result"))
+        .collect();
+    // The request that asked for the write finishes, the refused call ends, the second request
+    // finishes, and the object closes the stream.
+    let call = kinds
+        .iter()
+        .position(|kind| *kind == "call")
+        .expect(&streamed);
+    assert_eq!(kinds.last(), Some(&"result"), "{streamed}");
+    assert_eq!(kinds.iter().filter(|kind| **kind == "result").count(), 1);
+    assert_eq!(
+        kinds.iter().filter(|kind| **kind == "usage").count(),
+        2,
+        "one usage event per finished request: {streamed}"
+    );
+    assert_eq!(lines[call]["tool"], "write_file", "{streamed}");
+    assert_eq!(lines[call]["target"], "out.txt", "{streamed}");
+    assert_eq!(lines[call]["refused"], true, "{streamed}");
+    // The first request finished before the call it asked for ran, and the cumulative figure
+    // after the second is the sum of both.
+    let usage: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|line| line["event"] == "usage")
+        .collect();
+    assert!(
+        kinds.iter().position(|kind| *kind == "usage") < Some(call),
+        "{streamed}"
+    );
+    assert_eq!(usage[1]["tokens"]["total"], 51, "{streamed}");
+
+    // The last line is the object `--json` writes, which names the same call.
+    let last = streamed.lines().last().expect("a last line");
+    assert_eq!(last, plain.trim_end(), "the stream ended on another object");
+    assert!(
+        !plain.contains("\"event\""),
+        "the plain object grew an event field: {plain}"
+    );
+    assert_eq!(plain.lines().count(), 1, "{plain}");
+}
+
+/// CLI-24: a run that stops before any call, refusal or request has no events to write, and says so
+/// with the result object alone, as `--json` does.
+#[test]
+fn a_streamed_run_that_stops_before_the_turn_writes_only_the_result_object() {
+    let scratch = Scratch::new("cli-running-json-stream-early");
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "ai-chat.example.invalid"),
+        ],
+        &["--json-stream", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    assert!(stdout.contains(r#""status":3"#), "{stdout}");
+    assert!(!stdout.contains(r#""event""#), "{stdout}");
+}
+
 /// CRED-2: the tier a credential stands at reaches the person, once per credential the report
 /// accounts for. A tier recorded and never printed leaves the surface reading the record saying
 /// what would end each credential and nothing about what authority any of them stands for, which

@@ -114,6 +114,11 @@ renamed or given a different meaning, so a caller reading the fields it knows ke
 
 Progress, the message and the trail stay on stderr, exactly as they do without the flag.
 
+To follow a run as it happens, use `--json-stream`. It writes one event per line for each tool call,
+refusal and change in token usage, then the same object as the last line, so a script can show
+progress or tell a hung run from a slow one. [The reference](../reference/cli.md#--json-stream)
+lists the events.
+
 ## Configuring one run differently from the next
 
 ```sh
@@ -266,6 +271,7 @@ the wrong thing to search for.
 | `--model <name>` | the model this run asks for |
 | `--advisor <name>` | a model the planner may put a question to |
 | `--json` | one result object on stdout, in the reply's place |
+| `--json-stream` | one event per line on stdout as the run goes, then the result object |
 | `--settings <path>` | read a settings file above the ones found, for this run |
 | `--mode manifest` | plan the whole run first, then walk the plan |
 

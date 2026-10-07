@@ -112,6 +112,7 @@ cli-option-effort = How hard this run asks the model to think, in place of the r
 cli-option-print = Non-interactive. Reads piped stdin as quarantined context
 cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
+cli-option-json-stream = Print one event per line on stdout as the run goes, then the result object
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
 cli-option-safe =
     Load none of your own hooks, skills, definitions, MCP servers or AGENTS.md. Sign-in, model and permissions still apply

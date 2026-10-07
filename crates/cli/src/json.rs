@@ -10,6 +10,9 @@
 //! serialisation dependency to spend on one flat object.
 
 use crate::exit::Ending;
+use bravebot_core::delegate::DelegateId;
+use bravebot_core::event::{Event, RecordingSink, Sink};
+use std::io::Write;
 
 /// The number in the `schema` field.
 ///
@@ -45,7 +48,7 @@ pub struct Refusal {
 }
 
 /// What the turn cost.
-#[derive(Default)]
+#[derive(Default, PartialEq)]
 pub struct Tokens {
     pub total: u64,
     pub output: u64,
@@ -133,20 +136,13 @@ fn maybe(value: Option<&str>) -> String {
 /// One line so that a run can be appended to a log and read back a record at a time, which is how
 /// a caller collecting several of them will want it.
 pub fn render(report: &Report<'_>) -> String {
-    let calls = object_list(report.calls.iter().map(|call| {
-        object(&[
-            ("tool", quoted(&call.tool)),
-            ("target", quoted(&call.target)),
-            ("refused", call.refused.to_string()),
-        ])
-    }));
-    let refusals = object_list(report.refusals.iter().map(|refusal| {
-        object(&[
-            ("gate", quoted(refusal.gate)),
-            ("principle", quoted(refusal.principle)),
-            ("reason", quoted(&refusal.reason)),
-        ])
-    }));
+    let calls = object_list(report.calls.iter().map(|call| object(&call_pairs(call))));
+    let refusals = object_list(
+        report
+            .refusals
+            .iter()
+            .map(|refusal| object(&refusal_pairs(refusal))),
+    );
 
     object(&[
         ("schema", SCHEMA.to_string()),
@@ -159,20 +155,131 @@ pub fn render(report: &Report<'_>) -> String {
         ("model", quoted(report.model)),
         ("agent", maybe(report.agent)),
         ("steps", report.steps.to_string()),
-        (
-            "tokens",
-            object(&[
-                ("total", report.tokens.total.to_string()),
-                ("output", report.tokens.output.to_string()),
-                ("context", report.tokens.context.to_string()),
-                ("cache_read", report.tokens.cache_read.to_string()),
-                ("cache_written", report.tokens.cache_written.to_string()),
-            ]),
-        ),
+        ("tokens", token_fields(&report.tokens)),
         ("calls", calls),
         ("refusals", refusals),
         ("notices", strings(report.notices)),
     ])
+}
+
+/// One call's fields, as the result object lists it and as the stream's `call` event carries it.
+fn call_pairs(call: &Call) -> Vec<(&'static str, String)> {
+    vec![
+        ("tool", quoted(&call.tool)),
+        ("target", quoted(&call.target)),
+        ("refused", call.refused.to_string()),
+    ]
+}
+
+/// One refusal's fields, shared the same way with the stream's `refusal` event.
+fn refusal_pairs(refusal: &Refusal) -> Vec<(&'static str, String)> {
+    vec![
+        ("gate", quoted(refusal.gate)),
+        ("principle", quoted(refusal.principle)),
+        ("reason", quoted(&refusal.reason)),
+    ]
+}
+
+/// The token counts, as the result object holds them and as the stream's `usage` event does.
+fn token_fields(tokens: &Tokens) -> String {
+    object(&[
+        ("total", tokens.total.to_string()),
+        ("output", tokens.output.to_string()),
+        ("context", tokens.context.to_string()),
+        ("cache_read", tokens.cache_read.to_string()),
+        ("cache_written", tokens.cache_written.to_string()),
+    ])
+}
+
+/// One event of the stream a `--json-stream` run writes before its result object.
+///
+/// The event's own fields are the ones the result object already carries for the same thing, so a
+/// caller that reads the stream learns nothing a caller of `--json` would not learn at the end.
+/// Carries the schema number of [`SCHEMA`] and follows its add-only rule.
+fn event(kind: &str, mut fields: Vec<(&str, String)>) -> String {
+    let mut all = vec![("schema", SCHEMA.to_string()), ("event", quoted(kind))];
+    all.append(&mut fields);
+    object(&all)
+}
+
+/// A tool call finished, refused or not.
+pub fn call_event(call: &Call) -> String {
+    event("call", call_pairs(call))
+}
+
+/// A gate refused something.
+pub fn refusal_event(refusal: &Refusal) -> String {
+    event("refusal", refusal_pairs(refusal))
+}
+
+/// The run's cumulative token usage changed.
+pub fn usage_event(tokens: &Tokens) -> String {
+    event("usage", vec![("tokens", token_fields(tokens))])
+}
+
+/// Somewhere a stream's lines go. A failed write is dropped, as it is for the reply: a closed
+/// stdout is a caller that stopped reading, and the run should not stop for it.
+pub struct Stream(Box<dyn std::io::Write + Send>);
+
+impl Stream {
+    pub fn new(out: impl std::io::Write + Send + 'static) -> Self {
+        Self(Box::new(out))
+    }
+
+    /// One line, flushed, so a caller following the run sees it as it happens.
+    pub fn line(&mut self, line: &str) {
+        let _ = writeln!(self.0, "{line}");
+        let _ = self.0.flush();
+    }
+}
+
+/// A trail that also writes each refusal to a stream as the gate takes it.
+///
+/// Holds the same events a plain [`RecordingSink`] would, so the result object and `--trace` read
+/// from it exactly as they do without the stream.
+#[derive(Default)]
+pub struct Streaming {
+    recorded: RecordingSink,
+    stream: Option<Stream>,
+}
+
+impl Streaming {
+    pub fn new(stream: Option<Stream>) -> Self {
+        Self {
+            recorded: RecordingSink::new(),
+            stream,
+        }
+    }
+
+    pub fn recorded(&self) -> &RecordingSink {
+        &self.recorded
+    }
+}
+
+impl Sink for Streaming {
+    fn emit(&mut self, event: Event) {
+        if let (
+            Some(stream),
+            Event::GateBlocked {
+                gate,
+                reason,
+                principle,
+                ..
+            },
+        ) = (self.stream.as_mut(), &event)
+        {
+            stream.line(&refusal_event(&Refusal {
+                gate,
+                principle: principle.name(),
+                reason: reason.clone(),
+            }));
+        }
+        self.recorded.emit(event);
+    }
+
+    fn recording_for(&mut self, delegate: Option<DelegateId>) {
+        self.recorded.recording_for(delegate);
+    }
 }
 
 /// A JSON array of objects already rendered.
@@ -334,5 +441,127 @@ mod tests {
         // One `"ok":` and one `"status":`, because a second of either is content that wrote a
         // field of its own and a caller reading the last wins.
         assert_eq!(written.matches(r#""ok":"#).count(), 1, "{written}");
+    }
+
+    /// A writer a test can read back after the stream has been handed it.
+    #[derive(Clone, Default)]
+    struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for Shared {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Shared {
+        fn written(&self) -> String {
+            String::from_utf8(self.0.lock().expect("lock").clone()).expect("utf-8")
+        }
+    }
+
+    /// An event is the fields the result object holds for the same thing, so a caller following
+    /// the stream and one reading the last line parse the same names. Each is checked against the
+    /// object's own rendering rather than against a second copy of the field names.
+    #[test]
+    fn an_event_carries_the_fields_the_result_object_carries_for_the_same_thing() {
+        let call = Call {
+            tool: "write_file".to_string(),
+            target: "notes.md".to_string(),
+            refused: true,
+        };
+        let refusal = Refusal {
+            gate: "action",
+            principle: "integrity-gate",
+            reason: "injection blocked".to_string(),
+        };
+        let tokens = Tokens {
+            total: 9,
+            output: 2,
+            context: 7,
+            cache_read: 1,
+            cache_written: 0,
+        };
+        let object = render(&finished(
+            Ending::Done,
+            std::slice::from_ref(&call),
+            std::slice::from_ref(&refusal),
+        ));
+
+        let call_line = call_event(&call);
+        assert_eq!(
+            call_line,
+            r#"{"schema":1,"event":"call","tool":"write_file","target":"notes.md","refused":true}"#
+        );
+        assert!(
+            object
+                .contains(&call_line[r#"{"schema":1,"event":"call","#.len()..call_line.len() - 1])
+        );
+        let refusal_line = refusal_event(&refusal);
+        assert_eq!(
+            refusal_line,
+            r#"{"schema":1,"event":"refusal","gate":"action","principle":"integrity-gate","reason":"injection blocked"}"#
+        );
+        assert!(object.contains(
+            &refusal_line[r#"{"schema":1,"event":"refusal","#.len()..refusal_line.len() - 1]
+        ));
+        assert_eq!(
+            usage_event(&tokens),
+            r#"{"schema":1,"event":"usage","tokens":{"total":9,"output":2,"context":7,"cache_read":1,"cache_written":0}}"#
+        );
+        // The result object is the one line that has no `event`.
+        assert!(!object.contains(r#""event""#), "{object}");
+    }
+
+    /// A refusal is written when the gate takes it, which is what lets a caller following the run
+    /// see it before the run ends, and the trail the object and `--trace` read from still holds it.
+    #[test]
+    fn a_refusal_is_streamed_when_the_gate_takes_it() {
+        let out = Shared::default();
+        let mut sink = Streaming::new(Some(Stream::new(out.clone())));
+
+        sink.emit(Event::GatePassed {
+            gate: "action",
+            detail: "read_file".to_string(),
+        });
+        assert_eq!(out.written(), "", "a passing gate is not a refusal");
+
+        sink.emit(Event::GateBlocked {
+            gate: "action",
+            detail: "write_file".to_string(),
+            reason: "injection blocked".to_string(),
+            principle: bravebot_core::event::Principle::IntegrityGate,
+        });
+
+        assert_eq!(
+            out.written(),
+            concat!(
+                r#"{"schema":1,"event":"refusal","gate":"action","principle":"integrity-gate","#,
+                r#""reason":"injection blocked"}"#,
+                "\n"
+            )
+        );
+        assert_eq!(sink.recorded().blocked().count(), 1);
+        assert_eq!(sink.recorded().events().len(), 2);
+    }
+
+    /// Without the flag nothing is written, and the trail is kept all the same.
+    #[test]
+    fn a_run_without_a_stream_writes_no_events() {
+        let mut sink = Streaming::new(None);
+        sink.emit(Event::GateBlocked {
+            gate: "action",
+            detail: "write_file".to_string(),
+            reason: "injection blocked".to_string(),
+            principle: bravebot_core::event::Principle::IntegrityGate,
+        });
+        assert_eq!(sink.recorded().blocked().count(), 1);
     }
 }
