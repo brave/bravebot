@@ -1895,12 +1895,59 @@ fn transcript_lines(session: &Session, width: u16, height: u16) -> Vec<Line<'sta
     with_prompts(session, width, height).0
 }
 
+/// The request a turn sent the planner, one header per span saying whose words follow.
+///
+/// Every span's text goes through [`printable`] like any other content, and the lines it comes to
+/// are the request's own: nothing is added between a header and the words under it. A header is
+/// the row `{` and `}` reach, so a long request is crossed span by span.
+fn request_lines(
+    view: &bravebot_agent::request_view::RequestView,
+) -> (Vec<Line<'static>>, Vec<usize>) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            printable(&t!(request_title, model = view.model.clone())),
+            Style::default()
+                .fg(theme::brand_primary())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            printable(&if view.tools.is_empty() {
+                t!(request_no_tools).to_string()
+            } else {
+                t!(request_tools, names = view.tools.join(", "))
+            }),
+            dim(),
+        )),
+    ];
+    let mut headers = Vec::new();
+    for span in &view.spans {
+        lines.push(Line::raw(""));
+        headers.push(lines.len());
+        lines.push(Line::from(Span::styled(
+            printable(&format!("-- {} · {}", span.role, span.provenance.label())),
+            Style::default()
+                .fg(theme::brand_primary())
+                .add_modifier(Modifier::BOLD),
+        )));
+        for text in span.text.lines() {
+            lines.push(Line::from(printable(text)));
+        }
+    }
+    (lines, headers)
+}
+
 /// The transcript, and the index of the line each prompt the person typed begins at.
 ///
 /// Two answers from one pass, because working the second out afterwards would mean deciding which
 /// drawn lines were prompts by looking at them, and the thing that knows is the pass that drew
 /// them.
 fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, Vec<usize>) {
+    if let Some(view) = session
+        .scroller()
+        .and_then(|scroller| scroller.request.as_deref())
+    {
+        return request_lines(view);
+    }
     let mut prompts: Vec<usize> = Vec::new();
     let mut lines: Vec<Line> = Vec::new();
 
@@ -5054,6 +5101,43 @@ mod tests {
                         .collect()
                 })
                 .collect()
+        }
+
+        /// A reference is drawn as its token under a header naming it, and each header says whose
+        /// words follow.
+        #[test]
+        fn the_request_view_draws_each_span_under_its_provenance() {
+            let mut session = Session::new("kernel-enforced");
+            session.note_layout(Laid {
+                width: 90,
+                height: 24,
+                rows: 24,
+                ..Laid::default()
+            });
+            session.set_last_request(bravebot_agent::request_view::RequestView {
+                model: "m".to_string(),
+                spans: vec![
+                    bravebot_agent::request_view::Span {
+                        role: "user",
+                        provenance: bravebot_agent::request_view::Provenance::Typed,
+                        text: "read it".to_string(),
+                    },
+                    bravebot_agent::request_view::Span {
+                        role: "tool",
+                        provenance: bravebot_agent::request_view::Provenance::Reference(
+                            "ref:1".to_string(),
+                        ),
+                        text: "ref:1 stands for a file".to_string(),
+                    },
+                ],
+                tools: vec!["read_file".to_string()],
+            });
+            session.show_request();
+            let (drawn, _) = screen(&session);
+            assert!(drawn.contains("-- user · typed"), "{drawn}");
+            assert!(drawn.contains("-- tool · ref:1"), "{drawn}");
+            assert!(drawn.contains("ref:1 stands for a file"), "{drawn}");
+            assert!(drawn.contains("read_file"), "{drawn}");
         }
 
         /// A session reading back over a quarantined block whose one preview line is `preview`,

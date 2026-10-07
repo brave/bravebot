@@ -6,6 +6,7 @@ governs:
   - crates/core/src/event.rs
   - crates/session/src/audit.rs
   - crates/ui-bridge/src/turn.rs
+  - crates/agent/src/request_view.rs
 documented-by: docs/website/docs/security/audit-trail.md
 ---
 
@@ -232,3 +233,60 @@ for a different response: raise the bound, retry, or nothing.
 `verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
 `verified-by: bravebot_agent::turn::a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note`
 `verified-by: bravebot_agent::turn::a_stopped_delegate_and_a_lost_one_are_each_recorded_as_what_they_were`
+
+<a id="TRACE-9"></a>
+### TRACE-9: `/request` shows the request already built, each span with where its words came from
+
+`/request`, typed by a person ([CMD-1](commands.md#CMD-1)), opens a read-only view of the last
+request a turn built for the planner: the system prompt in the pieces it was put together from
+(the instruction files, the skill list, the settings and the driver's own paragraphs), each message,
+and each tool result as the planner saw it. Each span names its origin in one label: `typed`,
+`trusted file <path>`, `tool result (trusted)`, `ref:N` for content the planner was not shown,
+`driver` for a sentence this program wrote, `planner` for the model's own words sent back,
+`setting` for a setting, `summary` for a compaction summary, `vetted ref:N` and `released: <where>` for
+content let through from a reference, `typed, with dropped files` for a line sent with files, and
+`unrecorded` where nothing recorded it. Other results are named by what they are, as in
+`shell output (trusted)`.
+
+The view is read from the request value handed to the backend, in memory, and never rebuilt from
+the transcript or the saved record. The pieces of the system prompt are the text sent, joined, and
+a prompt that cannot be shown in pieces that join to what was sent is shown whole as `unrecorded`.
+A label is what the composing code recorded when it wrote the message, and is not worked out from
+the words, so no branch is taken on the bytes of a span. A quarantined result or file is a `ref:N`
+span holding the sentence the planner was given in its place; its bytes are not in the request and
+so cannot be in the view. A delegate's requests are not shown. The view writes nothing to disk, the
+key that exports the transcript is inert in it, and an incognito session is unchanged
+([INCOG-1](incognito.md#INCOG-1)). It reuses the scroller of [watching.md](watching.md) and
+closing it puts the transcript back where it was. Before any turn has sent a request the command
+says so.
+
+**Why.** What the planner was sent is the question behind every "why did it do that", and a view
+reconstructed from the transcript would answer it with what the transcript says was sent. The
+label is a claim about authority, so it comes from where the text was composed.
+
+`verified-by: bravebot_agent::turn::the_view_of_the_request_labels_a_reference_by_its_token_and_holds_no_quarantined_body`
+`verified-by: bravebot_agent::turn::the_view_of_the_request_labels_a_hidden_listing_by_its_references`
+`verified-by: bravebot_agent::turn::the_view_of_the_request_names_a_trusted_result_and_a_trusted_file`
+`verified-by: bravebot_agent::turn::the_view_of_the_request_labels_instruction_files_and_the_goal_and_is_the_system_prompt_sent`
+`verified-by: bravebot_agent::turn::the_view_of_the_request_holds_no_instruction_file_the_kernel_withheld`
+`verified-by: bravebot_agent::turn::the_view_of_the_request_does_not_call_a_prompt_the_driver_wrote_typed`
+`verified-by: bravebot_agent::turn::no_view_of_the_request_is_built_for_a_reporter_that_does_not_ask`
+`verified-by: bravebot_agent::turn::the_view_of_the_request_does_not_call_a_dropped_file_typed`
+`verified-by: bravebot_agent::turn::the_view_of_the_request_does_not_call_released_output_trusted`
+`verified-by: bravebot_agent::turn::the_view_of_the_request_is_the_parents_when_a_delegate_ran_and_labels_its_report`
+`verified-by: bravebot_tui::state::clearing_the_conversation_forgets_the_request_it_sent`
+`verified-by: bravebot_agent::conversation::a_message_is_labelled_by_what_was_recorded_and_never_guessed_at`
+`verified-by: bravebot_agent::request_view::pieces_that_are_not_the_prompt_sent_are_not_trusted_to_describe_it`
+`verified-by: bravebot_tui::render::the_request_view_draws_each_span_under_its_provenance`
+`verified-by: bravebot_tui::state::the_request_view_opens_on_the_last_request_and_closing_restores_the_transcript`
+`verified-by: bravebot_tui::app::the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view`
+
+## Known costs
+
+- **A message restored from a saved session is `unrecorded`.** The origin is kept in memory beside
+  the message and is not part of the saved record, so after `--resume` the earlier messages carry no
+  label until the session sends new ones. Guessing one from the words would let a file's own bytes
+  choose their label.
+- **A prompt sent with dropped pictures or PDFs is one `typed, with dropped files` span.** The
+  line and the files go in one message, so the label says the bytes in it are not all typed.
+- **The view is of the planner's request, not of a delegate's, a summariser's or an advisor's.**

@@ -1071,6 +1071,13 @@ pub struct Scroller {
     pub at: usize,
     /// A count typed and waiting for the key it is for.
     pub count: Option<u32>,
+    /// The request this scroller is showing in place of the transcript, when `/request` opened it.
+    ///
+    /// A copy of the value the turn sent, so what is read is that request and a turn going on
+    /// underneath cannot change it.
+    pub request: Option<Box<bravebot_agent::request_view::RequestView>>,
+    /// The view the transcript had when `/request` opened this, put back when it closes.
+    pub before: Option<(u16, Laid)>,
 }
 
 /// Where `needle` occurs in `text`, as character ranges, left to right and never overlapping.
@@ -1362,6 +1369,11 @@ pub struct Session {
     /// `None` at rest, which is what every key in the box is answered against: the mode is the
     /// one thing that decides whether a letter is a letter or a movement.
     scroller: Option<Scroller>,
+    /// The last request a turn built for the planner, kept in memory and nowhere else.
+    ///
+    /// Not part of the conversation and never saved: it is what `/request` reads, and a session
+    /// that has sent nothing in this process has nothing to show.
+    last_request: Option<bravebot_agent::request_view::RequestView>,
     /// The delegate view, while it is open.
     ///
     /// `None` at rest, on the same footing as the scroller: what decides whether a letter is a
@@ -1677,6 +1689,8 @@ pub struct Session {
     /// that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
     watches: watch::Watches,
+    /// Set when `/init` hands back its prompt, so the turn that sends it says the driver wrote it.
+    init_prompt_pending: bool,
     /// The same prompts, resolved, for the turn in flight to take between rounds.
     ///
     /// Shared with the worker rather than sent down a channel, because a queued prompt can be
@@ -1877,6 +1891,7 @@ impl Session {
             identity: Identity::default(),
             scroll: 0,
             scroller: None,
+            last_request: None,
             watching: None,
             outputs: Vec::new(),
             jobs_from: 0,
@@ -1934,6 +1949,7 @@ impl Session {
             ctrl_enter_arrives: false,
             looping: None,
             watches: watch::Watches::new(),
+            init_prompt_pending: false,
             goal: None,
             addressing: None,
             system_prompts: bravebot_agent::turn::SystemPrompts::default(),
@@ -2366,6 +2382,7 @@ impl Session {
         // A new conversation has sent nothing yet, so Up starts from nothing of its own.
         self.history.forget_session();
         self.transcript.clear();
+        self.last_request = None;
         self.turns = 0;
         self.turn_history.clear();
         self.prompt_at = None;
@@ -7540,11 +7557,17 @@ impl Session {
             self.note(t!(init_already_there, file = crate::init_command::FILE));
             return None;
         }
+        self.init_prompt_pending = true;
         Some(self.begin_turn(
             crate::init_command::PROMPT.to_string(),
             (Vec::new(), Vec::new()),
             Vec::new(),
         ))
+    }
+
+    /// Whether the turn starting now sends `/init`'s prompt, which the driver wrote. Taken once.
+    pub fn take_init_prompt(&mut self) -> bool {
+        std::mem::take(&mut self.init_prompt_pending)
     }
 
     /// The definition the turn starting now was addressed to, taken so no later turn inherits it.
@@ -9295,7 +9318,46 @@ impl Session {
 
     /// Close it, leaving the view where it was left.
     pub fn close_scroller(&mut self) {
-        self.scroller = None;
+        if let Some(Scroller {
+            before: Some((scroll, laid)),
+            ..
+        }) = self.scroller.take()
+        {
+            self.scroll = scroll;
+            self.laid = laid;
+        }
+    }
+
+    /// Keep the request a turn is about to send, replacing the one before it.
+    pub fn set_last_request(&mut self, view: bravebot_agent::request_view::RequestView) {
+        self.last_request = Some(view);
+    }
+
+    /// Open the scroller on the last request a turn built (`/request`).
+    ///
+    /// Read from the value the turn handed over, so it shows what was sent and nothing is rebuilt
+    /// from the transcript. Before any turn has sent one there is nothing to open, which is said.
+    pub fn show_request(&mut self) {
+        let Some(view) = self.last_request.clone() else {
+            self.note(t!(request_none_yet));
+            return;
+        };
+        let before = (self.scroll, self.laid.clone());
+        // The first row, counted from the end of the layout the last frame drew; the next frame
+        // measures the request and holds this row.
+        self.scroll = self.furthest();
+        self.scroller = Some(Scroller {
+            request: Some(Box::new(view)),
+            before: Some(before),
+            ..Scroller::default()
+        });
+    }
+
+    /// Whether the scroller is showing a request rather than the transcript.
+    pub fn viewing_request(&self) -> bool {
+        self.scroller
+            .as_ref()
+            .is_some_and(|scroller| scroller.request.is_some())
     }
 
     pub fn scrolling(&self) -> bool {
@@ -13588,6 +13650,102 @@ mod tests {
             s.transcript
                 .iter()
                 .any(|entry| entry.text == t!(watch_none))
+        );
+    }
+
+    /// `/init`'s prompt is the driver's, said once for the turn that sends it and not for the next.
+    #[test]
+    fn the_init_prompt_is_the_drivers_for_one_turn_only() {
+        let root = crate::testutil::scratch_dir("init-prompt-pending");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut s = Session::new("none").in_workspace(&root);
+        assert!(!s.take_init_prompt());
+        assert!(s.start_init().is_some());
+        assert!(s.take_init_prompt());
+        assert!(!s.take_init_prompt());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn a_request() -> bravebot_agent::request_view::RequestView {
+        use bravebot_agent::request_view::{Provenance, RequestView, Span};
+        RequestView {
+            model: "m".to_string(),
+            spans: vec![
+                Span {
+                    role: "user",
+                    provenance: Provenance::Typed,
+                    text: "read it".to_string(),
+                },
+                Span {
+                    role: "tool",
+                    provenance: Provenance::Reference("ref:1".to_string()),
+                    text: "ref:1 stands for a file".to_string(),
+                },
+            ],
+            tools: vec!["read_file".to_string()],
+        }
+    }
+
+    /// Nothing built means nothing to open, and the person is told so rather than shown an empty
+    /// view that reads as a request with nothing in it.
+    #[test]
+    fn the_request_view_before_any_request_says_so_and_opens_nothing() {
+        let mut s = session();
+        s.show_request();
+        assert!(s.scroller().is_none());
+        assert!(!s.viewing_request());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(request_none_yet))
+        );
+    }
+
+    /// The view is of the latest request, and closing it puts the transcript back where it was.
+    #[test]
+    fn the_request_view_opens_on_the_last_request_and_closing_restores_the_transcript() {
+        let mut s = session();
+        s.note_layout(Laid {
+            width: 80,
+            height: 10,
+            rows: 100,
+            ..Laid::default()
+        });
+        s.scroll = 7;
+        let laid = s.laid.clone();
+        let mut older = a_request();
+        older.model = "older".to_string();
+        s.set_last_request(older);
+        s.set_last_request(a_request());
+
+        s.show_request();
+        assert!(s.viewing_request());
+        assert_eq!(
+            s.scroller()
+                .and_then(|scroller| scroller.request.as_deref()),
+            Some(&a_request()),
+            "the view is not of the latest request"
+        );
+
+        s.close_scroller();
+        assert!(s.scroller().is_none());
+        assert_eq!(s.scroll, 7, "the transcript was left somewhere else");
+        assert_eq!(s.laid, laid);
+    }
+
+    /// A cleared conversation has sent nothing, so `/request` has nothing of the old one to show.
+    #[test]
+    fn clearing_the_conversation_forgets_the_request_it_sent() {
+        let mut s = session();
+        s.set_last_request(a_request());
+
+        s.clear();
+        s.show_request();
+
+        assert!(
+            !s.viewing_request(),
+            "the cleared conversation's request opened"
         );
     }
 

@@ -554,6 +554,15 @@ pub trait Reporter {
     /// A measured model call, including retries and their waits, even on failure or stop.
     fn inference_interval(&mut self, _interval: crate::timing::Interval) {}
 
+    /// Whether this interface shows the request a turn built, so a turn builds the view of it only
+    /// for one that does.
+    fn wants_request_view(&self) -> bool {
+        false
+    }
+
+    /// The request a turn is about to send the planner, read from the request itself.
+    fn request_built(&mut self, _view: crate::request_view::RequestView) {}
+
     /// The parent is about to join a delegate, which may already have finished.
     fn delegate_waiting(&mut self, _delegate: DelegateId) {}
 
@@ -800,9 +809,19 @@ pub struct RecordingReporter {
     pub delegates_reported: Vec<(DelegateId, Option<Reported>)>,
     /// Whose work the reports that follow belong to.
     pub attributed_to: Option<DelegateId>,
+    /// Every request view a turn published, in order.
+    pub requests: Vec<crate::request_view::RequestView>,
 }
 
 impl Reporter for RecordingReporter {
+    fn wants_request_view(&self) -> bool {
+        true
+    }
+
+    fn request_built(&mut self, view: crate::request_view::RequestView) {
+        self.requests.push(view);
+    }
+
     fn prompt_recorded(&mut self, at: usize) {
         self.prompts.push(at);
     }

@@ -191,6 +191,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
                         Spoken::Agent(text) => Message::assistant(text.as_str()),
                     },
                     composed: Some(Composed::Imported),
+                    source: None,
                 })
                 .collect(),
             measured: 0,

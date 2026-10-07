@@ -41991,3 +41991,715 @@ fn an_advisor_that_was_shown_untrusted_content_is_quarantined() {
         "the planner was handed advice given over untrusted content: {last}"
     );
 }
+
+/// What `/request` shows is read off the request that went, so each message the person or a tool
+/// supplied after the system prompt is the one the backend received, in order, with its words.
+fn what_the_backend_received_after_the_system_prompt(body: &str) -> Vec<String> {
+    let parsed: serde_json::Value = serde_json::from_str(body).expect("a JSON request");
+    parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .skip(1)
+        .filter(|message| message["role"] != "assistant")
+        .map(message_words)
+        .collect()
+}
+
+fn message_words(message: &serde_json::Value) -> String {
+    match message["content"].as_array() {
+        Some(parts) => parts
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect(),
+        None => message["content"].as_str().unwrap_or_default().to_string(),
+    }
+}
+
+/// A quarantined body is not in the request, so the view cannot show it, and the span that stands
+/// in its place is labelled by the reference the planner saw. The person's own line is `typed`,
+/// the system prompt's pieces are the driver's, and the view is of the request that was sent.
+#[test]
+fn the_view_of_the_request_labels_a_reference_by_its_token_and_holds_no_quarantined_body() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-quarantined");
+    std::fs::write(scratch.path.join("a.txt"), "SECRET-BODY-OF-A\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read a.txt"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let view = reporter.requests.last().expect("a view was published");
+    for span in &view.spans {
+        assert!(
+            !span.text.contains("SECRET-BODY-OF-A"),
+            "a quarantined body is in the view: {span:?}"
+        );
+    }
+    assert!(
+        view.spans
+            .iter()
+            .any(|span| matches!(&span.provenance, Provenance::Reference(token) if token.starts_with("ref:"))
+                && span.role == "tool"),
+        "no tool span is labelled by a reference token: {view:#?}"
+    );
+    assert!(
+        view.spans
+            .iter()
+            .any(|span| span.provenance == Provenance::Typed && span.text == "read a.txt"),
+        "the typed line is not labelled typed: {view:#?}"
+    );
+    assert!(
+        view.spans
+            .iter()
+            .filter(|span| span.role == "system")
+            .all(|span| span.provenance != Provenance::Typed),
+        "a piece of the system prompt claims to have been typed: {view:#?}"
+    );
+
+    // The view is of the request that went: after the system prompt, the same messages in order.
+    let sent = received.try_iter().last().expect("the last request");
+    let after_system: Vec<String> = view
+        .spans
+        .iter()
+        .filter(|span| span.role != "system" && span.role != "assistant")
+        .map(|span| span.text.clone())
+        .collect();
+    assert_eq!(
+        after_system,
+        what_the_backend_received_after_the_system_prompt(&sent),
+        "the view is not the request that was sent"
+    );
+}
+
+/// A result the kernel let through is named for what it is, and a file the person named with
+/// `--file` is named with its path, because those are the labels the driver already holds.
+#[test]
+fn the_view_of_the_request_names_a_trusted_result_and_a_trusted_file() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-trusted");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\n").unwrap();
+    std::fs::write(scratch.path.join("main.rs"), "fn main() {}").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read a.txt").with_file("main.rs"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let view = reporter.requests.last().expect("a view was published");
+    let labels: Vec<String> = view
+        .spans
+        .iter()
+        .map(|span| span.provenance.label())
+        .collect();
+    assert!(
+        view.spans.iter().any(
+            |span| span.provenance == Provenance::TrustedFile("main.rs".into())
+                && span.text.contains("fn main()")
+        ),
+        "the named file is not labelled with its path: {labels:?}"
+    );
+    assert!(
+        view.spans.iter().any(|span| span.role == "tool"
+            && matches!(span.provenance, Provenance::Trusted(_))
+            && span.text.contains("alpha")),
+        "the trusted result is not labelled trusted: {labels:?}"
+    );
+}
+
+/// A reporter that does not show the request is never handed one: building the view costs a copy
+/// of the whole request each round.
+#[test]
+fn no_view_of_the_request_is_built_for_a_reporter_that_does_not_ask() {
+    use bravebot_agent::report::Reporter;
+
+    struct Quiet(usize);
+    impl Reporter for Quiet {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn request_built(&mut self, _view: bravebot_agent::request_view::RequestView) {
+            self.0 += 1;
+        }
+    }
+
+    let scratch = Scratch::new("request-view-not-asked");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve(&reply_with("hello"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut quiet = Quiet(0);
+    let mut conversation = bravebot_agent::Conversation::new();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("hi"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut quiet,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+    assert_eq!(
+        quiet.0, 0,
+        "a view was built for a reporter that did not ask"
+    );
+}
+
+/// A prompt the driver wrote is not a keystroke. Labelled `typed` it would claim a person's
+/// authority for a sentence nobody typed.
+#[test]
+fn the_view_of_the_request_does_not_call_a_prompt_the_driver_wrote_typed() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-driver-prompt");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve(&reply_with("ok"));
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("carry on towards the goal").written_by_the_driver(),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let view = reporter.requests.last().expect("a view was published");
+    let span = view
+        .spans
+        .iter()
+        .find(|span| span.role == "user")
+        .expect("a user span");
+    assert_eq!(span.provenance, Provenance::Driver, "{view:#?}");
+}
+
+/// A listing the planner may not see is answered with one reference per entry, and the span says so
+/// rather than inheriting the label of whatever message came before it.
+#[test]
+fn the_view_of_the_request_labels_a_hidden_listing_by_its_references() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-listing");
+    std::fs::write(scratch.path.join("one.txt"), "x").unwrap();
+    std::fs::write(scratch.path.join("two.txt"), "y").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":"."}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("list"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let view = reporter.requests.last().expect("a view was published");
+    let tool = view
+        .spans
+        .iter()
+        .find(|span| span.role == "tool")
+        .expect("a tool span");
+    assert!(
+        matches!(&tool.provenance, Provenance::Reference(tokens) if tokens.starts_with("ref:")),
+        "{view:#?}"
+    );
+    assert!(
+        !tool.text.contains("one.txt"),
+        "a name is in the view: {tool:?}"
+    );
+}
+
+fn view_of_a_turn_in(
+    scratch: &Scratch,
+    task: Task,
+    trust: bravebot_core::trust::TrustStore,
+) -> (bravebot_agent::request_view::RequestView, String) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve(&reply_with("ok"));
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+    let sent = received.try_iter().last().expect("a request");
+    (reporter.requests.pop().expect("a view"), sent)
+}
+
+/// The system prompt is shown as the pieces it was composed from, each labelled by the file or the
+/// keystroke it came from, and the pieces are exactly the system message that was sent.
+#[test]
+fn the_view_of_the_request_labels_instruction_files_and_the_goal_and_is_the_system_prompt_sent() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-system");
+    std::fs::write(scratch.path.join("AGENTS.md"), "RULE-ONE: be brief").unwrap();
+    let (view, sent) = view_of_a_turn_in(
+        &scratch,
+        Task::new("go").working_towards(Some("a.txt exists".to_string())),
+        trusting_the_workspace(),
+    );
+
+    assert!(
+        view.spans.iter().any(|span| span.provenance
+            == Provenance::TrustedFile("AGENTS.md".into())
+            && span.text.contains("RULE-ONE")),
+        "{view:#?}"
+    );
+    assert!(
+        view.spans.iter().any(|span| span.role == "system"
+            && span.provenance == Provenance::Typed
+            && span.text.contains("a.txt exists")),
+        "the goal a person typed is not labelled typed: {view:#?}"
+    );
+    let system: String = view
+        .spans
+        .iter()
+        .filter(|span| span.role == "system")
+        .map(|span| span.text.as_str())
+        .collect();
+    let parsed: serde_json::Value = serde_json::from_str(&sent).expect("a JSON request");
+    assert_eq!(
+        message_words(&parsed["messages"][0]),
+        system,
+        "the spans are not the system prompt that was sent"
+    );
+}
+
+/// An instruction file the kernel did not admit is not in the request, so it is not in the view.
+#[test]
+fn the_view_of_the_request_holds_no_instruction_file_the_kernel_withheld() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-withheld");
+    std::fs::write(scratch.path.join("AGENTS.md"), "RULE-ONE: be brief").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (view, sent) = view_of_a_turn_in(
+        &scratch,
+        Task::new("go"),
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+    );
+    assert!(!sent.contains("RULE-ONE"), "the file was sent: {sent}");
+    assert!(
+        view.spans.iter().all(|span| !span.text.contains("RULE-ONE")
+            && !matches!(span.provenance, Provenance::TrustedFile(_))),
+        "{view:#?}"
+    );
+}
+
+/// A line sent with a dropped file carries the file's bytes in the same message, and bytes nobody
+/// typed are not labelled as typed.
+#[test]
+fn the_view_of_the_request_does_not_call_a_dropped_file_typed() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-dropped");
+    std::fs::write(
+        scratch.path.join("shot.png"),
+        [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+    )
+    .unwrap();
+
+    let (view, _) = view_of_a_turn_in(
+        &scratch,
+        Task::new("what is this").with_attachment("shot.png", "image/png"),
+        bravebot_core::trust::TrustStore::new(&scratch.path),
+    );
+
+    let prompt = view
+        .spans
+        .iter()
+        .find(|span| span.role == "user" && span.text.contains("what is this"))
+        .expect("the prompt is in the view");
+    assert_eq!(prompt.provenance, Provenance::TypedWithFiles, "{view:#?}");
+}
+
+/// Output the mode let through is in the request as the planner saw it, and it is not a result the
+/// kernel judged trusted: the label names the reference it was released from.
+#[test]
+fn the_view_of_the_request_does_not_call_released_output_trusted() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-released");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reading = ReadsWhatItRan::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let view = reporter.requests.last().expect("a view was published");
+    let released = view
+        .spans
+        .iter()
+        .find(|span| span.text.contains("SENTINEL-XYZZY"))
+        .expect("the released output is in the request");
+    assert!(
+        matches!(&released.provenance, Provenance::Released(from) if from.contains("ref:1")),
+        "{view:#?}"
+    );
+}
+
+/// A delegate asks the backend too, with a prompt of its own. `/request` is of the turn the person
+/// is watching, so every view published is of a request the parent sent, and what the delegate
+/// reported is labelled as news from a delegate rather than as anything typed.
+#[test]
+fn the_view_of_the_request_is_the_parents_when_a_delegate_ran_and_labels_its_report() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-delegate");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-SOMETHING",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("SAY-SOMETHING-SHORT", vec![reply_with("REPORTED BACK")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-SOMETHING"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    // The parent's own prompt tells its requests from the delegate's, as in the interjection test.
+    let asked = every_request(&received);
+    let (mine, delegated): (Vec<&String>, Vec<&String>) = asked
+        .iter()
+        .partition(|body| body.contains("DELEGATE-SOMETHING"));
+    assert!(
+        !delegated.is_empty(),
+        "no delegate asked the backend, so the test shows nothing"
+    );
+    assert_eq!(
+        reporter.requests.len(),
+        mine.len(),
+        "a view was published for a request that was not the parent's: {:#?}",
+        reporter.requests
+    );
+    for view in &reporter.requests {
+        assert!(
+            view.spans
+                .iter()
+                .any(|span| span.provenance == Provenance::Typed
+                    && span.text == "DELEGATE-SOMETHING"),
+            "a view is not of a request the parent sent: {view:#?}"
+        );
+    }
+
+    let report = reporter
+        .requests
+        .iter()
+        .flat_map(|view| &view.spans)
+        .find(|span| span.text.contains("REPORTED BACK"))
+        .expect("the delegate's report is in no view");
+    assert_eq!(
+        report.provenance,
+        Provenance::Trusted("delegate report"),
+        "{report:?}"
+    );
+}
+
+/// A line typed while the turn runs is what a person typed, and the view says so from the line
+/// being pushed rather than from its words.
+#[test]
+fn the_view_of_the_request_labels_a_line_typed_mid_turn_as_typed() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-interjection");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request("read_file", r#"{"path":"a.txt"}"#),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK"),
+        &mut SaysOnce::said_after_one_asking("no, the other file"),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let line = reporter
+        .requests
+        .iter()
+        .flat_map(|view| &view.spans)
+        .find(|span| span.text == "no, the other file")
+        .expect("the line typed mid-turn is in no view");
+    assert_eq!(line.provenance, Provenance::Typed, "{line:?}");
+}
+
+/// Output of a job that the kernel let through is named for what it is, not as anything a person
+/// typed or the driver wrote.
+#[test]
+fn the_view_of_the_request_names_a_finished_jobs_visible_output_as_job_output() {
+    use bravebot_agent::request_view::Provenance;
+
+    let reporter = reporter_after_a_background_job("request-view-job-visible");
+    let account = reporter
+        .requests
+        .iter()
+        .flat_map(|view| &view.spans)
+        .find(|span| span.text.contains(JOB_1_FINISHED))
+        .expect("the end of the job is in no view");
+    assert_eq!(
+        account.provenance,
+        Provenance::Trusted("job output"),
+        "{account:?}"
+    );
+    assert!(account.text.contains("SENTINEL-JOB"), "{account:?}");
+}
+
+fn reporter_after_a_background_job(name: &str) -> bravebot_agent::report::RecordingReporter {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"echo SENTINEL-JOB","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and get on with something else"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    reporter
+}
+
+/// What a background job printed is held back like any program's output, so the account of its end
+/// is labelled by the reference the planner was given and holds none of the output.
+#[test]
+fn the_view_of_the_request_labels_a_finished_jobs_held_back_output_by_its_reference() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("request-view-job-held");
+    let script = scratch.path.join("noisy");
+    std::fs::write(&script, "#!/bin/sh\necho SENTINEL-JOB\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"./noisy","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(false);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let account = reporter
+        .requests
+        .iter()
+        .flat_map(|view| &view.spans)
+        .find(|span| span.text.contains(JOB_1_FINISHED))
+        .expect("the end of the job is in no view");
+    assert!(
+        matches!(&account.provenance, Provenance::Reference(token) if token.starts_with("ref:")),
+        "{account:?}"
+    );
+    assert!(
+        !account.text.contains("SENTINEL-JOB"),
+        "the job's output is in the view: {account:?}"
+    );
+}

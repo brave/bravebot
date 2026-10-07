@@ -20,6 +20,7 @@ impl Run {
         match message {
             ToMain::Spent(spent) => self.retained = Some(spent),
             ToMain::PromptRecorded(_) => {}
+            ToMain::RequestBuilt(view) => session.set_last_request(*view),
             ToMain::Written(written) => session.set_written(written),
             ToMain::Phase(phase) => session.set_phase(phase),
             ToMain::Narration(text) => session.narrate(text),

@@ -12,6 +12,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 |---|---|---|
 | `/status` | | Report this session, what it may touch, and what it has spent |
 | `/cost` | | Show what each turn of this session has spent |
+| `/request` | | Show the last request sent to the model, and where each part of it came from |
 | `/model` | | Choose which model to think with |
 | `/theme` | `[name]` | Choose which theme paints the interface |
 | `/effort` | `[level]` | Choose how hard to think before answering |
@@ -89,6 +90,27 @@ transcript.
 
 The endpoint host and the key id are left out, though `bravebot doctor` prints both. A status panel
 is the thing people paste into an issue or a screenshot.
+
+## `/request`
+
+Opens a read-only view of the last request built for the model: the system prompt in the pieces it was
+put together from, each message, and each tool result as the model saw it. Every part is headed with
+where its words came from:
+
+| Label | Words from |
+|---|---|
+| `typed` | what you typed |
+| `trusted file <path>` | a file you named or vouched for |
+| `tool result (trusted)` | a result the kernel let the model read |
+| `ref:N` | content the model was not shown. You see the reference token it saw, never the content |
+| `driver` | a sentence bravebot wrote |
+| `planner` | the model's own earlier words |
+| `unrecorded` | nothing recorded it, as for a message restored from a saved session |
+
+The view is read from the request that was sent, not rebuilt from the transcript, so it holds nothing
+the model did not. It writes nothing to disk, and an incognito session is unchanged. Typed while a
+turn runs it answers at once; It is the transcript scroller, so it scrolls and closes as that does. The view is of the main conversation, not of a
+delegate's. It takes no argument: `/request` followed by words is a prompt.
 
 ## `/cost`
 

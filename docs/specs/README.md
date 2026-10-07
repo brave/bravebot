@@ -35,7 +35,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [cli.md](cli.md) | `CLI` | 25 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth` |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 40 | what the user types into: the box, the keys, and where a terminal's own limits show through |
-| [commands.md](commands.md) | `CMD` | 14 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, and how `/resume` leaves for another session |
+| [commands.md](commands.md) | `CMD` | 15 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, how `/resume` leaves for another session, and what `/request` opens |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 26 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
 | [session-view.md](session-view.md) | `RPCVIEW` | 5 | the opt-in shared Rust view for fresh local bridge sessions, and the stdio TypeScript client that applies it |
 | [watching.md](watching.md) | `WATCH` | 23 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
@@ -60,7 +60,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [session-messages.md](session-messages.md) | `MSG` | 12 | proposed, nothing built: one background session sending text to another, put to a person and never starting a turn |
 | [state-directory.md](state-directory.md) | `STATE` | 3 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
-| [trace.md](trace.md) | `TRACE` | 8 | what is recorded about every decision the system makes, and what that record may contain |
+| [trace.md](trace.md) | `TRACE` | 9 | what is recorded about every decision the system makes, what that record may contain, and the view of the request a turn built |
 | [localization.md](localization.md) | `LOCALE` | 7 | every word said to a person, and which of them change with the reader's language |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
 | [releases.md](releases.md) | `RELEASE` | 15 | what names a version, what starts a release, and what an installer trusts about what it fetched |

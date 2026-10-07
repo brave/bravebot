@@ -116,6 +116,13 @@ same cause is in the note you are shown. The planner is told only that the deleg
 Each [checkout](../customize/agents.md#a-checkout-of-its-own) made for a delegate, and each one
 removed, is recorded as well.
 
+## The request a turn sent can be read
+
+The trail records decisions, not the request. `/request` shows the last request built for the model,
+each part labelled `typed`, `trusted file <path>`, `tool result (trusted)` or `ref:N`, and it is read
+from the request itself, so content the model was not shown appears only as the reference token it
+was given. It is kept in memory, written to no file, and is not part of an incognito session's record.
+
 ## The trail holds no content
 
 Every field is a gate name, a capability, a label, a path, a destination host or a slot id. A network

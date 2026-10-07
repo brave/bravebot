@@ -25,7 +25,8 @@ conversation never sees, and where its answer is drawn is [watching.md](watching
 `/manifest` starts the other kind of run, which is [manifest.md](manifest.md)'s. The `!` prompt is
 a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has no other spec to
 belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12. `/init` starts an ordinary turn, but the words that turn is given and
-when it is refused are CMD-13.
+when it is refused are CMD-13. `/request` shows the request a turn built, which is
+[TRACE-9](trace.md#TRACE-9)'s.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -264,7 +265,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/advisor` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches only what the session keeps | `/cost`; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/advisor` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
@@ -632,6 +633,23 @@ decide, so the command only says which one the person meant.
 `verified-by: bravebot_tui::sessions::resume_by_id_reads_the_record_named_and_refuses_what_it_cannot_continue`
 `verified-by: bravebot_tui::sessions::resume_refuses_a_record_a_running_background_session_holds`
 `verified-by: bravebot_tui::sessions::resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory`
+
+<a id="CMD-15"></a>
+### CMD-15: `/request` opens the last request built, and takes no argument
+
+`/request` opens a read-only view of the last request a turn built for the planner, which
+[TRACE-9](trace.md#TRACE-9) states. It takes no argument, so `/request` followed by words is a
+prompt (CMD-2). It reads what the session already holds in memory, so it is carried out as it is
+typed while a turn runs (CMD-8), and it starts no turn and sends nothing. It is a command, so only a
+line a person typed reaches it (CMD-1).
+
+**Why.** The view answers what the planner was just sent, which is most worth asking while a turn is
+running.
+
+`verified-by: bravebot_tui::app::the_request_command_opens_the_view_and_starts_no_turn`
+`verified-by: bravebot_tui::app::words_after_the_request_command_make_a_prompt`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::remote_confirm::the_request_a_turn_built_travels_to_the_thread_that_draws_it`
 
 ## Known costs
 

@@ -277,7 +277,10 @@ pub fn record<S: Sink>(
     } else {
         format!("I ran `{line}` in the shell myself{outcome}. It printed:\n\n{released}")
     };
-    conversation.push(Message::user(said));
+    conversation.push_from(
+        Message::user(said),
+        crate::request_view::Provenance::Trusted("shell output"),
+    );
 
     Ok(Recorded {
         text: released,
