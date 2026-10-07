@@ -3372,6 +3372,17 @@ done
     /// A server at a port of its own answering each request with `answer`, and every body it was
     /// sent.
     fn serving(answer: fn(&str, &str) -> String, to: String) -> (String, mpsc::Receiver<String>) {
+        serving_holding(answer, to, "", Duration::ZERO)
+    }
+
+    /// As [`serving`], holding each request whose body names `method` for `hold` before answering
+    /// it.
+    fn serving_holding(
+        answer: fn(&str, &str) -> String,
+        to: String,
+        method: &'static str,
+        hold: Duration,
+    ) -> (String, mpsc::Receiver<String>) {
         use std::io::Read;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
@@ -3395,6 +3406,9 @@ done
                 let _ = reader.read_exact(&mut body);
                 let body = String::from_utf8_lossy(&body).into_owned();
                 let _ = sender.send(body.clone());
+                if !method.is_empty() && body.contains(method) {
+                    std::thread::sleep(hold);
+                }
                 let _ = stream.write_all(answer(&body, &to).as_bytes());
                 let _ = stream.flush();
             }
@@ -3963,6 +3977,82 @@ done
             routing,
             ReleasePlan::new(),
             CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("weather"))]),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let called = std::time::Instant::now();
+        let error = session
+            .call(
+                &mut policy,
+                &bravebot_net::Egress::new(),
+                "weather",
+                "lookup",
+                serde_json::json!({}),
+            )
+            .expect_err("the answer came after the bound");
+
+        assert_eq!(error.to_string(), "tool 'lookup' timed out after 1 seconds");
+        assert!(called.elapsed() < Duration::from_millis(2900));
+    }
+
+    /// Reach a remote weather server that holds the requests naming `method` for `hold`, under
+    /// `timeouts`.
+    fn reached_remote(
+        method: &'static str,
+        hold: Duration,
+        timeouts: Timeouts,
+    ) -> McpResult<crate::mcp::Reached> {
+        let (url, _bodies) = serving_holding(weather, String::new(), method, hold);
+        let declared = Declaration::http(url.clone()).expect("declaration");
+        handshake_remote("weather", url, declared.digest(), timeouts).0
+    }
+
+    /// A remote server that does not answer its handshake within the startup bound its declaration
+    /// gives fails at that bound, which is not the call bound or the default.
+    #[test]
+    fn a_remote_server_not_answering_its_handshake_within_its_startup_bound_is_given_up_on() {
+        let timeouts = Timeouts::new(Some(1), Some(30)).expect("timeouts");
+
+        let started = std::time::Instant::now();
+        let error = reached_remote("initialize", Duration::from_secs(4), timeouts)
+            .err()
+            .expect("the handshake was answered after its bound");
+
+        assert_eq!(error.to_string(), "initialize timed out after 1 seconds");
+        assert!(
+            started.elapsed() < Duration::from_millis(3500),
+            "the handshake was waited on past its bound: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Once its handshake is done a remote server is held to the call bound its declaration gives,
+    /// which is not the startup bound: this one answers its handshake at once, takes three seconds
+    /// to answer a call, and is given one.
+    #[test]
+    fn a_reached_remote_server_is_held_to_the_call_bound_its_declaration_gives() {
+        let root = scratch("cli-servers-remote-call-bound");
+        let timeouts = Timeouts::new(Some(30), Some(1)).expect("timeouts");
+        let reached = reached_remote("tools/call", Duration::from_secs(3), timeouts)
+            .expect("the handshake is answered at once");
+        let session = Session::new(
+            vec![reached],
+            root.clone(),
+            Some(root),
+            true,
+            Managed::default(),
+        );
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "call a tool");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([
+                Capability::WebFetch,
+                Capability::McpCall(ServerAlias::new("weather")),
+            ]),
             &mut sink,
         )
         .expect("policy");
