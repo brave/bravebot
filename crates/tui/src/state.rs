@@ -11229,6 +11229,33 @@ mod tests {
             assert_eq!(session.streaming, "the turn is thinking");
         }
 
+        /// A delegate says a great deal on its way to an answer and none of it is the turn's.
+        /// Pushed into the transcript, it reads as the planner announcing something it never said.
+        #[test]
+        fn what_a_delegate_says_between_its_tool_calls_is_not_in_the_transcript() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.narrate("DELEGATE-SAID-THIS");
+
+            assert!(
+                !session
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.text.contains("DELEGATE-SAID-THIS")),
+                "a delegate's words between tool calls landed in the turn's transcript"
+            );
+
+            session.reporting_for(None);
+            session.narrate("THE-TURN-SAID-THIS");
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.text.contains("THE-TURN-SAID-THIS")),
+                "the turn's own words were dropped along with the delegate's"
+            );
+        }
+
         /// The block where a delegate started is a glance at it rather than the whole of it. It
         /// draws the newest few and says how much has happened, so three rows under a delegate
         /// that has made thirty calls do not read as a delegate doing very little.

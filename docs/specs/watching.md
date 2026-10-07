@@ -143,6 +143,7 @@ sentence drawn in a delegate's view would be the only thing on that screen the d
 do.
 
 `verified-by: bravebot_tui::state::a_reply_a_delegate_is_writing_is_not_drawn_over_the_turn`
+`verified-by: bravebot_tui::state::what_a_delegate_says_between_its_tool_calls_is_not_in_the_transcript`
 
 <a id="WATCH-7"></a>
 ### WATCH-7: Ctrl-L opens what happened outside the transcript: the list where there are several rows, the one where there is one
