@@ -51,7 +51,7 @@ import { useExperience, conversationPreferences, setConversation, dropConversati
 import { showToast } from './toasts'
 import { applyAppearance } from './theme'
 import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
-import { planRewind, pointForPrompt } from './rewind'
+import { planRewind, pointForPrompt, RequestFailed, rewindFailure } from './rewind'
 import { RewindConfirm } from './components/Rewind'
 
 /** What the app is doing, which decides most of what the interface offers. */
@@ -204,7 +204,7 @@ async function call<T>(method: string, params?: Record<string, unknown>): Promis
     // means the credentials were not baked in at compile time. It is not recoverable
     // from here and needs saying properly.
     if (answer.error.code === 'config') throw new Unconfigurable(answer.error.message)
-    throw new Error(`${answer.error.code}: ${answer.error.message}`)
+    throw new RequestFailed(answer.error.code, answer.error.message)
   }
   return answer.ok as T
 }
@@ -226,7 +226,7 @@ async function callBot(request: {
   const answer = await window.bravebot.sendBotTurn(request)
   if (answer.error) {
     if (answer.error.code === 'config') throw new Unconfigurable(answer.error.message)
-    throw new Error(`${answer.error.code}: ${answer.error.message}`)
+    throw new RequestFailed(answer.error.code, answer.error.message)
   }
 }
 
@@ -1293,9 +1293,7 @@ export function App(): React.JSX.Element {
         : null)
       void refresh()
     } catch (error) {
-      setProblem(String(error).includes('turn_in_flight')
-        ? 'A turn started, so nothing was undone. Try again once it finishes.'
-        : String(error))
+      setProblem(rewindFailure(error))
     } finally {
       setRewinding(null)
     }

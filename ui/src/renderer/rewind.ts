@@ -73,3 +73,20 @@ export function undoRow(entries: readonly Entry[], points: readonly RewindPoint[
   }
   return null
 }
+
+/** A request the bridge answered with an error. The code is kept so a caller decides on it, not on the wording. */
+export class RequestFailed extends Error {
+  readonly code: string
+
+  constructor(code: string, message: string) {
+    super(`${code}: ${message}`)
+    this.code = code
+  }
+}
+
+/** What to tell a person whose rewind failed. A turn that started in the meantime is not a fault. */
+export function rewindFailure(error: unknown): string {
+  return error instanceof RequestFailed && error.code === 'turn_in_flight'
+    ? 'A turn started, so nothing was undone. Try again once it finishes.'
+    : String(error)
+}

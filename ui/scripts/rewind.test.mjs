@@ -9,7 +9,7 @@ function load(path) {
   new Function('require', 'module', 'exports', source)(require, module, module.exports)
   return module.exports
 }
-const { planRewind, gapWarning, pointForPrompt, undoRow } = load('src/renderer/rewind.ts')
+const { planRewind, gapWarning, pointForPrompt, undoRow, RequestFailed, rewindFailure } = load('src/renderer/rewind.ts')
 const t = load('src/renderer/transcript.ts')
 const { CONTEXT, NOTHING_OPEN, isEnabled, parseWindowState, command } = load('src/shared/commands.ts')
 
@@ -84,4 +84,20 @@ test('Undo turn sits on the latest turn’s footer only while the newest point i
   assert.equal(undoRow(saved, points), saved[3].id)
   assert.equal(undoRow(saved.slice(0, 2), points), null)
   assert.equal(undoRow(saved, [{ ...points[0], prompt: null }]), null)
+})
+
+test('a rewind refused because a turn is running says nothing was undone, and any other failure says what happened', () => {
+  assert.equal(
+    rewindFailure(new RequestFailed('turn_in_flight', 'a turn is running')),
+    'A turn started, so nothing was undone. Try again once it finishes.',
+  )
+  assert.equal(
+    rewindFailure(new RequestFailed('bad_request', 'This session can go back 2 turns at most.')),
+    'Error: bad_request: This session can go back 2 turns at most.',
+  )
+  assert.equal(
+    rewindFailure(new RequestFailed('bad_request', 'the words turn_in_flight appear here')),
+    'Error: bad_request: the words turn_in_flight appear here',
+    'the code decides, not a substring of the message',
+  )
 })
