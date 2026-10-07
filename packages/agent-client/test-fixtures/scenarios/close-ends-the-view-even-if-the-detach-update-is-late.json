@@ -1,0 +1,20 @@
+{
+  "name": "close-ends-the-view-even-if-the-detach-update-is-late",
+  "description": "A close response ends the view as detached, and a detach update that arrives after it changes nothing.",
+  "steps": [
+    {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
+    {"expectRequest": "info", "method": "agent.info", "params": {}},
+    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}}}}]},
+    {"expectRequest": "new", "method": "session.new", "params": {"directory": "/work"}},
+    {"send": [{"event": "trust.request", "session": "s1", "data": {"directory": "/work", "keeping": null}}, {"id": "$new", "ok": {"session": "s1"}}]},
+    {"expectRequest": "view", "method": "session.view.start", "params": {"session": "s1", "version": 1}},
+    {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "status": "idle", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
+    {"await": "a", "bindSession": "a"},
+    {"start": "close", "call": "close", "session": "a"},
+    {"expectRequest": "c", "method": "session.close", "params": {"session": "s1"}},
+    {"send": [{"id": "$c", "ok": {}}]},
+    {"await": "close", "result": {"viewDetached": true, "workerTerminated": "unknown", "saved": "unknown"}},
+    {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 1, "turn": 0, "status": "detached", "pending": null, "rows": []}}]},
+    {"expectView": "a", "sequence": 0, "status": "idle", "ended": {"reason": "detached"}}
+  ]
+}

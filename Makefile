@@ -72,6 +72,7 @@ help:
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
 	@echo "  make check-extension       Test the Brave extension's tools against a fake browser"
+	@echo "  make check-agent-client    Build and test the TypeScript session client against a real bravebot-rpc"
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
@@ -261,6 +262,7 @@ check-npm:
 	npm ci --ignore-scripts
 	npm run lint:lockfile
 	npm run lint:lockfile:website
+	npm run lint:lockfile:agent-client
 	npm run lint:lockfile:ui
 
 # The dependency policy in deny.toml. CI runs this target rather than cargo-deny's action,
@@ -344,7 +346,7 @@ docs-updated-to-sha:
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
 .PHONY: check-all-local check-all
-check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-reviewdog
+check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
 # The gates this branch's changes need, against its merge base with BASE, which check-reviewdog
@@ -410,6 +412,17 @@ check-ui: check-ui-build
 .PHONY: check-extension
 check-extension:
 	ls extension/tests/*.test.mjs >/dev/null && node --test extension/tests/*.test.mjs
+
+# The TypeScript session client under packages/agent-client: its types, its build, and its tests,
+# which drive a real bravebot-rpc against a model service of their own. The bridge is built here
+# because the tests never build it themselves. The package has its own lockfile and is not an npm
+# workspace. `ls` first for the reason check-extension gives.
+.PHONY: check-agent-client
+check-agent-client:
+	ls packages/agent-client/test-fixtures/scenarios/*.json >/dev/null
+	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo build -p bravebot-ui-bridge --bin bravebot-rpc
+	npm --prefix packages/agent-client ci --ignore-scripts
+	npm --prefix packages/agent-client run check
 
 # CI sets UI_INSTALL to ui/scripts/ci-install.sh, which reuses a cached build of Leo, here and for
 # the two Windows packaging steps below.

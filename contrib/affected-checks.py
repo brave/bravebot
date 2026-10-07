@@ -83,7 +83,7 @@ ALWAYS = (
 )
 HOST = {
     "rust": ("check",),
-    "ui": ("check-ui",),
+    "ui": ("check-ui", "check-agent-client"),
     "docs": ("check-docs",),
     "npm": ("check-npm",),
     "deps": ("check-deps",),
@@ -120,6 +120,16 @@ def classify(path, desktop):
     if path.startswith("extension/"):
         # The job for the desktop UI runs the extension's tests, and a Rust test reads its files.
         return frozenset({"rust", "ui"})
+    if path.startswith("packages/agent-client/"):
+        # The client's tests run in the job for the desktop UI against the built bridge. Only the
+        # wire contract file is also read by a Rust test.
+        name = path[len("packages/agent-client/"):]
+        found = {"ui"}
+        if name == "test-fixtures/wire-contract.json":
+            found.add("rust")
+        if name in ("package.json", "package-lock.json"):
+            found.add("npm")
+        return frozenset(found)
     for under, area in (("docs/website/", "docs"), ("ui/", "ui")):
         if path.startswith(under):
             lockfile = path[len(under):] in ("package.json", "package-lock.json")
@@ -296,6 +306,9 @@ CASES = (
     ("ui/scripts/package.mjs", {"ui", "build"}),
     ("ui/scripts/fuses.mjs", {"ui", "build"}),
     ("ui/scripts/windows-installer.test.mjs", {"ui"}),
+    ("packages/agent-client/src/common/client.ts", {"ui"}),
+    ("packages/agent-client/test-fixtures/wire-contract.json", {"rust", "ui"}),
+    ("packages/agent-client/package-lock.json", {"ui", "npm"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("npm/scripts/postinstall.js", {"npm", "rust"}),

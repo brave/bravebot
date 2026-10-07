@@ -1,0 +1,11 @@
+{
+  "name": "capability-absent",
+  "description": "A runtime that advertises no session view is refused; the view is never rebuilt from legacy events.",
+  "steps": [
+    {"start": "open", "call": "createSession", "args": {"workspace": "work"}},
+    {"expectRequest": "info", "method": "agent.info", "params": {}},
+    {"send": [{"event": "turn.done", "session": "s1", "data": {"turn": 1}}, {"id": "$info", "ok": {"build": "old", "version": "0.1.0", "home": "/h"}}]},
+    {"await": "open", "error": {"name": "CapabilityError"}},
+    {"expectNoRequest": true}
+  ]
+}

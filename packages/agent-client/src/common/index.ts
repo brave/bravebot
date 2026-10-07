@@ -1,0 +1,6 @@
+export * from './errors.js'
+export * from './wire.js'
+export * from './interface.js'
+export type { Deadlines, LineSink } from './connection.js'
+export type { ViewEnd, ViewEndReason, ViewState } from './view.js'
+export { RpcAgentClient, type Workspace } from './client.js'

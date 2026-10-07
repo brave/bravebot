@@ -1,6 +1,6 @@
 # Client interface and prototype contract
 
-Status: the first Rust session-view block is implemented. The TypeScript client and later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-rust-block).
+Status: the first Rust session-view block and the stdio TypeScript client's session lifecycle are implemented. Approval replies, the local client program and the remaining stage 1–2a evidence are outstanding, so stages 1–2a are incomplete. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
 
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
@@ -10,7 +10,7 @@ Create a standalone TypeScript package at `packages/agent-client/` with its own 
 
 Review `ui/src/main/bridge.ts` for reusable framing/correlation code and tests. Reuse suitable logic without importing Electron modules or requiring desktop migration during the local client proof. Electron binary discovery and app lifecycle remain in the desktop app. Desktop adoption of the shared client belongs to the later handoff stage.
 
-Use a small language-independent scenario fixture directory, proposed `packages/agent-client/test-fixtures/`, for typed operations, serialized boundary payloads, expected responses/events, labels, and symbolic IDs. Thin runners bind fixtures to the TypeScript client, real stdio process, local socket, and the actual platform native module. Run native scenarios on each supported platform; success on one does not establish support on the other. Framing cases apply only to stream transports. Use explicit synchronization steps rather than timing-dependent transcripts.
+Use a small language-independent scenario fixture directory, `packages/agent-client/test-fixtures/`, for typed operations, serialized boundary payloads, expected responses/events, labels, and symbolic IDs. Thin runners bind fixtures to the TypeScript client, real stdio process, local socket, and the actual platform native module. Run native scenarios on each supported platform; success on one does not establish support on the other. Framing cases apply only to stream transports. Use explicit synchronization steps rather than timing-dependent transcripts.
 
 The React Native app imports the package’s dependency-free common module through the app shell and package-consumption setup owned by stage 3d. Stage 2b reuses that setup; if embedded work starts first, it may bring forward this shared setup without creating a second shell or making stage 3d depend on the embedded runtime. Keep package setup small; repository-wide workspace tooling is not a prerequisite for the local proof. Reuse and extend the Rust crates that own each behavior. Extract a small presentation crate if shared display transforms need a separate home under the layering rules; add its spec entry and tests with its first caller. The client package does not require a root npm workspace.
 
@@ -56,11 +56,81 @@ suite covers malformed input, EOF and refusal. View unit tests cover unsupported
 opaque replacement payloads and failure status; an emitter barrier test covers completion order.
 These tests do not establish TypeScript adapter behavior or native rendering.
 
-This block supplies no client package, saved-history import, late subscription, reconnect,
-controller state, send deduplication, persistent listener, networking or embedded bindings.
-Session identity lasts for the connection. Closing detaches the view without claiming worker
-termination or save success. Legacy reply targets are unchanged; stage 3a still supplies stronger
-stale-action protection. Stages 1–2a remain incomplete until the thin client and its tests ship.
+This block supplies no saved-history import, late subscription, reconnect, controller state,
+send deduplication, persistent listener, networking or embedded bindings. Session identity lasts
+for the connection. Closing detaches the view without claiming worker termination or save
+success. Legacy reply targets are unchanged; stage 3a still supplies stronger stale-action
+protection.
+
+## Implemented TypeScript client
+
+`packages/agent-client` is a standalone package with its own lockfile, build and tests; run it with
+`make check-agent-client`, which builds `bravebot-rpc` first. `src/common` holds the wire types,
+framing, request correlation, view application and the typed `AgentClient`/`AgentSession`
+interfaces, with no Node, DOM, Electron or JNI dependency; `tsconfig.common.json` type-checks it
+with no ambient types. `src/node` holds the child-process adapter. Language-independent scenarios
+are in `test-fixtures/`.
+
+**Reused from Rust.** The session view, its sequence numbers, status and pending metadata, and
+`wire::submitted` are called through the process; the client applies what they send. A Rust test
+writes `wire-contract.json` from the `view.rs` types and fails if it differs, and the package tests
+compare their enumerations and decoders with it, so the TypeScript types are checked against Rust
+rather than kept in step by hand. Framing and correlation follow `ui/src/main/bridge.ts`; the
+desktop does not import the package, and no desktop caller changed.
+
+**Kept in the client.** Framing, request ids, buffering of events that precede the response naming
+their session, the in-memory copy of rows and status, and sequence-gap detection. The client has no
+second session reducer: it does not derive busy state, approval state or turn outcomes. It reads no
+released content.
+
+**Operations in this increment.** The client can:
+
+- describe the target, with the state-directory path dropped;
+- list the configured workspaces by id and name;
+- create a fresh session in one of them with the view started (`createSession` never accepts a path);
+- answer startup trust when asked to, after which the question is no longer offered;
+- send, cancel, and close.
+
+Raw dispatch of arbitrary bridge methods is not part of the package. The entry points export no `raw`, no connection class, and no way to reach the client's connection, because dispatch is not confined to configured workspaces and could answer a question the client never offered. Tests reach it through an internal module that the package's `exports` map does not expose.
+
+`attach`, `takeControl` and `messageStatus` fail locally. A question a turn asks appears in the
+view and can be cancelled, which refuses it. Answering it is not yet supported.
+
+A runtime without version 1 of the capability is refused before any session is created. A close
+reports the view as detached, ending it on the bridge's response even if the detach update has
+not arrived, and worker termination and save success as unknown. A failed close
+keeps the session subscribed to view updates and connection loss, unless the bridge answers that the session no longer exists.
+
+A request unanswered past its deadline (30 seconds by default) ends the connection and stops the
+child, since its outcome cannot be known. Nothing is retried. The cleanup request sent after a
+failed session startup has no deadline, so a silent bridge cannot end the connection. Stdout EOF,
+a read error, or a failed write to the child also ends the connection immediately, even if the
+child is still alive.
+
+A view listener, event handler, response handler, diagnostic hook or close callback that throws or
+rejects is reported through the diagnostic hook where one is set. It does not affect other
+listeners, other sessions, the rest of the data being read, the request it belongs to, or
+shutdown. A diagnostic hook that throws does not lose the message being read.
+
+A startup that breaks the protocol (a malformed or out-of-order initial view, a repeated row id)
+refuses the session for good, even if a valid initial view follows. Startup trust questions are
+held only while a session is being created, and at most 64 sessions' worth are held, earliest first.
+
+**Evidence.** The scenarios run under four read-chunkings against a scripted server: split and
+combined frames, early events, interleaved sessions, out-of-order responses, gaps, malformed
+input, labelled rows carried whole, connection loss, an unknown method and a question of an
+unsupported kind. The real-process tests use a model service of the test's own, an empty home and
+a scratch project. They show:
+
+- trust deciding whether a write is asked about;
+- two sessions with turns in flight together keeping their own rows;
+- a cancelled write not landing, and its late approval refused;
+- close, EOF, a killed process and unreadable input.
+
+**Not established.** Answering questions, a local program, real-process evidence for labelled
+released content, native rendering, remote security, reconnect and recovery, send deduplication,
+controller ownership, a stronger stale-action guarantee than the bridge's, a persistent host, and
+operating systems other than macOS.
 
 ## Common interface
 

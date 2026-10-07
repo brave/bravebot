@@ -1,0 +1,10 @@
+{
+  "name": "capability-unsupported-wrong-start",
+  "description": "An advertised capability that is not version 1 of this contract (wrong-start) is refused.",
+  "steps": [
+    {"start": "open", "call": "describe"},
+    {"expectRequest": "info", "method": "agent.info", "params": {}},
+    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.watch", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}}}}]},
+    {"await": "open", "error": {"name": "CapabilityError"}}
+  ]
+}

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 GATES = (
     "check-scripts", "check", "check-spec", "check-security", "check-locales", "check-versions",
     "check-narration", "check-docs", "check-npm", "check-deps", "check-msrv", "check-windows",
-    "check-linux", "check-ui", "check-reviewdog",
+    "check-linux", "check-ui", "check-agent-client", "check-reviewdog",
 )
 
 
@@ -34,6 +34,8 @@ class CheckTargets(unittest.TestCase):
         (self.root / "ui/scripts/fixture.test.mjs").touch()
         (self.root / "extension/tests").mkdir(parents=True)
         (self.root / "extension/tests/fixture.test.mjs").touch()
+        (self.root / "packages/agent-client/test-fixtures/scenarios").mkdir(parents=True)
+        (self.root / "packages/agent-client/test-fixtures/scenarios/fixture.json").touch()
         (self.root / "npm/tests").mkdir(parents=True)
         (self.root / "npm/tests/fixture.test.mjs").touch()
         self.bin = self.root / "bin"
@@ -41,7 +43,7 @@ class CheckTargets(unittest.TestCase):
         self.log = self.root / "calls"
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                         CALL_LOG=str(self.log), FAIL_COMMAND="", TEST_PLATFORM="Darwin")
-        for name in ("npm", "node", "xvfb-run", "python3"):
+        for name in ("npm", "node", "xvfb-run", "python3", "cargo"):
             tool = self.bin / name
             tool.write_text('#!/bin/sh\ncommand="$(basename "$0") $*"\n'
                             'printf "%s\\n" "$command" >> "$CALL_LOG"\n'
@@ -166,6 +168,26 @@ class CheckTargets(unittest.TestCase):
                 expected = commands[:commands.index(failing) + 1] if failing else commands
                 self.assertEqual(self.log.read_text().splitlines(), expected)
 
+    def test_the_client_gate_builds_the_bridge_before_its_tests_and_preserves_each_failure(self):
+        """The client's tests drive a built bravebot-rpc and never build it, so a bridge that
+        fails to build must stop the gate before they run."""
+        commands = ["cargo build -p bravebot-ui-bridge --bin bravebot-rpc",
+                    "npm --prefix packages/agent-client ci --ignore-scripts",
+                    "npm --prefix packages/agent-client run check"]
+        for failing in ("", *commands):
+            with self.subTest(failing=failing):
+                result = self.run_make("check-agent-client", FAIL_COMMAND=failing)
+                self.assertEqual(result.returncode != 0, bool(failing), result.stderr)
+                expected = commands[:commands.index(failing) + 1] if failing else commands
+                self.assertEqual(self.log.read_text().splitlines(), expected)
+
+    def test_client_scenarios_that_are_no_longer_there_fail_the_gate(self):
+        """A scenario directory emptied or renamed must not leave the gate green on nothing."""
+        (self.root / "packages/agent-client/test-fixtures/scenarios/fixture.json").unlink()
+        result = self.run_make("check-agent-client")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.log.read_text().splitlines(), [])
+
     def test_extension_tests_that_are_no_longer_there_fail_the_gate(self):
         """`node --test` given a pattern matching nothing passes having run nothing."""
         (self.root / "extension/tests/fixture.test.mjs").unlink()
@@ -187,7 +209,7 @@ class CheckTargets(unittest.TestCase):
         installer test must run before anything installs a dependency for it to depend on."""
         commands = ["node --test npm/tests/fixture.test.mjs", "npm ci --ignore-scripts",
                     "npm run lint:lockfile", "npm run lint:lockfile:website",
-                    "npm run lint:lockfile:ui"]
+                    "npm run lint:lockfile:agent-client", "npm run lint:lockfile:ui"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("check-npm", FAIL_COMMAND=failing)

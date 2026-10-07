@@ -466,6 +466,11 @@ jobs:
         timeout-minutes: 5
         run: make check-ui-walkthrough
 
+      # The TypeScript session client, against the bridge this job has just built. It needs no
+      # display and none of the desktop app's dependencies.
+      - name: Build and test the session client
+        run: make check-agent-client
+
   # The desktop app where it runs rather than cross-compiled for it. The helper's walk refuses
   # junctions, streams and device names on NTFS, which no other host has, and the walkthrough
   # drives the pair end to end. -gnu for the reason the windows job gives, which on this runner

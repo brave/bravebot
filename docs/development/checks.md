@@ -30,7 +30,7 @@ Choose how much to run:
 
 | Command | Coverage |
 |---|---|
-| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, toolchain age, docs, npm lockfiles, dependency policy, desktop UI and reviewdog. No Docker. |
+| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, toolchain age, docs, npm lockfiles, dependency policy, desktop UI, the TypeScript session client and reviewdog. No Docker. |
 | `make check-all` | Everything in `check-all-local`, plus Docker checks for minimum Rust, Windows Clippy and Linux. |
 | `make check-affected` | Script selftests, specs, security rules, locales, versions, narration and reviewdog, plus each host check this branch's changes need, chosen the way CI chooses its jobs. No Docker. |
 | `make check-affected-containers` | The Docker checks this branch's changes need: minimum Rust, Windows Clippy and Linux for a change to Rust, and none otherwise. |
@@ -90,6 +90,12 @@ and walkthrough targets, with a separate timeout for the walkthrough.
 The check build leaves out backend credentials, even when your development build has
 them, so the walkthrough can test the unconfigured app without using your account.
 Run `npm --prefix ui run build` afterwards to restore a configured development build.
+
+`make check-agent-client` builds `bravebot-rpc`, then installs, type-checks, builds and tests
+`packages/agent-client`. Its tests start that binary against a model service of their own, an empty
+home and a scratch project, so they need no credentials and no desktop session. The Front end CI
+job runs it, and the classifier gives it to any change under `packages/agent-client/` or to the bridge crates. Only a change to the wire contract file there also runs the Rust jobs, since a Rust test reads it.
+Run it for a change to the session view or the client.
 
 `make check-scripts` checks that every required gate runs, that UI, installer and lockfile
 failures reach the caller, and that scanner failures cannot pass as empty scans. The installer

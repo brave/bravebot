@@ -245,6 +245,115 @@ mod tests {
         }
     }
 
+    fn status_name(status: Status) -> &'static str {
+        // Exhaustive on purpose: a new variant stops compiling here until it is listed, and the
+        // contract file below then changes with it.
+        match status {
+            Status::AwaitingTrust => "awaiting_trust",
+            Status::Idle => "idle",
+            Status::Running => "running",
+            Status::Waiting => "waiting",
+            Status::Completed => "completed",
+            Status::Failed => "failed",
+            Status::Cancelled => "cancelled",
+            Status::Detached => "detached",
+        }
+    }
+
+    fn row_kind_name(kind: RowKind) -> &'static str {
+        match kind {
+            RowKind::Prompt => "prompt",
+            RowKind::Narration => "narration",
+            RowKind::Quarantined => "quarantined",
+            RowKind::Approval => "approval",
+            RowKind::Reply => "reply",
+            RowKind::Error => "error",
+            RowKind::Activity => "activity",
+        }
+    }
+
+    /// What the TypeScript client is written against: the capability, every status and row kind
+    /// as serde writes them, and one update using every field.
+    fn wire_contract() -> Value {
+        use RowKind::*;
+        let statuses = [
+            Status::AwaitingTrust,
+            Status::Idle,
+            Status::Running,
+            Status::Waiting,
+            Status::Completed,
+            Status::Failed,
+            Status::Cancelled,
+            Status::Detached,
+        ];
+        let kinds = [
+            Prompt,
+            Narration,
+            Quarantined,
+            Approval,
+            Reply,
+            Error,
+            Activity,
+        ];
+        for status in statuses {
+            assert_eq!(json!(status), json!(status_name(status)));
+        }
+        for kind in kinds {
+            assert_eq!(json!(kind), json!(row_kind_name(kind)));
+        }
+        let data = json!({"label": "(U,pub)", "text": "released"});
+        let rows: Vec<Row> = kinds
+            .iter()
+            .enumerate()
+            .map(|(at, kind)| Row {
+                id: at as u64 + 1,
+                turn: 1,
+                kind: *kind,
+                event: (*kind != Prompt).then(|| "tool.started".to_string()),
+                data: data.clone(),
+                resolved: *kind == Approval,
+            })
+            .collect();
+        let update = Update {
+            sequence: 3,
+            turn: 1,
+            status: Status::Waiting,
+            pending: Some(Pending {
+                row: 4,
+                request: 7,
+                kind: "fetch".into(),
+                supported: true,
+                data: json!({"request": 7, "url": "https://example.test/", "host": "example.test"}),
+            }),
+            rows,
+        };
+        json!({
+            "capability": capability(),
+            "statuses": statuses.map(status_name),
+            "rowKinds": kinds.map(row_kind_name),
+            "update": update,
+        })
+    }
+
+    /// The client package's wire types are checked against these Rust types through this file.
+    /// Regenerate it with `WRITE_WIRE_CONTRACT=1 cargo test -p bravebot-ui-bridge --lib wire_contract`.
+    #[test]
+    fn the_client_wire_contract_matches_the_rust_types() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/agent-client/test-fixtures/wire-contract.json");
+        let actual = wire_contract();
+        if std::env::var_os("WRITE_WIRE_CONTRACT").is_some() {
+            let text = serde_json::to_string_pretty(&actual).unwrap() + "\n";
+            std::fs::write(&path, text).expect("the contract file is written");
+        }
+        let text = std::fs::read_to_string(&path).expect("the contract file exists");
+        let expected: Value = serde_json::from_str(&text).expect("the contract file is JSON");
+        assert_eq!(
+            actual, expected,
+            "the Rust view types changed; regenerate {path:?} and update packages/agent-client"
+        );
+    }
+
     /// A failed model request must not leave a client showing a running turn.
     #[test]
     fn failures_have_authoritative_terminal_status() {
