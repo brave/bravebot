@@ -1222,9 +1222,19 @@ fn a_stream_writes_each_event_as_it_happens_and_ends_on_the_result_object() {
     );
     assert_eq!(usage[1]["tokens"]["total"], 51, "{streamed}");
 
-    // The last line is the object `--json` writes, which names the same call.
+    // The last line is the object `--json` writes, which names the same call. Each run writes its
+    // own session record (CLI-25), so the two objects differ in the id of that record alone.
+    let without_session = |text: &str| {
+        let mut object: serde_json::Value = serde_json::from_str(text).expect("an object");
+        object["session"] = serde_json::Value::Null;
+        object
+    };
     let last = streamed.lines().last().expect("a last line");
-    assert_eq!(last, plain.trim_end(), "the stream ended on another object");
+    assert_eq!(
+        without_session(last),
+        without_session(plain.trim_end()),
+        "the stream ended on another object"
+    );
     assert!(
         !plain.contains("\"event\""),
         "the plain object grew an event field: {plain}"
@@ -7128,8 +7138,8 @@ fn an_attach_from_a_terminal_starts_a_stopped_session() {
     assert!(second.contains("fix the build"), "{second}");
 }
 
-/// BG-9: `--resume` and `--continue` name a record a running background session holds, and say to
-/// attach, instead of opening a second writer on it.
+/// BG-9 and CLI-25: `--resume` and `--continue`, with or without a task, name a record a running
+/// background session holds, and say to attach, instead of opening a second writer on it.
 #[cfg(unix)]
 #[test]
 fn a_record_a_running_session_holds_is_not_resumed() {
@@ -7168,6 +7178,23 @@ fn a_record_a_running_session_holds_is_not_resumed() {
         );
         assert!(err.contains("bravebot attach 3f2a9c1e"), "{err}");
     }
+
+    for arguments in [
+        &["-p", "next", "--resume", SESSION_ID][..],
+        &["-p", "next", "--continue"][..],
+    ] {
+        let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        let err = said(&output).1;
+        assert!(
+            err.contains("held by a running background session"),
+            "{arguments:?}: {err}"
+        );
+    }
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a refused task reached the gateway"
+    );
 
     let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
     let _ = host.wait();
@@ -7745,4 +7772,281 @@ fn a_one_shot_run_removes_the_checkouts_no_session_holds_and_leaves_a_held_one()
 
     assert!(taken, "the run left a checkout no record lists");
     assert!(kept, "the run took a checkout another session holds");
+}
+
+/// The id a `--json` run reported for the session it wrote, or `None` where the field is null.
+fn session_of(stdout: &str) -> Option<String> {
+    let marker = r#""session":"#;
+    let rest = &stdout[stdout.find(marker)? + marker.len()..];
+    rest.strip_prefix('"')?
+        .split('"')
+        .next()
+        .map(str::to_string)
+}
+
+/// Every chat request the gateway has been sent since the last call, oldest first.
+fn requests(gateway: &Gateway) -> Vec<String> {
+    let mut bodies = Vec::new();
+    while let Ok(body) = gateway.asked.recv_timeout(Duration::from_millis(500)) {
+        bodies.push(body);
+    }
+    bodies
+}
+
+/// A one-shot run answering `reply` at `gateway`, with `arguments` after the flags that ask for
+/// the result object.
+fn a_recorded_run(scratch: &Scratch, arguments: &[&str]) -> (Output, String, String) {
+    let mut all = vec!["--json"];
+    all.extend_from_slice(arguments);
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &all);
+    let (stdout, stderr) = said(&output);
+    (output, stdout, stderr)
+}
+
+/// CLI-25: a one-shot run is written down, and its result object names the record. A script reads
+/// the id out of one run and hands it to the next, so a run that wrote nothing, or wrote it and
+/// said nothing, leaves the script restating everything each time.
+#[test]
+fn a_one_shot_run_is_written_down_and_names_its_session() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("first reply"));
+    let scratch = Scratch::new("cli-running-recorded").with_settings(&settings_for(&gateway));
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["-p", "first question"]);
+
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let id = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+    let records = scratch.path.join(".bravebot").join("sessions");
+    let written = std::fs::read_dir(&records)
+        .expect("the run created the sessions directory")
+        .flatten()
+        .flat_map(|project| std::fs::read_dir(project.path()).expect("a project directory"))
+        .flatten()
+        .any(|file| file.file_name().to_string_lossy() == format!("{id}.json"));
+    assert!(written, "no record named {id} under {records:?}");
+}
+
+/// CLI-25: `--continue` carries the most recent session, and `--resume <id>` the one it names. The
+/// second request has to hold the first run's question and reply, which is what separates a
+/// continued conversation from a follow-up sent into an empty one, and the session the id names
+/// has to be the one chosen, not the newest.
+#[test]
+fn a_task_carries_on_the_session_it_names_and_not_the_newest() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-continued").with_settings(&settings_for(&gateway));
+
+    let (_, alpha_out, _) = a_recorded_run(&scratch, &["-p", "ALPHA-QUESTION"]);
+    let alpha = session_of(&alpha_out).expect("the first run named its session");
+    let (_, beta_out, _) = a_recorded_run(&scratch, &["-p", "BETA-QUESTION"]);
+    let beta = session_of(&beta_out).expect("the second run named its session");
+    assert_ne!(alpha, beta);
+    let _ = requests(&gateway);
+
+    let (output, stdout, stderr) =
+        a_recorded_run(&scratch, &["-p", "FOLLOW-UP", "--resume", &alpha]);
+
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(session_of(&stdout), Some(alpha), "{stdout}");
+    let sent = requests(&gateway);
+    let sent = sent.last().expect("the follow-up reached the gateway");
+    assert!(
+        sent.contains("ALPHA-QUESTION"),
+        "the named session was dropped: {sent}"
+    );
+    assert!(sent.contains("FOLLOW-UP"), "{sent}");
+    assert!(
+        !sent.contains("BETA-QUESTION"),
+        "the newest session was carried on instead of the one named: {sent}"
+    );
+}
+
+/// CLI-25: `--continue` carries the session just written, and the turn it adds goes on that record
+/// rather than a new one, so a third task sees both earlier turns.
+#[test]
+fn a_task_continuing_the_latest_session_adds_a_turn_to_its_record() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch =
+        Scratch::new("cli-running-continued-latest").with_settings(&settings_for(&gateway));
+    let (_, first, _) = a_recorded_run(&scratch, &["-p", "FIRST-QUESTION"]);
+    let id = session_of(&first).expect("the first run named its session");
+    let _ = requests(&gateway);
+
+    let (output, second, stderr) =
+        a_recorded_run(&scratch, &["-p", "SECOND-QUESTION", "--continue"]);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(session_of(&second), Some(id.clone()), "{second}");
+    let _ = requests(&gateway);
+
+    let (output, third, stderr) = a_recorded_run(&scratch, &["-p", "THIRD-QUESTION", "-c"]);
+
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(session_of(&third), Some(id), "{third}");
+    let sent = requests(&gateway);
+    let sent = sent.last().expect("the third task reached the gateway");
+    assert!(
+        sent.contains("FIRST-QUESTION") && sent.contains("SECOND-QUESTION"),
+        "the third task did not see both earlier turns: {sent}"
+    );
+}
+
+/// CLI-25 and CLI-3: piped input stays a reference across the continuation. The planner is never
+/// handed the bytes, in the first run or the follow-up, and the follow-up is told the reference it
+/// holds no longer names anything, which is what a record written without the quarantine says.
+#[test]
+fn a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-continued-pipe").with_settings(&settings_for(&gateway));
+
+    let mut piped = Command::new(env!("CARGO_BIN_EXE_bravebot"));
+    piped
+        .env_clear()
+        .env("HOME", &scratch.path)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args(["--json", "-p", "summarise what was piped"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = piped.spawn().expect("the built binary runs");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(b"PIPED-SECRET-BYTES")
+        .expect("write the pipe");
+    let first = child.wait_with_output().expect("the first run ends");
+    let (stdout, stderr) = said(&first);
+    assert_eq!(first.status.code(), Some(0), "{stderr}");
+    let id = session_of(&stdout).expect("the first run named its session");
+    let first_sent = requests(&gateway);
+    assert!(
+        first_sent
+            .iter()
+            .all(|body| !body.contains("PIPED-SECRET-BYTES")),
+        "the pipe reached the planner on the first run"
+    );
+
+    let (output, _, stderr) = a_recorded_run(&scratch, &["-p", "and again", "--resume", &id]);
+
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let sent = requests(&gateway);
+    let sent = sent.last().expect("the follow-up reached the gateway");
+    assert!(
+        !sent.contains("PIPED-SECRET-BYTES"),
+        "a record put the pipe's bytes in front of the planner: {sent}"
+    );
+    assert!(
+        sent.contains("summarise what was piped") && sent.contains("ref:0"),
+        "the follow-up does not hold the first run's reference: {sent}"
+    );
+}
+
+/// CLI-25 and INCOG-3: an incognito run writes no record, says so by a null session, and leaves
+/// `--continue` with nothing to find.
+#[test]
+fn an_incognito_run_is_not_recorded_and_cannot_be_continued() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-incognito-run").with_settings(&settings_for(&gateway));
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["--incognito", "-p", "private"]);
+
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stdout.contains(r#""session":null"#), "{stdout}");
+    let _ = requests(&gateway);
+
+    let (output, stdout, _) = a_recorded_run(&scratch, &["-p", "follow up", "--continue"]);
+
+    assert_eq!(output.status.code(), Some(2), "{stdout}");
+    assert!(stdout.contains(r#""reason":"argument""#), "{stdout}");
+    assert!(
+        requests(&gateway).is_empty(),
+        "a follow-up with nothing to carry on was sent"
+    );
+}
+
+/// CLI-25, CLI-17 and SESSION-10: what cannot be carried on is refused by the status for an
+/// argument before anything is sent. A script falling back to a fresh conversation would answer
+/// the follow-up as though nothing came before it.
+#[test]
+fn a_task_that_cannot_carry_on_a_session_is_refused_before_anything_is_sent() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch =
+        Scratch::new("cli-running-continued-refused").with_settings(&settings_for(&gateway));
+    let (_, stdout, _) = a_recorded_run(&scratch, &["-p", "first"]);
+    let id = session_of(&stdout).expect("the first run named its session");
+    let _ = requests(&gateway);
+
+    for (arguments, said_in_the_refusal) in [
+        (vec!["-p", "next", "--resume", "no-such-id"], "no-such-id"),
+        (vec!["-p", "next", "--resume"], "--resume requires"),
+        (
+            vec!["--agent", "someone", "-p", "next", "--resume", id.as_str()],
+            "--resume",
+        ),
+        (
+            vec!["--mode", "manifest", "-p", "next", "--continue"],
+            "--mode manifest",
+        ),
+    ] {
+        let (output, stdout, _) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stdout}");
+        assert!(
+            stdout.contains(said_in_the_refusal),
+            "{arguments:?} did not say {said_in_the_refusal}: {stdout}"
+        );
+    }
+    assert!(
+        requests(&gateway).is_empty(),
+        "a refused run sent a request"
+    );
+}
+
+/// CLI-25 and SESSION-10: a record a manifest run wrote has no conversation to carry on, so a task
+/// naming it by id is refused before anything is sent, and `--continue` does not take it for the
+/// latest session.
+#[test]
+fn a_task_naming_a_manifest_record_is_refused_before_anything_is_sent() {
+    fn the_record_under(path: &Path) -> Option<PathBuf> {
+        for entry in std::fs::read_dir(path).ok()? {
+            let path = entry.ok()?.path();
+            if path.is_dir() {
+                if let Some(found) = the_record_under(&path) {
+                    return Some(found);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "json") {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch =
+        Scratch::new("cli-running-continued-manifest").with_settings(&settings_for(&gateway));
+    let (_, stdout, _) = a_recorded_run(&scratch, &["-p", "first"]);
+    let id = session_of(&stdout).expect("the first run named its session");
+    let path = the_record_under(&scratch.path.join(".bravebot/sessions")).expect("the record");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    record["manifest"] = serde_json::json!({});
+    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let _ = requests(&gateway);
+
+    for (arguments, said_in_the_refusal) in [
+        (vec!["-p", "next", "--resume", id.as_str()], "manifest run"),
+        (vec!["-p", "next", "--continue"], "no session to continue"),
+    ] {
+        let (output, stdout, _) = a_recorded_run(&scratch, &arguments);
+
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stdout}");
+        assert!(
+            stdout.contains(said_in_the_refusal),
+            "{arguments:?} did not say {said_in_the_refusal}: {stdout}"
+        );
+    }
+    assert!(
+        requests(&gateway).is_empty(),
+        "a refused run sent a request"
+    );
 }

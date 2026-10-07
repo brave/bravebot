@@ -5,6 +5,7 @@
 mod auth;
 mod background;
 mod completion;
+mod continued;
 mod exit;
 mod host;
 mod import;
@@ -198,6 +199,9 @@ fn main() -> ExitCode {
             prompts,
         ),
         // Picking up where a session left off, chosen from a list or named outright.
+        Some("--resume" | "-r" | "--continue" | "-c") if continues_with_a_task(&args) => {
+            run_task(&args, skip_permissions, agent, prompts)
+        }
         Some("--resume" | "-r") => match args.get(1) {
             Some(id) => resume_named(id, skip_permissions, prompts),
             None => interactive(bravebot_tui::app::Start::Choose, skip_permissions, prompts),
@@ -215,7 +219,9 @@ fn main() -> ExitCode {
         },
         // The same, for the session somebody was in a moment ago, which is the one they mean
         // often enough that asking them to find its id is asking for nothing.
-        Some("--continue" | "-c") => continue_here(skip_permissions, prompts),
+        Some("--continue" | "-c") if !continues_with_a_task(&args) => {
+            continue_here(skip_permissions, prompts)
+        }
         // Fork a session, creating a new session record that starts with the same transcript.
         Some("--fork" | "-f") => match args.get(1) {
             Some(id) => fork_named(id, skip_permissions, prompts),
@@ -326,6 +332,27 @@ fn take_agent(args: &mut Vec<String>) -> Result<Option<String>, String> {
     }
     *args = kept;
     Ok(named)
+}
+
+/// Whether a leading `--resume` or `--continue` carries a task, which makes it a one-shot run
+/// carrying on an earlier session (CLI-25) rather than a request to open one.
+///
+/// A task is `-p` or `--print`, or a word that is not a flag. A flag alone, which opened the
+/// session before and still does, is not one. `--resume` followed by a flag names no session, and
+/// the task run refuses it by name rather than looking for a session called `-p`.
+fn continues_with_a_task(args: &[String]) -> bool {
+    let carries = |rest: &[String]| {
+        rest.iter()
+            .any(|arg| matches!(arg.as_str(), "-p" | "--print") || !arg.starts_with('-'))
+    };
+    match args.first().map(String::as_str) {
+        Some("--resume" | "-r") => match args.get(1) {
+            Some(id) => id.starts_with('-') || carries(&args[2..]),
+            None => false,
+        },
+        Some("--continue" | "-c") => carries(&args[1..]),
+        _ => false,
+    }
 }
 
 /// Why `--agent` cannot go with the command line's first argument, or `None` where it can.
@@ -519,6 +546,14 @@ fn print_help() {
         ("bravebot --resume [id]", t!(cli_usage_resume)),
         ("bravebot --from-pr <number|url>", t!(cli_usage_from_pr)),
         ("bravebot --continue", t!(cli_usage_continue)),
+        (
+            "bravebot -p \"<task>\" --resume <id>",
+            t!(cli_usage_resume_task),
+        ),
+        (
+            "bravebot -p \"<task>\" --continue",
+            t!(cli_usage_continue_task),
+        ),
         ("bravebot --fork <id>", t!(cli_usage_fork)),
         ("bravebot doctor", t!(cli_usage_doctor)),
         ("bravebot sessions [--json]", t!(cli_usage_sessions)),
@@ -748,6 +783,8 @@ struct Invocation {
     /// Whether stdout also carries an event line for each call, refusal and request as it
     /// finishes, ahead of the result object (CLI-24).
     stream: bool,
+    /// The earlier session this run carries on (CLI-25).
+    resume: Option<continued::Resume>,
 }
 
 /// Parse `<prompt> [--file path]... [--add-dir path]... [--mode name] [--model name]
@@ -764,6 +801,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut print = false;
     let mut json = false;
     let mut stream = false;
+    let mut resume = None;
     let mut index = 0;
 
     while index < args.len() {
@@ -837,6 +875,20 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 trace = true;
                 index += 1;
             }
+            // A task carrying on an earlier session. The id is refused when it is missing or is
+            // the next flag, for the reason a blank `--model` is: the run would otherwise look for
+            // a session called `-p`, or carry on none.
+            "--resume" | "-r" => match args.get(index + 1) {
+                Some(id) if !id.trim().is_empty() && !id.starts_with('-') => {
+                    resume = Some(continued::Resume::Id(id.clone()));
+                    index += 2;
+                }
+                _ => return Err(t!(cli_resume_needs_an_id).to_string()),
+            },
+            "--continue" | "-c" => {
+                resume = Some(continued::Resume::Latest);
+                index += 1;
+            }
             "--json" => {
                 json = true;
                 index += 1;
@@ -871,6 +923,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         print,
         json,
         stream,
+        resume,
     })
 }
 
@@ -899,6 +952,7 @@ fn run_task(
         print,
         json: as_json,
         stream: as_stream,
+        resume,
     } = invocation;
 
     // Read before the emptiness check below, since `cat notes.md | bravebot -p` is a complete
@@ -947,6 +1001,29 @@ fn run_task(
             Ending::Argument,
             t!(cli_system_prompt_not_with_a_manifest, flag = flag),
         );
+    }
+
+    // A record stores no definition, so a run addressed to one cannot carry on a recorded session
+    // (CLI-17), and a manifest run has no conversation to carry a recorded one into.
+    if let Some(asked) = &resume {
+        let flag = match asked {
+            continued::Resume::Id(_) => "--resume",
+            continued::Resume::Latest => "--continue",
+        };
+        if agent.is_some() {
+            return stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                t!(cli_agent_not_with_a_recorded_session, flag = flag),
+            );
+        }
+        if mode == Mode::Manifest {
+            return stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                t!(cli_resume_not_with_a_manifest, flag = flag),
+            );
+        }
     }
 
     let mut config = match Config::from_env() {
@@ -1010,6 +1087,17 @@ fn run_task(
         }
         Err(problem) => return stopped_before_the_turn(as_json, Ending::Argument, problem),
     }
+
+    // Found before anything is sent, so a session that is not there exits with the status for an
+    // argument and costs nothing (CLI-25).
+    let mut continued = match resume
+        .as_ref()
+        .map(|asked| continued::find(workspace.root(), asked))
+        .transpose()
+    {
+        Ok(record) => record,
+        Err(why) => return stopped_before_the_turn(as_json, Ending::Argument, why),
+    };
 
     // The rules the settings file carried, read before the definition is matched so the match
     // leaves out a definition they deny reading, as the turn does. Anything unreadable is named on
@@ -1243,21 +1331,62 @@ fn run_task(
         eprintln!("{}", t!(cli_notice, notice = failure.to_string()));
     }
 
+    // The id of the record this run wrote, which the result object carries (CLI-25).
+    let mut session: Option<String> = None;
+
     // Both modes take the same arguments and return the same outcome. The whole of the
     // difference is inside: one asks the model what to do next after every result, the other
     // asked once, before there were any.
     let outcome = match mode {
-        Mode::Turn => turn::run_cancellable(
-            &config,
-            &egress,
-            &workspace,
-            &task,
-            &mut confirmer,
-            &mut reporter,
-            &mut sink,
-            bravebot_agent::workspace::trust_store(workspace.root()),
-            &Cancel::new(),
-        ),
+        Mode::Turn => {
+            // What a continued session vouched for comes back with it, as it does in a session
+            // (SESSION-1). The programs it vouched for do not (CLI-1): the run is handed none, and
+            // the record keeps the ones it holds.
+            let trust = continued
+                .as_ref()
+                .and_then(|record| record.trust_map(workspace.root()))
+                .unwrap_or_else(|| bravebot_agent::workspace::trust_store(workspace.root()));
+            let mut conversation = continued
+                .as_ref()
+                .map(|record| bravebot_agent::Conversation::restored(record.conversation.clone()))
+                .unwrap_or_default();
+            let begins = conversation.recounted().len();
+            let completed = turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &task,
+                &mut conversation,
+                &mut confirmer,
+                &mut reporter,
+                &mut sink,
+                trust,
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            );
+            let turn::Decisions {
+                trust,
+                programs: _,
+                asked_about: _,
+                exposed: _,
+            } = completed.decisions;
+            if let Ok(finished) = &completed.outcome {
+                session = continued::keep(
+                    workspace.root(),
+                    continued.take(),
+                    continued::Finished {
+                        prompt: &task.prompt,
+                        conversation: &conversation,
+                        outcome: finished,
+                        trust: &trust,
+                        begins,
+                        prompt_at: reporter.prompt_at(),
+                    },
+                );
+            }
+            completed.outcome
+        }
         Mode::Manifest => bravebot_agent::manifest::run(
             &config,
             &egress,
@@ -1339,6 +1468,7 @@ fn run_task(
                     reply: outcome.reply_for_display(),
                     model: &outcome.model,
                     agent: outcome.addressed.as_ref().map(|addressed| addressed.name()),
+                    session: session.as_deref(),
                     steps: outcome.steps,
                     tokens: json::Tokens {
                         total: outcome.tokens,
@@ -1541,6 +1671,7 @@ fn what_ran(
         reply: "",
         model: "",
         agent: None,
+        session: None,
         steps: 0,
         tokens: json::Tokens {
             total: spent.tokens,
@@ -6458,5 +6589,65 @@ mod tests {
             permissions.for_path(Subject::Edit, "notes.md"),
             Decision::Ruled(Ruling::Allow)
         );
+    }
+
+    /// A leading `--resume` or `--continue` with something after the session it names is a task
+    /// run (CLI-25), and with nothing after it is still the request to open that session. Reading
+    /// every `--resume` as a task would turn the interactive resume into a refusal for the missing
+    /// task, and reading none would drop the task a script sent.
+    #[test]
+    fn a_resume_with_a_task_after_it_runs_the_task_and_one_without_opens_the_session() {
+        for (typed, task) in [
+            (&["--resume", "abc", "-p", "next"][..], true),
+            (&["--resume", "abc", "next"][..], true),
+            (&["-r", "abc", "--json", "-p", "next"][..], true),
+            (&["--resume", "abc"][..], false),
+            (&["--resume"][..], false),
+            (&["--continue", "-p", "next"][..], true),
+            (&["-c", "next"][..], true),
+            (&["--continue"][..], false),
+            (&["--resume", "abc", "--plain"][..], false),
+            (&["--continue", "--json"][..], false),
+            (&["-p", "next", "--resume", "abc"][..], false),
+            (&["doctor"][..], false),
+        ] {
+            assert_eq!(continues_with_a_task(&args(typed)), task, "{typed:?}");
+        }
+        // A flag where the id should be is a task run, which refuses it by name.
+        assert!(continues_with_a_task(&args(&["--resume", "-p", "next"])));
+    }
+
+    /// The task may lead and the session may follow, as Claude Code's `-p "task" --resume id`
+    /// does, so a script written for either order carries on the session it names.
+    #[test]
+    fn a_task_may_name_the_session_it_carries_on_before_or_after_it() {
+        use crate::continued::Resume;
+
+        for typed in [
+            &["-p", "next", "--resume", "abc"][..],
+            &["--resume", "abc", "-p", "next"][..],
+            &["-r", "abc", "next"][..],
+        ] {
+            let invocation = parse_invocation(&args(typed)).expect("parses");
+            assert_eq!(invocation.resume, Some(Resume::Id("abc".to_string())));
+            assert_eq!(invocation.prompt, "next");
+        }
+        let latest = parse_invocation(&args(&["-p", "next", "-c"])).expect("parses");
+        assert_eq!(latest.resume, Some(Resume::Latest));
+        let fresh = parse_invocation(&args(&["-p", "next"])).expect("parses");
+        assert_eq!(fresh.resume, None);
+    }
+
+    /// A flag or nothing where the id should be is refused rather than read as a session called
+    /// `-p`, or as no session at all, which would run the follow-up with nothing before it.
+    #[test]
+    fn a_resume_naming_no_session_is_refused() {
+        for typed in [
+            &["next", "--resume"][..],
+            &["--resume", "-p", "next"][..],
+            &["next", "--resume", " "][..],
+        ] {
+            parse_invocation(&args(typed)).expect_err("a missing id must be refused");
+        }
     }
 }

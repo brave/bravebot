@@ -460,6 +460,32 @@ pub struct StoredTurn {
     pub outcome: Option<StoredOutcome>,
 }
 
+impl StoredTurn {
+    /// The boundaries of a turn that completed, from the length of the recounted conversation
+    /// before and after it and where the prompt entered it. A conversation that got shorter lost its
+    /// context, so the turn starts again at 0.
+    pub fn completed(
+        number: usize,
+        prompt: &str,
+        begins: usize,
+        ends: usize,
+        prompt_at: Option<usize>,
+    ) -> Self {
+        let reset_context = ends < begins;
+        Self {
+            number,
+            prompt: Some(prompt.to_string()),
+            start: if reset_context { 0 } else { begins },
+            end: ends,
+            reset_context,
+            prompt_offset: prompt_at
+                .filter(|at| !reset_context && *at >= begins && *at < ends)
+                .map(|at| at - begins),
+            outcome: Some(StoredOutcome::Completed),
+        }
+    }
+}
+
 /// A recorded ending, with only the safe explanation already composed by the interface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1490,6 +1516,26 @@ pub struct Standing<'a> {
     pub checkouts: &'a [bravebot_agent::workspace::SessionCheckout],
 }
 
+/// One turn, as it is added to a record that already exists.
+#[derive(Debug, Clone, Copy)]
+pub struct Continuation<'a> {
+    /// The conversation after the turn.
+    pub conversation: &'a Snapshot,
+    /// The prompt the turn was given.
+    pub prompt: &'a str,
+    /// What the turn spent.
+    pub tokens: u64,
+    /// The model the server reported answering with.
+    pub model: &'a str,
+    /// The trust map after the turn.
+    pub trust: &'a TrustStore,
+    /// The length of the recounted conversation before the turn and after it.
+    pub begins: usize,
+    pub ends: usize,
+    /// Where the prompt entered the recounted conversation, where the turn said.
+    pub prompt_at: Option<usize>,
+}
+
 /// A session worth picking up again, and where to pick it up.
 ///
 /// The id alone is half an answer. `--resume` looks an id up under the working directory it is run
@@ -1883,18 +1929,63 @@ impl Handle {
                 .collect(),
         };
 
-        let Ok(body) = serde_json::to_vec_pretty(&record) else {
-            return;
+        self.write(&directory, &record);
+    }
+
+    /// Write `record` under `directory`, and remember that this session now has one on disk.
+    fn write(&mut self, directory: &Path, record: &Record) -> bool {
+        let Ok(body) = serde_json::to_vec_pretty(record) else {
+            return false;
         };
 
         // Written beside and renamed, so a session killed mid-write leaves the last good record
         // rather than half of a new one.
         let temporary = directory.join(format!("{}.tmp", self.id));
-        if bravebot_agent::home::write_file(&temporary, &body).is_ok()
-            && std::fs::rename(&temporary, directory.join(format!("{}.json", self.id))).is_ok()
-        {
+        let written = bravebot_agent::home::write_file(&temporary, &body).is_ok()
+            && std::fs::rename(&temporary, directory.join(format!("{}.json", self.id))).is_ok();
+        if written {
             self.wrote = true;
         }
+        written
+    }
+
+    /// Add one turn to the record this session was resumed from, and write it back.
+    ///
+    /// Everything the turn did not touch is written as it was read: the asides, the task lists, the
+    /// timings, the rewind points, the vouched-for programs and the checkouts. A front end that
+    /// rebuilt the record from the pieces it holds would have to hold all of them, and a one-shot
+    /// run holds none, so rebuilding would erase what an interactive session recorded.
+    ///
+    /// Whether the turn is entered in the display history follows the record: one that keeps a
+    /// history gains the turn, and one that never kept one is not given boundaries now
+    /// ([SESSION-25](sessions.md#SESSION-25)).
+    ///
+    /// `false` where nothing was written, which includes an incognito session.
+    pub fn save_continuation(&mut self, mut record: Record, next: Continuation<'_>) -> bool {
+        let Some(directory) = self.directory() else {
+            return false;
+        };
+        let number = record.turns + 1;
+        if let Some(history) = record.history.as_mut() {
+            history.push(StoredTurn::completed(
+                number,
+                next.prompt,
+                next.begins,
+                next.ends,
+                next.prompt_at,
+            ));
+        }
+        record.turns = number;
+        record.tokens += next.tokens;
+        *record.spend.entry(number).or_insert(0) += next.tokens;
+        record.model = Some(next.model.to_string());
+        record.conversation = next.conversation.clone();
+        record.trust = Some(stored_rules(next.trust));
+        record.updated = now();
+        record.branch = self.branch.clone();
+        record.build = Some(self.build.clone());
+        record.front = Some(self.front.recorded().to_string());
+        self.write(&directory, &record)
     }
 
     /// Append what one turn's gates decided.
@@ -4838,5 +4929,152 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_file(&outside);
+    }
+
+    #[test]
+    fn a_completed_turn_starts_over_when_the_conversation_got_shorter() {
+        let kept = StoredTurn::completed(2, "next", 4, 7, Some(5));
+        assert_eq!((kept.start, kept.end, kept.reset_context), (4, 7, false));
+        assert_eq!(kept.prompt_offset, Some(1));
+
+        let outside = StoredTurn::completed(2, "next", 4, 7, Some(9));
+        assert_eq!(outside.prompt_offset, None);
+
+        let first = StoredTurn::completed(1, "task", 0, 3, Some(0));
+        assert_eq!(
+            (first.start, first.end, first.prompt_offset),
+            (0, 3, Some(0))
+        );
+
+        let reset = StoredTurn::completed(3, "again", 8, 2, Some(1));
+        assert_eq!((reset.start, reset.end, reset.reset_context), (0, 2, true));
+        assert_eq!(reset.prompt_offset, None);
+    }
+
+    /// A one-shot run carrying on an interactive session holds none of what that session recorded
+    /// beside its conversation, so a write that rebuilt the record from what the run holds would
+    /// erase the aside, the timing and the history boundaries, and the next interactive resume
+    /// would open on a transcript with its own turns unattributed.
+    #[test]
+    fn continuing_a_record_adds_one_turn_and_leaves_what_it_held_as_read() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-continue-record");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        let first = StoredTurn {
+            number: 1,
+            prompt: Some("first question".to_string()),
+            start: 0,
+            end: 2,
+            prompt_offset: Some(0),
+            reset_context: false,
+            outcome: Some(StoredOutcome::Completed),
+        };
+        let timing = BTreeMap::from([(
+            1,
+            bravebot_agent::timing::Timing {
+                wall_ms: 7,
+                ..Default::default()
+            },
+        )]);
+        let aside = Aside {
+            question: "why".to_string(),
+            answer: Some("because".to_string()),
+            kept: true,
+        };
+        handle.save(
+            "first question",
+            Standing {
+                history: Some(&[first]),
+                conversation: &snapshot,
+                turns: 1,
+                tokens: 10,
+                spend: &BTreeMap::from([(1, 10)]),
+                timing: &timing,
+                model: Some("old-model"),
+                todos: &BTreeMap::new(),
+                asides: &[aside],
+                trust: &TrustStore::new("/work"),
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            },
+        );
+        let record = load(&root, handle.id()).expect("the record was written");
+
+        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        let written = resumed.save_continuation(
+            record.clone(),
+            Continuation {
+                conversation: &snapshot,
+                prompt: "second question",
+                tokens: 5,
+                model: "new-model",
+                trust: &TrustStore::new("/work"),
+                begins: 2,
+                ends: 4,
+                prompt_at: Some(3),
+            },
+        );
+
+        assert!(written);
+        let after = load(&root, handle.id()).expect("the record is still there");
+        assert_eq!(after.id, record.id);
+        assert_eq!(after.title, "first question");
+        assert_eq!(after.started, record.started);
+        assert_eq!((after.turns, after.tokens), (2, 15));
+        assert_eq!(after.spend, BTreeMap::from([(1, 10), (2, 5)]));
+        assert_eq!(after.model.as_deref(), Some("new-model"));
+        assert_eq!(after.timing.keys().collect::<Vec<_>>(), vec![&1]);
+        assert_eq!(after.asides.len(), 1);
+        let history = after
+            .history
+            .expect("a record that kept a history keeps it");
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].prompt.as_deref(), Some("first question"));
+        assert_eq!(
+            (history[1].number, history[1].start, history[1].end),
+            (2, 2, 4)
+        );
+        assert_eq!(history[1].prompt.as_deref(), Some("second question"));
+        assert_eq!(history[1].prompt_offset, Some(1));
+    }
+
+    /// A record that never kept a history is not given one by being continued (SESSION-25): turn
+    /// boundaries guessed now would be wrong for every turn before it.
+    #[test]
+    fn continuing_a_record_with_no_history_gives_it_none() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-continue-record-no-history");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let record = load(&root, handle.id()).expect("the record was written");
+        assert!(record.history.is_none());
+
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        assert!(resumed.save_continuation(
+            record,
+            Continuation {
+                conversation: &snapshot,
+                prompt: "next",
+                tokens: 1,
+                model: "m",
+                trust: &TrustStore::new("/work"),
+                begins: 0,
+                ends: 2,
+                prompt_at: Some(0),
+            },
+        ));
+
+        let after = load(&root, handle.id()).expect("the record is still there");
+        assert_eq!(after.turns, 2);
+        assert!(after.history.is_none());
     }
 }

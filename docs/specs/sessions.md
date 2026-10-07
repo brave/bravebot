@@ -30,7 +30,9 @@ outlives the terminal is proposed in [background-sessions.md](background-session
 builds it; until it does, no process other than the one running a session holds its record.
 
 Everything here describes an ordinary session. A session started with `--incognito` keeps none of
-it, and reads all of it: [incognito.md](incognito.md) governs which half is which.
+it, and reads all of it: [incognito.md](incognito.md) governs which half is which. A one-shot run
+is recorded as a session of one turn, and carrying one on with a task is
+[CLI-25](cli.md#CLI-25).
 
 ## Clauses
 
@@ -411,7 +413,8 @@ resumable in its new home at all: until it is saved there, there is nothing ther
 picker offers first, and picks it up exactly as naming its id would. A manifest run is passed over
 rather than refused, since there is no conversation inside one to carry on from. Where the
 directory holds no session that can be continued, it says so and fails rather than starting a fresh
-one.
+one. Given with a task it carries that session on as a one-shot run ([CLI-25](cli.md#CLI-25)),
+and finds none by the same rule.
 
 **Why.** An id is the answer to "resume that one", and the question people actually have most of
 the time is "carry on with what I was just doing". Answering it with an id means finding the line

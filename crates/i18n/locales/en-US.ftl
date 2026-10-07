@@ -29,6 +29,8 @@ cli-usage-piped = ...with piped input, never trusted
 cli-usage-resume = Pick up a session in this directory
 cli-usage-from-pr = Pick up a session linked to a pull request
 cli-usage-continue = Pick up the most recent session in this directory
+cli-usage-resume-task = Send a one-shot task as the next turn of a session
+cli-usage-continue-task = Send a one-shot task as the next turn of the most recent session
 cli-usage-fork = Fork a session and start exploring a different path
 cli-usage-doctor = Check configuration and confinement
 cli-usage-import = Import a Leo Premium subscription
@@ -131,6 +133,10 @@ cli-option-version = Show the version
 cli-unknown-option = unknown option: { $flag }
 cli-completion-needs-a-shell = completion takes one of bash, zsh or fish
 cli-file-needs-a-path = --file requires a path
+cli-resume-needs-an-id = --resume requires the id of a session when it goes with a task
+# The flag is --resume or --continue, as typed.
+cli-resume-not-with-a-manifest =
+    { $flag } does not go with --mode manifest: a manifest run has no conversation to carry on from
 cli-add-dir-needs-a-path = --add-dir requires an absolute path to a directory
 cli-directory-ends-checkouts = { $directory } holds the working directory, so no delegate is given a checkout while it is open; start again without --add-dir { $directory } to have one
 cli-settings-needs-a-path = --settings requires a path to a settings file

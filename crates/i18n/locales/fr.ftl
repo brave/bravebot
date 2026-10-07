@@ -39,6 +39,8 @@ cli-usage-piped = ... avec une entrée redirigée, jamais fiable
 cli-usage-resume = Reprendre une session dans ce répertoire
 cli-usage-from-pr = Reprendre une session liée à une pull request
 cli-usage-continue = Reprendre la session la plus récente de ce répertoire
+cli-usage-resume-task = Envoyer une tâche unique comme tour suivant d'une session
+cli-usage-continue-task = Envoyer une tâche unique comme tour suivant de la session la plus récente
 cli-usage-fork = Dupliquer une session pour explorer une autre voie
 cli-usage-doctor = Vérifier la configuration et le confinement
 cli-usage-import = Importer un abonnement Leo Premium
@@ -125,6 +127,10 @@ cli-option-version = Afficher la version
 cli-unknown-option = option inconnue : { $flag }
 cli-completion-needs-a-shell = completion attend l'un de bash, zsh ou fish
 cli-file-needs-a-path = --file demande un chemin
+cli-resume-needs-an-id = --resume demande l'identifiant d'une session lorsqu'il accompagne une tâche
+# Le drapeau est --resume ou --continue, tel qu'il a été tapé.
+cli-resume-not-with-a-manifest =
+    { $flag } ne va pas avec --mode manifest : une exécution planifiée n'a aucune conversation à poursuivre
 cli-add-dir-needs-a-path = --add-dir demande le chemin absolu d'un répertoire
 cli-directory-ends-checkouts = { $directory } contient le répertoire de travail, donc aucun délégué n'obtient de copie de travail tant qu'il est ouvert ; relancez sans --add-dir { $directory } pour en avoir une
 cli-settings-needs-a-path = --settings demande le chemin d'un fichier de réglages
