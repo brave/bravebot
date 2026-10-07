@@ -100,6 +100,9 @@ mod tests {
         crate::managed::scratch(name, text)
     }
 
+    /// The default is today's behaviour: a session where nobody said anything keeps the network
+    /// every confined program had before the setting existed, so adding it changes nothing for a
+    /// person who never sets it.
     #[test]
     fn nobody_deciding_leaves_the_network_open() {
         let answer = resolve(None, &Settings::default(), &Managed::default());
@@ -107,6 +110,9 @@ mod tests {
         assert_eq!(answer.decided, Decided::Default);
     }
 
+    /// The flag is typed for this run and a settings file is written for every run, so the nearer
+    /// instruction wins. The second half is the control: with no flag, the same file decides, which
+    /// is what shows the first half was the flag and not a settings file that was ignored.
     #[test]
     fn the_flag_beats_the_settings() {
         let answer = resolve(
@@ -125,6 +131,9 @@ mod tests {
         assert!(matches!(answer.decided, Decided::Settings(_)));
     }
 
+    /// A managed pin is the administrator's, and a person or a checkout who could outrank it would
+    /// reopen a network the machine's owner closed. The flag and the settings both say `open` here,
+    /// so only the pin can be why the answer is `closed`.
     #[test]
     fn a_managed_pin_beats_the_flag_and_the_settings() {
         let pin = managed("run-network-pin", r#"{"run": {"network": "closed"}}"#);
@@ -137,6 +146,11 @@ mod tests {
         assert!(matches!(answer.decided, Decided::Managed(_)));
     }
 
+    /// A pin that cannot be read as `open` or `closed` still shows its owner meant to restrict
+    /// something, and reading it as absent would let the flag or the settings open the network the
+    /// pin was there to hold. `Closed` is spelled with a capital because that is the typo most
+    /// likely to be made, and the flag and the settings say `open` so that falling through to them
+    /// would be visible.
     #[test]
     fn a_managed_pin_that_is_neither_word_closes_the_network() {
         let typo = managed("run-network-typo", r#"{"run": {"network": "Closed"}}"#);
