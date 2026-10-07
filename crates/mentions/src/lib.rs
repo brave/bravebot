@@ -1,4 +1,8 @@
-//! Workspace entries offered while a file reference is being typed.
+//! Naming a file with `@` in a prompt: what is offered while the name is typed, what Enter does
+//! with it, and which files a sent line names.
+//!
+//! One implementation for every front end. The terminal calls it directly, and the desktop's
+//! bridge calls it for the window, so the two cannot disagree about what a line names.
 //!
 //! # What an `@` reference means
 //!
@@ -9,14 +13,16 @@
 //!
 //! So this list exists to make that choice an informed one. It is drawn from the directory itself
 //! rather than from anything a model said, it is shown to the person typing, and the file it names
-//! becomes context only once they press Enter on the line. The keystroke is the grant, the same way
-//! it is for a prompt recalled out of history.
+//! becomes context only once they send the line. Sending is the grant, the same way it is for a
+//! prompt recalled out of history.
 //!
-//! Nothing here is a decision derived from untrusted content. Filenames are content, and this
-//! walks the directory to show them to a person, which is the release
-//! [`bravebot_core::policy::Policy::names_for_display`] already makes for the same reason: the user owns
-//! the workspace, and an interface that will not tell them which files are in it has protected
-//! them from nothing. No name reaches a model from here.
+//! Nothing here is a decision derived from untrusted content, and nothing here reads a file's
+//! contents. Filenames are content, and this walks the directory to show them to a person, which
+//! is the release `bravebot_core::policy::Policy::names_for_display` already makes for the same
+//! reason: the user owns the workspace, and an interface that will not tell them which files are in
+//! it has protected them from nothing. No name reaches a model from here. This crate links neither
+//! `bravebot-core` nor `bravebot-agent`, so none of it runs inside the driver.
+#![forbid(unsafe_code)]
 
 use std::path::Path;
 
@@ -24,7 +30,7 @@ use std::path::Path;
 ///
 /// A directory of ten thousand files would otherwise be a list nobody can read and a redraw for
 /// every keystroke. Narrowing is what finds a file; the cap only bounds the first look.
-const MAX_ENTRIES: usize = 40;
+pub const MAX_ENTRIES: usize = 40;
 
 /// One thing in the workspace that a reference could name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +92,7 @@ pub fn matching(root: &Path, typed: &str) -> Vec<Entry> {
             // Decided from the name alone, without asking what the entry is. A worktree's `.git`
             // is a regular file holding a pointer to the real one, and a `node_modules` a person
             // symlinked elsewhere is a symlink, so a type test would offer both of them back.
-            if bravebot_agent::workspace::is_ignored_directory(&name) {
+            if bravebot_filetype::is_ignored_directory(&name) {
                 return None;
             }
             let is_directory = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -215,6 +221,26 @@ pub fn referenced(line: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether Enter on a half-typed reference completes it rather than sending the line.
+///
+/// `offered` is what [`matching`] returned for `typed`, and `cursor` is the row the person moved to,
+/// clamped to the list as it is drawn. A name the person finished typing is a finished sentence,
+/// whatever the list happens to be highlighting: `@test` names a file of its own while a `tests/`
+/// beside it sorts above. Walking the list with the arrows is a choice among the rows and still
+/// wins, which is why this asks about the untouched cursor.
+///
+/// Asked of the workspace through [`names_a_file`] rather than of `offered`, which is capped for
+/// display: forty directories sharing the prefix sort above the file and cut it from the list, and
+/// scanning the list would then complete a finished name away into a directory nobody chose.
+pub fn enter_completes(root: &Path, typed: &str, offered: &[Entry], cursor: usize) -> bool {
+    if cursor == 0 && names_a_file(root, typed) {
+        return false;
+    }
+    offered
+        .get(cursor.min(offered.len().saturating_sub(1)))
+        .is_some_and(|entry| typed != entry.path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,12 +248,16 @@ mod tests {
     /// A scratch workspace, removed with the test.
     struct Scratch {
         path: std::path::PathBuf,
+        _held: tempfile::TempDir,
     }
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            let path = crate::testutil::scratch_dir(&format!("bravebot-entries-{name}"));
-            let _ = std::fs::remove_dir_all(&path);
+            let held = tempfile::Builder::new()
+                .prefix(&format!("bravebot-mentions-{name}-"))
+                .tempdir()
+                .expect("scratch");
+            let path = held.path().to_path_buf();
             std::fs::create_dir_all(path.join("crates/tui")).expect("create");
             std::fs::create_dir_all(path.join("target")).expect("create");
             std::fs::create_dir_all(path.join(".git")).expect("create");
@@ -241,13 +271,7 @@ mod tests {
             // real one.
             std::fs::write(path.join("crates/tui/.git"), "gitdir: /elsewhere\n").expect("write");
             std::fs::write(path.join("crates/tui/lib.rs"), "").expect("write");
-            Self { path }
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
+            Self { path, _held: held }
         }
     }
 
@@ -472,5 +496,37 @@ mod tests {
         );
         assert!(names_a_file(&scratch.path, "My Documents/notes.md"));
         assert_eq!(last_word_starts_at(r"read @My\ Doc"), 5);
+    }
+
+    /// Enter completes a half-typed name, sends a finished one even where the list highlights a
+    /// directory above it, and still completes to a row the person moved the cursor to.
+    #[test]
+    fn what_enter_does_with_a_half_typed_or_finished_name() {
+        let scratch = Scratch::new("enter");
+        let half = matching(&scratch.path, "Make");
+        assert!(
+            enter_completes(&scratch.path, "Make", &half, 0),
+            "half typed"
+        );
+
+        std::fs::create_dir_all(scratch.path.join("Makefiles")).expect("create");
+        let finished = matching(&scratch.path, "Makefile");
+        assert_eq!(paths(&finished), vec!["Makefiles/", "Makefile"]);
+        assert!(
+            !enter_completes(&scratch.path, "Makefile", &finished, 0),
+            "a finished name was completed away into the directory above it"
+        );
+        assert!(
+            !enter_completes(&scratch.path, "Makefile", &finished, 1),
+            "the row the cursor is on is what was typed"
+        );
+        assert!(
+            enter_completes(&scratch.path, "Makefile", &[finished[0].clone()], 5),
+            "a cursor past the end of the list chooses its last row"
+        );
+        assert!(
+            !enter_completes(&scratch.path, "zz", &[], 0),
+            "nothing offered"
+        );
     }
 }

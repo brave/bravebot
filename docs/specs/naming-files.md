@@ -3,7 +3,7 @@ id: NAME
 title: Naming a file with `@`
 status: normative
 governs:
-  - crates/tui/src/entries.rs
+  - crates/mentions/src/lib.rs
   - crates/tui/src/state.rs
   - crates/cli/src/main.rs
 documented-by: docs/website/docs/using/context.md
@@ -74,10 +74,10 @@ among what is offered.
 `verified-by: bravebot_tui::references::a_directory_completes_so_typing_can_continue_into_it`
 `verified-by: bravebot_tui::references::the_arrows_and_enter_choose_among_the_offered_files`
 `verified-by: bravebot_tui::references::a_finished_reference_closes_the_list`
-`verified-by: bravebot_tui::entries::an_empty_reference_lists_the_root_with_directories_first`
-`verified-by: bravebot_tui::entries::a_prefix_narrows_the_list`
-`verified-by: bravebot_tui::entries::a_slash_lists_what_is_inside_that_directory`
-`verified-by: bravebot_tui::entries::noise_directories_are_not_offered`
+`verified-by: bravebot_mentions::lib::an_empty_reference_lists_the_root_with_directories_first`
+`verified-by: bravebot_mentions::lib::a_prefix_narrows_the_list`
+`verified-by: bravebot_mentions::lib::a_slash_lists_what_is_inside_that_directory`
+`verified-by: bravebot_mentions::lib::noise_directories_are_not_offered`
 `verified-by: bravebot_tui::references::a_paste_returns_the_cursor_to_the_top_of_the_narrowed_list`
 
 <a id="NAME-5"></a>
@@ -87,8 +87,8 @@ among what is offered.
 working directory or a directory opened for the session.
 
 `verified-by: bravebot_tui::references::a_reference_cannot_climb_out_of_the_workspace`
-`verified-by: bravebot_tui::entries::a_reference_cannot_climb_out_of_the_workspace`
-`verified-by: bravebot_tui::entries::dots_and_an_absolute_path_are_not_finished_names`
+`verified-by: bravebot_mentions::lib::a_reference_cannot_climb_out_of_the_workspace`
+`verified-by: bravebot_mentions::lib::dots_and_an_absolute_path_are_not_finished_names`
 
 <a id="NAME-6"></a>
 ### NAME-6: a directory names nothing, and neither does prose
@@ -101,10 +101,10 @@ content into the turn that no gesture chose.
 
 `verified-by: bravebot_tui::references::a_directory_reference_is_not_included_as_a_file`
 `verified-by: bravebot_tui::references::an_address_in_a_sentence_is_not_a_reference`
-`verified-by: bravebot_tui::entries::a_directory_is_not_collected_as_a_file`
-`verified-by: bravebot_tui::entries::a_bare_at_sign_names_nothing`
-`verified-by: bravebot_tui::entries::what_counts_as_a_reference_being_typed`
-`verified-by: bravebot_tui::entries::every_referenced_file_is_collected`
+`verified-by: bravebot_mentions::lib::a_directory_is_not_collected_as_a_file`
+`verified-by: bravebot_mentions::lib::a_bare_at_sign_names_nothing`
+`verified-by: bravebot_mentions::lib::what_counts_as_a_reference_being_typed`
+`verified-by: bravebot_mentions::lib::every_referenced_file_is_collected`
 
 <a id="NAME-7"></a>
 ### NAME-7: sending finishes a half-typed name
@@ -116,8 +116,9 @@ reference rather than sending the fragment.
 `verified-by: bravebot_tui::references::enter_completes_a_prompt_that_ends_in_a_half_typed_reference`
 `verified-by: bravebot_tui::references::enter_sends_a_finished_reference_a_directory_shares_a_prefix_with`
 `verified-by: bravebot_tui::references::enter_sends_a_finished_reference_the_offered_list_is_too_short_to_show`
-`verified-by: bravebot_tui::entries::what_counts_as_already_naming_a_file`
-`verified-by: bravebot_tui::entries::a_symlink_is_a_finished_name_because_the_list_offers_it_as_one`
+`verified-by: bravebot_mentions::lib::what_counts_as_already_naming_a_file`
+`verified-by: bravebot_mentions::lib::a_symlink_is_a_finished_name_because_the_list_offers_it_as_one`
+`verified-by: bravebot_mentions::lib::what_enter_does_with_a_half_typed_or_finished_name`
 `verified-by: bravebot_tui::references::the_arrows_still_choose_a_row_over_a_finished_reference`
 `verified-by: bravebot_tui::references::the_files_a_submitted_line_would_include`
 `verified-by: bravebot_tui::references::a_cursor_past_the_end_of_a_narrowed_list_still_names_a_file`

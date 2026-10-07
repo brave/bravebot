@@ -3526,7 +3526,7 @@ fn shortcut_lines(
 /// A directory is dimmer than a file and keeps its trailing slash, because the two are chosen for
 /// different reasons: a file is what a reference ends at, and a directory is somewhere to keep
 /// typing. Nothing here says what a file contains, only that it exists.
-fn entry_lines(session: &Session, offered: &[crate::entries::Entry]) -> Vec<Line<'static>> {
+fn entry_lines(session: &Session, offered: &[bravebot_mentions::Entry]) -> Vec<Line<'static>> {
     let highlighted = session.highlighted_entry();
     offered
         .iter()

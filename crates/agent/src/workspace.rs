@@ -2735,31 +2735,6 @@ const MAX_SEARCH_TIME: Duration = Duration::from_secs(10);
 const MAX_PAGE_LINES: usize = 500;
 const MAX_LINE: usize = 2_000;
 
-/// Directories skipped when walking a tree.
-///
-/// Version control, build output and vendored dependencies would dominate a listing without
-/// adding anything a task needs. This is size hygiene applied to *directory names*, not to
-/// content: nothing is read to decide, so it cannot be steered by what a file contains.
-///
-/// A fixed list rather than the project's own ignore file, and deliberately. Reading
-/// `.gitignore` would generalise better, being how a search tool learns each repository's
-/// own idea of noise, but it would decide what to walk from the contents of a file in the
-/// tree being walked, and a tree that can hide its own files from search is a tree that can
-/// hide them from review. The names below are ones no project uses for its own sources, so
-/// skipping them needs nobody's word for it.
-///
-/// Vendored code is the entry that earns its place by experience: a search for a common word
-/// spent its entire budget inside a Rust crate mirror and reported documentation comments
-/// about the wrong meaning of the word, having never reached the project.
-/// Whether a directory of this name is one a walk steps over.
-///
-/// Shared so that everything walking the tree skips the same names. A pattern expanded for a
-/// command line and a listing shown to a person that disagreed about `node_modules` would be two
-/// different ideas of what the tree contains.
-pub fn is_ignored_directory(name: &str) -> bool {
-    IGNORED_DIRECTORIES.contains(&name)
-}
-
 /// Whether the directory `name`, found inside `parent`, is one a walk from above steps over.
 ///
 /// A name on its own, or a two-segment name: `.claude/worktrees` holds linked worktrees, each a
@@ -2767,51 +2742,9 @@ pub fn is_ignored_directory(name: &str) -> bool {
 /// the two names alone, as the single names are. A search that names a directory inside it still
 /// reaches it, because the walk then starts below the skipped name.
 fn is_ignored_in(parent: &Path, name: &str) -> bool {
-    is_ignored_directory(name)
+    bravebot_filetype::is_ignored_directory(name)
         || (name == "worktrees" && parent.file_name().is_some_and(|p| p == ".claude"))
 }
-
-const IGNORED_DIRECTORIES: &[&str] = &[
-    // Version control.
-    ".git",
-    ".hg",
-    ".svn",
-    // Build output and caches.
-    "target",
-    "dist",
-    "build",
-    ".next",
-    ".nuxt",
-    ".parcel-cache",
-    ".turbo",
-    ".gradle",
-    ".cache",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    "__pycache__",
-    "coverage",
-    ".nyc_output",
-    ".terraform",
-    ".stack-work",
-    // Linked worktrees, each a full copy of the tree. `.claude/worktrees` is the two-segment
-    // case, in `is_ignored_in`.
-    ".worktrees",
-    // Dependencies, fetched or vendored. `out` and `bin` are deliberately absent: plenty of
-    // projects keep real sources under those names.
-    "node_modules",
-    "bower_components",
-    "vendor",
-    "third_party",
-    "thirdparty",
-    "Pods",
-    "Carthage",
-    "site-packages",
-    ".venv",
-    "venv",
-    ".bundle",
-];
 
 /// A path inside the repository the planner called `named`, spelled the way it spelled the
 /// repository, so the trust map is asked about the name it would be asked about for a read.

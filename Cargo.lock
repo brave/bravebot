@@ -257,6 +257,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bravebot-mentions"
+version = "0.14.0"
+dependencies = [
+ "bravebot-filetype",
+ "tempfile",
+]
+
+[[package]]
 name = "bravebot-net"
 version = "0.14.0"
 dependencies = [
@@ -326,6 +334,7 @@ dependencies = [
  "bravebot-config",
  "bravebot-core",
  "bravebot-i18n",
+ "bravebot-mentions",
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-session",
