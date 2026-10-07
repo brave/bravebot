@@ -2371,8 +2371,9 @@ goal-replaces-loop =
 ## Being told when a file changes
 
 watch-armed =
-    watch { $number } is on { $path }: you will be told when it looks written to, with no turn
-    running. /watch lists them, /watch stop { $number } ends this one, and ctrl-c ends them all
+    watch { $number } is on { $path }: you will be told when it is written to, removed or appears,
+    with no turn running. /watch lists them, /watch stop { $number } ends this one, and ctrl-c
+    ends them all
 watch-not-armed-under-a-loop =
     a watch on a file was asked for and not armed: a loop is running, and a session does one
     thing at a time that happens without anybody typing
@@ -2383,9 +2384,10 @@ watch-not-armed-full =
     a watch on a file was asked for and not armed: { $count } are already live, which is as many
     as a session keeps. /watch stop <n> ends one
 watch-not-armed-unreadable =
-    a watch on { $path } was asked for and not armed: that path cannot be looked at, so there is
-    nothing for a later look to be compared against
+    a watch on { $path } was asked for and not armed: that path cannot be looked at from here
 watch-fired = watch { $number }: { $path } looks written to
+watch-fired-removed = watch { $number }: { $path } no longer exists
+watch-fired-appeared = watch { $number }: { $path } now exists
 watch-listed = watch { $number }: { $path }, armed by turn { $turn }, { $left } left
 watch-none =
     nothing is being watched. A turn arms a watch when you ask to be told about a file, and

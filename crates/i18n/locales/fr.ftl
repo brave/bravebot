@@ -1973,8 +1973,8 @@ goal-replaces-loop =
 ## Être averti quand un fichier change
 
 watch-armed =
-    la veille { $number } porte sur { $path } : vous serez averti dès qu'il semblera avoir été
-    écrit, sans qu'un tour tourne. /watch les liste, /watch stop { $number } arrête celle-ci, et
+    la veille { $number } porte sur { $path } : vous serez averti dès qu'il sera écrit, supprimé
+    ou créé, sans qu'un tour tourne. /watch les liste, /watch stop { $number } arrête celle-ci, et
     ctrl-c les arrête toutes
 watch-not-armed-under-a-loop =
     une veille sur un fichier a été demandée sans être posée : une boucle tourne, et une session
@@ -1986,9 +1986,10 @@ watch-not-armed-full =
     une veille sur un fichier a été demandée sans être posée : { $count } sont déjà actives, le
     maximum qu'une session garde. /watch stop <n> en arrête une
 watch-not-armed-unreadable =
-    une veille sur { $path } a été demandée sans être posée : ce chemin ne peut pas être regardé,
-    il n'y a donc rien à quoi comparer un regard ultérieur
+    une veille sur { $path } a été demandée sans être posée : ce chemin ne peut pas être regardé d'ici
 watch-fired = veille { $number } : { $path } semble avoir été écrit
+watch-fired-removed = veille { $number } : { $path } n'existe plus
+watch-fired-appeared = veille { $number } : { $path } existe maintenant
 watch-listed =
     veille { $number } : { $path }, posée au tour { $turn }, il reste { $left }
 watch-none =

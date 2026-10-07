@@ -215,11 +215,11 @@ try {
   assert.equal(readFileSync(hookLog, 'utf8'), 'finished\n')
   console.log('PASS: UI-saved hook executes; removed hook no longer executes')
 
-  // 5: actual poller (not a synthetic watch event), missing file, per-watch stop and stop-all.
+  // 5: actual poller (not a synthetic watch event), a path outside the project, per-watch stop and stop-all.
   await page.setViewportSize({ width: 560, height: 780 })
   await page.getByRole('button', { name: 'More', exact: true }).click(); await page.getByRole('menuitem', { name: 'File watches…', exact: true }).click()
   const watches = page.getByRole('dialog', { name: 'File watches', exact: true })
-  await fillField(watches, 'Project file', 'missing.txt')
+  await fillField(watches, 'Project file', '../outside.txt')
   await watches.getByRole('button', { name: 'Watch file', exact: true }).click()
   await watches.getByRole('alert').waitFor()
   await fillField(watches, 'Project file', 'watched.txt')
@@ -248,7 +248,7 @@ try {
   await watches.getByRole('button', { name: 'Stop all watches', exact: true }).click()
   await watches.getByText('No files watched.', { exact: false }).waitFor()
   await page.keyboard.press('Escape'); await page.setViewportSize({ width: 1350, height: 900 })
-  console.log('PASS: real file watch, missing-file error, narrow dialog, stop and stop-all')
+  console.log('PASS: real file watch, outside-the-project error, narrow dialog, stop and stop-all')
 
   // 6: real quarantined read -> checker -> decision -> planner, across fresh sessions.
   const checker = () => content('{"verdict":"safe","reason":"Plain release notes."}')

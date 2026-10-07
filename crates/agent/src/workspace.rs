@@ -2143,6 +2143,17 @@ impl Workspace {
             .is_some_and(|meta| meta.is_file())
     }
 
+    /// Whether `relative` resolves to something that is there and is not a file.
+    ///
+    /// The other half of [`Workspace::names_a_file`] for a caller that accepts a path with nothing
+    /// at it yet: absent is not a directory, and a socket or a directory is not a file.
+    pub fn names_something_else(&self, relative: &str) -> bool {
+        self.resolve(relative)
+            .ok()
+            .and_then(|resolved| std::fs::metadata(resolved).ok())
+            .is_some_and(|meta| !meta.is_file())
+    }
+
     /// The same read, with the label kept on, for a question put to a person about the file
     /// itself.
     ///
