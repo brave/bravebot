@@ -432,6 +432,66 @@ fn a_bravebot_skill_shadows_a_foreign_one_of_the_same_name() {
     }
 }
 
+/// INSTR-12 with the shadowing and the trust check meeting. A skill present under all three roots
+/// with only `.bravebot/skills` vouched for is offered, and nothing says it was not loaded: a
+/// person can see it on the list, so a notice claiming otherwise is simply wrong.
+///
+/// This is the layout `make init` creates in this repository, which symlinks the same skills into
+/// each root, and notices are rebuilt every turn, so reporting per root would be wrong on every
+/// turn in bravebot's own checkout.
+///
+/// A second skill present only in the untrusted roots is still counted, so what is suppressed is
+/// the part a more specific root covered and not the notice itself.
+#[test]
+fn a_skill_a_vouched_root_offers_is_not_also_reported_as_not_loaded() {
+    let scratch = Scratch::new("foreign-shadowed-notice");
+    let project = scratch.workspace();
+    for dir in [".agents", ".claude", ".bravebot"] {
+        write_skill(
+            &project.join(dir),
+            "commit-style",
+            "commit-style",
+            "the same skill in every root",
+            "body",
+        );
+    }
+    for dir in [".agents", ".claude"] {
+        write_skill(
+            &project.join(dir),
+            "only-foreign",
+            "only-foreign",
+            "present in no vouched root",
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        // The one root a person vouched for, which is what makes the other two skipped.
+        let mut policy = policy(&mut sink, &[".bravebot/skills"]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert!(
+        catalogue.get("commit-style").is_some(),
+        "the vouched root's skill was not offered"
+    );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert!(
+        told.iter().all(|line| !line.contains("2 skills")),
+        "a skill the vouched root offered was also counted as not loaded: {told:?}"
+    );
+    assert_eq!(
+        told,
+        [
+            "1 skill in .agents/skills was not loaded: this directory is not trusted",
+            "1 skill in .claude/skills was not loaded: this directory is not trusted",
+        ],
+        "the count is not the skills the vouched root did not cover"
+    );
+}
+
 /// A foreign root is content like any other project directory, so an untrusted project offers
 /// none of it, and the notice counts what was skipped and names the directory it was skipped
 /// from rather than any skill inside it (SKILL-6).

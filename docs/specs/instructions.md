@@ -360,6 +360,10 @@ them, each directory is checked for trust before it is enumerated at all, and wh
 counted with the directory it was skipped from named and no skill inside it
 ([SKILL-4](skills.md#SKILL-4), [SKILL-6](skills.md#SKILL-6)).
 
+The count is what a more specific root did not go on to offer. A skill of the same name under a
+vouched root is on the list a person can see, so counting it as not loaded would contradict what is
+in front of them. A root whose every skill was covered that way is not reported at all.
+
 **Why not the user's own `~/.claude/skills` and `~/.agents/skills`.** [INSTR-2](#INSTR-2) tries no
 user directory but `~/.bravebot`, and reading instructions from a directory the person never chose
 here is the fallback that clause refuses. Adding them is a separate decision and is not settled
@@ -368,6 +372,7 @@ here.
 `verified-by: bravebot_agent::skills::a_bravebot_skill_shadows_a_foreign_one_of_the_same_name`
 `verified-by: bravebot_agent::skills::a_foreign_skills_directory_below_the_root_is_not_a_source`
 `verified-by: bravebot_agent::skills::a_foreign_skill_in_an_untrusted_project_is_counted_and_not_named`
+`verified-by: bravebot_agent::skills::a_skill_a_vouched_root_offers_is_not_also_reported_as_not_loaded`
 
 ## Known costs
 

@@ -70,7 +70,8 @@ make init
 
 `agents/` is the source of truth for what an agent reads here: `AGENTS.md` and the skills under
 `agents/skills/`. Nothing discovers it there. Claude Code looks under `.claude/`, and bravebot reads
-`AGENTS.md` at the workspace root and skills from `.bravebot/skills`. `make init` creates symlinks and
+`AGENTS.md` at the workspace root and skills from `.bravebot/skills`, `.claude/skills` and
+`.agents/skills`. `make init` creates symlinks and
 nothing else:
 
 ```

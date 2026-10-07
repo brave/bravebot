@@ -110,7 +110,7 @@ expanded.
 ## Words from the command line
 
 [`--append-system-prompt`](../reference/cli.md#--system-prompt-prompt-and---append-system-prompt-prompt)
-adds its words as a seventh source that is not a file. It is read last, after the project's
+adds its words as a ninth source that is not a file. It is read last, after the project's
 `AGENTS.md`, so where the two disagree the words win. It is held by the running process, so it is in
 every turn of the run and in the stored session of none: resuming without the flag runs without it.
 

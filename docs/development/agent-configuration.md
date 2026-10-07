@@ -4,7 +4,8 @@
 `settings.json`, and the skills under `agents/skills/`. Nothing discovers it there. Claude Code
 looks under `.claude/`, Codex reads `AGENTS.md` at the workspace root and skills from
 `.agents/skills`, Cursor reads `AGENTS.md` at the root and skills and subagents under `.cursor/`,
-and bravebot reads `AGENTS.md` at the workspace root, skills from `.bravebot/skills` and
+and bravebot reads `AGENTS.md` at the workspace root, skills from `.bravebot/skills`,
+`.claude/skills` and `.agents/skills`, and
 delegate definitions from `.bravebot/agents`, so a fresh clone links the one source into all
 four:
 

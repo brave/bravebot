@@ -729,8 +729,28 @@ fn discover_workspace<S: Sink>(
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
 ) {
+    // The skipped names are held back rather than reported as each root is read, because the roots
+    // are read least specific first and a more specific one later in the list may offer the same
+    // skill. Reporting in place would tell a person a skill was not loaded while they can see that
+    // it was: the layout `make init` creates in this repository symlinks the same skills into all
+    // three, so that notice would be wrong on every turn.
+    let mut skipped: Vec<(&str, Vec<String>)> = Vec::new();
     for root in WORKSPACE_SKILL_ROOTS {
-        discover_workspace_root(policy, workspace, root, catalogue, notices);
+        discover_workspace_root(policy, workspace, root, catalogue, notices, &mut skipped);
+    }
+    for (root, names) in skipped {
+        let missing = names.len()
+            - names
+                .iter()
+                .filter(|name| catalogue.get(name).is_some())
+                .count();
+        if missing == 0 {
+            continue;
+        }
+        let (count, verb) = counted(missing);
+        notices.push(Notice::new(format!(
+            "{count} in {root} {verb} not loaded: this directory is not trusted"
+        )));
     }
 }
 
@@ -738,9 +758,10 @@ fn discover_workspace<S: Sink>(
 fn discover_workspace_root<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
-    skills_root: &str,
+    skills_root: &'static str,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
+    skipped: &mut Vec<(&'static str, Vec<String>)>,
 ) {
     let root = workspace.root().join(skills_root);
     let names = skill_directories(&root);
@@ -753,10 +774,10 @@ fn discover_workspace_root<S: Sink>(
     // for could be named to read like an instruction, and it would reach the user's screen in a
     // notice even if it never reached the prompt.
     if !policy.trusts_path(skills_root) {
-        let (count, verb) = counted(names.len());
-        notices.push(Notice::new(format!(
-            "{count} in {skills_root} {verb} not loaded: this directory is not trusted"
-        )));
+        // The names, so the caller can drop the ones a more specific root went on to offer. Held
+        // here and never put in a notice: a directory name in a project nobody vouched for is
+        // content, and only the count of it reaches a screen (SKILL-6).
+        skipped.push((skills_root, names));
         return;
     }
 

@@ -4,7 +4,8 @@
 The source of truth is `agents/`: versioned, reviewed, and named for no particular
 vendor. No tool reads it. Claude Code discovers skills, slash commands and subagents
 under `.claude/`; Codex discovers skills under `.agents/skills`; Cursor discovers skills
-and subagents under `.cursor/`; and bravebot discovers skills under `.bravebot/skills` and subagents under `.bravebot/agents`.
+and subagents under `.cursor/`; and bravebot discovers skills under `.bravebot/skills`,
+`.claude/skills` and `.agents/skills`, and subagents under `.bravebot/agents`.
 Codex, Cursor and bravebot read their instructions from `AGENTS.md` at the workspace
 root. This script bridges them by creating one symlink per entry, so a skill is written
 once and every tool sees it:
