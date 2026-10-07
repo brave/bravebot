@@ -72,13 +72,45 @@ impl Toolchain {
         for row in self.installs().iter().chain(self.configurations()) {
             policy = policy.allow_read(under(home, row));
         }
+        self.grant_caches(policy, prelude, home)
+    }
+
+    /// `policy` with every toolchain's caches added to it, whatever program the stage runs.
+    ///
+    /// A stage is a script as often as one program, and a script that starts `cargo` or `npm` is
+    /// no program the plan resolved to a toolchain. The caches are the one thing a toolchain
+    /// brings that is written, and each is a directory named below the one holding its token, so
+    /// writing all of them lets any build cache what it fetched without handing any stage the
+    /// token or an install. Installs and configuration need no row where the machine is read.
+    pub fn grant_every_cache(
+        policy: SandboxPolicy,
+        prelude: Prelude,
+        home: &Path,
+    ) -> SandboxPolicy {
+        EVERY_TOOLCHAIN
+            .into_iter()
+            .fold(policy, |policy, toolchain| {
+                toolchain.grant_caches(policy, prelude, home)
+            })
+    }
+
+    fn grant_caches(
+        self,
+        mut policy: SandboxPolicy,
+        prelude: Prelude,
+        home: &Path,
+    ) -> SandboxPolicy {
         for row in self.cache_directories(prelude) {
             let path = under(home, row);
-            policy = policy.allow_read(&path).allow_write_directory(path);
+            if !policy.writable.iter().any(|granted| granted.path == path) {
+                policy = policy.allow_read(&path).allow_write_directory(path);
+            }
         }
         for row in self.cache_files() {
             let path = under(home, row);
-            policy = policy.allow_read(&path).allow_write_file(path);
+            if !policy.writable.iter().any(|granted| granted.path == path) {
+                policy = policy.allow_read(&path).allow_write_file(path);
+            }
         }
         policy
     }
@@ -144,6 +176,15 @@ impl Toolchain {
     }
 }
 
+const EVERY_TOOLCHAIN: [Toolchain; 6] = [
+    Toolchain::Cargo,
+    Toolchain::Node,
+    Toolchain::Python,
+    Toolchain::Go,
+    Toolchain::Maven,
+    Toolchain::Gradle,
+];
+
 /// Whether `name` is `program`, or `program` followed by a version: `python3` and `python3.12`
 /// are `python`, and `python3-config` is not.
 fn versioned(name: &str, program: &str) -> bool {
@@ -165,15 +206,6 @@ mod tests {
 
     const A_HOME: &str = "/home/a-person";
     const THE_SESSIONS_TEMPORARY_DIRECTORY: &str = "/scratch/tmp-of-this-session";
-
-    const EVERY_TOOLCHAIN: [Toolchain; 6] = [
-        Toolchain::Cargo,
-        Toolchain::Node,
-        Toolchain::Python,
-        Toolchain::Go,
-        Toolchain::Maven,
-        Toolchain::Gradle,
-    ];
 
     const EVERY_PLATFORM: [Prelude; 3] = [Prelude::Linux, Prelude::MacOs, Prelude::Windows];
 

@@ -101,11 +101,27 @@ impl SeatbeltSandbox {
         // `ENV` is exec'd under `process-exec` above and is not opened for reading, so no
         // read row names it: its contents are readable only where a policy grants /usr/bin.
 
-        for path in &policy.readable {
+        // The last matching rule wins, so a refusal follows the grants it narrows and the rows that
+        // lift it follow the refusal. A read row at or beneath a refused path is a lift; any other
+        // row is written before the refusals it is narrowed by.
+        let lifts_a_refusal = |path: &Path| policy.unreadable.iter().any(|d| path.starts_with(d));
+        let allow_read = |out: &mut String, path: &Path| {
             out.push_str(&format!(
                 "(allow file-read* (subpath {}))\n",
                 quote(&path.to_string_lossy())
             ));
+        };
+        for path in policy.readable.iter().filter(|p| !lifts_a_refusal(p)) {
+            allow_read(&mut out, path);
+        }
+        for path in &policy.unreadable {
+            out.push_str(&format!(
+                "(deny file-read* (subpath {}))\n",
+                quote(&path.to_string_lossy())
+            ));
+        }
+        for path in policy.readable.iter().filter(|p| lifts_a_refusal(p)) {
+            allow_read(&mut out, path);
         }
 
         for row in &policy.writable {
@@ -572,6 +588,36 @@ int main(void) {
         let profile = SeatbeltSandbox::profile(&policy);
         assert!(profile.contains(r#"(allow file-read* (subpath "/workspace"))"#));
         assert!(profile.contains(r#"(allow file-write* (subpath "/workspace/target"))"#));
+    }
+
+    /// Seatbelt lets the last matching rule decide, so a refusal written before the grant it
+    /// narrows is no refusal, and a lift written before the refusal is lifted by nothing. The
+    /// regression it rejects is either order, and a refusal written with a hostile path in it
+    /// that ends the string it is quoted in.
+    #[test]
+    fn the_profile_states_a_refusal_after_the_grant_it_narrows_and_a_lift_after_the_refusal() {
+        let policy = SandboxPolicy::strict()
+            .allow_read("/")
+            .deny_read("/home/a-person/.ssh")
+            .deny_read("/home/a \"person\"/.aws")
+            .allow_read("/home/a-person/.ssh/config")
+            .allow_read("/usr");
+
+        let profile = SeatbeltSandbox::profile(&policy);
+        let at = |rule: &str| {
+            profile
+                .find(rule)
+                .unwrap_or_else(|| panic!("{rule} is not in the profile:\n{profile}"))
+        };
+        let grant = at(r#"(allow file-read* (subpath "/"))"#);
+        let usr = at(r#"(allow file-read* (subpath "/usr"))"#);
+        let refusal = at(r#"(deny file-read* (subpath "/home/a-person/.ssh"))"#);
+        let hostile = at(r#"(deny file-read* (subpath "/home/a \"person\"/.aws"))"#);
+        let lift = at(r#"(allow file-read* (subpath "/home/a-person/.ssh/config"))"#);
+
+        assert!(grant < refusal && usr < refusal, "{profile}");
+        assert!(grant < hostile && usr < hostile, "{profile}");
+        assert!(refusal < lift && hostile < lift, "{profile}");
     }
 
     /// A grant here is a name in a profile rather than a right on an open descriptor, so a
@@ -1757,6 +1803,94 @@ int main(void) {
 
         let _ = std::fs::remove_dir_all(repository);
         let _ = std::fs::remove_file(&database);
+    }
+
+    /// The run base as the kernel holds it: one process per credential location is refused it,
+    /// each token file a program reads by name is read, the three kinds of file in `~/.ssh` that
+    /// hold no secret are read beside the private key that is not, and nothing outside the
+    /// temporary directory is written. The table is spelled out here and not read from the base, so
+    /// a row dropped from the base is a row this fails on.
+    #[test]
+    fn a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-run-base-table");
+        let held_back = [
+            ".ssh/id_ed25519",
+            ".ssh/id_rsa",
+            ".aws/credentials",
+            ".kube/config",
+            ".docker/config.json",
+            ".azure/accessTokens.json",
+            ".config/gcloud/credentials.db",
+            ".gnupg/private-keys-v1.d/key",
+            "Library/Keychains/login.keychain-db",
+            "Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies",
+            "Library/Application Support/Google/Chrome/Default/Cookies",
+            "Library/Application Support/Firefox/Profiles/x/cookies.sqlite",
+            "Library/Cookies/Cookies.binarycookies",
+            "Library/Safari/History.db",
+        ];
+        let read = [
+            ".gitconfig",
+            ".config/gh/hosts.yml",
+            ".npmrc",
+            ".cargo/credentials.toml",
+            ".pypirc",
+            ".netrc",
+            ".git-credentials",
+            ".ssh/config",
+            ".ssh/known_hosts",
+            ".ssh/id_ed25519.pub",
+            "Documents/notes.txt",
+            "Library/Application Support/Other/state",
+        ];
+        for row in held_back.iter().chain(&read) {
+            let file = home.join(row);
+            std::fs::create_dir_all(file.parent().expect("a row has a parent"))
+                .expect("the scratch home is creatable");
+            std::fs::write(&file, "contents").expect("the scratch home is writable");
+        }
+        let policy = crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+        let code = |program: &str, path: PathBuf| {
+            exit_code_under(
+                &policy,
+                a_stage_for(&home),
+                program,
+                &[&path.display().to_string()],
+            )
+        };
+
+        for row in held_back {
+            assert_eq!(
+                code("/bin/cat", home.join(row)),
+                Some(READ_FAILED),
+                "{row} was read"
+            );
+        }
+        for row in read {
+            assert_eq!(
+                code("/bin/cat", home.join(row)),
+                Some(0),
+                "{row} was refused"
+            );
+        }
+        assert_eq!(
+            code("/usr/bin/touch", home.join("Documents").join("made")),
+            Some(TOUCH_FAILED),
+            "a file was made outside the temporary directory"
+        );
+        assert_eq!(
+            code("/usr/bin/touch", temporary.join("made")),
+            Some(0),
+            "the temporary directory was not written"
+        );
+        assert!(
+            SeatbeltSandbox::profile(&policy)
+                .contains("(deny file-read* (subpath \"/Library/Keychains\"))"),
+            "the machine's keychains are not refused"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// The cargo list as the kernel holds it: the registry is written, the configuration cargo

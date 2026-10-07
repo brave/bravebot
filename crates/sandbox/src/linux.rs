@@ -288,7 +288,9 @@ impl LandlockSandbox {
             command.current_dir(directory);
         }
 
-        let readable: Vec<_> = policy.readable.clone();
+        // A refusal is made by listing: Landlock grants a directory with everything beneath it.
+        let enumerated = !policy.unreadable.is_empty();
+        let readable = policy.readable_by_enumeration();
         let writable: Vec<_> = policy.writable.iter().map(|row| row.path.clone()).collect();
 
         // Landlock applies to the calling thread and is inherited across exec, so the
@@ -307,7 +309,17 @@ impl LandlockSandbox {
                     .and_then(|r| r.create())
                     .map_err(|e| Error::other(format!("landlock: {e}")))?;
 
-                if !readable.is_empty() {
+                // An entry that went away between the listing and here has nothing to grant, and
+                // the rules are added as they are built so a large directory holds one
+                // descriptor at a time and not one for each entry.
+                if enumerated {
+                    ruleset = ruleset
+                        .add_rules(path_beneath_rules(
+                            &readable,
+                            AccessFs::from_read(HANDLED_ABI),
+                        ))
+                        .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
+                } else if !readable.is_empty() {
                     ruleset = ruleset
                         .add_rules(rules_for_every_path(
                             &readable,
@@ -870,6 +882,134 @@ mod tests {
             refused.wait().expect("should wait").code(),
             Some(CAT_FAILED),
             "the key was readable, or the read failed for another reason"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&temporary_directory);
+    }
+
+    /// The run base under the kernel: each credential location is refused, each file a program
+    /// reads by name is read, the three kinds of file in `~/.ssh` that hold no secret are read
+    /// beside the private key that is not, a link to a credential is judged by where it leads,
+    /// and a location absent when the stage starts is refused as well. The rows are spelled out
+    /// here and not read from the base, so a row dropped from it fails this.
+    #[test]
+    fn a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let temporary_directory = a_temporary_directory("bravebot-run-base-table-tmp");
+        let home = crate::testutil::scratch_dir("bravebot-run-base-table");
+        let _ = std::fs::remove_dir_all(&home);
+        let held_back = [
+            ".ssh/id_ed25519",
+            ".ssh/id_rsa",
+            ".aws/credentials",
+            ".kube/config",
+            ".docker/config.json",
+            ".azure/accessTokens.json",
+            ".config/gcloud/credentials.db",
+            ".gnupg/private-keys-v1.d/key",
+            ".local/share/keyrings/login.keyring",
+            ".password-store/site.gpg",
+            ".config/BraveSoftware/Brave-Browser/Default/Cookies",
+            ".config/google-chrome/Default/Cookies",
+            ".config/chromium/Default/Cookies",
+            ".mozilla/firefox/x/cookies.sqlite",
+        ];
+        let read = [
+            ".gitconfig",
+            ".config/gh/hosts.yml",
+            ".config/other/state",
+            ".local/share/other/state",
+            ".npmrc",
+            ".cargo/credentials.toml",
+            ".pypirc",
+            ".netrc",
+            ".git-credentials",
+            ".ssh/config",
+            ".ssh/known_hosts",
+            ".ssh/id_ed25519.pub",
+            "docs/notes.txt",
+        ];
+        for row in held_back.iter().chain(&read) {
+            let file = home.join(row);
+            std::fs::create_dir_all(file.parent().expect("a row has a parent"))
+                .expect("the scratch home is creatable");
+            std::fs::write(&file, CONTENTS).expect("the scratch home is writable");
+        }
+        let door = home.join("docs").join("door");
+        std::os::unix::fs::symlink(home.join(".aws"), &door).expect("a link");
+        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home))
+            .nameable_under(&sandbox.capabilities())
+            .policy;
+        let cat = |path: &Path| {
+            let mut child = sandbox
+                .spawn(
+                    "/usr/bin/cat",
+                    &[path.display().to_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn");
+            child.wait().expect("should wait").code()
+        };
+
+        for row in read {
+            assert_eq!(cat(&home.join(row)), Some(0), "{row} was refused");
+        }
+        for row in held_back {
+            assert_eq!(cat(&home.join(row)), Some(CAT_FAILED), "{row} was read");
+        }
+        assert_eq!(
+            cat(&door.join("credentials")),
+            Some(CAT_FAILED),
+            "a link to a credential directory was followed"
+        );
+        assert_eq!(
+            cat(&home.join(".kube-not-there/config")),
+            Some(CAT_FAILED),
+            "the read failed for a reason that is not a refusal"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&temporary_directory);
+    }
+
+    /// The regression it rejects: a refusal carried out by listing that leaves the stage able
+    /// to write where it was never given a row, or to run a program from the directories the
+    /// listing granted whole.
+    #[test]
+    fn a_stage_under_the_run_base_runs_programs_and_writes_only_where_it_was_given() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let temporary_directory = a_temporary_directory("bravebot-run-base-writes-tmp");
+        let home = crate::testutil::scratch_dir("bravebot-run-base-writes");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("docs")).expect("the scratch home is creatable");
+        let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home))
+            .nameable_under(&sandbox.capabilities())
+            .policy;
+        let touch = |path: &Path| {
+            let mut child = sandbox
+                .spawn(
+                    "/usr/bin/touch",
+                    &[path.display().to_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("a program starts under the run base");
+            child.wait().expect("should wait").code()
+        };
+
+        assert_eq!(touch(&temporary_directory.join("made")), Some(0));
+        assert_eq!(
+            touch(&home.join("docs").join("made")),
+            Some(TOUCH_FAILED),
+            "a file was made outside the temporary directory"
         );
 
         let _ = std::fs::remove_dir_all(&home);
