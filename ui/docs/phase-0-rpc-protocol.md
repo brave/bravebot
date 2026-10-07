@@ -552,7 +552,9 @@ with the configured default, or `null` when configuration is unavailable.
 ```json
 { "id": 5, "method": "turn.send",
   "params": { "session": "s1", "prompt": "why does the parser drop trailing commas?",
-              "files": ["notes.md"], "dropped": ["/Users/me/briefing.md"] } }
+              "files": ["notes.md"], "dropped": ["/Users/me/briefing.md"],
+              "attachments": ["/Users/me/Desktop/screenshot.png"],
+              "images": [{ "media": "image/png", "data": "iVBORw0KGgo..." }] } }
 ```
 
 Builds a `Workspace` over the session's project, then re-opens any extra directories the
@@ -564,7 +566,8 @@ causes is the one that was already happening, and this protocol has no way to sa
 outside a turn.
 
 Builds a `Task::new(prompt)`, applies `with_file` per entry of `files`,
-`with_dropped_text` per entry of `dropped`, and `with_home(home::directory())`.
+`with_dropped_text` per entry of `dropped`, `with_attachment` per entry of `attachments`,
+`with_image` per entry of `images`, and `with_home(home::directory())`.
 
 The optional `composed` parameter says the client composed this prompt itself rather than
 a person typing it, and takes exactly one word: `"consolidation"`, a turn sent to ask a bot
@@ -589,7 +592,41 @@ A path that cannot be read as text ends the turn — `turn.error` with `kind: "w
 rather than being skipped. A caller that attaches a file it maintains has to make sure the
 file is there immediately before the send, not once when it was first named.
 
-Neither list may be named by a renderer in this app; see §9 and `src/main/index.ts`. Spawns the worker thread and calls `turn::resume` with an
+Two more optional lists carry bytes rather than text, and both default to empty.
+
+`attachments` is a list of absolute paths to pictures and PDFs a person dropped (DROP-10). Each
+entry must name a regular file, with an extension the agent carries as bytes (`png`, `jpg`, `jpeg`,
+`gif`, `webp`, `pdf`, in any case), no larger than 8 MiB
+(`bravebot_agent::workspace::MAX_ATTACHMENT_BYTES`). The bridge takes the media type from that
+extension and never from the caller. The read is unconfined and the file is vouched for, as for
+`dropped`, and the bytes go in the prompt's own message as a `data:` URL part.
+
+`images` is a list of pictures a person pasted (PASTE-2), each `{ "media": string, "data": string }`.
+`media` is one of `image/png`, `image/jpeg`, `image/gif` or `image/webp`, matched exactly, and the
+bridge sends its own copy of the matching type (PASTE-3). `data` is the picture as standard base64,
+at most 10 MiB once decoded (`bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES`, the terminal's paste
+cap) and not empty. The picture is not read from anywhere, so it takes no trust rule; it is recorded
+in the audit trail and kept in the session record, so a reopened session still carries it
+(PASTE-9).
+
+In the message, dropped attachments come first and pasted pictures after them, as the terminal
+sends them.
+
+Either list is checked in full before a turn starts. Each of these refuses the send with
+`bad_request`, and no turn starts:
+
+- `attachments` that is not a list, or an entry that is not a string;
+- an entry that is relative, names nothing, names a directory, has an extension not in the list
+  above, or is larger than 8 MiB;
+- `images` that is not a list, or an entry that is not an object with string `media` and `data`;
+- a `media` outside the four types, `data` that is not standard base64, an empty picture, or a
+  picture larger than 10 MiB.
+
+`null` for either list is the same as leaving it out.
+
+None of these lists may be named by a renderer in this app; see §9 and `src/main/sanitise.ts`.
+
+Spawns the worker thread and calls `turn::resume` with an
 RPC `Confirmer`, an RPC `Reporter`, and a `Trail` sink — the same call shape as
 the upstream TUI, differing only in where the three handles send.
 
@@ -1239,8 +1276,8 @@ Still open:
   its index is built once. They are never written to a record: a reopened or forked session
   starts with none and asks. Closing the session stops them, and so does the process ending.
 - `manifest.run` takes `session`, `task` and an optional `model`, and answers `{ run }` once the
-  run has begun. It is refused with `bad_request` for an empty task, for any `files`, `dropped`
-  or `attachments`, and before `trust.reply`. It is refused with `turn_in_flight` while a turn
+  run has begun. It is refused with `bad_request` for an empty task, for any `files`, `dropped`,
+  `attachments` or `images`, and before `trust.reply`. It is refused with `turn_in_flight` while a turn
   or another run is in flight. `turn.cancel` stops a run.
 - A run is not a turn. The conversation is not sent to the planner and nothing is added to it,
   the session's turn count does not change, and the session's record is not written. The run

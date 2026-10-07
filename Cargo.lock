@@ -340,6 +340,7 @@ dependencies = [
 name = "bravebot-ui-bridge"
 version = "0.14.0"
 dependencies = [
+ "base64 0.22.1",
  "bravebot-agent",
  "bravebot-aichat",
  "bravebot-config",

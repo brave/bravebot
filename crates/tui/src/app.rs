@@ -2712,7 +2712,8 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
 /// Separated from the loop so it can be tested without a terminal, and taking the read as an
 /// argument so a test can say what the clipboard held.
 fn take_from_clipboard(session: &mut Session, pasted: crate::clipboard::Pasted) {
-    use crate::clipboard::{MAX_IMAGE_BYTES, Pasted};
+    use crate::clipboard::Pasted;
+    use bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES;
 
     // Whatever the answer was, it is the current one, so the hint has served its purpose. It comes
     // back at the next focus change if the picture is still there and still wanted.
@@ -2727,7 +2728,7 @@ fn take_from_clipboard(session: &mut Session, pasted: crate::clipboard::Pasted) 
         Pasted::TooLarge(bytes) => session.note(t!(
             paste_too_large,
             size = in_megabytes(bytes),
-            limit = in_megabytes(MAX_IMAGE_BYTES)
+            limit = in_megabytes(MAX_PASTED_IMAGE_BYTES)
         )),
         Pasted::Nothing => session.note(t!(paste_nothing_on_clipboard)),
     }
@@ -11587,7 +11588,8 @@ mod tests {
 
     mod pasting {
         use super::*;
-        use crate::clipboard::{Image, MAX_IMAGE_BYTES, Pasted};
+        use crate::clipboard::{Image, Pasted};
+        use bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES;
 
         fn picture(bytes: Vec<u8>) -> Pasted {
             Pasted::Image(Image {
@@ -11935,7 +11937,7 @@ mod tests {
         #[test]
         fn a_picture_too_large_to_send_says_so_with_its_size() {
             let mut session = Session::new("kernel-enforced");
-            take_from_clipboard(&mut session, Pasted::TooLarge(MAX_IMAGE_BYTES * 2));
+            take_from_clipboard(&mut session, Pasted::TooLarge(MAX_PASTED_IMAGE_BYTES * 2));
 
             assert!(
                 session.input().is_empty(),

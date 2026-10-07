@@ -91,6 +91,8 @@ fn check_completion(ending: &str) -> (bool, bool) {
             composed: None,
             files: vec![],
             dropped: vec![],
+            attachments: vec![],
+            images: vec![],
             recall: false,
             turn: 1,
             cancel,

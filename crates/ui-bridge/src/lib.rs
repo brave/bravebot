@@ -18,6 +18,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod attached;
 pub mod bridge;
 pub mod connectors;
 pub mod definitions;

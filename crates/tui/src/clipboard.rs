@@ -17,6 +17,7 @@
 //! drawn. What is pasted is the user's own input, on the footing of the prompt it lands in, which
 //! [`bravebot_core::policy::Policy::admit_pasted_image`] states in full.
 
+use bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -85,14 +86,6 @@ fn write_escape_sequence(text: &str) -> bool {
     write!(out, "\x1b]52;c;{encoded}\x07").is_ok() && out.flush().is_ok()
 }
 
-/// The largest image a paste will carry.
-///
-/// Not a policy rule: nothing about a big picture is unsafe, it is that encoding one into a request
-/// costs a third again in base64 and a screenshot of a large display already runs to several
-/// megabytes. The refusal happens here, where the user is still looking at the paste that caused
-/// it, rather than at an endpoint that would answer with a number.
-pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
-
 /// The longest side, in pixels, a picture over the cap is scaled down to before it is tried again.
 const DOWNSCALED_SIDE: u32 = 2048;
 
@@ -148,9 +141,9 @@ pub fn paste() -> Pasted {
 /// tool spawned for an answer nothing looks at.
 fn chosen(image: Option<(&'static str, Vec<u8>)>, text: impl FnOnce() -> Option<String>) -> Pasted {
     match image {
-        Some((_, bytes)) if bytes.len() > MAX_IMAGE_BYTES => {
+        Some((_, bytes)) if bytes.len() > MAX_PASTED_IMAGE_BYTES => {
             return match downscaled(&bytes) {
-                Some(smaller) if smaller.len() <= MAX_IMAGE_BYTES => Pasted::Image(Image {
+                Some(smaller) if smaller.len() <= MAX_PASTED_IMAGE_BYTES => Pasted::Image(Image {
                     media_type: "image/png",
                     bytes: smaller,
                 }),
@@ -449,7 +442,7 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
             .expect("a PNG encodes");
         assert!(
-            out.len() > MAX_IMAGE_BYTES,
+            out.len() > MAX_PASTED_IMAGE_BYTES,
             "the fixture must be over the cap"
         );
         out
@@ -503,7 +496,7 @@ mod tests {
         chunk(&mut out, b"IDAT", &zlib);
         chunk(&mut out, b"IEND", &[]);
         assert!(
-            out.len() > MAX_IMAGE_BYTES,
+            out.len() > MAX_PASTED_IMAGE_BYTES,
             "the fixture must be over the cap"
         );
         out
@@ -525,7 +518,7 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
             .expect("a PNG encodes");
         assert!(
-            out.len() > MAX_IMAGE_BYTES,
+            out.len() > MAX_PASTED_IMAGE_BYTES,
             "the fixture must be over the cap"
         );
         out
@@ -568,7 +561,7 @@ mod tests {
         let size = noisy.len();
         let scaled = downscaled(&noisy).expect("the fixture decodes");
         assert!(
-            scaled.len() > MAX_IMAGE_BYTES,
+            scaled.len() > MAX_PASTED_IMAGE_BYTES,
             "the scaled fixture must still be over the cap"
         );
 
@@ -591,7 +584,7 @@ mod tests {
             panic!("an oversized picture that decodes was not admitted: {chosen:?}");
         };
         assert_eq!(image.media_type, "image/png");
-        assert!(image.bytes.len() <= MAX_IMAGE_BYTES);
+        assert!(image.bytes.len() <= MAX_PASTED_IMAGE_BYTES);
         let decoded = image::load_from_memory(&image.bytes).expect("the result decodes");
         assert_eq!(decoded.width().max(decoded.height()), DOWNSCALED_SIDE);
     }
@@ -601,12 +594,12 @@ mod tests {
     /// screenshot somebody meant, with nothing said about the one they asked for.
     #[test]
     fn a_picture_over_the_cap_that_will_not_decode_is_refused_rather_than_swapped_for_the_text() {
-        let oversized = vec![0u8; MAX_IMAGE_BYTES + 1];
+        let oversized = vec![0u8; MAX_PASTED_IMAGE_BYTES + 1];
         let chosen = chosen(Some(("image/png", oversized)), || {
             Some("https://example.invalid/the-page".to_string())
         });
 
-        assert_eq!(chosen, Pasted::TooLarge(MAX_IMAGE_BYTES + 1));
+        assert_eq!(chosen, Pasted::TooLarge(MAX_PASTED_IMAGE_BYTES + 1));
     }
 
     /// With no picture, the text is the paste. This is what the ordinary case reduces to, and it

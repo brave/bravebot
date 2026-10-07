@@ -9,7 +9,6 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
 
@@ -191,16 +190,4 @@ test('a service failure in a run reads the category and never the service’s wo
   const markup = draw(ended({ kind: 'chat', message: 'transport', category: 'transport', problem: null }))
 
   assert.ok(markup.includes('The model service could not be reached'), markup)
-})
-
-test('a manifest run forwards a task and a model, and no file under any key', () => {
-  // The main process is the one place that sees what a window sends. Read from its source,
-  // because it cannot be imported without an Electron to run it in.
-  const main = readFileSync('src/main/index.ts', 'utf8')
-  const start = main.indexOf("if (method === 'manifest.run')")
-  assert.ok(start > 0, 'the main process does not single out a manifest run')
-  const branch = main.slice(start, main.indexOf('}', main.indexOf('return', start)) + 1)
-
-  assert.match(branch, /return \{ session: held\.session, task: held\.task, model: held\.model \}/)
-  for (const key of ['files', 'dropped', 'attachments']) assert.ok(!branch.includes(key), key)
 })

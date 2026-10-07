@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/app.rs
   - crates/agent/src/attached.rs
   - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/attached.rs
 documented-by: docs/website/docs/using/context.md
 ---
 
@@ -38,8 +39,8 @@ contains can put one there.
 
 Never a path a model proposed, never one read out of a file, never one a processor produced. The
 justification cannot be checked from the bytes, so it lives at the call site. Two call sites mint
-the grant: the terminal's drop handling, and the `dropped` list a front end sends with `turn.send`,
-whose caller owes what [DROP-10](#DROP-10) states. Nothing else mints it.
+the grant: the terminal's drop handling, and the `dropped` and `attachments` lists a front end
+sends with `turn.send`, whose caller owes what [DROP-10](#DROP-10) states. Nothing else mints it.
 
 `verified-by: bravebot_tui::drop::dropping_an_image_puts_a_marker_in_the_line`
 `verified-by: bravebot_agent::workspace::an_untrusted_path_is_not_read_as_a_drop`
@@ -224,23 +225,29 @@ dropped onto a line queued mid-turn already relies on.
 <a id="DROP-10"></a>
 ### DROP-10: a front end sending a drop over the protocol accounts for the path
 
-`turn.send` carries a `dropped` list, and every path in it is read the way a text file dropped onto
-the terminal is: an unconfined read, and a rule in the session's trust map. That and nothing else.
-The list carries no type of its own, so [DROP-4](#DROP-4) is the terminal's alone and a picture
-named here fails the turn rather than reaching the model as bytes.
+`turn.send` carries two lists of dropped paths. Every path in `dropped` is read the way a text
+file dropped onto the terminal is: an unconfined read, and a rule in the session's trust map. Every
+path in `attachments` is carried the way a picture or a PDF dropped onto the terminal is: an
+unconfined read of its bytes, the same rule, and the bytes in the message beside the prompt, after
+the prompt and before any pasted picture. The bridge takes the media type from the agent's table of
+extensions ([DROP-4](#DROP-4)) and never from the caller. A picture named in `dropped` fails the turn
+rather than reaching the model as bytes, because that list is text.
 
 The caller is a separate process, so the gesture is not visible to the bridge and what the caller
-sends is the whole of the justification. A front end putting a path there is saying that a person's
-gesture produced it, or that the file is one the front end composed itself out of what it already
-speaks for.
+sends is the whole of the justification. A front end putting a path in either list is saying that a
+person's gesture produced it, or that the file is one the front end composed itself out of what it
+already speaks for.
 
 What the bridge decides is the half a string can be held to: each entry is an absolute path naming
 a file that is there. A directory is refused, on [DROP-5](#DROP-5)'s reasoning. A path naming
 nothing is refused, on [DROP-7](#DROP-7)'s: guessing in the permissive direction admits a path
 nobody's gesture put there. A relative path is refused because `files` is the list for a path
-inside the project, and the two lists differ in nothing else a caller can see, so admitting one
-would mint the unconfined grant for a file its caller meant as an ordinary one. An operating system
-reports a drop as an absolute path, so a front end loses nothing by it.
+inside the project, and the lists differ in nothing else a caller can see, so admitting one would
+mint the unconfined grant for a file its caller meant as an ordinary one. An operating system
+reports a drop as an absolute path, so a front end loses nothing by it. An entry in `attachments`
+is also refused when its extension is not one the agent carries as bytes, and when the file is
+larger than the agent will carry, so the send fails rather than the turn. `attachments` that is not
+a list of strings is refused too.
 
 **Why a refusal rather than an entry left out.** A turn that lost the file it was sent with is not
 a smaller turn: it answers without what it was asked about, and reports success. The caller knows
@@ -249,19 +256,18 @@ what the path was for and can say so; the turn cannot.
 `verified-by: bravebot_ui_bridge::dispatch::a_dropped_path_that_names_no_file_is_refused`
 `verified-by: bravebot_ui_bridge::dispatch::a_relative_dropped_path_is_refused`
 `verified-by: bravebot_ui_bridge::dispatch::a_turn_may_name_files_or_none_and_none_is_the_default`
+`verified-by: bravebot_ui_bridge::attaching::a_dropped_picture_and_pdf_reach_the_model_before_a_pasted_picture`
+`verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/sanitise.test.mjs pins its half: a window's turn.send reaches the agent with no dropped, attachments or images list of its own, a path where an attachment id goes sends nothing, and a manifest run forwards a task and a model and nothing else; make check-ui runs it)`
 
 ## Known costs
 
-- **A front end has no way to carry a picture over the protocol.** The `dropped` list is read as
-  text and nothing beside it takes bytes, so a graphical front end that wants a dropped screenshot
-  in front of the model has nowhere to put it, and naming it in the list ends the turn in an error
-  about binary content. What the terminal does with a recognised type has no counterpart here.
 - **A front end's word is the whole of a protocol drop's justification.** The checks
-  [DROP-10](#DROP-10) puts on a `dropped` entry establish that a file is there, not that anybody
-  dragged it: a path the caller invented and a path a person dropped are the same string on the
-  wire, and no check over a pipe tells them apart. A front end that mints one carelessly grants
-  its session a trusted, unconfined read of that file, which is the grant the terminal's gesture
-  buys and the only thing the bridge cannot ask for evidence of.
+  [DROP-10](#DROP-10) puts on a `dropped` or `attachments` entry establish that a file is there,
+  not that anybody dragged it: a path the caller invented and a path a person dropped are the same
+  string on the wire, and no check over a pipe tells them apart. A front end that mints one
+  carelessly grants its session a trusted, unconfined read of that file, which is the grant the
+  terminal's gesture buys and the only thing the bridge cannot ask for evidence of.
 - **A screenshot somebody sent you is content you have not read and are vouching for.** It goes
   into the turn as trusted input, on the strength of the gesture alone. Be as careful about a drop
   as about answering yes to a directory.

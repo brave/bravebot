@@ -47,6 +47,7 @@ import { botFolders, isBotModel, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
+import { sanitised } from './sanitise'
 import { isSubpath } from '../shared/files'
 import { chooseDirectory, mayOpenSessionIn, offerDirectories } from './opened'
 import {
@@ -531,41 +532,6 @@ function noteOpenedRoot(method: string, params: unknown, ok: unknown): void {
       ? (record as { directory?: unknown }).directory
       : answer.directory
   noteRoot(answer.session, directory)
-}
-
-/**
- * The params a method is allowed to have arrived with.
- *
- * `turn.send` takes two lists of file paths — `files`, read inside the workspace, and `dropped`,
- * read anywhere on the disk — and both are admitted to the planner as *trusted* context. Nothing
- * else the renderer can say has that reach: the file tree is confined to roots this process learnt
- * from the agent, the folder picker is native, and the preload has never carried a file's contents
- * in either direction. A window that could name either list would be a window that could read any
- * file on the machine and have the planner read it too, which is a larger change than any feature
- * is worth.
- *
- * So they are removed here rather than trusted here. A bot's turn needs both, and gets them from
- * `bravebot:bots:send` below — which composes the paths itself, from a definition this process
- * holds, and never from anything that crossed the bridge from a window.
- *
- * Stripped silently. There is no legitimate caller to warn, and a message saying which key was
- * removed would be a message telling a compromised renderer what to try next.
- */
-function sanitised(method: string, params: unknown): Record<string, unknown> {
-  const held = (params ?? {}) as Record<string, unknown>
-  // A manifest run takes a task and no files. Only the three fields it reads are forwarded, so
-  // a window cannot name a file to it under any key.
-  if (method === 'manifest.run') {
-    return { session: held.session, task: held.task, model: held.model }
-  }
-  if (method !== 'turn.send') return held
-  // `recall` and `definition` join the two lists for a smaller reason than theirs. `recall`
-  // decides whether a prompt is one a person can find again, and `definition` decides which
-  // definition a turn is addressed to (MEMORY-10). Both are claims about who asked and what the
-  // turn is for, which this process makes from a bot's row and a window does not get to. A window
-  // that could name a definition could address a turn to any definition on the machine.
-  const { files: _files, dropped: _dropped, recall: _recall, definition: _definition, attachments, ...rest } = held
-  return { ...rest, files: attachmentPaths(typeof rest.session === 'string' ? rest.session : '', attachments) }
 }
 
 app.whenReady().then(() => {

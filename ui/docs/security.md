@@ -26,8 +26,8 @@ and limits. Do not assume every filesystem operation uses the helper.
 File contents **do** cross IPC for previews and bot-memory editing. These operations
 do not themselves send the contents to a model. File attachments require a native
 picker, a session-bound grant, validation at send time, and an explicit Send action.
-The main process strips raw `files` and `dropped` lists from renderer turn requests
-and composes authorized paths itself. Bot briefings are also composed by the main process.
+The main process strips raw `files`, `dropped`, `attachments` and `images` from renderer
+turn requests and composes authorized paths itself. Bot briefings are also composed by the main process.
 Both lists are admitted as trusted context, so the only path a bot contributes is the
 briefing, whose every byte the main process wrote from what somebody typed. A bot's memory
 is neither named nor quoted in it: the briefing says where the memory is and the model reads
