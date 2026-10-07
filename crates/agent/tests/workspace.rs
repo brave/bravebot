@@ -7985,7 +7985,8 @@ fn a_checkouts_candidate_is_read_with_its_paths_label_and_nothing_else_is_read()
     std::fs::write(made.root().join("src/new.rs"), "fn new() {}\n").unwrap();
     info.record_typed("src/new.rs");
 
-    let read = |id: &str, path: &str| workspace.read_checkout_file(&policy, id, path);
+    let read =
+        |id: &str, path: &str| workspace.read_checkout_file(&policy, id, path, &Default::default());
     assert_eq!(
         read("c1", "src/new.rs").expect("a candidate").label(),
         Label::trusted_private(),
@@ -8030,7 +8031,7 @@ fn a_checkouts_candidate_is_read_with_its_paths_label_and_nothing_else_is_read()
     info.record_typed("docs/denied.md");
     assert_eq!(
         workspace
-            .read_checkout_file(&denying_it, "c1", "docs/denied.md")
+            .read_checkout_file(&denying_it, "c1", "docs/denied.md", &Default::default())
             .unwrap_err(),
         CheckoutRead::Denied
     );
@@ -8311,6 +8312,98 @@ fn read_git_in_a_checkout_is_answered_without_reading_its_dot_git() {
     );
     let log = asked_in(&made, &mut policy, Query::Log).unwrap();
     assert!(log.contains("first"), "{log}");
+}
+
+/// CHECKOUT-13. The status over a session's checkout lists the files a program wrote there, which
+/// no tool recorded, and the ones it deleted apart from the rest, without reading `<checkout>/.git`.
+#[test]
+fn a_checkouts_status_lists_what_changed_there_and_what_was_deleted() {
+    let (_scratch, state, workspace) = repository_with_a_state_directory(
+        "checkout-status-lists",
+        &[
+            ("README", "hello\n"),
+            ("gone.txt", "bye\n"),
+            ("same.txt", "s\n"),
+        ],
+    );
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    made.checkout().unwrap().mark_worked_in();
+    std::fs::write(made.root().join(".git"), "gitdir: /nowhere/at/all\n").unwrap();
+
+    let clean = workspace.checkout_status(&mut policy, "c1").expect("clean");
+    assert_eq!(
+        (clean.changed.len(), clean.removed.len(), clean.complete),
+        (0, 0, true),
+        "a fresh checkout listed something: {clean:?}"
+    );
+
+    std::fs::write(made.root().join("README"), "changed\n").unwrap();
+    std::fs::write(made.root().join("new.txt"), "x\n").unwrap();
+    std::fs::remove_file(made.root().join("gone.txt")).unwrap();
+    let listed = workspace
+        .checkout_status(&mut policy, "c1")
+        .expect("listed");
+    assert_eq!(listed.changed, ["README", "new.txt"]);
+    assert_eq!(listed.removed, ["gone.txt"]);
+    assert!(listed.complete, "{listed:?}");
+    assert!(
+        workspace.checkout_status(&mut policy, "c9").is_err(),
+        "a checkout the session keeps nothing for had a status"
+    );
+}
+
+/// CHECKOUT-13. No status is read in a checkout where one path in it is distrusted, since a status
+/// reads every file; a file a rule withholds is not listed and the listing says it is not whole;
+/// and a directory of new files git did not open says the same.
+#[test]
+fn a_checkouts_status_is_declined_where_a_path_is_distrusted_and_says_what_it_left_out() {
+    use bravebot_agent::git::Declined;
+    let (_scratch, state, workspace) = repository_with_a_state_directory(
+        "checkout-status-gaps",
+        &[("README", "hello\n"), ("secret.txt", "s\n")],
+    );
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    made.checkout().unwrap().mark_worked_in();
+
+    std::fs::write(made.root().join("README"), "changed\n").unwrap();
+    std::fs::write(made.root().join("secret.txt"), "changed\n").unwrap();
+    std::fs::create_dir_all(made.root().join("fresh")).unwrap();
+    std::fs::write(made.root().join("fresh/a.txt"), "a\n").unwrap();
+    let rule = format!("Read(/{}/secret.txt)", made.root().display());
+    let mut denying_sink = RecordingSink::new();
+    let root = made.root().to_string_lossy().into_owned();
+    let mut denying = checkout_policy(&workspace, &mut denying_sink, &[".", &root], &[&rule]);
+    let listed = workspace
+        .checkout_status(&mut denying, "c1")
+        .expect("listed");
+    assert_eq!(
+        listed.changed,
+        ["README", "fresh/a.txt"],
+        "a withheld file was listed, or a file in a directory of new files was not"
+    );
+    assert!(
+        !listed.complete,
+        "a listing that left files out said it was whole"
+    );
+
+    assert!(authority.publish(
+        &format!("{}/README", made.checkout().unwrap().key()),
+        Integrity::Untrusted
+    ));
+    assert_eq!(
+        workspace.checkout_status(&mut policy, "c1").unwrap_err(),
+        Declined::UntrustedTree,
+        "a status was read over a checkout with a distrusted file"
+    );
 }
 
 /// CHECKOUT-12. The checkout's `HEAD` and index are the entry's, not the common directory's: a

@@ -287,8 +287,9 @@ pub(crate) fn checkout_candidates(candidates: &crate::workspace::Candidates) -> 
         ));
     }
     note.push_str(
-        " The checkout's status could not be read, so a file a program wrote there other than by a \
-         redirection is not named.",
+        " It does not name a file a program wrote there other than by a redirection: \
+         apply_checkout asks the checkout's status for those, and gets an answer only where the \
+         session trusts the whole checkout.",
     );
     note
 }
@@ -1053,6 +1054,9 @@ mod tests {
             ),
             "{note}"
         );
-        assert!(note.ends_with("is not named."), "{note}");
+        assert!(
+            note.contains("apply_checkout asks the checkout's status"),
+            "{note}"
+        );
     }
 }

@@ -27920,9 +27920,102 @@ fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
         told.iter().any(|body| body.contains(
             "The driver recorded writes there to `README`, `notes/out.txt` and `printed.txt`. It \
              also recorded 1 write through a reference, and does not name the file a reference \
-             holds. The checkout's status could not be read"
+             holds. It does not name a file a program wrote there"
         )),
         "the planner was not told the paths written in the checkout"
+    );
+}
+
+/// CHECKOUT-13, CHECKOUT-14. A file a program wrote in a kept checkout, by no tool and no
+/// redirection, comes back through the apply because the checkout's status lists it, and a file the
+/// program deleted is named as deleted and left in the working directory.
+#[test]
+fn a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status() {
+    let scratch = Scratch::new("checkout-status-apply");
+    let home = Scratch::new("checkout-status-apply-home");
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "committed\n"), ("gone.txt", "bye\n")],
+        "first",
+    );
+    repository::check_out(
+        &scratch.path,
+        &[("README", "committed\n"), ("gone.txt", "bye\n")],
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PARENT-OF-A-PROGRAMS-WORK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"RUN-TWO-PROGRAMS","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                tool_request("apply_checkout", r#"{"checkout":"c1"}"#),
+                tool_request(
+                    "apply_checkout",
+                    r#"{"checkout":"c1","paths":["gone.txt"]}"#,
+                ),
+                reply_with("applied"),
+            ],
+        ),
+        (
+            "RUN-TWO-PROGRAMS",
+            vec![
+                tool_request("run", r#"{"command":"cp README copied.txt"}"#),
+                tool_request("run", r#"{"command":"mkdir sub"}"#),
+                tool_request("run", r#"{"command":"cp README sub/nested.txt"}"#),
+                tool_request("run", r#"{"command":"rm gone.txt"}"#),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("PARENT-OF-A-PROGRAMS-WORK").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+    let asked = every_request(&received);
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("copied.txt")).ok(),
+        Some("committed\n".to_string()),
+        "a file only the status listed did not come back"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("sub/nested.txt")).ok(),
+        Some("committed\n".to_string()),
+        "a file in a directory of new files did not come back"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("gone.txt")).ok(),
+        Some("bye\n".to_string()),
+        "a deletion in the checkout removed the working directory's file"
+    );
+    assert!(
+        asked.iter().any(|body| body
+            .contains("lists gone.txt as deleted there, and a deletion is not brought back")),
+        "a path listed as deleted was not refused as one"
+    );
+    assert!(
+        asked.iter().any(|body| body.contains(
+            "The checkout's status lists `gone.txt` as deleted there; a deletion is not brought \
+             back"
+        )),
+        "the deletion was not named"
     );
 }
 
