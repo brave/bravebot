@@ -357,9 +357,13 @@ named here and nowhere else:
 | `!` | arms a mode that changes what Enter does, over whatever the box holds when the turn ends ([shell-mode.md](shell-mode.md)) |
 | Up | takes back what is waiting before it walks the history (INPUT-18) |
 
-**What is offered beneath the box is machinery for finishing a line that is about to be sent**, so a
-running turn offers nothing to complete. The list of keys (INPUT-13) is not that: it is
-documentation somebody asked for, and it is drawn whether or not a turn is running.
+**What is offered beneath the box while work runs is the commands and the list of keys.** A line
+that is a slash word alone is offered the commands it could become, with the rows and keys it has at
+rest, because Enter carries a command out or queues it ([CMD-8](commands.md#CMD-8)) and a person has
+to be able to find the word. Each row says whether Enter on it runs the command now or waits for the
+turn. Nothing else is offered to complete: not the skills, which are not read while work runs, and
+not files. The list of keys (INPUT-13) is documentation somebody asked for, and it is drawn whether
+or not a turn is running.
 
 **Why.** The box took nothing at all mid-turn once, and it was opened up a piece at a time:
 characters, then editing, then pasting. Walking the history was left behind, so a person could
@@ -381,7 +385,12 @@ attached to no press.
 `verified-by: bravebot_tui::app::the_two_paths_answer_the_same_set_of_keys`
 `verified-by: bravebot_tui::app::the_way_out_stops_being_offered_at_the_next_press_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_question_mark_lists_the_keys_while_a_turn_runs`
-`verified-by: bravebot_tui::app::nothing_is_offered_for_completion_while_a_turn_runs`
+`verified-by: bravebot_tui::app::a_slash_offers_every_command_and_no_skill_while_a_turn_runs`
+`verified-by: bravebot_tui::app::nothing_is_offered_while_a_turn_runs_for_a_prompt_an_unknown_word_or_a_file`
+`verified-by: bravebot_tui::app::nothing_is_offered_in_shell_mode_while_work_runs`
+`verified-by: bravebot_tui::app::tab_completes_a_half_typed_command_while_a_turn_runs`
+`verified-by: bravebot_tui::app::enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs`
+`verified-by: bravebot_tui::app::the_arrows_choose_the_row_while_a_turn_runs`
 `verified-by: bravebot_tui::app::the_trail_can_be_asked_for_while_a_turn_runs`
 `verified-by: bravebot_tui::render::a_question_mark_lists_every_shortcut_while_a_turn_runs`
 `verified-by: bravebot_tui::app::up_recalls_a_previous_prompt_while_a_turn_is_running`

@@ -2093,6 +2093,16 @@ command-rewind = List the turns a rewind could go back to, or go back that many
 command-exit = Leave
 
 
+## When Enter carries out a command listed while work runs
+
+# Carried out as soon as Enter is pressed.
+command-when-now = now
+# Waits for the work to end, in the order typed.
+command-when-queued = queued
+# Carried out at once or queued, by what the line says and what is already waiting.
+command-when-either = now/queued
+
+
 ## Where a skill offered after a slash was found
 
 skill-from-project = (project)

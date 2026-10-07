@@ -5921,11 +5921,22 @@ impl Session {
         if self.shortcuts {
             return Offered::Shortcuts;
         }
-        // A line being composed while a turn runs is one Enter will queue; what is offered for it is
-        // machinery for finishing something about to be sent, which is the one thing a running turn
-        // refuses.
+        // A command typed while work runs is carried out or queued (CMD-8), so the words are
+        // offered to be found. Skills and files are not: the skills are not read while work runs.
         if self.status == Status::Working {
-            return Offered::Nothing;
+            let commands = if self.shell {
+                Vec::new()
+            } else {
+                crate::app::completions(&self.input)
+            };
+            return if commands.is_empty() {
+                Offered::Nothing
+            } else {
+                Offered::Slash {
+                    commands,
+                    skills: Vec::new(),
+                }
+            };
         }
         // A command line is neither a slash command nor a sentence with a file reference in it.
         // `/usr/bin/env` and an address with an `@` in it are ordinary arguments here, and

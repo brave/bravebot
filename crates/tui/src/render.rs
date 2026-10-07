@@ -3266,6 +3266,21 @@ fn slash_lines(
         .max()
         .unwrap_or(0);
 
+    // While work runs a column between the word and its description says when Enter carries the
+    // command out (CMD-8). Sized for the longest of the three so the descriptions stay in line.
+    let working = session.status == Status::Working;
+    let when = working.then(|| {
+        [
+            t!(command_when_now),
+            t!(command_when_queued),
+            t!(command_when_either),
+        ]
+        .iter()
+        .map(|label| label.chars().count())
+        .max()
+        .unwrap_or(0)
+    });
+
     let highlighted = session.highlighted_completion();
     let mut lines: Vec<Line<'static>> = commands
         .iter()
@@ -3275,6 +3290,13 @@ fn slash_lines(
             let padding = column.saturating_sub(word.chars().count()) + 2;
             let mut row = slash_row(chosen, word);
             row.push(Span::raw(" ".repeat(padding)));
+            if let Some(room) = when {
+                let label = command_when(session, command);
+                row.push(Span::styled(label, dim()));
+                row.push(Span::raw(
+                    " ".repeat(room.saturating_sub(label.chars().count()) + 2),
+                ));
+            }
             row.push(Span::styled(command.description, dim()));
             Line::from(row)
         })
@@ -3306,6 +3328,27 @@ fn slash_lines(
         Line::from(row)
     }));
     lines
+}
+
+/// When Enter on a command carries it out, as the session stands (CMD-8).
+///
+/// Work that is not a turn, a compaction or an aside, holds every command back, whatever the table
+/// says of one typed during a turn.
+fn command_when(session: &Session, command: &crate::app::Command) -> &'static str {
+    use crate::app::MidTurn;
+    if !session.a_turn_is_running() {
+        return t!(command_when_queued);
+    }
+    match command.mid_turn {
+        MidTurn::Runs if crate::app::waits_behind_the_queue(session, command.name) => {
+            t!(command_when_queued)
+        }
+        MidTurn::Runs => t!(command_when_now),
+        MidTurn::Waits => t!(command_when_queued),
+        MidTurn::Changes | MidTurn::RunsWhenNamed | MidTurn::RunsUnlessItStarts => {
+            t!(command_when_either)
+        }
+    }
 }
 
 /// How wide the margin before a slash row's word is, the marker for the chosen row included.
@@ -8017,6 +8060,87 @@ mod tests {
             assert!(output.contains(&key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
+    }
+
+    /// The row of the list that names `word`, the last one drawn since a waiting line is drawn above
+    /// it, so a label is read from the row it is drawn on.
+    fn row_for(output: &str, width: usize, word: &str) -> String {
+        let cells: Vec<char> = output.chars().collect();
+        cells
+            .chunks(width)
+            .map(|row| row.iter().collect::<String>())
+            .rfind(|row| row.contains(word))
+            .unwrap_or_else(|| panic!("{word} has no row"))
+    }
+
+    fn labelled(row: &str, label: &str) -> bool {
+        row.contains(&format!("  {label}  "))
+    }
+
+    /// Rejects: a label taken from somewhere other than the command's own column of the table, or
+    /// one shared by every row, either of which tells a person `/model` runs now when it waits.
+    #[test]
+    fn each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs() {
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit().expect("the prompt is sent");
+        session.type_char('/');
+
+        let output = rendered_at(&session, 120, 40);
+
+        assert!(labelled(&row_for(&output, 120, "/cost"), "now"));
+        assert!(labelled(&row_for(&output, 120, "/model"), "queued"));
+        assert!(labelled(
+            &row_for(&output, 120, "/theme [name]"),
+            "now/queued"
+        ));
+    }
+
+    /// Rejects: a `now` label on a command that Enter would queue, because a line of the same
+    /// command already waits ahead of it.
+    #[test]
+    fn a_row_reads_queued_while_a_line_of_its_command_waits() {
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit().expect("the prompt is sent");
+        for c in "/cost".chars() {
+            session.type_char(c);
+        }
+        assert!(session.queue_command(), "the command did not wait");
+        session.type_char('/');
+
+        let output = rendered_at(&session, 120, 40);
+
+        assert!(labelled(&row_for(&output, 120, "/cost"), "queued"));
+        assert!(labelled(&row_for(&output, 120, "/status"), "now"));
+    }
+
+    /// Rejects: a label that is drawn at rest, where there is no turn to wait for and nothing to
+    /// tell apart.
+    #[test]
+    fn the_rows_carry_no_label_when_nothing_is_running() {
+        let mut session = Session::new("none");
+        session.type_char('/');
+
+        let row = row_for(&rendered_at(&session, 120, 40), 120, "/cost");
+
+        for label in ["now", "queued", "now/queued"] {
+            assert!(!labelled(&row, label), "{label} drawn at rest");
+        }
+    }
+
+    /// Rejects: marking `/cost` as running now during a compaction or an aside, where every
+    /// command waits whatever the table says of one typed during a turn.
+    #[test]
+    fn every_row_is_queued_during_an_aside() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        session.type_char('/');
+
+        let output = rendered_at(&session, 120, 40);
+
+        assert!(labelled(&row_for(&output, 120, "/cost"), "queued"));
+        assert!(!labelled(&row_for(&output, 120, "/cost"), "now"));
     }
 
     /// A command carried out mid-turn answers into a list the transcript does not hold until the
