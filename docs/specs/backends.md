@@ -1009,7 +1009,7 @@ asking a service which refuses costs one round trip while not asking costs every
 **How long the service keeps it is a person's choice.** A `promptCacheTtl` of `5m` or `1h` in the
 settings puts a `ttl` of that word on each breakpoint, the prompt's and the conversation's alike.
 Absent, or any other word, nothing is added and the service keeps its own default, so a build nobody
-has configured sends what it sent before. The longer lifetime is charged at a higher write rate, which
+has configured sends breakpoints with no `ttl` field. The longer lifetime is charged at a higher write rate, which
 is why the default is no lifetime rather than the longest. The value comes from the settings and
 never from message content, so no branch depends on an untrusted byte.
 
