@@ -176,6 +176,9 @@ pub struct Bedrock {
     /// Set by [`crate::Config`] rather than here, because a `provider` block is parsed with no
     /// environment to consult and both routes to an account have to answer the same.
     output_budget: Option<u64>,
+    /// The cache lifetime the settings chose, set by [`crate::Config`] for the reason
+    /// `output_budget` is.
+    cache_ttl: Option<crate::CacheTtl>,
 }
 
 /// The context window a Bedrock model is assumed to have, in prompt tokens.
@@ -244,6 +247,7 @@ impl Bedrock {
             profile,
             models,
             output_budget: None,
+            cache_ttl: None,
         })
     }
 
@@ -285,6 +289,7 @@ impl Bedrock {
             profile,
             models,
             output_budget: None,
+            cache_ttl: None,
         }
     }
 
@@ -292,6 +297,17 @@ impl Bedrock {
     pub fn with_output_budget(mut self, budget: Option<u64>) -> Self {
         self.output_budget = budget;
         self
+    }
+
+    /// The same account with the settings' cache lifetime applied to every request it sends.
+    pub fn with_cache_ttl(mut self, ttl: Option<crate::CacheTtl>) -> Self {
+        self.cache_ttl = ttl;
+        self
+    }
+
+    /// The cache lifetime a request to this account asks for, where somebody chose one.
+    pub fn cache_ttl(&self) -> Option<crate::CacheTtl> {
+        self.cache_ttl
     }
 
     /// How long a reply from `model` may run before the service cuts it off.

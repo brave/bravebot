@@ -942,6 +942,36 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
+/// How long a provider keeps a cached prompt prefix after the last request that read it.
+///
+/// The two lifetimes the providers accept. A person's choice, read from the settings and never
+/// derived from anything a conversation holds. The longer one is charged at a higher write rate, so
+/// nothing is sent until somebody chooses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheTtl {
+    FiveMinutes,
+    OneHour,
+}
+
+impl CacheTtl {
+    /// Every lifetime, for a test that has to cover each.
+    pub const ALL: [Self; 2] = [Self::FiveMinutes, Self::OneHour];
+
+    /// The word a cache breakpoint carries as its `ttl`, which is also how the setting spells it.
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::FiveMinutes => "5m",
+            Self::OneHour => "1h",
+        }
+    }
+
+    /// The lifetime `word` names, exactly as [`CacheTtl::wire`] spells it, or `None` for anything
+    /// else. A word that names neither is absence rather than a guess at the nearest lifetime.
+    pub fn parse(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|ttl| ttl.wire() == word.trim())
+    }
+}
+
 /// Everything needed to talk to the backends this build can reach.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -983,6 +1013,11 @@ pub struct Config {
     ///
     /// `None` offers no advisor. [`Config::advisor`] resolves a tier word in it.
     pub advisor_model: Option<String>,
+    /// The cache lifetime the settings in force chose for requests to a gateway, if they chose one.
+    ///
+    /// `None` sends no lifetime, so every service keeps its own default. Bedrock accounts carry the
+    /// same choice ([`bedrock::Bedrock::cache_ttl`]), set beside this where the settings are read.
+    pub prompt_cache_ttl: Option<CacheTtl>,
     /// How many prompt tokens one request may reach before the conversation is compacted.
     ///
     /// A guess, and it has to be one. The server reports what a request cost but never what it
@@ -1160,6 +1195,15 @@ impl Config {
         // (BACKEND-48).
         config.models = managed.models().clone();
         config.advisor_model = settings.advisor_model().map(str::to_string);
+        let ttl = settings.prompt_cache_ttl();
+        config.prompt_cache_ttl = ttl;
+        config.bedrock = config.bedrock.map(|account| account.with_cache_ttl(ttl));
+        for entry in &mut config.providers {
+            entry.bedrock = entry
+                .bedrock
+                .take()
+                .map(|account| account.with_cache_ttl(ttl));
+        }
         Ok(config)
     }
 
@@ -1277,6 +1321,7 @@ impl Config {
             premium_endpoint,
             default_model,
             advisor_model: None,
+            prompt_cache_ttl: None,
             context_budget,
             budget_was_chosen,
             budget_was_advertised,
@@ -4053,5 +4098,50 @@ mod tests {
         let shown = format!("{config:?}");
         assert!(!shown.contains("test-signing-key"), "leaked: {shown}");
         assert!(shown.contains("redacted"));
+    }
+
+    /// The lifetime the settings chose reaches every place a request is built from: the gateway
+    /// client's configuration, the account the environment names, and one a provider block names. A
+    /// settings file that chose none leaves all three at the provider's default.
+    #[test]
+    fn the_cache_lifetime_setting_reaches_every_account() {
+        let exported = |key: &str| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            other => complete_env(other),
+        };
+        let block = r#""provider": {"amazon-bedrock": {"options": {"region": "us-west-2"},
+            "models": {"anthropic.claude-sonnet-4-5": {}}}}"#;
+        let ttls = |config: &Config| {
+            (
+                config.prompt_cache_ttl,
+                config
+                    .bedrock
+                    .as_ref()
+                    .and_then(|account| account.cache_ttl()),
+                config
+                    .providers
+                    .iter()
+                    .filter_map(|entry| entry.bedrock.as_ref())
+                    .map(|account| account.cache_ttl())
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let chosen = Settings::parse(&format!(r#"{{"promptCacheTtl": "1h", {block}}}"#));
+        let config = resolved(&chosen, exported, complete_env).expect("configured");
+        assert_eq!(
+            ttls(&config),
+            (
+                Some(CacheTtl::OneHour),
+                Some(CacheTtl::OneHour),
+                vec![Some(CacheTtl::OneHour)]
+            )
+        );
+
+        let unchosen = Settings::parse(&format!("{{{block}}}"));
+        let config = resolved(&unchosen, exported, complete_env).expect("configured");
+        assert_eq!(ttls(&config), (None, None, vec![None]));
     }
 }

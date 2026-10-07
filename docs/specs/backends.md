@@ -1006,6 +1006,19 @@ wire format, which marks a prefix a different way and marks less of one: the sys
 last thing the user said, never a result. That is BACKEND-32, and it turns on the same trade, that
 asking a service which refuses costs one round trip while not asking costs every request.
 
+**How long the service keeps it is a person's choice.** A `promptCacheTtl` of `5m` or `1h` in the
+settings puts a `ttl` of that word on each breakpoint, the prompt's and the conversation's alike.
+Absent, or any other word, nothing is added and the service keeps its own default, so a build nobody
+has configured sends breakpoints with no `ttl` field. The longer lifetime is charged at a higher write rate, which
+is why the default is no lifetime rather than the longest. The value comes from the settings and
+never from message content, so no branch depends on an untrusted byte.
+
+**A model that refuses the lifetime keeps its breakpoints.** A model that reads a breakpoint and not
+a lifetime on it refuses the request in the same way a model without caching does. A refusal of a
+request carrying a lifetime is therefore sent once more with the lifetime removed and the breakpoints
+kept, ahead of the retry that removes the breakpoints, and where that answers no later request in the
+process sends that model a lifetime. A request carrying no lifetime is not affected.
+
 **A breakpoint carries no label and asks for nothing.** It marks a prefix of a request that has
 already been assembled, after every gate that decided what may be in it. Which bytes the service
 kept from a previous request of the same session cannot put a byte into this one that was not sent,
@@ -1013,6 +1026,12 @@ so nothing in [labels.md](labels.md) reads differently for a request that carrie
 for one that does not.
 
 `verified-by: bravebot_bedrock::protocol::the_system_prompt_carries_a_breakpoint`
+`verified-by: bravebot_bedrock::protocol::a_chosen_lifetime_is_stated_on_every_breakpoint`
+`verified-by: bravebot_bedrock::protocol::no_lifetime_is_sent_where_none_was_chosen`
+`verified-by: bravebot_bedrock::lib::the_chosen_lifetime_is_sent_until_the_model_refuses_it`
+`verified-by: bravebot_bedrock::lib::a_refused_lifetime_is_given_up_before_the_breakpoints_and_remembered`
+`verified-by: bravebot_config::settings::only_five_minutes_or_an_hour_names_a_cache_lifetime`
+`verified-by: bravebot_config::lib::the_cache_lifetime_setting_reaches_every_account`
 `verified-by: bravebot_bedrock::protocol::the_last_block_of_the_conversation_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::a_conversation_ending_in_a_tool_result_is_marked_too`
 `verified-by: bravebot_bedrock::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
@@ -1245,6 +1264,12 @@ again. This is BACKEND-27's rule and its reason, in the statuses this protocol s
 it: two gateways can offer the same name, and one of them can be the name Brave's own endpoint
 answers to. A refusal recorded against the id alone would stop the asking everywhere one appeared.
 
+**A gateway may be asked how long to keep it.** With a `promptCacheTtl` setting, `cache_control`
+becomes `{"type": "ephemeral", "ttl": "1h"}` (or `"5m"`) on a request to a gateway, and is unchanged
+on a request to Brave's own endpoint, which reads no such field. The refusal rule is BACKEND-27's: a
+gateway that refuses a request carrying a lifetime is sent it again without the lifetime and with the
+breakpoints, and is not sent one again for that model on that service.
+
 **Nothing here claims a service reads it.** What is established is that the request asks and that a
 service refusing it with an invalid-request status does not cost the turn. A service that objects
 some other way refuses the request as it would refuse any other, and the breakpoints are not what
@@ -1258,6 +1283,8 @@ and which bytes a service kept from an earlier request cannot put a byte into th
 sent.
 
 `verified-by: bravebot_aichat::protocol::the_system_prompt_and_the_last_thing_the_user_said_are_marked`
+`verified-by: bravebot_aichat::lib::a_chosen_lifetime_goes_to_a_gateway_and_to_nothing_else`
+`verified-by: bravebot_aichat::client::a_lifetime_a_gateway_refuses_is_given_up_before_the_breakpoints_and_remembered`
 `verified-by: bravebot_aichat::protocol::a_result_the_assistant_asked_for_is_not_marked`
 `verified-by: bravebot_aichat::protocol::the_last_user_turn_is_marked_through_several_rounds_of_results`
 `verified-by: bravebot_aichat::protocol::a_request_giving_up_its_conversation_marks_the_prompt_alone`
@@ -2427,9 +2454,12 @@ strict one, refuses the request, and a conversation can change service between t
   that: BACKEND-31's figures are per turn, and the turn that compacted is charged for the write in
   the same figure as the rounds that profited from it.
 
-- **An ephemeral cache entry expires on a few minutes of inactivity, and nothing here tracks it.** A
-  person who thinks between turns misses more often than the token arithmetic suggests, and a miss
-  looks identical to a service that reports nothing: the reply carries a zero read either way.
+- **An ephemeral cache entry expires on inactivity, and nothing here tracks it.** The lifetime is
+  the provider's default of a few minutes unless the `promptCacheTtl` setting chooses one (BACKEND-27,
+  BACKEND-32), and the longer one is charged at a higher write rate, which is why nothing is sent until
+  a person chooses. A person who thinks between turns misses more often than the token arithmetic
+  suggests, and a miss looks identical to a service that reports nothing: the reply carries a zero
+  read either way.
   Neither figure says when the last request was, so nothing can distinguish a prefix that expired
   from one that was never established.
 

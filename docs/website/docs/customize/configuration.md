@@ -444,6 +444,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `model` | the model to request when nobody has chosen one ([below](#model)) |
 | `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
+| `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
@@ -607,6 +608,23 @@ the two cases worth knowing: the models that read no level, and the Brave endpoi
 and discards it. Taking the row for no level in the picker removes the record rather than writing an
 empty one, so your own file's level answers again in the next session; unset it there if you want
 none.
+
+### `promptCacheTtl`
+
+```json
+{ "promptCacheTtl": "1h" }
+```
+
+How long the service keeps the cached prompt after the last request that read it: `5m` for five
+minutes or `1h` for one hour. It applies to requests that go to an AWS account and to an
+OpenAI-compatible gateway, and not to Brave's own endpoint. A person who pauses for longer than the
+default lifetime between turns pays to read the whole conversation again; the one-hour lifetime avoids
+that, and the providers charge a higher rate to write it. With the key absent, bravebot sends no
+lifetime and every service keeps its own default. Any other word names nothing and sends nothing.
+
+A model that does not accept a lifetime refuses the request on it. That request is sent again with the
+lifetime removed and the cache breakpoints kept, and the model is not sent one again in that process.
+A model that does not accept breakpoints at all is handled as before.
 
 ### `editorMode`
 

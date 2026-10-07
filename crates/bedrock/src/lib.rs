@@ -146,6 +146,10 @@ impl std::error::Error for BedrockError {}
 pub struct Refusals {
     /// Cache breakpoints, which a model without prompt caching refuses along with the request.
     pub caching: bool,
+    /// The cache lifetime a person chose, which a model that reads breakpoints but not a lifetime
+    /// refuses along with the request. Given up before the breakpoints, so such a model still
+    /// caches for its own default.
+    pub cache_ttl: bool,
     /// The effort level, whose field belongs to the model's own provider.
     pub effort: bool,
     /// The ask for tool arguments as they are written, which is a beta of one provider's.
@@ -293,6 +297,12 @@ pub struct BedrockClient<'a> {
     /// True until a model refuses one, which is the only way to find out that it does not do
     /// prompt caching: an inference-profile ARN does not say which model is behind it.
     breakpoints: bool,
+    /// Whether requests still carry the cache lifetime the settings chose.
+    ///
+    /// True until a model refuses it, which is the only way to find out that it reads breakpoints
+    /// and not a lifetime on them. Nothing is sent where no lifetime was chosen, so this is only
+    /// ever given up by a request that carried one.
+    cache_ttl: bool,
     /// Whether requests still carry the effort level a turn was given.
     ///
     /// True until a model refuses the field, which is the only way to find out that it does not
@@ -360,6 +370,7 @@ impl<'a> BedrockClient<'a> {
             egress,
             cancel: None,
             breakpoints: true,
+            cache_ttl: true,
             effort: true,
             arguments_as_written: true,
             ceiling: true,
@@ -400,6 +411,10 @@ impl<'a> BedrockClient<'a> {
             match self.complete_once(policy, request) {
                 // Sent again immediately rather than after a wait: nothing is busy, the request was
                 // simply carrying something this model does not take.
+                Err(error) if self.worth_dropping_cache_ttl(&error) => {
+                    self.cache_ttl = false;
+                    probed = true;
+                }
                 Err(error) if self.worth_dropping_breakpoints(&error) => {
                     self.breakpoints = false;
                     probed = true;
@@ -429,6 +444,18 @@ impl<'a> BedrockClient<'a> {
                 }
             }
         }
+    }
+
+    /// Whether this failure is worth sending the same request again without the cache lifetime.
+    ///
+    /// Tried ahead of the breakpoints, which carry it: a model that reads a breakpoint and refuses
+    /// a lifetime on it keeps its caching at its own default, where the other order would give up
+    /// the caching for the sake of a lifetime. Only where a request carried one.
+    fn worth_dropping_cache_ttl(&self, error: &BedrockError) -> bool {
+        self.cache_ttl
+            && self.breakpoints
+            && self.config.cache_ttl().is_some()
+            && error.may_refuse_caching()
     }
 
     /// Whether this failure is worth sending the same request again without its cache breakpoints.
@@ -547,6 +574,7 @@ impl<'a> BedrockClient<'a> {
         }
         if failed {
             self.breakpoints = !self.recalled.caching;
+            self.cache_ttl = !self.recalled.cache_ttl;
             self.effort = !self.recalled.effort;
             self.arguments_as_written = !self.recalled.arguments_as_written;
             self.ceiling = !self.recalled.ceiling;
@@ -557,6 +585,7 @@ impl<'a> BedrockClient<'a> {
             &self.learned_for,
             Refusals {
                 caching: !self.breakpoints,
+                cache_ttl: !self.cache_ttl,
                 effort: !self.effort,
                 arguments_as_written: !self.arguments_as_written,
                 ceiling: !self.ceiling,
@@ -572,6 +601,7 @@ impl<'a> BedrockClient<'a> {
     fn recall(&mut self, model: &str) {
         let refusals = refusals(model);
         self.breakpoints = !refusals.caching;
+        self.cache_ttl = !refusals.cache_ttl;
         self.effort = !refusals.effort;
         self.arguments_as_written = !refusals.arguments_as_written;
         self.ceiling = !refusals.ceiling;
@@ -735,6 +765,10 @@ impl<'a> BedrockClient<'a> {
         let mut probed = false;
         loop {
             match self.stream_once(policy, request, attempt, &mut progress) {
+                Err(error) if self.worth_dropping_cache_ttl(&error) => {
+                    self.cache_ttl = false;
+                    probed = true;
+                }
                 Err(error) if self.worth_dropping_breakpoints(&error) => {
                     self.breakpoints = false;
                     probed = true;
@@ -959,7 +993,8 @@ impl<'a> BedrockClient<'a> {
     ) -> protocol::ConverseRequest {
         let converse = protocol::request_from(&request.messages, request.tools.as_deref())
             .with_ceiling(self.ceiling_for(model))
-            .with_effort(request.effort.filter(|_| self.effort));
+            .with_effort(request.effort.filter(|_| self.effort))
+            .with_cache_ttl(self.config.cache_ttl().filter(|_| self.cache_ttl));
         let converse = if self.streams_arguments(request, streaming) {
             converse.with_arguments_as_written()
         } else {
@@ -1386,6 +1421,7 @@ mod tests {
             refusals(model),
             Refusals {
                 caching: true,
+                cache_ttl: false,
                 effort: true,
                 arguments_as_written: false,
                 ceiling: false,
@@ -2617,6 +2653,7 @@ mod tests {
             refusals(model),
             Refusals {
                 caching: false,
+                cache_ttl: false,
                 effort: true,
                 arguments_as_written: true,
                 ceiling: true,
@@ -4175,5 +4212,151 @@ mod tests {
                 assert_eq!(client.attempts(), 0);
             }
         }
+    }
+
+    /// The lifetime the settings chose goes on the request only for an account that carries one, and
+    /// not once the model has refused it.
+    #[test]
+    fn the_chosen_lifetime_is_sent_until_the_model_refuses_it() {
+        let egress = Egress::new();
+        let request = writing_a_file("opus-arn");
+        let ttl_of = |client: &BedrockClient| {
+            serde_json::to_value(client.converse_for(&request, "opus-arn", false))
+                .expect("a body")
+                .pointer("/messages/0/content/1/cachePoint/ttl")
+                .cloned()
+        };
+
+        let plain = config();
+        assert_eq!(ttl_of(&BedrockClient::new(&plain, &egress)), None);
+
+        let chosen = config().with_cache_ttl(Some(bravebot_config::CacheTtl::OneHour));
+        let mut client = BedrockClient::new(&chosen, &egress);
+        assert_eq!(ttl_of(&client), Some(json!("1h")));
+        client.cache_ttl = false;
+        assert_eq!(
+            ttl_of(&client),
+            None,
+            "a lifetime the model refused was sent again"
+        );
+    }
+
+    /// A model that reads a breakpoint and refuses a lifetime on it keeps its caching: the lifetime
+    /// is given up first, the request answers with its breakpoints, and the next turn starts
+    /// without the lifetime and with the breakpoints.
+    #[test]
+    fn a_refused_lifetime_is_given_up_before_the_breakpoints_and_remembered() {
+        let model = "a-model-that-refuses-a-lifetime";
+        let config = config_for(model).with_cache_ttl(Some(bravebot_config::CacheTtl::OneHour));
+        let request = ChatRequest::new(model, vec![Message::user("write fish.py")]);
+
+        let (result, sent) = stream_against(
+            &config,
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), answered()],
+        );
+
+        result.expect("the request without the lifetime answers");
+        let shape = |body: &serde_json::Value| {
+            (
+                body.pointer("/messages/0/content/1/cachePoint").cloned(),
+                body.pointer("/messages/0/content/1/cachePoint/ttl")
+                    .cloned(),
+            )
+        };
+        assert_eq!(
+            sent.iter().map(shape).collect::<Vec<_>>(),
+            [
+                (
+                    Some(json!({"type": "default", "ttl": "1h"})),
+                    Some(json!("1h"))
+                ),
+                (Some(json!({"type": "default"})), None),
+            ],
+            "the retry gave up the breakpoints with the lifetime, or kept the lifetime"
+        );
+        assert_eq!(
+            refusals(model),
+            Refusals {
+                cache_ttl: true,
+                ..Refusals::default()
+            }
+        );
+
+        let egress = Egress::new();
+        let mut next = BedrockClient::new(&config, &egress);
+        next.recall(model);
+        assert!(
+            !next.cache_ttl && next.breakpoints,
+            "it asked all over again"
+        );
+    }
+
+    /// The whole-reply path gives up a refused lifetime the same way the streamed one does, ahead
+    /// of the breakpoints.
+    #[test]
+    fn a_whole_reply_request_gives_up_a_refused_lifetime_before_the_breakpoints() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let model = "a-model-that-refuses-a-lifetime-in-a-whole-reply";
+        let config = config_for(model).with_cache_ttl(Some(bravebot_config::CacheTtl::OneHour));
+        let request = ChatRequest::new(model, vec![Message::user("write fish.py")]);
+        let body = serde_json::json!({
+            "output": {"message": {"content": [{"text": "done"}]}},
+            "usage": {"inputTokens": 100, "outputTokens": 7}
+        })
+        .to_string();
+        let mut answer = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        answer.extend(body.into_bytes());
+        let (http, received) =
+            scripted_responses(vec![refused_with(REFUSED_CACHING_STATUS), answer]);
+        let egress = Egress::new();
+        let mut client = BedrockClient::new(&config, &egress);
+        client.test_request = Some(http);
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+
+        client
+            .complete(&mut policy, &request)
+            .expect("the request without the lifetime answers");
+
+        let sent: Vec<serde_json::Value> = (0..client.attempts())
+            .map(|_| {
+                serde_json::from_slice(
+                    &received
+                        .recv_timeout(Duration::from_secs(2))
+                        .expect("an attempt the server read"),
+                )
+                .expect("a JSON body")
+            })
+            .collect();
+        let point =
+            |body: &serde_json::Value| body.pointer("/messages/0/content/1/cachePoint").cloned();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(
+            point(&sent[0]),
+            Some(json!({"type": "default", "ttl": "1h"}))
+        );
+        assert_eq!(
+            point(&sent[1]),
+            Some(json!({"type": "default"})),
+            "the retry gave up the breakpoints with the lifetime, or kept the lifetime"
+        );
+        assert!(refusals(model).cache_ttl);
     }
 }

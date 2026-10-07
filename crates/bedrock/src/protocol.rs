@@ -52,13 +52,27 @@ const DOCUMENT_FORMATS: [(&str, &str); 1] = [("application/pdf", "pdf")];
 pub struct CachePoint {
     #[serde(rename = "type")]
     pub kind: &'static str,
+    /// How long the service keeps what this point covers, or absent for the service's own default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<&'static str>,
 }
 
 impl CachePoint {
     /// The only kind this API offers, and the only one worth asking for: a turn re-sends its whole
     /// history every round, and rounds are seconds apart.
     pub fn new() -> Self {
-        Self { kind: "default" }
+        Self {
+            kind: "default",
+            ttl: None,
+        }
+    }
+
+    /// The same point asking the service to keep its prefix for `ttl`.
+    pub fn lasting(ttl: bravebot_config::CacheTtl) -> Self {
+        Self {
+            ttl: Some(ttl.wire()),
+            ..Self::new()
+        }
     }
 }
 
@@ -493,6 +507,31 @@ impl ConverseRequest {
             message
                 .content
                 .retain(|block| !matches!(block, Block::CachePoint(_)));
+        }
+        self
+    }
+
+    /// The same request with every breakpoint asking the service to keep its prefix for `ttl`.
+    ///
+    /// Not every model reads a lifetime, and one that does not refuses the request, so this is
+    /// something a refusal is worth trying without before the breakpoints are given up. `None`
+    /// leaves each breakpoint as the service's default.
+    pub fn with_cache_ttl(mut self, ttl: Option<bravebot_config::CacheTtl>) -> Self {
+        let Some(ttl) = ttl else {
+            return self;
+        };
+        let point = CachePoint::lasting(ttl);
+        for block in self.system.iter_mut().flatten() {
+            if let SystemBlock::CachePoint(held) = block {
+                *held = point;
+            }
+        }
+        for message in &mut self.messages {
+            for block in &mut message.content {
+                if let Block::CachePoint(held) = block {
+                    *held = point;
+                }
+            }
         }
         self
     }
@@ -1652,5 +1691,41 @@ mod tests {
             serde_json::from_str(r#"{"stopReason":"end_turn"}"#).expect("parses");
         assert!(reply.output.is_none());
         assert_eq!(reply.stop_reason.as_deref(), Some("end_turn"));
+    }
+
+    /// Every breakpoint carries the lifetime asked for, the prompt's and the conversation's alike,
+    /// and each lifetime is its own word, so a request cannot pass by sending the same one for both.
+    #[test]
+    fn a_chosen_lifetime_is_stated_on_every_breakpoint() {
+        for ttl in bravebot_config::CacheTtl::ALL {
+            let request = request_from(
+                &[Message::system("be helpful"), Message::user("hello")],
+                None,
+            )
+            .with_cache_ttl(Some(ttl));
+            let body = serde_json::to_value(&request).expect("a body");
+            let point = serde_json::json!({"type": "default", "ttl": ttl.wire()});
+            assert_eq!(body["system"][1]["cachePoint"], point, "the prompt");
+            assert_eq!(
+                body["messages"][0]["content"][1]["cachePoint"], point,
+                "the end of the conversation"
+            );
+        }
+    }
+
+    /// Nothing chosen, nothing sent: the request is the one that went before the setting existed.
+    #[test]
+    fn no_lifetime_is_sent_where_none_was_chosen() {
+        let request = request_from(
+            &[Message::system("be helpful"), Message::user("hello")],
+            None,
+        )
+        .with_cache_ttl(None);
+        let body = serde_json::to_string(&request).expect("a body");
+        assert!(
+            body.contains(r#"{"cachePoint":{"type":"default"}}"#),
+            "{body}"
+        );
+        assert!(!body.contains("ttl"), "{body}");
     }
 }
