@@ -227,6 +227,28 @@ fn the_command_is_recorded_as_something_the_user_did() {
     assert_eq!(roles, vec![Role::User]);
 }
 
+/// SHELL-2: nothing asks. The only things a command line is handed are the line, the directory it
+/// runs in and a cancel flag, and the only thing the recording step is handed besides the result is a
+/// sink for the trail. Neither takes a confirmer or any other way to put a question to the person,
+/// so adding an approval prompt to either changes the signature this binds and stops compiling.
+#[test]
+fn a_command_line_is_run_and_recorded_without_any_way_to_ask() {
+    let run: fn(&str, &std::path::Path, &Cancel) -> Result<shell::Ran, ShellError> = shell::run;
+    let record: fn(
+        &str,
+        &shell::Ran,
+        &mut Conversation,
+        &mut NullSink,
+    ) -> Result<shell::Recorded, ShellError> = shell::record::<NullSink>;
+
+    let scratch = Scratch::new("asks-nothing");
+    let mut conversation = Conversation::new();
+    let ran = run("echo unasked", &scratch.path, &Cancel::new()).expect("it runs unasked");
+    let recorded =
+        record("echo unasked", &ran, &mut conversation, &mut NullSink).expect("it is recorded");
+    assert!(recorded.succeeded);
+}
+
 /// Labelling a command's output trusted is the most consequential decision in the feature, so it
 /// has to be visible in the trail rather than taken quietly.
 #[test]

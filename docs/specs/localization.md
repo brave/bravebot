@@ -121,6 +121,7 @@ make the output of every test depend on the machine it ran on, and a test that p
 sees is worth nothing if two people running it see different things.
 
 `verified-by: bravebot_i18n::lib::a_process_that_never_chose_a_locale_reads_the_reference`
+`verified-by: bravebot_i18n::lib::a_process_whose_environment_names_a_language_still_reads_the_reference_until_asked`
 
 ## Known costs
 

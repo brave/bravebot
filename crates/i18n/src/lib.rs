@@ -237,6 +237,33 @@ mod tests {
         assert_eq!(DEFAULT.tag(), "en-US");
     }
 
+    /// The same test run in a process whose environment asks for another language. A `locale()`
+    /// that read the environment lazily passes on an English or unset machine and fails here.
+    #[test]
+    fn a_process_whose_environment_names_a_language_still_reads_the_reference_until_asked() {
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let exe = std::env::current_exe().expect("the test binary has a path");
+        let other = LOCALES
+            .iter()
+            .find(|l| **l != DEFAULT)
+            .expect("a build ships a second catalog")
+            .tag();
+        let output = std::process::Command::new(exe)
+            .args([
+                "--exact",
+                "tests::a_process_that_never_chose_a_locale_reads_the_reference",
+            ])
+            .env(LOCALE, other)
+            .env("LC_ALL", other)
+            .env("LC_MESSAGES", other)
+            .env("LANG", other)
+            .output()
+            .expect("the test binary starts");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "child failed:\n{stdout}");
+        assert!(stdout.contains("1 passed"), "child ran nothing:\n{stdout}");
+    }
+
     /// The whole point of naming a catalog after a locale.
     #[test]
     fn a_request_takes_the_catalog_of_that_exact_name() {
