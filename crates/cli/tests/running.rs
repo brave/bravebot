@@ -9674,3 +9674,287 @@ fn a_bug_report_with_an_argument_is_refused() {
         0
     );
 }
+
+/// CLI-26: what a run offered and what became of a call to a program tool, with the flags that
+/// limit the tool set. The gateway's model asks to run `touch made.txt` whatever it is offered, so
+/// a limit that only edited the list the planner was shown, and left the name callable, would still
+/// make the file with the bypass flag on.
+///
+/// The first request is the list the planner was offered and the second carries what the call was
+/// answered with. The file is the effect a person would care about, and the run with no flag is the
+/// control that this machine makes it.
+#[cfg(unix)]
+fn a_limited_run_asked_for_a_program(name: &str, flags: &[&str]) -> (String, Option<String>, bool) {
+    let gateway = a_gateway_asking_to_run("touch made.txt");
+    let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    let mut arguments = flags.to_vec();
+    arguments.extend(["--dangerously-skip-permissions", "-p", "make a file"]);
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+    let output = bravebot_started_in(&scratch.path, &project, &environment, &arguments);
+    let offered = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    let answered = gateway.asked.recv_timeout(Duration::from_secs(60)).ok();
+    let made = project.join("made.txt").exists();
+    let _ = said(&output);
+    (offered, answered, made)
+}
+
+/// CLI-26: `--no-shell` takes `run` and the two tools that read what a program printed off the
+/// list, leaves the file tools, and answers a call to a name it took away as an unknown one.
+#[cfg(unix)]
+#[test]
+fn a_no_shell_run_offers_no_program_tool_and_refuses_a_call_to_one() {
+    let (offered, _, made) = a_limited_run_asked_for_a_program("cli-running-no-shell-control", &[]);
+    assert!(
+        offered.contains(r#""name":"run""#) && offered.contains(r#""name":"read_output""#),
+        "the control run was never offered a program tool, so the limited run proves nothing: {offered}"
+    );
+    assert!(made, "the control run never made its file");
+
+    let (offered, answered, made) =
+        a_limited_run_asked_for_a_program("cli-running-no-shell", &["--no-shell"]);
+    for taken in [
+        r#""name":"run""#,
+        r#""name":"read_output""#,
+        r#""name":"job_output""#,
+    ] {
+        assert!(!offered.contains(taken), "{taken} was offered: {offered}");
+    }
+    assert!(
+        offered.contains(r#""name":"read_file""#) && offered.contains(r#""name":"write_file""#),
+        "--no-shell took away more than the program tools: {offered}"
+    );
+    let answered = answered.expect("the call was answered with a second request");
+    assert!(
+        answered.contains("no such tool 'run'"),
+        "the call to run was not refused as an unknown name: {answered}"
+    );
+    assert!(!made, "a program ran although --no-shell was given");
+}
+
+/// CLI-26: `--tools` offers the tools it names and no others, and a call to one it left out is
+/// refused although the run was told to stop asking.
+#[cfg(unix)]
+#[test]
+fn a_tools_list_offers_only_what_it_names_and_refuses_a_call_to_any_other() {
+    let (offered, answered, made) = a_limited_run_asked_for_a_program(
+        "cli-running-tools-list",
+        &["--tools", "read_file, search"],
+    );
+    for kept in [r#""name":"read_file""#, r#""name":"search""#] {
+        assert!(offered.contains(kept), "{kept} was not offered: {offered}");
+    }
+    for left_out in [
+        r#""name":"run""#,
+        r#""name":"write_file""#,
+        r#""name":"list_files""#,
+        r#""name":"spawn_agent""#,
+    ] {
+        assert!(
+            !offered.contains(left_out),
+            "{left_out} was offered: {offered}"
+        );
+    }
+    let answered = answered.expect("the call was answered with a second request");
+    assert!(
+        answered.contains("no such tool 'run'"),
+        "the call to run was not refused as an unknown name: {answered}"
+    );
+    assert!(!made, "a program ran although --tools did not name run");
+}
+
+/// CLI-26: what the planner's delegate was offered and what became of its call to `run`, under the
+/// flags that limit the tool set. The planner asks for a checker, which asks to run
+/// `touch made.txt`, so a limit that held for the planner and not for the delegate would make the
+/// file with the bypass flag on.
+///
+/// The planner and the delegate are answered by what their request holds, because the planner asks
+/// again while the delegate runs. The delegate's first request is the list it was offered and its
+/// second carries what its call was answered with.
+#[cfg(unix)]
+fn a_limited_delegate_asked_for_a_program(
+    name: &str,
+    flags: &[&str],
+) -> (String, Option<String>, bool) {
+    let gateway = a_gateway(r#"["tools"]"#, |body| {
+        let answered = body.contains(r#""role":"tool""#);
+        let frame = match (body.contains("You are a delegated agent"), answered) {
+            (false, false) => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"spawn_agent",
+                        "arguments":serde_json::json!({
+                            "kind": "checker", "task": "make a file"}).to_string()}}]},
+                "finish_reason":"tool_calls"}]}),
+            (true, false) => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-2","type":"function","function":{
+                        "name":"run",
+                        "arguments":serde_json::json!({
+                            "command": "touch made.txt", "why": "make a file"}).to_string()}}]},
+                "finish_reason":"tool_calls"}]}),
+            _ => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    });
+    let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    let mut arguments = flags.to_vec();
+    arguments.extend(["--dangerously-skip-permissions", "-p", "make a file"]);
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+    let output = bravebot_started_in(&scratch.path, &project, &environment, &arguments);
+    // The run has exited, so every request it made is waiting. The delegate's are the ones that
+    // open with its own instructions, in the order it made them.
+    let mut delegates = gateway
+        .asked
+        .try_iter()
+        .filter(|request| request.contains("You are a delegated agent"));
+    let offered = delegates.next().expect("the delegate reached the gateway");
+    let answered = delegates.next();
+    let made = project.join("made.txt").exists();
+    let _ = said(&output);
+    (offered, answered, made)
+}
+
+/// CLI-26: a delegate is offered the tools the flags left, and a call of its own to one they took
+/// away is refused as an unknown name.
+#[cfg(unix)]
+#[test]
+fn a_delegate_is_limited_by_the_flags_the_run_was_given() {
+    let (offered, _, made) =
+        a_limited_delegate_asked_for_a_program("cli-running-delegate-control", &[]);
+    assert!(
+        offered.contains(r#""name":"run""#),
+        "the control delegate was never offered run, so the limited one proves nothing: {offered}"
+    );
+    assert!(made, "the control delegate never made its file");
+
+    for (name, flags) in [
+        ("cli-running-delegate-no-shell", vec!["--no-shell"]),
+        (
+            "cli-running-delegate-tools",
+            vec!["--tools", "spawn_agent,read_file"],
+        ),
+    ] {
+        let (offered, answered, made) = a_limited_delegate_asked_for_a_program(name, &flags);
+        assert!(
+            offered.contains(r#""name":"read_file""#),
+            "{flags:?} took away more than it named: {offered}"
+        );
+        for taken in [r#""name":"run""#, r#""name":"read_output""#] {
+            assert!(
+                !offered.contains(taken),
+                "{flags:?}: the delegate was offered {taken}: {offered}"
+            );
+        }
+        let answered = answered.expect("the delegate's call was answered with a second request");
+        assert!(
+            answered.contains("no such tool 'run'"),
+            "{flags:?}: the delegate's call to run was not refused as an unknown name: {answered}"
+        );
+        assert!(!made, "{flags:?}: the delegate ran a program");
+    }
+}
+
+/// A shell script that answers an MCP client's handshake and tool listing with one tool, `forecast`.
+#[cfg(unix)]
+const A_SERVER_OFFERING_FORECAST: &str = r#"while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"weather","version":"1"}}}\n' "$id";;
+    *'"tools/list"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"forecast","description":"a forecast","inputSchema":{"type":"object"}}]}}\n' "$id";;
+  esac
+done"#;
+
+/// CLI-26: `--tools` names this program's own tools, so the tools of an approved server a settings
+/// file requests are not offered, and the same home without the flag offers them.
+///
+/// The control run is what says this home reaches the server and offers what it lists, so the
+/// limited run's lack of it is the flag's doing.
+#[cfg(unix)]
+#[test]
+fn a_tools_list_offers_no_tool_of_an_approved_server() {
+    let run = |name: &str, flags: &[&str]| {
+        let gateway = a_gateway_listing(r#"["tools"]"#);
+        let settings =
+            settings_for(&gateway).replacen('{', r#"{"mcp": {"request": ["weather"]},"#, 1);
+        let argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            A_SERVER_OFFERING_FORECAST.to_string(),
+        ];
+        let declaration =
+            bravebot_config::mcp::Declaration::stdio(argv.clone(), vec!["PATH".into()], None)
+                .expect("a declaration");
+        let declared = serde_json::json!({"servers": {"weather": {
+            "transport": "stdio", "argv": argv, "variables": ["PATH"]}}});
+        let scratch = Scratch::new(name)
+            .with_settings(&settings)
+            .with_state("mcp.json", &declared.to_string())
+            .with_state("mcp-approved", &format!("{}\n", declaration.digest()));
+        let mut arguments = flags.to_vec();
+        arguments.extend(["--dangerously-skip-permissions", "-p", "say something"]);
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot(&scratch.path, &environment, &arguments);
+        let offered = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        (offered, said(&output).1)
+    };
+    let (offered, stderr) = run("cli-running-tools-server-control", &[]);
+    assert!(
+        offered.contains("mcp__weather__forecast"),
+        "the control run was never offered the server's tool, so the limited run proves nothing: {offered}\n{stderr}"
+    );
+    let (offered, _) = run("cli-running-tools-server", &["--tools", "read_file"]);
+    assert!(
+        !offered.contains("mcp__weather__forecast"),
+        "a run limited by --tools was offered a server's tool: {offered}"
+    );
+}
+
+/// CLI-26: a list that names nothing, a name that is no tool, and the flags where nothing offers a
+/// tool are each refused as a bad argument before any configuration is read.
+#[test]
+fn a_tool_limit_that_limits_nothing_is_refused_by_name() {
+    let scratch = Scratch::new("cli-running-tools-refused");
+    for (arguments, wanted) in [
+        (vec!["-p", "hi", "--tools"], "--tools requires"),
+        (vec!["-p", "hi", "--tools", " "], "--tools requires"),
+        (vec!["-p", "hi", "--tools", "read_file,shell"], "shell"),
+        (vec!["doctor", "--no-shell"], "doctor"),
+        (
+            vec!["--run-network", "closed", "doctor", "--no-shell"],
+            "doctor",
+        ),
+        (vec!["--bg", "a task", "--tools", "read_file"], "--tools"),
+        (
+            vec!["-p", "hi", "--mode", "manifest", "--no-shell"],
+            "--mode manifest",
+        ),
+    ] {
+        let output = bravebot(&scratch.path, &[], &arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+        assert!(
+            stderr.contains(wanted),
+            "{arguments:?} was not refused with {wanted}: {stderr}"
+        );
+    }
+}

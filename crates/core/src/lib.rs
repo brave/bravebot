@@ -38,6 +38,7 @@ pub mod safe;
 pub mod slot;
 pub mod spelling;
 pub mod todo;
+pub mod tool_set;
 pub mod trust;
 pub mod url;
 pub mod value;

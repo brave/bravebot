@@ -80,6 +80,8 @@ fn main() -> ExitCode {
                 arg.as_str(),
                 "--incognito"
                     | "--safe"
+                    | "--tools"
+                    | "--no-shell"
                     | "--vet"
                     | "--settings"
                     | "--run-network"
@@ -255,6 +257,25 @@ fn main() -> ExitCode {
         Err(refused) => {
             return stopped_before_the_turn(as_json, Ending::Argument, sandbox_refusal(&refused));
         }
+    }
+
+    // Taken out after every flag that takes a value, so the first argument left is the command, and
+    // settled before a session is assembled so that the list a turn is offered is written once under
+    // one answer. A refused list stops here, ahead of any turn.
+    let tool_limit = match take_tool_limit(&mut args) {
+        Ok(limit) => limit,
+        Err(complaint) => {
+            return stopped_before_the_turn(wants_json(&args), Ending::Argument, complaint);
+        }
+    };
+    if !tool_limit.is_none() {
+        if let Some(refused) = args
+            .first()
+            .and_then(|first| without_a_tool_set_to_limit(first))
+        {
+            return stopped_before_the_turn(wants_json(&args), Ending::Argument, refused);
+        }
+        bravebot_core::tool_set::settle(tool_limit);
     }
 
     args.extend(foreign);
@@ -985,6 +1006,8 @@ fn print_help() {
         ("--mode <mode>", t!(cli_option_mode)),
         ("--model <name>", t!(cli_option_model)),
         ("--advisor <name>", t!(cli_option_advisor)),
+        ("--tools <a,b,c>", t!(cli_option_tools)),
+        ("--no-shell", t!(cli_option_no_shell)),
         ("--effort <level>", t!(cli_option_effort)),
         ("-p, --print", t!(cli_option_print)),
         ("--trace", t!(cli_option_trace)),
@@ -1095,6 +1118,86 @@ fn take_safe(args: &mut Vec<String>) -> bool {
     let asked = args.len();
     args.retain(|arg| arg != "--safe");
     args.len() != asked
+}
+
+/// Every tool name `--tools` may name: the ones a turn is offered, wherever a surface offers them,
+/// and the `advisor` a session may add.
+fn nameable_tools() -> Vec<String> {
+    use bravebot_agent::tools::{Running, Scheduling, available};
+    let mut names: Vec<String> = [Scheduling::ArrangingALook, Scheduling::PacingALoop]
+        .into_iter()
+        .flat_map(|scheduling| {
+            available(
+                scheduling,
+                bravebot_agent::watch::Arming::Allowed { free: 1 },
+                bravebot_agent::exec::Deadlines::BUILT_IN,
+                Running::Offered,
+            )
+        })
+        .map(|tool| tool.function.name)
+        .collect();
+    names.push("advisor".to_string());
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Take `--tools <a,b,c>` and `--no-shell` out of the arguments, answering with what they limit.
+///
+/// Removed before dispatch for the reason `--incognito` is: every way of starting builds the same
+/// list of tools. A name that is no tool is refused with the ones that are, since a typo read as
+/// "offer nothing of that" would leave a run holding a smaller set than its author thought and say
+/// nothing, and a list that names nothing is refused for the reason a blank `--model` is. Given
+/// twice, `--tools` takes the last list. The arguments are rewritten only once the scan has
+/// succeeded.
+fn take_tool_limit(args: &mut Vec<String>) -> Result<bravebot_core::tool_set::Limit, String> {
+    let mut limit = bravebot_core::tool_set::Limit::default();
+    let mut kept = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--no-shell" => {
+                limit.no_shell = true;
+                index += 1;
+            }
+            "--tools" => {
+                let Some(list) = args.get(index + 1).filter(|list| !list.trim().is_empty()) else {
+                    return Err(t!(cli_tools_needs_a_list).to_string());
+                };
+                let known = nameable_tools();
+                let mut named = Vec::new();
+                for name in list.split(',').map(str::trim) {
+                    if !known.iter().any(|tool| tool == name) {
+                        return Err(t!(cli_tools_unknown, name = name, known = known.join(", "))
+                            .to_string());
+                    }
+                    named.push(name.to_string());
+                }
+                limit.only = Some(named);
+                index += 2;
+            }
+            other => {
+                kept.push(other.to_string());
+                index += 1;
+            }
+        }
+    }
+    *args = kept;
+    Ok(limit)
+}
+
+/// Why the tool limit cannot go with the command line's first argument, or `None` where it can.
+///
+/// The commands that start no session and no task offer no tools, so the flags would be taken and do
+/// nothing. Refused rather than ignored, for the reason CLI-13 gives about a settings file.
+fn without_a_tool_set_to_limit(first: &str) -> Option<String> {
+    match first {
+        command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
+        | "import-leo-creds" | "import-providers" | "completion" | "shell-init") => {
+            Some(t!(cli_tools_not_for_a_command, command = command).to_string())
+        }
+        _ => None,
+    }
 }
 
 /// Take `--vet` out of the arguments, reporting whether it was there.
@@ -1350,6 +1453,15 @@ fn run_task(
             as_json,
             Ending::Argument,
             t!(cli_advisor_not_with_a_manifest),
+        );
+    }
+    // A manifest run's steps are planned and run from the plan, not chosen from a list of tools, so
+    // the flags would be taken and limit nothing.
+    if !bravebot_core::tool_set::settled().is_none() && mode == Mode::Manifest {
+        return stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_tools_not_with_a_manifest),
         );
     }
     // Neither reaches the planner of a manifest run, which is given no standing instructions from
@@ -6137,6 +6249,39 @@ mod tests {
         let mut arguments = args(&["-p", "explain safe mode"]);
         assert!(!take_safe(&mut arguments));
         assert_eq!(arguments, args(&["-p", "explain safe mode"]));
+    }
+
+    /// `--tools` and `--no-shell` belong to every way of starting, so they are taken out wherever they
+    /// stand. A task that merely mentions them is left alone, and a list naming no tool is refused
+    /// rather than read as no limit.
+    #[test]
+    fn the_tool_limit_is_taken_out_wherever_it_appears() {
+        let mut arguments = args(&[
+            "-p",
+            "--tools",
+            "read_file,search",
+            "do a thing",
+            "--no-shell",
+        ]);
+        let limit = take_tool_limit(&mut arguments).expect("a list of tools");
+        assert_eq!(arguments, args(&["-p", "do a thing"]));
+        assert!(limit.no_shell);
+        assert_eq!(
+            limit.only,
+            Some(vec!["read_file".to_string(), "search".to_string()])
+        );
+
+        let mut arguments = args(&["-p", "explain --no-shell and --tools"]);
+        let limit = take_tool_limit(&mut arguments).expect("no flag");
+        assert!(limit.is_none());
+        assert_eq!(arguments, args(&["-p", "explain --no-shell and --tools"]));
+
+        let mut arguments = args(&["-p", "x", "--tools", "read_file,nothing"]);
+        let err = take_tool_limit(&mut arguments).expect_err("an unknown tool");
+        assert!(
+            err.contains("nothing") && err.contains("read_file"),
+            "{err}"
+        );
     }
 
     /// `--vet` belongs to every way of starting, so it is taken out wherever it appears and the

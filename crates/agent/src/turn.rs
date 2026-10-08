@@ -3315,16 +3315,19 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     Ok((None, offered))
                 }
                 None => {
-                    let mut offered = tools::for_planner(
-                        scheduling,
-                        arming,
-                        &delegates,
-                        task.deadlines,
-                        tools::Running::Offered,
-                    );
+                    // What the command line took away is decided before the table is written, for the
+                    // reason a definition narrowed past `run` is below: a description naming a tool
+                    // that is no longer beside it sends the planner to a name that is not there.
+                    let running = match bravebot_core::tool_set::allows("run") {
+                        true => tools::Running::Offered,
+                        false => tools::Running::Withheld,
+                    };
+                    let mut offered =
+                        tools::for_planner(scheduling, arming, &delegates, task.deadlines, running);
                     if advisor.is_some() {
                         tools::offer_advisor(&mut offered);
                     }
+                    offered.retain(|tool| bravebot_core::tool_set::allows(&tool.function.name));
                     let names: Vec<&str> = offered
                         .iter()
                         .map(|tool| tool.function.name.as_str())
@@ -3349,6 +3352,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             if advisor.is_some() {
                                 tools::offer_advisor(&mut offered);
                             }
+                            offered.retain(|tool| {
+                                bravebot_core::tool_set::allows(&tool.function.name)
+                            });
                         }
                         offered.retain(|tool| addressed.tools().contains(&tool.function.name));
                     }
@@ -3790,6 +3796,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             .any(|capability| matches!(capability, Capability::McpCall(_)));
         let mcp = match (&task.delegate, &task.mcp) {
             (_, Some(_)) if !holds_a_server => None,
+            // `--tools` names this program's own tools, so a server's are not among them, and no
+            // list is put to the person for a server whose tools would not be offered.
+            (_, Some(_)) if bravebot_core::tool_set::names_only() => None,
             (Some(_), Some(session)) => Some((
                 session.offer().holding(&holding),
                 bravebot_aichat::protocol::Usage::default(),
