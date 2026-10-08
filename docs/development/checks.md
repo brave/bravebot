@@ -108,6 +108,11 @@ anything but an explicit `false`.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
 absolute path when running the target. Without it, that integration test is reported as skipped.
 
+The sandbox usability suite (`crates/agent/tests/usability.rs`, spec SANDBOX-21) runs everyday
+workflows under the sandbox default, so a default change cannot break `git`, `gh`, `cargo`, `npm` or
+`make` unnoticed. It runs with `cargo test --all` on Linux and macOS, skips what is not installed, and
+`bravebot doctor --sandbox` runs it on any machine.
+
 These are local checks, not a promise that every CI environment passes. Windows Clippy
 cross-compiles without running Windows tests. Docker Desktop cannot exercise Landlock;
 CI's native Linux tests cover that gap. Release cross-builds remain separate.

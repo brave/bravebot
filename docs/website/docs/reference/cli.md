@@ -21,6 +21,7 @@ Usage:
   bravebot -p "<task>" --continue        Send a one-shot task as the next turn of the most recent session
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
+  bravebot doctor --sandbox              Run everyday workflows under the sandbox and report which work
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
   bravebot auth logout <way>             Forget an imported Leo Premium subscription or a stored gateway key
   bravebot auth status [way]             Say whether a sign-in is usable, exiting 0 only if it is
@@ -45,6 +46,7 @@ Usage:
 | `bravebot -p "<task>" --continue` | the same, for the most recent session in this directory |
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |
+| `bravebot doctor --sandbox` | run `git`, `cargo`, `npm` and the other everyday programs under the sandbox and report which work |
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
 | `bravebot auth logout leo` | forget an imported Leo Premium subscription |
 | `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
@@ -471,6 +473,18 @@ Answers "what will this actually use", and changes nothing. It reports:
 - what a TLS handshake is validated against, and what a request is routed through;
 - the confinement available on this platform;
 - the state of any imported subscription.
+
+```sh
+bravebot doctor --sandbox
+```
+
+Runs everyday workflows under the sandbox the way a person's shell command would: `git` init, commit
+and branch, a script, `make`, `cargo` build and test, `npm`, Python, Go, `gh` offline and an editor.
+Each runs on a throwaway account that holds a credential of each kind. It also runs the rows that must stay
+refused, a read of an SSH key or AWS credentials and a write beside or outside the session. A workflow that works
+without the sandbox and fails with it is reported with its stage, its exit code, a fix and a log path. A
+program that is not installed is reported as skipped, by name, and does not fail the report. It exits
+non-zero when a workflow fails or a refused row gets through. It takes no further argument.
 
 **No value from a settings file is ever printed.** Where a credential decides whether a backend
 works, what is reported is that one was found, because a settings file holds credentials on some

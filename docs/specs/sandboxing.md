@@ -940,6 +940,64 @@ reach, but can ask for less of it.
 `verified-by: bravebot_tui::logo::a_closed_network_is_named_on_the_opening_screen_and_an_open_one_is_not`
 `verified-by: bravebot_tui::status::a_closed_network_is_reported_with_who_closed_it_and_an_open_one_is_not`
 
+<a id="SANDBOX-21"></a>
+### SANDBOX-21: the programs people run every day are run under the default, and a change that breaks one fails
+
+A suite runs the everyday workflows under the confinement a `run` stage is given on Linux and macOS
+([SANDBOX-17](#SANDBOX-17)), each in a session directory and a scratch home of its own: `git` (init,
+add, commit, branch, merge, stash, rebase, worktree, a commit hook, and push, clone, fetch and pull
+against a local remote), `gh`, a wrapper script that starts `git` and `make`, `make`, `cargo`
+(check, build, run, test, and a build script), `npm` and `node`, `python3`, `go`, `find`, `grep`,
+`sed`, `awk`, `diff` and `patch`, and `vim` and `less`. A workflow works when every stage exits zero.
+The home holds a credential of each kind and has the cache directories of an account that has used
+each toolchain, so a first run on an account that never ran the tool is not what is measured
+([SANDBOX-15](#SANDBOX-15)). A stage is started as `run` starts it: from the step, with the process
+environment overlaid by the stage's own and the withheld names removed, and a host variable that
+moves a read row (`GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `CARGO_HOME`) or names
+an agent socket removed.
+
+Rows that must stay refused run beside them: reading a private key in `~/.ssh`, reading
+`~/.aws/credentials`, writing to a directory the session was not opened on, and writing to the
+home directory. Such a row passes when its last stage is refused and the same workflow, run again
+without the sandbox, works, so a path that was never there is not counted as a refusal. A row that
+is let through fails, and so does one whose earlier stage is refused.
+
+A workflow whose program is not installed is skipped, named, and counted apart from the passes; it
+is not a failure. A workflow that fails without the sandbox as well is reported as that and not as
+the sandbox's. A failing row fails the suite, which runs in CI on Linux and macOS and reports the
+number skipped. `bravebot doctor --sandbox` runs the same suite on this machine, from a directory
+under the state directory, and prints each row, and for a row that failed the stage, the fix for
+that kind of failure and where the stage's output went. It exits with the failed ending
+([CLI-6](cli.md#CLI-6)) when a row failed. It runs nothing on Windows, where programs are confined
+by container.
+
+**Why.** Each clause above is tested on the policy it builds, and a default that is sound by every
+one of them can still stop `git commit` from working. That is found by running `git commit` under
+it, which no policy test does, and a person finds it first when it is already the default.
+
+**It branches on no output.** A row passes or fails on the exit status of its stages. What a
+program printed goes to a log file under the suite's directory, and neither the report nor the
+`doctor` output carries any of it, only the path of the log.
+
+`verified-by: bravebot_agent::usability::every_workflow_works_under_the_default`
+`verified-by: bravebot_agent::usability::the_suite_covers_each_everyday_program_and_the_rows_that_stay_refused`
+`verified-by: bravebot_agent::usability::a_workflow_the_sandbox_refuses_fails_the_suite`
+`verified-by: bravebot_agent::usability::a_workflow_that_fails_without_the_sandbox_is_not_blamed_on_it`
+`verified-by: bravebot_agent::usability::a_row_expected_to_stay_refused_fails_when_the_program_gets_through`
+`verified-by: bravebot_agent::usability::a_refusal_of_a_file_that_is_not_there_is_not_a_refusal`
+`verified-by: bravebot_agent::usability::a_refusal_before_the_last_stage_of_a_refused_row_is_not_the_expected_one`
+`verified-by: bravebot_agent::usability::a_setup_that_fails_is_named_as_setup`
+`verified-by: bravebot_agent::usability::a_program_that_is_not_installed_is_skipped_by_name`
+`verified-by: bravebot_agent::usability::a_program_a_shell_line_starts_is_skipped_by_name_when_it_is_not_installed`
+`verified-by: bravebot_agent::usability::the_report_holds_no_program_output`
+`verified-by: bravebot_agent::usability::the_suite_will_not_run_under_the_temporary_directory`
+`verified-by: bravebot_cli::sandbox_check::doctor_sandbox_prints_a_failed_row_with_its_stage_and_its_fix`
+`verified-by: bravebot_cli::sandbox_check::doctor_sandbox_gives_each_kind_of_failure_its_own_fix`
+`verified-by: bravebot_cli::sandbox_check::doctor_sandbox_names_a_skipped_workflow_and_does_not_fail_on_it`
+`verified-by: bravebot_cli::sandbox_check::doctor_sandbox_counts_passed_failed_and_skipped_apart`
+`verified-by: bravebot_cli::running::doctor_sandbox_skips_what_is_not_installed_and_cleans_up_after_a_clean_run`
+`verified-by: bravebot_cli::running::doctor_sandbox_refuses_a_further_argument`
+
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is confined on Linux, macOS and Windows

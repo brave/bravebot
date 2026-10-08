@@ -13,6 +13,7 @@ mod json;
 mod mcp;
 mod plain;
 mod progress;
+mod sandbox_check;
 mod session_import;
 use bravebot_agent::servers;
 
@@ -261,6 +262,12 @@ fn main() -> ExitCode {
             "-p" | "--print" | "--mode" | "--model" | "--advisor" | "--effort" | "--file"
             | "--add-dir" | "--trace" | "--json" | "--json-stream",
         ) => run_task(&args, skip_permissions, agent, prompts),
+        Some("doctor") if args.get(1).map(String::as_str) == Some("--sandbox") => {
+            match args.len() {
+                2 => sandbox_check::run(),
+                _ => refused_with_the_usage(as_json, t!(cli_doctor_sandbox_takes_nothing_else)),
+            }
+        }
         Some("doctor") => doctor(),
         Some("auth") => auth::command(&args[1..]),
         Some("sessions") => background::sessions(&args[1..]),
@@ -598,6 +605,7 @@ fn print_help() {
         ),
         ("bravebot --fork <id>", t!(cli_usage_fork)),
         ("bravebot doctor", t!(cli_usage_doctor)),
+        ("bravebot doctor --sandbox", t!(cli_usage_doctor_sandbox)),
         ("bravebot sessions [--json]", t!(cli_usage_sessions)),
         ("bravebot sessions stop <id>", t!(cli_usage_sessions_stop)),
         (
