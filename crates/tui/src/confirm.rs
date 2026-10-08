@@ -13,6 +13,7 @@ use bravebot_agent::confirm::{
     ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::diff::Change;
+use bravebot_agent::reach::Lasting;
 use bravebot_agent::report::{Reach, Shown};
 use bravebot_core::ask::{Answer as UserAnswer, Asking};
 use bravebot_core::vetting::Verdict;
@@ -643,6 +644,16 @@ pub enum RunAnswer {
     ///
     /// [RUN-20]: ../../../docs/specs/tools/run.md
     ApproveAndRecordFamily,
+    /// Run it, and remember the credential scopes the planner requested for this session
+    /// ([SANDBOX-27]).
+    ///
+    /// Neither `a` nor `r` in a narrower form: it stops no asking and vouches for nothing, and the
+    /// next plan for the same programs shows the scope as a row to be read.
+    ///
+    /// [SANDBOX-27]: ../../../docs/specs/sandboxing.md
+    KeepReach,
+    /// Run it, and remember the same scopes for every session started in this checkout.
+    KeepReachEverySession,
     Reject,
     /// Refuse the run and stop the turn that asked for it.
     Interrupt,
@@ -657,6 +668,10 @@ impl RunAnswer {
             RunAnswer::ApproveAlways => RunDecision::approve_always(),
             RunAnswer::ApproveAndRecord => RunDecision::approve_and_record(),
             RunAnswer::ApproveAndRecordFamily => RunDecision::approve_and_record_family(),
+            RunAnswer::KeepReach => RunDecision::approve_and_keep_reach(Lasting::ThisSession),
+            RunAnswer::KeepReachEverySession => {
+                RunDecision::approve_and_keep_reach(Lasting::EverySession)
+            }
             RunAnswer::Reject | RunAnswer::Interrupt => RunDecision::reject(),
         }
     }
@@ -670,6 +685,8 @@ impl RunAnswer {
             | RunAnswer::ApproveAlways
             | RunAnswer::ApproveAndRecord
             | RunAnswer::ApproveAndRecordFamily
+            | RunAnswer::KeepReach
+            | RunAnswer::KeepReachEverySession
             | RunAnswer::Reject => false,
             RunAnswer::Interrupt => true,
         }
@@ -719,6 +736,15 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
         KeyCode::Char('f' | 'F') if request.offers_a_family() => {
             Some(RunResponse::Answer(RunAnswer::ApproveAndRecordFamily))
         }
+        // Unbound where the prompt did not draw them, for the reason `r` is: each writes a standing
+        // grant, and the programs it names are worked out from the plan again here and not taken
+        // from the drawing.
+        KeyCode::Char('m' | 'M') if request.offers_to_keep_reach() => {
+            Some(RunResponse::Answer(RunAnswer::KeepReach))
+        }
+        KeyCode::Char('k' | 'K') if request.offers_to_keep_reach() => {
+            Some(RunResponse::Answer(RunAnswer::KeepReachEverySession))
+        }
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(RunResponse::Answer(RunAnswer::Reject)),
         KeyCode::Up => Some(RunResponse::Scroll(-1)),
         KeyCode::Down => Some(RunResponse::Scroll(1)),
@@ -761,6 +787,8 @@ struct RunDrawn {
     record_unread: usize,
     /// Rows saying what `f` grants besides running the line, not on the screen yet.
     family_unread: usize,
+    /// Rows saying what `m` and `k` remember, not on the screen yet.
+    reach_unread: usize,
 }
 
 impl RunDrawn {
@@ -773,6 +801,7 @@ impl RunDrawn {
             RunAnswer::ApproveAlways => self.always_unread,
             RunAnswer::ApproveAndRecord => self.record_unread,
             RunAnswer::ApproveAndRecordFamily => self.family_unread,
+            RunAnswer::KeepReach | RunAnswer::KeepReachEverySession => self.reach_unread,
         };
         self.whole && self.unread == 0 && grant_unread == 0
     }
@@ -1095,6 +1124,7 @@ fn draw_run(
     let mut always = 0..0;
     let mut record = 0..0;
     let mut family = 0..0;
+    let mut reach = 0..0;
 
     // What `a` would actually grant, in as many words. It is two things, not one, and the second
     // is the one nothing else in the interface would tell them: what the command prints stops
@@ -1239,6 +1269,75 @@ fn draw_run(
         family.end = measure(&lines);
     }
 
+    // What `m` and `k` would remember, where they are offered: the programs by name, the scopes, and
+    // the place the record is written. The second sentence is the half a person is most likely to
+    // assume the other way round, since the plan they are looking at asked for the scope: it is
+    // asked about again next time, with the scope on it, and nothing is vouched for.
+    let kept = request.kept_reach_shapes();
+    if let Some(path) = request.reach_record.as_ref().filter(|_| !kept.is_empty()) {
+        lines.push(Line::raw(""));
+        reach.start = measure(&lines);
+        lines.push(Line::from(Span::styled(
+            format!("  {}", t!(run_keep_reach_explained)),
+            Style::default().fg(theme::muted()),
+        )));
+        for shape in &kept {
+            lines.push(Line::from(Span::styled(
+                format!("       {shape}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+        }
+        lines.push(Line::from(Span::styled(
+            format!(
+                "     {}",
+                t!(
+                    run_keep_reach_scopes,
+                    scopes = request
+                        .requested_credential_scopes()
+                        .iter()
+                        .map(|scope| scope.name())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            ),
+            Style::default().fg(theme::running()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_keep_reach_still_asked)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_keep_reach_lifetimes)),
+            Style::default().fg(theme::muted()),
+        )));
+        let toolchains = request.requested_toolchains();
+        if !toolchains.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "     {}",
+                    t!(
+                        run_keep_reach_toolchains,
+                        toolchains = toolchains.join(", ")
+                    )
+                ),
+                Style::default().fg(theme::muted()),
+            )));
+        }
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_keep_reach_where)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("       {}", path.display()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_keep_reach_undo)),
+            Style::default().fg(theme::muted()),
+        )));
+        reach.end = measure(&lines);
+    }
+
     // What answers a line whose arguments differ from one run to the next, since no key on this
     // screen does. Drawn only where the person has already answered a prompt for this binary under
     // other arguments, so it is not a sentence every prompt carries. It names the file rather than
@@ -1301,11 +1400,13 @@ fn draw_run(
         always_unread: shown.unseen(always),
         record_unread: shown.unseen(record),
         family_unread: shown.unseen(family),
+        reach_unread: shown.unseen(reach),
     };
 
     // Said in place of how far there is to scroll while a key waits on it, since what the person
     // needs to know then is why the key does nothing.
-    let waiting = drawn.always_unread + drawn.record_unread + drawn.family_unread;
+    let waiting =
+        drawn.always_unread + drawn.record_unread + drawn.family_unread + drawn.reach_unread;
     let hint = if drawn.unread > 0 {
         Line::styled(
             format!("   {}", t!(run_unseen, count = drawn.unread)),
@@ -1384,6 +1485,24 @@ fn run_keys(
                 .add_modifier(Modifier::BOLD),
         ));
         key_spans.push(Span::raw(format!(" {}    ", t!(run_remember_family))));
+    }
+    if request.offers_to_keep_reach() {
+        for (key, answer, label) in [
+            ("m", RunAnswer::KeepReach, t!(run_keep_reach)),
+            (
+                "k",
+                RunAnswer::KeepReachEverySession,
+                t!(run_keep_reach_always),
+            ),
+        ] {
+            key_spans.push(Span::styled(
+                key,
+                Style::default()
+                    .fg(colour(answer, theme::running()))
+                    .add_modifier(Modifier::BOLD),
+            ));
+            key_spans.push(Span::raw(format!(" {label}    ")));
+        }
     }
     key_spans.extend([
         Span::styled(
@@ -3710,6 +3829,7 @@ mod tests {
         }];
         RunRequest {
             confined: None,
+            reach_record: None,
             stdin: None,
             // A line naming a file to write is asked about however it was answered, so the prompt
             // offers no key that would outlive the session.
@@ -4640,6 +4760,7 @@ mod tests {
         };
         RunRequest {
             confined: None,
+            reach_record: None,
             stdin: None,
             // Private input is asked about every time, so neither standing key is offered.
             record: None,
@@ -4754,6 +4875,7 @@ mod tests {
         };
         RunRequest {
             confined: None,
+            reach_record: None,
             stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "LD_PRELOAD=./evil.so git log".to_string(),
@@ -4862,6 +4984,7 @@ mod tests {
         };
         RunRequest {
             confined: None,
+            reach_record: None,
             stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "sh check.sh > out.txt".to_string(),
@@ -5086,6 +5209,171 @@ mod tests {
             let plain = fully_rendered_run(&request);
             assert!(!plain.contains("<number>"), "{plain}");
             assert!(!plain.contains("any number"), "{plain}");
+        }
+    }
+
+    /// A run prompt for `gh pr view` that asked for `requested`, in a session that keeps a record
+    /// of reach.
+    fn a_run_asking_for(requested: Vec<bravebot_sandbox::scope::Requested>) -> RunRequest {
+        let mut request = RunRequest::from_pipeline(
+            &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
+                "gh",
+                ["pr", "view", "1081"].map(String::from).to_vec(),
+            )]),
+            &["/usr/bin/gh".into()],
+            "/home/someone/project",
+        );
+        request.confined = Some(bravebot_agent::Confined {
+            reads_the_machine: false,
+            directories: vec!["/home/someone/project".into()],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: requested
+                .into_iter()
+                .map(|request| ("gh".to_string(), request))
+                .collect(),
+            carried: Vec::new(),
+        });
+        request.reach_record = Some("/home/someone/.bravebot/reach.jsonl".into());
+        request
+    }
+
+    fn a_run_keeping_remote() -> RunRequest {
+        a_run_asking_for(vec![bravebot_sandbox::scope::Requested::Scope(
+            bravebot_sandbox::scope::Scope::Remote,
+        )])
+    }
+
+    /// SANDBOX-27: `m` and `k` approve the line and ask for the requested reach to be remembered
+    /// for this session or for every one, and for nothing else. The regressions it rejects: a key
+    /// that also vouches for the programs or records the line, and `k` lasting only the session.
+    #[test]
+    fn the_keep_keys_approve_and_remember_the_reach_only() {
+        let request = a_run_keeping_remote();
+        assert_eq!(
+            run_answer_for(press(KeyCode::Char('m')), &request),
+            Some(RunResponse::Answer(RunAnswer::KeepReach))
+        );
+        assert_eq!(
+            run_answer_for(press(KeyCode::Char('k')), &request),
+            Some(RunResponse::Answer(RunAnswer::KeepReachEverySession))
+        );
+        for (answer, lasting) in [
+            (RunAnswer::KeepReach, Lasting::ThisSession),
+            (RunAnswer::KeepReachEverySession, Lasting::EverySession),
+        ] {
+            let decision = answer.decision();
+            assert!(decision.approved());
+            assert_eq!(decision.remember_reach, Some(lasting));
+            assert!(!decision.remember, "{answer:?} vouched for the programs");
+            assert!(!decision.record, "{answer:?} recorded the line");
+            assert!(!decision.record_family, "{answer:?} recorded a family");
+            assert!(!answer.stops_the_turn());
+        }
+        for answer in [
+            RunAnswer::Approve,
+            RunAnswer::ApproveAlways,
+            RunAnswer::ApproveAndRecord,
+            RunAnswer::ApproveAndRecordFamily,
+            RunAnswer::Reject,
+            RunAnswer::Interrupt,
+        ] {
+            assert_eq!(answer.decision().remember_reach, None, "{answer:?}");
+        }
+    }
+
+    /// SANDBOX-27: the keys are unbound where the prompt does not offer them: no place to write a
+    /// record, no credential scope asked for, only a toolchain list asked for, and a stage with an
+    /// option where its operation would be. The regression it rejects: a key granting what the
+    /// screen did not offer.
+    #[test]
+    fn the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them() {
+        let no_record = RunRequest {
+            reach_record: None,
+            ..a_run_keeping_remote()
+        };
+        let no_request = a_run_asking_for(Vec::new());
+        let toolchain_only = a_run_asking_for(vec![bravebot_sandbox::scope::Requested::Toolchain(
+            bravebot_sandbox::toolchain::Toolchain::Cargo,
+        )]);
+        let mut option_first = a_run_keeping_remote();
+        option_first.plan.steps =
+            bravebot_core::command::Steps::Pipeline(vec![bravebot_core::command::Step {
+                program: "gh".to_string(),
+                resolved: "/usr/bin/gh".into(),
+                started_as: "/usr/bin/gh".into(),
+                args: vec!["-R".to_string(), "a/b".to_string(), "pr".to_string()],
+                environment: Vec::new(),
+                routes: Vec::new(),
+            }]);
+        for request in [
+            a_run(false),
+            no_record,
+            no_request,
+            toolchain_only,
+            option_first,
+        ] {
+            for key in ['m', 'M', 'k', 'K'] {
+                assert_eq!(
+                    run_answer_for(press(KeyCode::Char(key)), &request),
+                    None,
+                    "`{key}` answered a prompt that does not offer it"
+                );
+            }
+            let drawn = fully_rendered_run(&request);
+            assert!(
+                !drawn.contains(t!(run_keep_reach)),
+                "the keys were drawn without being offered: {drawn}"
+            );
+        }
+    }
+
+    /// SANDBOX-27, PROMPT-4: the keys wait for the rows saying what they remember.
+    #[test]
+    fn the_keep_keys_wait_for_the_rows_saying_what_they_remember() {
+        let seen = RunDrawn {
+            whole: true,
+            ..RunDrawn::default()
+        };
+        let unread = RunDrawn {
+            reach_unread: 1,
+            ..seen
+        };
+        for answer in [RunAnswer::KeepReach, RunAnswer::KeepReachEverySession] {
+            assert!(seen.takes(answer));
+            assert!(!unread.takes(answer), "{answer:?}");
+        }
+        assert!(unread.takes(RunAnswer::Approve));
+        assert!(unread.takes(RunAnswer::Reject));
+    }
+
+    /// SANDBOX-27: the prompt names the programs and the scope, says the line is still asked about,
+    /// says a toolchain list is not kept, shows where the record is, and draws both keys.
+    #[test]
+    fn a_prompt_offering_to_keep_a_request_names_what_would_be_kept() {
+        let mut request = a_run_keeping_remote();
+        request
+            .confined
+            .as_mut()
+            .expect("confined")
+            .requested
+            .push((
+                "gh".to_string(),
+                bravebot_sandbox::scope::Requested::Toolchain(
+                    bravebot_sandbox::toolchain::Toolchain::Cargo,
+                ),
+            ));
+        let drawn = fully_rendered_run(&request);
+        for wanted in [
+            "gh pr".to_string(),
+            "remote, read only".to_string(),
+            "/home/someone/.bravebot/reach.jsonl".to_string(),
+            "still asked about every time".to_string(),
+            "cargo is not remembered".to_string(),
+            t!(run_keep_reach).to_string(),
+            t!(run_keep_reach_always).to_string(),
+        ] {
+            assert!(drawn.contains(&wanted), "{wanted:?} was not drawn: {drawn}");
         }
     }
 

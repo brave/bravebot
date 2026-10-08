@@ -1571,6 +1571,17 @@ run-stdin-not-remembered =
     a line fed a reference is asked about every time, so this one cannot be remembered
 run-scopes-not-remembered =
     a line the planner asked to carry a credential scope or a toolchain list is asked about every time, so this one cannot be remembered
+# Said only where the plan asked for a credential scope and a record of reach can be written. The
+# lines under it are the programs, each with its operation word, as `/reach` lists them.
+run-keep-reach-explained = m: also remember the requested reach for these commands, so the next plan for them carries it
+run-keep-reach-scopes = the reach remembered is { $scopes }, read only
+run-keep-reach-still-asked = the line is still asked about every time, with that reach shown on it, and nothing it prints is trusted
+run-keep-reach-lifetimes = m lasts for this session. k lasts for every session started in this checkout.
+run-keep-reach-toolchains = { $toolchains } is not remembered: a toolchain list is asked for again each time
+run-keep-reach-where = it is written down here:
+run-keep-reach-undo = /reach lists what is remembered, and /reach remove <number> forgets one
+run-keep-reach = remember the reach
+run-keep-reach-always = remember it for every session
 run-remember-explained = r: stop asking about this exact line, in this directory, from now on
 run-remember-where = it is written down here, and deleting the line is the way back:
 run-remember-only-asking = it stops the asking only: what it prints stays quarantined

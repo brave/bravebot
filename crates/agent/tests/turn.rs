@@ -16453,6 +16453,10 @@ struct ScopedRun {
     ran: bool,
     vouched: usize,
     recorded: bool,
+    /// The reach remembered for the session `a-session` in the workspace after the run.
+    reach: Vec<bravebot_agent::reach::Grant>,
+    /// The reach remembered for a session that did not make the run.
+    reach_elsewhere: Vec<bravebot_agent::reach::Grant>,
 }
 
 /// One `run` call carrying `arguments`, made in a confining turn under `mode` with a profile
@@ -16532,6 +16536,12 @@ fn scoped_run_remembering<C: bravebot_agent::Confirmer + Send>(
             !bravebot_agent::remembered::Store::new(state, workspace.root())
                 .read()
                 .is_empty()
+        }),
+        reach: state.map_or_else(Vec::new, |state| {
+            bravebot_agent::reach::Store::new(state).read(Some("a-session"), workspace.root())
+        }),
+        reach_elsewhere: state.map_or_else(Vec::new, |state| {
+            bravebot_agent::reach::Store::new(state).read(Some("another-session"), workspace.root())
         }),
     }
 }
@@ -16631,6 +16641,7 @@ fn a_standing_answer_to_a_request_remembers_nothing() {
         remember: true,
         record: true,
         record_family: false,
+        remember_reach: None,
     });
     let seen = person.seen.clone();
     let control = scoped_run_remembering(
@@ -16672,6 +16683,183 @@ fn a_standing_answer_to_a_request_remembers_nothing() {
     );
     assert_eq!(result.vouched, 0, "a request vouched for the program");
     assert!(!result.recorded, "a request was written to the record");
+}
+
+/// One `uname` run asking for `scopes`, answered with `answer`, in a session that keeps state.
+fn keeping_a_request(
+    name: &str,
+    scopes: serde_json::Value,
+    answer: bravebot_agent::RunDecision,
+    state: Option<&std::path::Path>,
+) -> (ScopedRun, Vec<bravebot_agent::RunRequest>) {
+    let mut person = AskedAboutRuns::answering(answer);
+    let seen = person.seen.clone();
+    let result = scoped_run_remembering(
+        name,
+        serde_json::json!({ "command": "uname", "scopes": scopes }),
+        bravebot_sandbox::SandboxMode::Strict,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut person,
+        state,
+    );
+    let seen = seen.lock().unwrap().clone();
+    (result, seen)
+}
+
+/// SANDBOX-27: `m` approves the line and remembers the requested credential scope for that program
+/// in that session, read only, and vouches for nothing. The regressions it rejects: a grant that
+/// outlives the session or applies to the next one, a write grant, and an approval that also
+/// vouches for the program (which would show the next output unquarantined).
+#[test]
+fn keeping_a_request_for_the_session_remembers_the_scope_for_that_session_only() {
+    if cannot_confine_here() {
+        return;
+    }
+    let state = Scratch::new("scopes-keep-session-state");
+    let (result, seen) = keeping_a_request(
+        "scopes-keep-session",
+        serde_json::json!(["aws"]),
+        bravebot_agent::RunDecision::approve_and_keep_reach(
+            bravebot_agent::reach::Lasting::ThisSession,
+        ),
+        Some(&state.path),
+    );
+    assert_eq!(seen.len(), 1);
+    assert!(
+        seen[0].offers_to_keep_reach(),
+        "the prompt did not offer the key, so the answer below proves nothing"
+    );
+    assert_eq!(seen[0].kept_reach_shapes().len(), 1);
+    assert!(result.second.contains("It exited 0."), "{}", result.second);
+    assert_eq!(result.reach.len(), 1, "{:?}", result.reach);
+    let grant = &result.reach[0];
+    assert_eq!(
+        grant.reached,
+        bravebot_agent::reach::Reached::Scope(bravebot_sandbox::scope::Scope::Aws)
+    );
+    assert!(!grant.write);
+    assert_eq!(
+        grant.lifetime,
+        bravebot_agent::reach::Lifetime::Session("a-session".to_string())
+    );
+    assert!(grant.workspace.is_some(), "uname is not a global grant");
+    assert!(
+        result.reach_elsewhere.is_empty(),
+        "a session grant applied to another session"
+    );
+    assert_eq!(
+        result.vouched, 0,
+        "keeping the reach vouched for the program"
+    );
+    assert!(!result.recorded, "keeping the reach recorded the line");
+    let said = message_from(&result.second, "Result of run");
+    assert!(
+        said.contains("[ref:1]"),
+        "the output was not quarantined: {said}"
+    );
+}
+
+/// SANDBOX-27: `k` writes the grant for every session of the checkout.
+#[test]
+fn keeping_a_request_for_every_session_is_read_by_another_session() {
+    if cannot_confine_here() {
+        return;
+    }
+    let state = Scratch::new("scopes-keep-always-state");
+    let (result, _) = keeping_a_request(
+        "scopes-keep-always",
+        serde_json::json!(["aws"]),
+        bravebot_agent::RunDecision::approve_and_keep_reach(
+            bravebot_agent::reach::Lasting::EverySession,
+        ),
+        Some(&state.path),
+    );
+    assert_eq!(result.reach.len(), 1, "{:?}", result.reach);
+    assert_eq!(
+        result.reach[0].lifetime,
+        bravebot_agent::reach::Lifetime::Always
+    );
+    assert_eq!(
+        result.reach_elsewhere.len(),
+        1,
+        "another session did not read the grant"
+    );
+}
+
+/// SANDBOX-27: a toolchain list is not remembered, and a request for both remembers the scope
+/// only. The regression it rejects: the toolchain row riding along into the record.
+#[test]
+fn keeping_a_request_leaves_a_toolchain_out() {
+    if cannot_confine_here() {
+        return;
+    }
+    let state = Scratch::new("scopes-keep-toolchain-state");
+    let keep = bravebot_agent::RunDecision::approve_and_keep_reach(
+        bravebot_agent::reach::Lasting::ThisSession,
+    );
+    let (only, seen) = keeping_a_request(
+        "scopes-keep-toolchain-only",
+        serde_json::json!(["cargo"]),
+        keep,
+        Some(&state.path),
+    );
+    assert!(!seen[0].offers_to_keep_reach());
+    assert_eq!(seen[0].requested_toolchains(), ["cargo"]);
+    assert!(only.reach.is_empty(), "{:?}", only.reach);
+
+    let state = Scratch::new("scopes-keep-both-state");
+    let (both, _) = keeping_a_request(
+        "scopes-keep-both",
+        serde_json::json!(["cargo", "aws"]),
+        keep,
+        Some(&state.path),
+    );
+    assert_eq!(both.reach.len(), 1, "{:?}", both.reach);
+    assert_eq!(
+        both.reach[0].reached,
+        bravebot_agent::reach::Reached::Scope(bravebot_sandbox::scope::Scope::Aws)
+    );
+}
+
+/// SANDBOX-27: a session with nowhere to write a record is not offered the key, and an answer that
+/// names it anyway writes nothing. A refusal that names it writes nothing either.
+#[test]
+fn keeping_a_request_writes_nothing_where_it_was_not_offered_or_was_refused() {
+    if cannot_confine_here() {
+        return;
+    }
+    let keep = bravebot_agent::RunDecision::approve_and_keep_reach(
+        bravebot_agent::reach::Lasting::EverySession,
+    );
+    let (result, seen) = keeping_a_request(
+        "scopes-keep-no-state",
+        serde_json::json!(["aws"]),
+        keep,
+        None,
+    );
+    assert!(seen[0].reach_record.is_none());
+    assert!(!seen[0].offers_to_keep_reach());
+    assert!(result.reach.is_empty());
+
+    let state = Scratch::new("scopes-keep-refused-state");
+    let refused = bravebot_agent::RunDecision {
+        decision: bravebot_agent::Decision::Reject,
+        ..keep
+    };
+    let (result, seen) = keeping_a_request(
+        "scopes-keep-refused",
+        serde_json::json!(["aws"]),
+        refused,
+        Some(&state.path),
+    );
+    assert!(
+        seen[0].offers_to_keep_reach(),
+        "the prompt did not offer the key, so the refusal below proves nothing"
+    );
+    assert!(result.reach.is_empty(), "{:?}", result.reach);
+    assert!(result.reach_elsewhere.is_empty());
 }
 
 /// SANDBOX-26: the request is refused, and the program does not start, where the mode accepts

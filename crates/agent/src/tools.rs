@@ -7151,6 +7151,14 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             confined: confinement
                 .as_ref()
                 .map(|confinement| confinement.describe(&plan.steps())),
+            // Offered only for a line that asked for something to remember, in a session with a
+            // state directory, a session to key the answer to and a mode that may add to that
+            // directory. The path is what the prompt shows, for the reason `record` is.
+            reach_record: tools
+                .home
+                .zip(tools.remembering)
+                .filter(|_| !requested.is_empty() && crate::reach::may_be_added_to())
+                .map(|(home, _)| crate::reach::Store::new(home).path().to_path_buf()),
         };
         let answer = confirmer.confirm_run(&request);
         policy.record_answer(
@@ -7185,6 +7193,26 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             for command in request.would_vouch_for() {
                 policy.remember_command(command);
             }
+        }
+        // The credential scopes the planner asked for, kept for the stages they were added to
+        // (SANDBOX-27). The shapes are worked out again from the plan and the closed table here,
+        // rather than read back from what the prompt drew, so a front end answering with a key the
+        // prompt never offered cannot attach a scope to a stage it was not shown on. The scopes
+        // are the request's, which a person read in the plan, and no output byte is an input.
+        if let (Some(lasting), Some(home), Some(session)) =
+            (answer.remember_reach, tools.home, tools.remembering)
+            && !requested.is_empty()
+        {
+            let scopes = request.requested_credential_scopes();
+            crate::reach::keep_requested(
+                &crate::reach::Store::new(home),
+                &plan.steps(),
+                &scopes,
+                lasting,
+                session,
+                tools.workspace.root(),
+                &crate::reach::today(),
+            );
         }
         // The second of the two refusals RUN-19 makes, at the layer that acts on the answer. The
         // policy is asked again rather than the drawing being read back: a front end answering

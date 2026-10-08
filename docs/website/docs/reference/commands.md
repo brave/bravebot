@@ -330,6 +330,17 @@ a program printed when it was refused is never read for a path.
 Typed while a turn runs, it waits for the turn to end. In an incognito session it reads what is
 there and adds nothing, and says so. The record is `reach.jsonl` in `~/.bravebot`.
 
+### Remembering a scope a `run` asked for
+
+When the planner asks a `run` for a credential scope by name and the question is drawn, `m` runs the
+line and remembers each scope it asked for, read only, for the programs of the line, for this
+session. `k` does the same for every session started in this checkout. It is the row `/reach` would
+have made, listed by `/reach` and taken away by `/reach remove`. The line is still asked about every
+time, with the scope shown on it, and neither key trusts what it prints. A toolchain list the
+planner asked for is not remembered, and a line with a `NAME=value` in front of a program, or a
+program started with an option such as `git -C dir push`, is not offered either key. The desktop app
+does not offer them.
+
 ## `/loop [interval] <prompt>`
 
 Sends one prompt again and again until you stop it, says what is repeating, or ends it.

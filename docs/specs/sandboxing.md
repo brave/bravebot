@@ -1226,13 +1226,8 @@ run, in the words of the other reach, so there is nothing new to trust.
 
 **What is not built.** A path the planner proposes, and a reach attached to a command the planner
 has never run. Each puts a path or a shape the planner chose in front of a person to approve, and
-neither is decided here.
-
-**A key at the confirmation that remembers the reach is decided against.** A line whose call asked
-for a scope offers no `a` or `r` and records no entry ([SANDBOX-26](#SANDBOX-26)), so the person is
-asked every time. A person who wants a scope remembered for a program shape types
-`/reach <scope> -- <command>`, which writes the standing answer where they can read it, and the next
-plan shows it as a row.
+neither is decided here. The one key at the confirmation that remembers a reach is for a credential
+scope the planner asked a line for ([SANDBOX-27](#SANDBOX-27)); none remembers a directory.
 
 `verified-by: bravebot_agent::reach::a_grant_covers_the_file_and_the_operation_it_was_made_for`
 `verified-by: bravebot_agent::reach::an_assignment_in_front_of_a_step_removes_every_grant`
@@ -1498,7 +1493,8 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
 - Asked about every time. A line that asks is put to a person before any vouched entry, remembered
   line or rule is read ([RUN-5](tools/run.md#RUN-5)), and the prompt shows the names and the stage
   each was added to. It offers no `a` or `r`, records no entry and vouches for no program, since an
-  entry is a program, its arguments and a tree, and holds none of what the line was lent.
+  entry is a program, its arguments and a tree, and holds none of what the line was lent. The only
+  answers that last past the line are the two that remember the scope as reach ([SANDBOX-27](#SANDBOX-27)).
 - What it prints is not trusted on a vouch's account: a line that asked for a scope has its output
   quarantined as an unvouched line's is ([RUN-4](tools/run.md#RUN-4)).
 - Refused, with one sentence that does not say which setting withheld it, in a session whose mode is
@@ -1540,6 +1536,51 @@ for a different line.
 `verified-by: bravebot_agent::turn::scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given`
 `verified-by: bravebot_agent::turn::a_scope_outside_the_menu_is_an_error`
 `verified-by: bravebot_ui_bridge::wire::a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent`
+
+<a id="SANDBOX-27"></a>
+### SANDBOX-27: a person may answer a request for a credential scope by remembering it as reach for the programs it was added to
+
+At the confirmation for a line that asked for a credential scope ([SANDBOX-26](#SANDBOX-26)), `m`
+runs the line and remembers each requested scope, read only, for the session, and `k` does the same
+for every session started in this checkout. What is remembered is what `/reach` writes
+([SANDBOX-23](#SANDBOX-23)): one grant for each distinct program and operation word among the line's
+stages and each requested scope, so the next plan for those programs carries the scope as a row the
+person reads, and a session that asks for nothing is not asked about it.
+
+- Offered only where a record of reach can be written (a session that keeps state and is not
+  incognito) and every stage that was given the scope can be keyed: it has an operation word, or no
+  argument. A stage with a `NAME=value` in front of it was given nothing and is left out; a stage that
+  starts with an option has no operation to key on, so the line is offered neither key. The keys are
+  unbound where they are not drawn, and the acting layer works the shapes out again from the plan and
+  the closed scope table rather than from what was drawn.
+- A toolchain list is never remembered, whether it was asked for alone or beside a scope. The prompt
+  says so.
+- The line that asked is still asked about every time, with the remembered scope shown on it, and
+  neither key vouches for a program, records the line or stops the asking; what it prints is
+  quarantined as it was ([SANDBOX-26](#SANDBOX-26)).
+- A grant for a program the scope table gives that scope to (`gh` and the remote scope) is for
+  every checkout. Every other grant is bound to the checkout the answer was given in
+  ([SANDBOX-23](#SANDBOX-23)). The prompt names the programs, the scopes, the lifetimes and the file
+  the record is written to, and the keys wait for those rows to have been on the screen. A refusal
+  or an interrupt remembers nothing.
+- The desktop offers neither key. `/reach remove <number>` forgets one.
+
+**Why.** A build whose script shells out to `gh` needs the scope in every session, and without a way
+to keep it the planner asks again each time and the person reads the same prompt each time. Writing
+the grant the person could have typed with `/reach`, and nothing wider, makes the answer the same
+act as the command, shown in the same words, and keeps the planner's name for a scope from becoming
+more than the person read.
+
+`verified-by: bravebot_agent::reach::a_kept_request_leaves_out_an_assigned_stage_and_refuses_an_option_first_stage`
+`verified-by: bravebot_agent::reach::a_kept_request_binds_to_a_checkout_unless_the_table_gives_the_program_the_scope`
+`verified-by: bravebot_agent::turn::keeping_a_request_for_the_session_remembers_the_scope_for_that_session_only`
+`verified-by: bravebot_agent::turn::keeping_a_request_for_every_session_is_read_by_another_session`
+`verified-by: bravebot_agent::turn::keeping_a_request_leaves_a_toolchain_out`
+`verified-by: bravebot_agent::turn::keeping_a_request_writes_nothing_where_it_was_not_offered_or_was_refused`
+`verified-by: bravebot_tui::confirm::the_keep_keys_approve_and_remember_the_reach_only`
+`verified-by: bravebot_tui::confirm::the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them`
+`verified-by: bravebot_tui::confirm::the_keep_keys_wait_for_the_rows_saying_what_they_remember`
+`verified-by: bravebot_tui::confirm::a_prompt_offering_to_keep_a_request_names_what_would_be_kept`
 
 ## Programs a person asked for
 
