@@ -103,5 +103,6 @@ fr:sessions-stop-failed
 fr:sessions-stopped
 fr:sessions-usage
 fr:summary-model-needs-sign-in
+fr:summary-model-not-served
 fr:summary-model-refused
 fr:verb-advisor

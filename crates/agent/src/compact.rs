@@ -110,6 +110,7 @@ fn instruction(focus: Option<&str>) -> String {
 /// questions are asked of this machine, so the decision is made from what the driver already had.
 pub fn side_request_model<'a>(
     config: &'a bravebot_config::Config,
+    egress: &bravebot_net::Egress,
     session_model: Option<&'a str>,
 ) -> Result<std::borrow::Cow<'a, str>, SideModelRefusal> {
     let Some(named) = config.summary() else {
@@ -117,15 +118,22 @@ pub fn side_request_model<'a>(
             session_model.unwrap_or(&config.default_model),
         ));
     };
-    // Asked here as well as wherever a run's own model was settled, because a model the
-    // machine-level layer refuses is refused whichever route named it (BACKEND-48), and this is a
-    // route that names one. The same place `advisor::consult` asks it, for the same reason.
-    if config.model_refused(&named).is_some() {
-        return Err(SideModelRefusal::Refused(named));
-    }
-    match crate::backend::Backend::needs_sign_in(config, &named) {
-        true => Err(SideModelRefusal::NeedsSignIn(named)),
-        false => Ok(std::borrow::Cow::Owned(named)),
+    // The same question `--model` and `--advisor` are put, through the same call, because a name
+    // means the same model wherever it was written down. It answers the machine-level refusal
+    // first (BACKEND-48) and then whether any configured service would answer at all: a key naming
+    // a model nothing serves otherwise sends the request anyway, and a judge or a summariser
+    // answering without the exchange reads as a verdict rather than as a failure.
+    match crate::backend::serving(config, egress, &named) {
+        crate::backend::Serving::Refused { .. } => Err(SideModelRefusal::Refused(named)),
+        crate::backend::Serving::NothingConfigured { .. } => {
+            Err(SideModelRefusal::NotServed(named))
+        }
+        crate::backend::Serving::Configured => {
+            match crate::backend::Backend::needs_sign_in(config, &named) {
+                true => Err(SideModelRefusal::NeedsSignIn(named)),
+                false => Ok(std::borrow::Cow::Owned(named)),
+            }
+        }
     }
 }
 
@@ -137,6 +145,9 @@ pub fn side_request_model<'a>(
 pub enum SideModelRefusal {
     /// The machine-level layer excludes it (BACKEND-48).
     Refused(String),
+    /// No configured service would answer for it, so a typo degrades a side request rather than
+    /// failing it.
+    NotServed(String),
     /// This machine has made no sign-in that reaches it.
     NeedsSignIn(String),
 }
@@ -198,6 +209,9 @@ impl fmt::Display for CompactError {
             }
             Self::SummaryModel(SideModelRefusal::Refused(model)) => {
                 write!(f, "{}", t!(summary_model_refused, model = model))
+            }
+            Self::SummaryModel(SideModelRefusal::NotServed(model)) => {
+                write!(f, "{}", t!(summary_model_not_served, model = model))
             }
         }
     }
@@ -266,7 +280,7 @@ pub fn compact<S: Sink>(
     // The model this runs on: the `summaryModel` setting where it names one, and the session's own
     // otherwise (COMPACT-14). A configured model with no sign-in refuses the compaction and leaves
     // the conversation whole, which is this module's answer to every other refusal too.
-    let model = side_request_model(chat.config, chat.model)?;
+    let model = side_request_model(chat.config, chat.egress, chat.model)?;
     let model = model.as_ref();
     let request = ChatRequest::new(model, messages).giving_up_its_conversation();
 
@@ -334,11 +348,17 @@ mod tests {
         // Nothing named: the session's model, and the configured default where the session has no
         // choice of its own.
         assert_eq!(
-            side_request_model(&config, Some("a-session-model")).expect("no sign-in is needed"),
+            side_request_model(
+                &config,
+                &bravebot_net::Egress::new(),
+                Some("a-session-model")
+            )
+            .expect("no sign-in is needed"),
             "a-session-model"
         );
         assert_eq!(
-            side_request_model(&config, None).expect("no sign-in is needed"),
+            side_request_model(&config, &bravebot_net::Egress::new(), None)
+                .expect("no sign-in is needed"),
             config.default_model
         );
 
@@ -346,7 +366,8 @@ mod tests {
         config.summary_model = Some("a-cheap-summary-model".to_string());
         for session in [Some("a-session-model"), None] {
             assert_eq!(
-                side_request_model(&config, session).expect("no sign-in is needed"),
+                side_request_model(&config, &bravebot_net::Egress::new(), session)
+                    .expect("no sign-in is needed"),
                 "a-cheap-summary-model",
                 "{session:?}"
             );
@@ -369,9 +390,17 @@ mod tests {
 
         // This machine has whatever AWS session it has, so the word resolving is what is asserted
         // here and the sign-in is the test below's.
-        let resolved = match side_request_model(&config, Some("a-session-model")) {
+        let resolved = match side_request_model(
+            &config,
+            &bravebot_net::Egress::new(),
+            Some("a-session-model"),
+        ) {
             Ok(model) => model.to_string(),
-            Err(SideModelRefusal::NeedsSignIn(model) | SideModelRefusal::Refused(model)) => model,
+            Err(
+                SideModelRefusal::NeedsSignIn(model)
+                | SideModelRefusal::Refused(model)
+                | SideModelRefusal::NotServed(model),
+            ) => model,
         };
         assert_eq!(resolved, "haiku-arn", "the tier word did not resolve");
     }
@@ -392,7 +421,11 @@ mod tests {
         .expect("configured");
         config.summary_model = Some("haiku".to_string());
 
-        let refused = side_request_model(&config, Some("a-session-model"));
+        let refused = side_request_model(
+            &config,
+            &bravebot_net::Egress::new(),
+            Some("a-session-model"),
+        );
         assert_eq!(
             refused.expect_err("a model with no sign-in must refuse"),
             SideModelRefusal::NeedsSignIn("haiku-arn".to_string()),
@@ -406,6 +439,50 @@ mod tests {
         assert!(
             said.contains("haiku-arn") && said.contains("sign-in"),
             "{said}"
+        );
+    }
+
+    /// A name no configured service answers for is refused rather than sent, and the sentence
+    /// names the key's value.
+    ///
+    /// The refusal itself goes through the same `backend::serving` call `--model` and `--advisor`
+    /// are put through, so a name means the same model wherever it was written down. The
+    /// `NothingConfigured` arm of that call depends on premium-subscription discovery reading this
+    /// machine's own files, which a unit test cannot stand up without reaching outside itself; the
+    /// sibling arm, `Refused`, is pinned below and comes from the same call, so what is pinned here
+    /// is the mapping and the message rather than the classification.
+    ///
+    /// The classification was observed instead. With `summaryModel` naming a model nothing serves,
+    /// the request went out, a model answered without the exchange, and `/goal` cleared the goal
+    /// reporting "the state of the task is unknown"; with the key unset the same exchange was judged
+    /// met. `doctor` reported the same value under `model` and said nothing under `summaryModel`.
+    #[test]
+    fn a_summary_model_nothing_serves_is_named_in_the_refusal_it_causes() {
+        let said = CompactError::from(SideModelRefusal::NotServed(
+            "a-model-nobody-has".to_string(),
+        ))
+        .to_string();
+        assert!(
+            said.contains("a-model-nobody-has"),
+            "the refusal does not name the value the key holds: {said}"
+        );
+        assert!(
+            !said.contains("sign-in"),
+            "a model nothing serves was reported as one needing a sign-in: {said}"
+        );
+
+        // Absence is still the session's own model, so the refusal is about the key and not about
+        // every side request.
+        let mut config = bravebot_config::Config::from_lookup(aichat_only).expect("configured");
+        config.summary_model = None;
+        assert_eq!(
+            side_request_model(
+                &config,
+                &bravebot_net::Egress::new(),
+                Some("a-session-model")
+            )
+            .expect("absent"),
+            "a-session-model"
         );
     }
 
@@ -430,8 +507,12 @@ mod tests {
 
         config.summary_model = Some("an-excluded-model".to_string());
         assert_eq!(
-            side_request_model(&config, Some("a-session-model"))
-                .expect_err("a model the machine refuses must refuse here too"),
+            side_request_model(
+                &config,
+                &bravebot_net::Egress::new(),
+                Some("a-session-model")
+            )
+            .expect_err("a model the machine refuses must refuse here too"),
             SideModelRefusal::Refused("an-excluded-model".to_string()),
             "the excluded model was handed back as the one to summarise on"
         );
@@ -445,7 +526,12 @@ mod tests {
         // and nothing else.
         config.summary_model = Some("a-permitted-model".to_string());
         assert_eq!(
-            side_request_model(&config, Some("a-session-model")).expect("not excluded"),
+            side_request_model(
+                &config,
+                &bravebot_net::Egress::new(),
+                Some("a-session-model")
+            )
+            .expect("not excluded"),
             "a-permitted-model"
         );
     }

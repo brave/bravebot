@@ -396,7 +396,7 @@ sign-in are [COMPACT-14](compaction.md#COMPACT-14)'s; one setting names the mode
 requests, so a person capping what background work costs caps it once.
 
 A model needing a sign-in this machine has not made sends no check, and neither does one the
-machine-level layer excludes. The goal ends, as it does for every other request that failed
+machine-level layer excludes or one no configured service answers for. The goal ends, as it does for every other request that failed
 ([GOAL-6](#GOAL-6)), and the reason says which model could not be reached and which of the two it
 was.
 

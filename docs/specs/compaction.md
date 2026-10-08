@@ -315,7 +315,10 @@ A model needing a sign-in this machine has not made refuses the compaction, whic
 conversation exactly as it was, as every other refusal here does. It is not replaced by the
 session's model. A model the machine-level layer excludes is refused on the same terms: a model that
 layer rules out is requested by no route, and a key in a person's own file is a route, so this one
-asks before it sends rather than leaving an administrator's exclusion to the request.
+asks before it sends rather than leaving an administrator's exclusion to the request. A name no
+configured service answers for is refused too, by the same question `model` and the advisor are put:
+sent anyway, it reaches a service that answers without the exchange, and a summary or a verdict
+written from nothing reads as an answer rather than as a failure.
 
 **Why refuse rather than fall back.** A cheaper model is a cost boundary. A summary quietly sent to
 the session's model instead spends the rate the person named this key to avoid, on the longest
@@ -333,3 +336,4 @@ against the window of the planner's model rather than this one
 `verified-by: bravebot_agent::turn::a_compaction_with_no_summary_model_runs_on_the_sessions_own`
 `verified-by: bravebot_agent::turn::a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conversation_whole`
 `verified-by: bravebot_agent::compact::a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on`
+`verified-by: bravebot_agent::compact::a_summary_model_nothing_serves_is_named_in_the_refusal_it_causes`

@@ -237,6 +237,13 @@ impl fmt::Display for GoalError {
                     bravebot_i18n::t!(summary_model_refused, model = model)
                 )
             }
+            Self::SummaryModel(crate::compact::SideModelRefusal::NotServed(model)) => {
+                write!(
+                    f,
+                    "{}",
+                    bravebot_i18n::t!(summary_model_not_served, model = model)
+                )
+            }
         }
     }
 }
@@ -276,7 +283,7 @@ pub fn assess<S: Sink>(
     // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
     // below adds to it. A judge that could call a tool would be a turn, and it would be a turn
     // whose job is deciding whether turns stop.
-    let model = crate::compact::side_request_model(chat.config, chat.model)?;
+    let model = crate::compact::side_request_model(chat.config, chat.egress, chat.model)?;
     let model = model.as_ref();
     // The exchange is given up once this answers, so nothing asks for a cache of it: the next
     // check carries a turn's work on the end of the same exchange, in front of the same condition,

@@ -2703,6 +2703,10 @@ summary-model-needs-sign-in =
 # than sent, and rather than fallen back from, for the same reason.
 summary-model-refused =
     { $model } is set as the summary model and this machine's managed settings do not allow it, so nothing was sent
+# The same setting naming a model no configured service answers for. Refused rather than sent, since
+# a judge or a summariser answering without the exchange reads as a verdict rather than a failure.
+summary-model-not-served =
+    { $model } is set as the summary model and no configured service answers for it, so nothing was sent
 # A definition's skills line named skills this session did not find. The definition is its file's
 # path and the skills are that file's own words, joined with a comma, both from a vouched-for file.
 delegate-skills-not-found =

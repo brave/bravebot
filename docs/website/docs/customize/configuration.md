@@ -618,6 +618,9 @@ the session's model instead. A compaction refused this way leaves the conversati
 goal check refused this way ends the goal. Naming a cheaper model is a limit on what background work
 costs, and quietly falling back would spend exactly what the key was set to avoid.
 
+A model no configured service answers for is reported the same way, so a typo in this key stops the
+request instead of sending it somewhere that answers without your conversation.
+
 A model your administrator refuses is not used here either. The managed settings on a machine rule a
 model out for every route that could name one, and this key is a route, so it is reported the same
 way rather than sent.
