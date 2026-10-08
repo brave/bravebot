@@ -51,6 +51,7 @@ the one it would have asked, so confirming their own keystroke would be theatre.
 simply runs.
 
 `verified-by: bravebot_agent::shell::the_command_is_recorded_as_something_the_user_did`
+`verified-by: bravebot_agent::shell::a_command_line_is_run_and_recorded_without_any_way_to_ask`
 
 <a id="SHELL-3"></a>
 ### SHELL-3: the output is `(T,priv)` and reaches the planner in full
