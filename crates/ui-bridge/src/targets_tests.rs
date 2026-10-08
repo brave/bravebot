@@ -10,6 +10,8 @@ struct Session {
     cancel: Cancel,
     finished: Arc<AtomicBool>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
+    /// The project directory, removed when the session is dropped.
+    _directory: tempfile::TempDir,
 }
 
 /// A session with turn `turn` in flight, started by one of its two watches. A cancel that applies
@@ -19,7 +21,16 @@ fn session_running(turn: usize) -> Session {
 }
 
 fn session_holding(turn: usize, run: bool) -> Session {
-    let project = std::env::temp_dir();
+    // A directory of its own, private to this test, and removed with it.
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("bravebot-cancel-target-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    let directory = builder.tempdir().unwrap();
+    let project = directory.path().to_path_buf();
     let mut watches = bravebot_agent::watch::Watches::new();
     let now = Instant::now();
     let started = watches
@@ -71,6 +82,7 @@ fn session_holding(turn: usize, run: bool) -> Session {
         cancel,
         finished,
         watches,
+        _directory: directory,
     }
 }
 
@@ -81,7 +93,9 @@ impl Session {
             params["turn"] = turn;
         }
         let line = json!({"id": 1, "method": "turn.cancel", "params": params}).to_string();
-        self.bridge.dispatch(&Request::parse(&line).unwrap())
+        let request = Request::parse(&line)
+            .map_err(|_| Failure::bad_request("the test built a request that does not parse"))?;
+        self.bridge.dispatch(&request)
     }
 
     fn watching(&self) -> usize {

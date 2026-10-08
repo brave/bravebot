@@ -20,7 +20,7 @@ documented-by: none (internal: the local RPC view is documented in ui/docs/phase
 The opt-in Rust display view for fresh local bridge sessions, and the standalone TypeScript client
 that applies it over stdio. The view has no listener, native binding, recovery, or controller
 model. The view does not grant authority. Exact action targets (RPCVIEW-6) apply to every client of
-the bridge, and a client that does not name its turn keeps the cancel it always had.
+the bridge. A client that names no turn in a cancel stops whatever is running.
 
 ## Clauses
 
@@ -130,7 +130,7 @@ refused.
 or one that has ended, stops nothing and answers `{ "cancelled": false }`; one that names the
 running turn answers `{ "cancelled": true }`. A manifest run carries the session's last turn number
 but is not a turn, so a cancel that names a turn never stops it. A cancel that names no turn stops
-whatever is running and answers `{}`, as before. A `turn` that is not a number is refused. Turn
+whatever is running and answers `{}`. A `turn` that is not a number is refused. Turn
 numbers repeat after `session.rewind`, so a named cancel separates turns within one history, not
 the turns before a rewind from the turns after it.
 
