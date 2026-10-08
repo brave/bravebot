@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/skills.rs
   - crates/tui/src/caffeinate.rs
   - crates/tui/src/init_command.rs
+  - crates/tui/src/prompt_files.rs
 guards:
   - symbol: commands
 documented-by: docs/website/docs/reference/commands.md
@@ -35,6 +36,10 @@ still a prompt like any other sentence, and the planner is what fetches the skil
 [skills.md](skills.md) owns what a skill is and what each source is trusted for, and
 [tools/load-skill.md](tools/load-skill.md) owns the fetch. CMD-7 says why no skill becomes a
 command, and CMD-9 says what the box offers.
+
+**Prompt files are looked up, and are never commands.** A slash word that names a file in the
+person's own `~/.bravebot/prompts` is replaced in the box by the file's text, for the person to read
+and send. CMD-17 says what the lookup reads and what it never does.
 
 ## Where a command may come from
 
@@ -256,6 +261,10 @@ touching this table. Neither is a skill row, since the command claims the name.
 this table, and the definition it runs is an argument on the line, compared against the set the
 session resolved and never added here, however many definitions a machine holds
 ([addressing-a-definition.md](addressing-a-definition.md)).
+
+A prompt file (CMD-17) does not add to the set either. A name is looked up in one directory when
+Enter is pressed on a line that starts with it, and is never listed, drawn as a row, or allowed to
+claim a word the table holds.
 
 `verified-by: by-construction (the table is an array of string literals fixed at compile time, and no directory listing, configuration value or turn output reaches it)`
 
@@ -698,6 +707,53 @@ question and the account into the conversation the planner reads for the rest of
 `verified-by: bravebot_agent::aside::a_recap_within_the_limit_is_not_cut`
 `verified-by: bravebot_agent::aside::the_recap_limit_counts_characters_rather_than_bytes`
 `verified-by: bravebot_agent::aside::a_recap_asks_its_own_question_with_a_limit_and_leaves_the_exchange_alone`
+
+<a id="CMD-17"></a>
+### CMD-17: a line starting with the name of a prompt file is replaced by the file's text, and sends nothing
+
+On Enter, a line whose first word is `/name` is looked up as `~/.bravebot/prompts/name.md`. Where the
+file exists, the line is replaced in the box by the file's text after its front matter, with
+`$ARGUMENTS` set to the rest of the line and `$1` to `$9` to its whitespace-separated words (a
+missing word is nothing). The substitution is a single pass, so text from the line is never read for
+another placeholder. Nothing is sent: the next Enter sends the text as a prompt, once the person has
+seen it. Mid-turn the same press expands and does not queue.
+
+A `name` is ASCII letters, digits, `-` and `_`, so it cannot leave the directory or name a hidden
+file. A word the command table claims is never a name, so no file shadows a command or changes
+`/init the project` from a prompt (CMD-2). A first word with no file is a prompt as typed. Only the
+person's own directory is read, never a workspace's. Shell mode does not look anything up, nor does a
+row the person moved to in the list.
+
+A file that is not a regular file, not UTF-8, over 64 KiB, empty after its front matter, or whose
+text would begin with a command word is not used: the line stays as typed, a note says why, and
+nothing is sent. The last refusal keeps CMD-1: no command is carried out from text read out of a
+file.
+
+The one command a file can fill is `/agent`. An `agent: name` key of one word makes the box
+`/agent name <text>`, which is only a line in the box until the person presses Enter on it, and the
+name is then compared against the resolved set as for any other ([addressing-a-definition.md](addressing-a-definition.md)).
+
+**Why.** A prompt used often should be a word, and the file is the person's own, so it is as trusted
+as their typing. Putting the text in the box before it is sent keeps what reaches the planner a line
+the person saw. Refusing a body that opens with a command, and not looking the name up in a
+directory listing, keep CMD-1 and CMD-7 whole.
+
+`verified-by: bravebot_tui::app::a_prompt_file_expands_into_the_box_and_is_sent_by_the_next_enter`
+`verified-by: bravebot_tui::app::a_slash_word_with_no_file_is_sent_as_typed`
+`verified-by: bravebot_tui::app::a_file_named_for_a_command_does_not_replace_it`
+`verified-by: bravebot_tui::app::a_prompt_file_that_cannot_be_used_is_said_and_not_sent`
+`verified-by: bravebot_tui::app::a_prompt_file_is_not_expanded_in_shell_mode`
+`verified-by: bravebot_tui::app::enter_on_a_highlighted_row_takes_the_row_not_a_file`
+`verified-by: bravebot_tui::app::a_prompt_file_expands_while_a_turn_is_running_before_it_is_queued`
+`verified-by: bravebot_tui::prompt_files::arguments_and_positions_are_filled_from_what_followed_the_name`
+`verified-by: bravebot_tui::prompt_files::text_that_came_from_the_line_is_not_read_for_placeholders`
+`verified-by: bravebot_tui::prompt_files::front_matter_is_not_put_in_the_box`
+`verified-by: bravebot_tui::prompt_files::an_agent_in_the_front_matter_fills_the_agent_form`
+`verified-by: bravebot_tui::prompt_files::an_agent_that_is_not_one_word_is_refused`
+`verified-by: bravebot_tui::prompt_files::only_a_plain_name_is_looked_up_and_only_inside_the_directory`
+`verified-by: bravebot_tui::prompt_files::a_name_a_command_claims_is_never_a_file`
+`verified-by: bravebot_tui::prompt_files::a_body_that_opens_with_a_command_is_refused`
+`verified-by: bravebot_tui::prompt_files::a_file_that_cannot_be_used_is_refused_rather_than_ignored`
 
 ## Known costs
 

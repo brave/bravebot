@@ -40,6 +40,7 @@ pub mod markdown;
 pub mod model_prompt;
 pub mod panel;
 pub mod preview;
+pub mod prompt_files;
 pub mod reasoning;
 pub mod remote_confirm;
 pub mod render;

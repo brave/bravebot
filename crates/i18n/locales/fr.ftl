@@ -2363,6 +2363,16 @@ return-not-pressed =
     cette entrée est arrivée avec d'autres touches, donc ce n'était pas une frappe : appuyez sur Entrée pour envoyer cette ligne, ou Échap pour l'effacer
 leave-not-pressed =
     cela est arrivé avec d'autres touches, donc ce n'était pas une frappe : appuyez à nouveau pour quitter
+prompt-file-unreadable =
+    /{ $name } est un fichier d'invite illisible comme texte, donc la ligne n'a pas été envoyée : { $path }
+prompt-file-too-large =
+    /{ $name } est un fichier d'invite de plus de 64 Kio, donc la ligne n'a pas été envoyée : { $path }
+prompt-file-empty =
+    /{ $name } est un fichier d'invite vide, donc la ligne n'a pas été envoyée : { $path }
+prompt-file-agent-not-a-name =
+    /{ $name } est un fichier d'invite dont l'agent n'est pas un seul mot, donc la ligne n'a pas été envoyée : { $path }
+prompt-file-begins-with-a-command =
+    /{ $name } est un fichier d'invite qui commence par une commande, ce qu'un fichier ne peut pas lancer, donc la ligne n'a pas été envoyée : { $path }
 paste-folded = { $lines ->
     [one] [Texte collé #{ $number } +{ $lines } ligne]
    *[other] [Texte collé #{ $number } +{ $lines } lignes]

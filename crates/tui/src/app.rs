@@ -232,7 +232,7 @@ const MANIFEST_COMMAND: &str = "/manifest";
 /// One word however many definitions a machine holds: a name is written by whoever wrote the file
 /// and can read like an instruction, so it is an argument here and never a command word or a
 /// completion row (ADDRESS-2, ADDRESS-6). See `docs/specs/addressing-a-definition.md`.
-const AGENT_COMMAND: &str = "/agent";
+pub(crate) const AGENT_COMMAND: &str = "/agent";
 /// Lists each definition's memory, where it is kept and whether it is withheld (MEMORY-12).
 const MEMORY_COMMAND: &str = "/memory";
 
@@ -1788,8 +1788,10 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             let commanded = session.take_command();
             dispatch_command(session, commanded)
         }
-        // A half-typed command, after every arm that recognises a whole one. Enter takes the
-        // highlighted row rather than sending "/mod" to the planner, which is never what was meant.
+        // A line whose first word names a file in the person's prompt directory: the file's text
+        // replaces the line and waits in the box (CMD-17). After every command, so a file cannot
+        // shadow one, and before completion, so `/review the diff` is not read as a half-typed word.
+        KeyCode::Enter if session.expand_prompt_file() => Action::Redraw,
         // A half-typed command, after every arm that recognises a whole one. Enter takes the
         // highlighted row rather than sending "/mod" to the planner, which is never what was meant.
         //
@@ -2787,6 +2789,14 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         && session.queue_command()
     {
         return queued(session, key);
+    }
+
+    // A prompt file expands mid-turn as it does at rest, into the box, so the text is read before it
+    // is queued with the Enter that follows (CMD-17). Nothing is sent by this press.
+    if key.code == KeyCode::Enter
+        && session.answer_while_working(|session| session.expand_prompt_file())
+    {
+        return Action::Redraw;
     }
 
     // After the arms that recognise a whole command, as at rest: Enter on a half-typed word takes
@@ -3882,6 +3892,7 @@ fn event_loop(
     session.adopt_wheel_rows(settings.wheel_rows());
     session.adopt_panel();
     session.adopt_caffeinate();
+    session.adopt_prompt_files(crate::prompt_files::directory());
     crate::title::adopt(
         settings.terminal_title(),
         bravebot_core::incognito::engaged(),
@@ -15151,6 +15162,138 @@ mod tests {
             enter_line(&mut session, "/init the project"),
             Action::Submit("/init the project".to_string())
         );
+    }
+
+    /// A session whose prompt directory holds the given files.
+    fn with_prompt_files(name: &str, files: &[(&str, &str)]) -> Session {
+        let directory = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        for (file, text) in files {
+            std::fs::write(directory.join(file), text).unwrap();
+        }
+        let mut session = Session::new("none");
+        session.adopt_prompt_files(Some(directory));
+        session
+    }
+
+    /// CMD-17: Enter on `/name args` puts the file's text in the box and sends nothing. The text
+    /// goes as a prompt on the next Enter, once the person has seen it.
+    #[test]
+    fn a_prompt_file_expands_into_the_box_and_is_sent_by_the_next_enter() {
+        let mut session = with_prompt_files(
+            "prompt-files-key",
+            &[("review.md", "Review $ARGUMENTS closely\n")],
+        );
+
+        assert_eq!(enter_line(&mut session, "/review the diff"), Action::Redraw);
+        assert_eq!(session.input(), "Review the diff closely");
+        assert_eq!(session.status, Status::Idle, "the expansion began a turn");
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("Review the diff closely".to_string())
+        );
+    }
+
+    /// CMD-17: a first word no file answers to is an ordinary prompt, and so is every line when
+    /// no directory was adopted.
+    #[test]
+    fn a_slash_word_with_no_file_is_sent_as_typed() {
+        let mut session = with_prompt_files("prompt-files-none", &[("review.md", "Review")]);
+        assert_eq!(
+            enter_line(&mut session, "/missing some words"),
+            Action::Submit("/missing some words".to_string())
+        );
+
+        let mut unset = Session::new("none");
+        assert_eq!(
+            enter_line(&mut unset, "/review the diff"),
+            Action::Submit("/review the diff".to_string())
+        );
+    }
+
+    /// CMD-17: a file named for a command does not take the command's place, whether the command
+    /// is carried out or its word is followed by a sentence (CMD-2).
+    #[test]
+    fn a_file_named_for_a_command_does_not_replace_it() {
+        let mut session = with_prompt_files(
+            "prompt-files-shadow",
+            &[("init.md", "from a file"), ("clear.md", "from a file")],
+        );
+        assert_eq!(
+            enter_line(&mut session, "/init the project"),
+            Action::Submit("/init the project".to_string())
+        );
+        enter_line(&mut session, "/clear");
+        assert_eq!(session.input(), "", "the file's text replaced the command");
+    }
+
+    /// CMD-17: a file that cannot be used leaves the line as typed, says why, and sends nothing.
+    #[test]
+    fn a_prompt_file_that_cannot_be_used_is_said_and_not_sent() {
+        let mut session = with_prompt_files("prompt-files-empty", &[("blank.md", "---\n---\n\n")]);
+
+        assert_eq!(enter_line(&mut session, "/blank now"), Action::Redraw);
+        assert_eq!(session.input(), "/blank now");
+        assert_eq!(session.status, Status::Idle);
+        assert!(
+            last_note(&session).contains("nothing in it"),
+            "{}",
+            last_note(&session)
+        );
+    }
+
+    /// CMD-17: in shell mode the line is a command line and a file is not consulted.
+    #[test]
+    fn a_prompt_file_is_not_expanded_in_shell_mode() {
+        let mut session = with_prompt_files("prompt-files-shell", &[("review.md", "Review")]);
+        session.shell = true;
+        type_line(&mut session, "/review x");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Run("/review x".to_string())
+        );
+    }
+
+    /// CMD-17: Enter on a row the person moved to takes the row rather than expanding a file whose
+    /// name the line happens to spell.
+    #[test]
+    fn enter_on_a_highlighted_row_takes_the_row_not_a_file() {
+        let mut session = with_prompt_files("prompt-files-row", &[("re.md", "from a file")]);
+        type_line(&mut session, "/re");
+        handle_key(&mut session, key(KeyCode::Down));
+        assert!(
+            session.offered_count() > 1,
+            "the list has nothing to move to"
+        );
+
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        assert_ne!(session.input(), "from a file");
+        assert!(session.input().starts_with('/'), "{}", session.input());
+    }
+
+    /// CMD-17: mid-turn the expansion also waits in the box, and only the Enter after it queues.
+    #[test]
+    fn a_prompt_file_expands_while_a_turn_is_running_before_it_is_queued() {
+        let mut session = with_prompt_files("prompt-files-working", &[("review.md", "Review $1")]);
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.status, Status::Working);
+
+        for c in "/review parser".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert_eq!(session.input(), "Review parser");
+        assert!(session.queued.is_empty(), "the expansion was queued unread");
+
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_eq!(waiting_prompts(&session), ["Review parser"]);
     }
 
     /// Naming a level on the line takes it without opening the picker.
