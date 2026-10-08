@@ -39,7 +39,7 @@ const LOOK_AWAY = 3
 /** The least time between two ticks, in milliseconds. A blink's lids are closed for about 75. */
 const AT_LEAST = 1000 / 30
 
-interface Registered {
+export interface Registered {
   svg: SVGSVGElement
   seed: string
   sprite: Sprite
@@ -104,10 +104,10 @@ export function lookOf(sprite: Sprite, doing: Doing, expression: Expression): Lo
   }
 }
 
-/** How a face is held at this moment. */
-function lookAt(entry: Registered, seconds: number): Look {
+/** How a face is held at this moment. `still` is whether the person asked for reduced motion. */
+export function lookAt(entry: Registered, seconds: number, still = stillness): Look {
   const look = lookOf(entry.sprite, entry.doing, entry.expression)
-  if (stillness) return look
+  if (still) return look
   const t = seconds + entry.phase
   const elapsed = seconds - entry.since
   const away = -entry.sprite.gaze as 1 | -1
