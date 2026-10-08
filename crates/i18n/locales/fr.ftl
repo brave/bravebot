@@ -1766,6 +1766,7 @@ command-issue = Dire pour quel ticket est cette session, l'afficher ou l'effacer
 command-pr = Dire pour quelle pull request est cette session, l'afficher ou l'effacer
 command-compact = Résumer la conversation jusqu'ici, en gardant la partie récente
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
+command-recap = Résumer où en est cette session, sans le mettre dans la conversation
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
 command-resume = Reprendre une autre session de ce répertoire, par identifiant ou dans une liste
 command-forget-trust = Ne plus retenir que ce répertoire est approuvé, pour que les sessions suivantes ici demandent

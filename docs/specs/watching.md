@@ -484,6 +484,7 @@ them.
 `verified-by: bravebot_tui::app::an_answer_being_written_beside_the_work_is_not_drawn_over_the_turn`
 `verified-by: bravebot_tui::render::the_list_names_an_aside_row_as_an_aside`
 `verified-by: bravebot_tui::render::an_asides_view_draws_the_question_and_the_answer`
+`verified-by: bravebot_tui::render::an_asides_view_wraps_an_answer_that_is_one_long_line`
 `verified-by: bravebot_agent::turn::asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone`
 
 <a id="WATCH-19"></a>

@@ -668,7 +668,8 @@ whether or not it is ever read.
 <a id="SESSION-20"></a>
 ### SESSION-20: a question asked beside the work is recorded, and comes back into the view alone
 
-`/btw` asks something over a copy of the conversation and puts neither half into it. Both halves
+`/btw` asks something over a copy of the conversation and puts neither half into it, and so does
+`/recap`, with a fixed question that [commands.md](commands.md) gives. Both halves
 are written into the record, and a resume puts them back into the mode Ctrl-L opens, which
 [watching.md](watching.md) governs. Nothing reads them into a conversation, so a resumed session
 carries on from the exchange it had and not from the questions asked beside it.

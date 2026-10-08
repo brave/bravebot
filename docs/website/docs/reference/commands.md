@@ -23,6 +23,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
+| `/recap` | | Recap where this session stands, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
 | `/branch` | `[<name>]` | Copy this session and carry on in the copy, keeping the original to return to |
 | `/resume` | `[<id>]` | Pick up another session of this directory, by id or from a list |
@@ -722,6 +723,14 @@ summariser's closing instruction and goes nowhere else, and the audit trail reco
 given and its length, not the words. The **request** is shortened, never the record: the replaced messages go to an
 archive that the transcript still reads and the session record still stores. See
 [Sessions](../using/sessions.md#long-conversations).
+
+## `/recap`
+
+Recaps where the session stands: what you are trying to do, how far the work has got, and what is
+next, in at most 400 characters. It is a [`/btw`](#btw-question) with a fixed question: a copy of the
+conversation goes out, no tools are offered, and neither the question nor the answer joins the
+conversation. The answer is cut to 400 characters if the model writes more, and it opens in the same
+mode as a `/btw` answer. `/recap` takes no argument: a line with words after it is a prompt.
 
 ## `/btw <question>`
 

@@ -147,6 +147,12 @@ const PR_COMMAND: &str = "/pr";
 /// The line that asks a question beside the work, taking the question as its argument.
 const BTW_COMMAND: &str = "/btw";
 
+/// The line that recaps the session so far, taking no argument.
+const RECAP_COMMAND: &str = "/recap";
+
+/// What the aside row shows as the question a recap asked.
+const RECAP_LABEL: &str = "/recap";
+
 /// The line that repeats a prompt, taking the prompt and any interval as its argument.
 const LOOP_COMMAND: &str = "/loop";
 
@@ -268,7 +274,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 36] {
+pub fn commands() -> [Command; 37] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -340,6 +346,12 @@ pub fn commands() -> [Command; 36] {
             name: BTW_COMMAND,
             argument: "<question>",
             description: t!(command_btw),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: RECAP_COMMAND,
+            argument: "",
+            description: t!(command_recap),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -650,6 +662,8 @@ pub enum Action {
         Vec<crate::state::AttachedImage>,
         Vec<crate::state::Attached>,
     ),
+    /// Recap the session so far, over a copy of the conversation, in the way an aside is answered.
+    Recap,
     /// Plan this task in full and then walk it. Needs the workspace, the trust map and the
     /// network, which the loop owns, and gives the conversation nothing back.
     ///
@@ -1881,6 +1895,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // conversation and the copy is thrown away, so nothing about it joins the exchange.
     if let Some(question) = argument_to(line, BTW_COMMAND) {
         return Action::Aside(question.to_string(), pasted, attached);
+    }
+    // Nothing the person types reaches the question: it is the driver's own sentence, so the line
+    // is the command and the argument, if any, is not read.
+    if line.trim() == RECAP_COMMAND {
+        return Action::Recap;
     }
     if line.trim() == CLEAR_COMMAND {
         return Action::Clear;
@@ -4357,8 +4376,13 @@ fn event_loop(
                 stored.append_audit(session.turns, &events);
                 needs_draw = true;
             }
-            Action::Aside(question, pasted, attached) => {
-                if question.is_empty() {
+            action @ (Action::Aside(..) | Action::Recap) => {
+                let recap = action == Action::Recap;
+                let (question, pasted, attached) = match action {
+                    Action::Aside(question, pasted, attached) => (question, pasted, attached),
+                    _ => (String::new(), Vec::new(), Vec::new()),
+                };
+                if question.is_empty() && !recap {
                     session.note(t!(btw_needs_a_question));
                 } else {
                     // The snapshot holds the spend and the timing as they were before the turn,
@@ -4372,6 +4396,7 @@ fn event_loop(
                         &conversation,
                         &mut answers.trust,
                         &question,
+                        recap,
                         &pasted,
                         &attached,
                         &workspace,
@@ -6778,6 +6803,7 @@ fn aside_animated(
     conversation: &Conversation,
     trust: &mut TrustStore,
     question: &str,
+    recap: bool,
     pasted: &[crate::state::AttachedImage],
     attached: &[crate::state::Attached],
     workspace: &Workspace,
@@ -6799,17 +6825,21 @@ fn aside_animated(
     // The pictures go with the question, in the order the markers in it number them, the way they go
     // with a prompt: somebody asking about a screenshot beside the work is asking about the thing
     // they pasted, and pasting.md PASTE-2 is the whole of why it may be looked at.
-    let asking = bravebot_agent::aside::Question::about(
-        conversation,
-        question,
-        pasted
-            .iter()
-            .map(|image| PastedImage {
-                media_type: image.media_type,
-                bytes: image.bytes.clone(),
-            })
-            .collect(),
-    );
+    let asking = if recap {
+        bravebot_agent::aside::Question::recap(conversation)
+    } else {
+        bravebot_agent::aside::Question::about(
+            conversation,
+            question,
+            pasted
+                .iter()
+                .map(|image| PastedImage {
+                    media_type: image.media_type,
+                    bytes: image.bytes.clone(),
+                })
+                .collect(),
+        )
+    };
     // The files dropped onto the line, as paths to read rather than as bytes: the read itself is the
     // worker's, so that it lands in the same trail as the request it travels in. Only what is carried
     // as bytes reaches here, since `crate::state::without_text_files` settled the rest to their names
@@ -6824,7 +6854,11 @@ fn aside_animated(
             crate::dropped::Kind::Text => None,
         })
         .collect();
-    let asked = question.to_string();
+    let asked = if recap {
+        RECAP_LABEL.to_string()
+    } else {
+        question.to_string()
+    };
 
     session.begin_aside();
 
@@ -15735,6 +15769,39 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Enter)),
             Action::Aside(String::new(), Vec::new(), Vec::new())
         );
+    }
+
+    /// `/recap` is the word alone, and carries nothing the person typed: the question is the
+    /// driver's own.
+    #[test]
+    fn the_recap_command_is_a_recap_and_not_a_prompt() {
+        let mut session = Session::new("none");
+        for c in RECAP_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Recap);
+    }
+
+    /// A sentence mentioning the word, or an argument after it, is said to the planner rather than
+    /// taken as a recap that ignores what follows.
+    #[test]
+    fn a_prompt_containing_the_recap_command_or_a_longer_word_is_still_a_prompt() {
+        for line in [
+            "what does /recap do",
+            "/recap the parser",
+            "/recaps are useful",
+        ] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line}"
+            );
+        }
     }
 
     /// A sentence mentioning it is a thing to say to the planner, and the word this one claims is

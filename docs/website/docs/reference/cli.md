@@ -676,6 +676,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/rename <name>` | Call this conversation something else |
 | `/compact` | Summarise the conversation so far, keeping the recent part |
 | `/btw <question>` | Ask something beside the work, without putting it in the conversation |
+| `/recap` | Recap where this session stands, without putting it in the conversation |
 | `/clear` | Start a new session here, keeping this one resumable |
 | `/loop [interval] <prompt>` | Send a prompt again and again, on your interval or at a pace each turn sets |
 | `/goal [<condition> \| clear]` | Keep working until a condition you set is judged met |

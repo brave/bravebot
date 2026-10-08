@@ -668,6 +668,32 @@ running.
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::remote_confirm::the_request_a_turn_built_travels_to_the_thread_that_draws_it`
 
+<a id="CMD-16"></a>
+### CMD-16: `/recap` asks for a short account of the session, in the way `/btw` asks a question
+
+`/recap` takes no argument, so `/recap` followed by words is a prompt (CMD-2). It sends a copy of the
+conversation with a fixed question on the end, written in this program and never read from the line,
+and the exchange is untouched afterwards, as for `/btw` ([watching.md](watching.md)). The request
+offers no tools and is made through no processor, because the exchange is what the planner was
+already shown. The answer is cut to 400 characters, ending in an ellipsis where it was cut, before
+it is drawn and before it is offered to the record, so a model that ignores the length it was asked
+for cannot exceed it. It is answered and recorded as an aside is: a row in the mode Ctrl-L opens, and
+written down only where the exchange had met nothing untrusted ([SESSION-20](sessions.md#SESSION-20)). It is
+not a turn. Typed during a turn it waits for the turn to end (CMD-8).
+
+**Why.** A person returning to a long session needs to know where it stands, and reading the
+transcript back to find out is the cost the command removes. Sending it as a prompt would put the
+question and the account into the conversation the planner reads for the rest of the session.
+
+`verified-by: bravebot_tui::app::the_recap_command_is_a_recap_and_not_a_prompt`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_recap_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_agent::turn::a_recap_is_cut_to_its_limit_and_leaves_the_conversation_alone`
+`verified-by: bravebot_agent::aside::a_recap_longer_than_the_limit_is_cut_to_it`
+`verified-by: bravebot_agent::aside::a_recap_within_the_limit_is_not_cut`
+`verified-by: bravebot_agent::aside::the_recap_limit_counts_characters_rather_than_bytes`
+`verified-by: bravebot_agent::aside::a_recap_asks_its_own_question_with_a_limit_and_leaves_the_exchange_alone`
+
 ## Known costs
 
 - **The list is one row per command and per skill, and a screen with no room for it loses the
