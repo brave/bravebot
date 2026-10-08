@@ -202,6 +202,9 @@ nothing in it would be indistinguishable from a program that had hung.
 
 All of these work while a turn is running, and the view does not jump to follow the turn.
 
+While the view is held off the latest, the bottom line says so and counts the rows that are below it,
+and names **Ctrl-End**, which returns to the latest. The cue goes when the view is back.
+
 ## The scroller
 
 **Ctrl-O** opens the scroller on the view already on the screen. Opening moves nothing: the row you

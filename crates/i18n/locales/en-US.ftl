@@ -2099,6 +2099,11 @@ panel-more = +{ $count } more
 panel-earlier = +{ $count } earlier
 # The same, with rows left out below as well.
 panel-earlier-and-more = +{ $earlier } earlier, +{ $later } more
+# Said on the bottom line while the view is scrolled back off the tail, and gone once it reaches it.
+held-hint = { $count ->
+    [one] held, { $count } row below  ·  { $chord } to return
+   *[other] held, { $count } rows below  ·  { $chord } to return
+    }
 # Said on the bottom line while a background job runs, and gone once the last one ends.
 jobs-hint = { $count ->
     [one] 1 in the background

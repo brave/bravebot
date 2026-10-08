@@ -694,3 +694,19 @@ word is what an interface is given, so no interface can draw the name as it was 
 `verified-by: bravebot_tui::remote_confirm::questions_and_reports_share_the_channel`
 `verified-by: bravebot_agent::turn::the_call_being_written_reaches_the_interface_before_it_runs`
 `verified-by: bravebot_agent::turn::a_call_named_by_an_attempt_thrown_away_is_taken_back`
+
+<a id="VIEW-27"></a>
+### VIEW-27: a held view says it is held, and how many rows arrived below
+
+While the resting view is scrolled off the tail ([VIEW-1](#VIEW-1)), the hint line says it is held,
+how many rows lie below it and the key that returns to the latest. The cue is dim, is dropped whole
+on a terminal with no room for it, and is gone once the view is at the tail.
+
+**Why.** The view stays where it was put while the turn goes on, and a person who scrolled up and
+looked away had no sign on the screen that the turn had moved on, or which key returned to it.
+Only the scroller's footer reported rows below.
+
+The count is read from the layout's row geometry and the sentence is the session's own, so the cue
+holds no bytes of what the rows contain and the rule is kept ([SCROLL-5](scroller.md#SCROLL-5)).
+
+`verified-by: bravebot_tui::render::a_held_view_says_how_many_rows_arrived_below_and_the_key_back`

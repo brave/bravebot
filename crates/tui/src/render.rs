@@ -3677,6 +3677,14 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         count => t!(jobs_hint, count = count),
     };
 
+    // The view is held where it was scrolled to, so what arrives goes below it and nothing else on
+    // the screen says so. A count of rows from the layout and the key that returns, never any of
+    // what those rows hold (VIEW-27).
+    let held = match session.rows_below() {
+        0 => String::new(),
+        count => t!(held_hint, chord = "ctrl-end", count = count),
+    };
+
     // Only while the command the turn is waiting on can be moved, for the reason the trail is only
     // named once there is one: offered at any other moment, the press does nothing.
     let movable = if session.can_move_to_background() {
@@ -3724,8 +3732,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
             looping,
             jobs,
             watchable,
+            held,
         ];
-        let kept = fitted(&parts, &[2, 1, 6, 3, 5, 4], area.width);
+        let kept = fitted(&parts, &[2, 1, 6, 3, 7, 5, 4], area.width);
         let mut spans = Vec::new();
         for (position, index) in kept.iter().enumerate() {
             let part = parts[*index].clone();
@@ -3815,6 +3824,7 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         movable,
         SHORTCUTS_HINT.to_string(),
         info,
+        held,
     ];
     // Indices into `parts`, in the order they are given up: the way to the panel before anything,
     // since the panel is a press away whether or not the line names it (PANEL-7), then the way to
@@ -3837,9 +3847,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // reading this line for a way out of the wait; a job is spending something unwatched, as the
     // loop is.
     let expendable: &[usize] = if context_is_unmeasured {
-        &[10, 3, 9, 2, 4, 7, 8, 6, 5]
+        &[10, 3, 9, 2, 4, 7, 8, 11, 6, 5]
     } else {
-        &[10, 9, 2, 3, 4, 7, 8, 6, 5]
+        &[10, 9, 2, 3, 4, 7, 8, 11, 6, 5]
     };
     // A note is drawn over the right of this same row, so what the parts may occupy is the width
     // less that note. Fitted against the whole width instead, the last part that fits is one the
@@ -9810,6 +9820,50 @@ mod tests {
             !arriving.contains("reply number 39"),
             "a chunk of the reply dragged the view back to the tail: {arriving}"
         );
+    }
+
+    /// The view is held where it was scrolled to, so the one place that can say so, and how much
+    /// has arrived below, is the hint line. It goes when the view reaches the tail.
+    #[test]
+    fn a_held_view_says_how_many_rows_arrived_below_and_the_key_back() {
+        let mut session = Session::new("none");
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+        let hint = |session: &mut Session| rows_of_a_frame(session).pop().expect("a last row");
+
+        let tail = hint(&mut session);
+        assert!(
+            !tail.contains("below"),
+            "a view at the tail was said to be held: {tail}"
+        );
+
+        session.scroll_up(60);
+        let held = hint(&mut session);
+        assert!(held.contains("held"), "{held}");
+        assert!(held.contains("ctrl-end to return"), "{held}");
+        let before = session.rows_below();
+        assert!(
+            before > 0 && held.contains(&format!("{before} rows below")),
+            "{held}"
+        );
+
+        session.streaming("a long chunk\n\n\n\nof the next reply");
+        // The first frame lays the new rows out and the second draws against what it measured.
+        hint(&mut session);
+        let arrived = hint(&mut session);
+        let after = session.rows_below();
+        assert!(after > before, "{before} -> {after}");
+        assert!(
+            arrived.contains(&format!("{after} rows below")),
+            "{arrived}"
+        );
+
+        session.scroll_down(u16::MAX);
+        let back = hint(&mut session);
+        assert!(!back.contains("below") && !back.contains("held"), "{back}");
     }
 
     /// Draw one frame the way the loop draws it, tell the session what the frame laid out, and give
