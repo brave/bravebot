@@ -36,6 +36,7 @@ it true of the call site written next year.
 
 `verified-by: bravebot_diag::lib::a_host_field_drops_userinfo_path_and_query`
 `verified-by: bravebot_diag::lib::a_host_with_odd_bytes_is_written_as_a_question_mark`
+`verified-by: bravebot_diag::lib::a_host_with_an_underscore_is_kept`
 `verified-by: bravebot_net::lib::a_failed_request_is_logged_as_host_status_and_kind_only`
 `verified-by: bravebot_cli::running::a_failed_request_leaves_its_host_and_status_and_no_content_in_the_log`
 
@@ -44,13 +45,15 @@ it true of the call site written next year.
 
 Each process writes its own file under `logs/` in the state directory, readable by its owner alone
 in a directory readable by its owner alone. Ten files are kept: making a new one removes the oldest
-of those this program made, and leaves any other file in the directory alone.
+of those this program made, never the one just made, and leaves any other file in the directory
+alone.
 
 **Why.** The directory grows with every run otherwise, and the files name the hosts a person
 talks to, which is theirs to share and nobody else's to read.
 
 `verified-by: bravebot_diag::lib::the_log_and_its_directory_are_private`
 `verified-by: bravebot_diag::lib::retention_keeps_the_newest_and_leaves_foreign_files`
+`verified-by: bravebot_diag::lib::the_file_being_written_survives_retention_when_the_clock_is_behind`
 `verified-by: bravebot_cli::running::a_failed_request_leaves_its_host_and_status_and_no_content_in_the_log`
 
 <a id="DIAG-3"></a>
@@ -109,11 +112,12 @@ A request that failed names its host, the kind of failure, the status where ther
 long it took. A decision to send a request again names which attempt it is and the wait before it.
 Starting a language server or an MCP server, and an MCP handshake, are recorded as having worked or
 as the kind of failure, and a language server's exit as an orderly one or a kill. At the default
-level only failures are written.
+level only failures are written, and a request a person stopped is not one.
 
 **Why.** These are the questions a bug report starts with: could it reach the service, was it
 retried, did the server it needs start. Each is a fact about the program and none needs content.
 
 `verified-by: bravebot_net::lib::a_failed_request_is_logged_as_host_status_and_kind_only`
+`verified-by: bravebot_net::lib::a_stopped_request_is_not_a_failure_to_log`
 `verified-by: bravebot_aichat::client::a_retry_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_lsp::server::a_missing_server_binary_is_written_to_the_diagnostic_log`

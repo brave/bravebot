@@ -105,7 +105,8 @@ fn host_of(url: &str) -> String {
         .next()
         .unwrap_or_default();
     let host = authority.rsplit('@').next().unwrap_or_default();
-    let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']');
+    let allowed =
+        |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '[' | ']');
     if host.is_empty() || host.len() > HOST_LIMIT || !host.chars().all(allowed) {
         return "?".to_string();
     }
@@ -239,23 +240,24 @@ fn open_new(dir: &Path) -> Option<File> {
     make_directory(dir).ok()?;
     let path = dir.join(file_name(now_millis()));
     let file = create_private(&path).ok()?;
-    prune(dir);
+    prune(dir, &path);
     Some(file)
 }
 
-/// Deletes the oldest files this crate made until [`KEEP`] remain. Anything else in the directory
-/// is left alone.
-fn prune(dir: &Path) {
+/// Deletes the oldest files this crate made until [`KEEP`] remain, never `current`, which a clock
+/// set behind the older files would otherwise sort first. Anything else in the directory is left
+/// alone.
+fn prune(dir: &Path, current: &Path) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     let mut names: Vec<String> = entries
         .flatten()
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| is_log_name(n))
+        .filter(|n| is_log_name(n) && current.file_name().is_none_or(|c| c != n.as_str()))
         .collect();
     names.sort();
-    let excess = names.len().saturating_sub(KEEP);
+    let excess = (names.len() + 1).saturating_sub(KEEP);
     for name in &names[..excess] {
         let _ = fs::remove_file(dir.join(name));
     }
@@ -448,6 +450,38 @@ mod tests {
         assert!(dir.join("notes.txt").exists());
         assert!(dir.join("20260101T000000Z.log").exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A clock set behind the older files would sort the new one first, and pruning it would lose
+    /// the log of the run that is writing it.
+    #[test]
+    fn the_file_being_written_survives_retention_when_the_clock_is_behind() {
+        let dir = scratch("behind");
+        fs::create_dir_all(&dir).unwrap();
+        for day in 1..=KEEP {
+            fs::write(dir.join(format!("20990101T0000{day:02}Z-1.log")), "future").unwrap();
+        }
+        let mut log = Log::new(Level::Error, Some(dir.clone()));
+        log.record(Level::Error, "failure", &[]);
+        let text: String = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| fs::read_to_string(e.path()).unwrap_or_default())
+            .collect();
+        assert!(text.contains("ERROR failure"), "the new log was pruned");
+        let count = fs::read_dir(&dir).unwrap().count();
+        assert_eq!(count, KEEP);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// An underscore is a legal host character, and a service named with one is the host a person
+    /// most needs to see in the log, not `?`.
+    #[test]
+    fn a_host_with_an_underscore_is_kept() {
+        assert_eq!(
+            Field::host("http://my_service:8080/x"),
+            Field(Repr::Host("my_service:8080".to_string()))
+        );
     }
 
     /// Dates are computed by hand, and a leap day is where that goes wrong.

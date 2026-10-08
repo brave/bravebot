@@ -845,6 +845,18 @@ fn within<B>(
 /// where there was one, and how long it took. The URL is the caller's, never a redirect target, and
 /// only its host is kept; the failure's own text can carry what a server said, so it is not.
 fn log_failure(url: &str, error: &EgressError, elapsed: Duration) {
+    if let Some(fields) = failure_fields(url, error, elapsed) {
+        bravebot_diag::error("net.fetch", &fields);
+    }
+}
+
+/// What a failed request is recorded as, or `None` for a stop: a person ending a run is not a
+/// failure, and logging it would leave a file for a run that went wrong nowhere.
+fn failure_fields(
+    url: &str,
+    error: &EgressError,
+    elapsed: Duration,
+) -> Option<Vec<(&'static str, bravebot_diag::Field)>> {
     let (kind, status) = match error {
         EgressError::Denied(_) => ("denied", None),
         EgressError::TooManyRedirects { .. } => ("too_many_redirects", None),
@@ -854,7 +866,7 @@ fn log_failure(url: &str, error: &EgressError, elapsed: Duration) {
         EgressError::Transport { .. } => ("transport", None),
         EgressError::OutOfTime { .. } => ("out_of_time", None),
         EgressError::Status { status, .. } => ("status", Some(*status)),
-        EgressError::Stopped { .. } => ("stopped", None),
+        EgressError::Stopped { .. } => return None,
     };
     let mut fields = vec![
         ("host", bravebot_diag::Field::host(url)),
@@ -865,7 +877,7 @@ fn log_failure(url: &str, error: &EgressError, elapsed: Duration) {
     if let Some(status) = status {
         fields.push(("status", bravebot_diag::Field::num(status)));
     }
-    bravebot_diag::error("net.fetch", &fields);
+    Some(fields)
 }
 
 /// How often a thread waiting on a reply looks at whether the caller has stopped.
@@ -1232,6 +1244,21 @@ mod tests {
         // 403 and 451 are refusals.
         let retryable: Vec<u16> = (100..=599).filter(|status| at(*status)).collect();
         assert_eq!(retryable, [408, 429, 500, 502, 503, 504]);
+    }
+
+    /// A person stopping a run is not a failure to report: logging it would leave a file, and use
+    /// up one of the few kept, for a run that went wrong nowhere.
+    #[test]
+    fn a_stopped_request_is_not_a_failure_to_log() {
+        let stopped = EgressError::Stopped {
+            url: "https://example.com/".to_string(),
+        };
+        assert!(failure_fields("https://example.com/", &stopped, Duration::ZERO).is_none());
+        let refused = EgressError::Status {
+            url: "https://example.com/".to_string(),
+            status: 503,
+        };
+        assert!(failure_fields("https://example.com/", &refused, Duration::ZERO).is_some());
     }
 
     /// A request that fails is written to the diagnostic log as the host, the kind of failure and
