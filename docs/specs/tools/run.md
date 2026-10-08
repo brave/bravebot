@@ -1278,8 +1278,8 @@ and both answers are then true of it.
 **A known cost.** A line whose arguments change every time is asked about every time, in this session
 and in the next. A commit message and a new branch name are the two that do this in ordinary work.
 The answer for them is a pattern the person writes or a prompt each time, and this clause chooses the
-prompt. A number of a pull request or an issue is no longer one of these for the sub-commands the table
-lists, and stays one for every program it does not.
+prompt. A number of a pull request or an issue is not one of these for the sub-commands the table lists,
+and is one for every program it does not.
 
 **A second known cost.** Two different jobs for one program read as one job whose arguments moved.
 `git log` followed by `git push` draws the advice, because telling those apart means deciding which
