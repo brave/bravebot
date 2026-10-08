@@ -148,7 +148,8 @@ class Session implements AgentSession {
       this.sending--
     }
     if (!isRecord(result) || typeof result.turn !== 'number') throw new ProtocolError('turn.send did not report a turn')
-    this.sent = Math.max(this.sent, result.turn)
+    // The latest send, not the largest: turn numbers go back after a rewind.
+    this.sent = result.turn
     return { turn: result.turn }
   }
 

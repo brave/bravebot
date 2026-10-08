@@ -1307,8 +1307,6 @@ fn question_numbers_are_not_reused_by_a_later_turn_of_the_same_session() {
 /// A session that has used every number asks no more questions, and a question not asked is a no.
 #[test]
 fn a_session_with_no_question_numbers_left_refuses_to_ask() {
-    let harness = harness();
-    let mut confirmer = harness.confirmer;
     let spent = Arc::new(AtomicU64::new(u64::MAX));
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&events);
@@ -1329,5 +1327,4 @@ fn a_session_with_no_question_numbers_left_refuses_to_ask() {
         events.lock().expect("not poisoned").is_empty(),
         "a question went out with no number"
     );
-    let _ = &mut confirmer;
 }
