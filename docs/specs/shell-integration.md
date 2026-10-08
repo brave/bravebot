@@ -55,8 +55,8 @@ larger and less predictable record, and a question that needs it can ask for it 
 
 **Known costs.** bash records through its history, when the command finishes and the prompt
 returns, so a command still running or killed is not in the record, where zsh and fish record it
-as it starts and so also record the line that sets `BRAVEBOT_INCOGNITO`. bash so a line the person's `HISTCONTROL` or
-`HISTIGNORE` drops is not recorded, which is the behaviour a person who set them wants. The tests
+as it starts and so also record the line that sets `BRAVEBOT_INCOGNITO`. With bash, a line that `HISTCONTROL` or `HISTIGNORE` drops is not recorded,
+which is the behaviour a person who set them wants. The tests
 run the bash hook in a real `bash`; the zsh and fish hooks are the same design written for those
 shells and are not run by the suite.
 
