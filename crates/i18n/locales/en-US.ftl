@@ -1852,6 +1852,9 @@ indicator-checking = { $lines ->
     [one] Checking { $lines } line
    *[other] Checking { $lines } lines
     }
+# Said while a hook holds the turn open. The moment is the word the hooks file spells it with and
+# the program is the first word of the command the person wrote there: nothing the hook printed.
+indicator-hook = Running hook: { $program } ({ $moment })
 # The same, over a picture or a PDF, which has no lines to count.
 indicator-checking-picture = Checking a picture
 indicator-checking-pdf = Checking a PDF

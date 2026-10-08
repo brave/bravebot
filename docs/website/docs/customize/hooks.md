@@ -121,6 +121,10 @@ An entry whose `timeout` is anything else, such as 0, 601, 1.5 or a string, decl
 rounded to the nearest limit, because that would be a limit you did not write. The ceiling is there
 because every hook holds the turn open while it runs.
 
+While a hook runs, the status line says so, naming the moment and the program, for example
+`Running hook: cargo (tool-finished)`. It disappears when the hook ends and leaves nothing behind in
+the transcript. It never shows anything the hook printed.
+
 ## When one goes wrong
 
 A hook that could not be started, that ended badly, or that was still running when its time ran out

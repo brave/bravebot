@@ -8131,6 +8131,10 @@ fn run_turn_animated(
                 crate::remote_confirm::ToMain::Job(event) => session.job(event),
                 crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
                 crate::remote_confirm::ToMain::CheckFinished => session.checked(),
+                crate::remote_confirm::ToMain::HookStarted(moment, program) => {
+                    session.hook_running(moment, program)
+                }
+                crate::remote_confirm::ToMain::HookFinished => session.hook_over(),
                 crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
                 crate::remote_confirm::ToMain::Printed(output) => session.command_printed(output),
                 crate::remote_confirm::ToMain::Returned(returned) => session.returned(returned),
@@ -8401,6 +8405,8 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         | ToMain::Job(_)
         | ToMain::CheckStarted(_)
         | ToMain::CheckFinished
+        | ToMain::HookStarted(..)
+        | ToMain::HookFinished
         | ToMain::Quarantined(_)
         | ToMain::Printed(_)
         | ToMain::Returned(_)

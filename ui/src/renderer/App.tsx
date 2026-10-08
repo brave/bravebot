@@ -10,6 +10,7 @@ import type {
   AskAnswer,
   BridgeEvent,
   Checking,
+  Hook,
   ForkedSession,
   KeptTrust,
   OpenedSession,
@@ -78,6 +79,7 @@ interface Live {
   phase: Waiting | null
   /** What a running confined check was given. Beside the phase, which a check does not change. */
   checking: Checking | null
+  hook: Hook | null
   /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
   composing: string | null
   tokens: number
@@ -502,6 +504,7 @@ export function App(): React.JSX.Element {
         quarantine: [],
         phase: null,
         checking: null,
+        hook: null,
         tokens: 0,
         composing: null,
         running: false,
@@ -576,6 +579,7 @@ export function App(): React.JSX.Element {
         quarantine: [],
         phase: null,
         checking: null,
+        hook: null,
         tokens: 0,
         composing: null,
         running: false,
@@ -1234,6 +1238,7 @@ export function App(): React.JSX.Element {
           quarantine: [],
           phase: null,
           checking: null,
+          hook: null,
           tokens: 0,
           composing: null,
           running: false,
@@ -1714,7 +1719,7 @@ export function apply(
       case 'watch.ended':
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':
-        return { ...old, running: true, phase: null, checking: null, composing: null, tokens: 0,
+        return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, tokens: 0,
           entries: t.beginTurn(old.entries, message.data.turn) }
       case 'audit':
         return old
@@ -1728,6 +1733,11 @@ export function apply(
         return { ...old, checking: message.data }
       case 'check.finished':
         return { ...old, checking: null }
+      // Likewise left to the phase: a hook runs in the middle of a round.
+      case 'hook.started':
+        return { ...old, hook: message.data }
+      case 'hook.finished':
+        return { ...old, hook: null }
       case 'tokens':
         return { ...old, tokens: message.data.written }
       case 'narration':
@@ -1778,14 +1788,14 @@ export function apply(
         return { ...old, phase: null, entries: [...old.entries, t.mcpStarted(message.data)] }
       // A run is not a turn, so it adds no turn marker and no reply to the conversation.
       case 'manifest.started':
-        return { ...old, running: true, phase: null, checking: null, tokens: 0 }
+        return { ...old, running: true, phase: null, checking: null, hook: null, tokens: 0 }
       case 'manifest.done':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, outcome: 'complete',
+        return { ...old, running: false, phase: null, checking: null, hook: null, outcome: 'complete',
           entries: [...old.entries, t.planReplied(message.data.reply, message.data.record)] }
       case 'manifest.error':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, queuePaused: true,
+        return { ...old, running: false, phase: null, checking: null, hook: null, queuePaused: true,
           entries: [...t.interruptPending(old.entries), t.planEnded(message.data)] }
       case 'vouch.request':
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
@@ -1806,6 +1816,7 @@ export function apply(
           phase: null,
           // A consolidating turn stays running, so a check whose end was never heard would stay drawn.
           checking: null,
+          hook: null,
           composing: null,
           entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
           awaitingOrdinal: null,
@@ -1824,6 +1835,7 @@ export function apply(
           running: false,
           phase: null,
           checking: null,
+          hook: null,
           composing: null,
           entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
           awaitingOrdinal: null,

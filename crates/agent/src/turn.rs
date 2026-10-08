@@ -2925,7 +2925,20 @@ fn fire_hooks<R: Reporter + ?Sized>(
         }
     }
     let mut said = Vec::new();
-    for fired in crate::hooks::fire(hooks, moment, tool, workspace.root()) {
+    let fired_all = crate::hooks::fire_watched(
+        hooks,
+        moment,
+        tool,
+        workspace.root(),
+        crate::hooks::LIMIT,
+        &mut |edge| match edge {
+            crate::hooks::Watch::Starting { moment, program } => {
+                reporter.hook_started(moment, program.to_string())
+            }
+            crate::hooks::Watch::Over => reporter.hook_finished(),
+        },
+    );
+    for fired in fired_all {
         let Some(trouble) = fired.trouble else {
             continue;
         };
