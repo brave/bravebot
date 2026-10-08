@@ -7024,7 +7024,7 @@ impl Session {
         }
     }
 
-    /// Ctrl-Right on a stored prompt, or where Up found nothing of this session's: walk every
+    /// The scope chord on a stored prompt, or where Up found nothing of this session's: walk every
     /// stored prompt, staying on the one on screen.
     pub fn widen_history(&mut self) {
         if let Some(prompt) = self.history.widen() {
@@ -7032,7 +7032,7 @@ impl Session {
         }
     }
 
-    /// Ctrl-Left on a stored prompt in the wide scope: walk this session's prompts again.
+    /// The scope chord on a stored prompt in the wide scope: walk this session's prompts again.
     pub fn narrow_history(&mut self) {
         if let Some(prompt) = self.history.narrow() {
             self.set_input(prompt);

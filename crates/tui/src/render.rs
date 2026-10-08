@@ -2967,9 +2967,15 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
             chord = session.bindings().history_name()
         );
         let switch = if session.history.can_narrow() {
-            Some(t!(input_history_narrow, chord = "ctrl-left"))
+            Some(t!(
+                input_history_narrow,
+                chord = session.bindings().scope_name()
+            ))
         } else if session.history.can_widen(false) {
-            Some(t!(input_history_widen, chord = "ctrl-right"))
+            Some(t!(
+                input_history_widen,
+                chord = session.bindings().scope_name()
+            ))
         } else {
             None
         };
@@ -3407,9 +3413,9 @@ const COMPACTED_CONTEXT: &str = "context compacted";
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The eight the file can move are
+/// list names the key that answers rather than the key that used to. The ten the file can move are
 /// the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
-fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 24] {
+fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 25] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
@@ -3438,6 +3444,10 @@ fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, 
         (bindings.paste_name(), "paste, pictures too"),
         (bindings.background_name(), "background a running command"),
         (bindings.panel_name(), "show or hide the info panel"),
+        (
+            bindings.scope_name(),
+            "earlier prompts: this session or all",
+        ),
         ("drag".to_string(), "select, copy on release"),
     ]
 }
@@ -3916,7 +3926,10 @@ fn note_at_the_right(session: &Session) -> Option<String> {
     if session.offered_all_prompts && !session.history.is_browsing() {
         return Some(format!(
             "{}  ",
-            t!(input_history_none_here, chord = "ctrl-right")
+            t!(
+                input_history_none_here,
+                chord = session.bindings().scope_name()
+            )
         ));
     }
 
@@ -8317,6 +8330,25 @@ mod tests {
         );
     }
 
+    /// The `?` list has a row for the scope switch, on its default and on a moved chord, so the key
+    /// is written down in the one place that lists the keys.
+    #[test]
+    fn the_shortcut_list_names_the_scope_chord() {
+        let mut session = Session::new("none");
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("ctrl-n"), "{listed}");
+
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("scope".to_string(), "alt-n".to_string());
+        session.adopt_keybindings(&moved);
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("alt-n"), "{listed}");
+        assert!(!listed.contains("ctrl-n"), "{listed}");
+    }
+
     /// When stash is customized, the stashed line reminder names the customized chord.
     #[test]
     fn the_stashed_line_names_the_custom_stash_chord() {
@@ -8446,7 +8478,7 @@ mod tests {
         session.recall_older();
         let hint = rendered_at(&session, 120, 12);
         assert!(
-            hint.contains(&t!(input_history_none_here, chord = "ctrl-right")),
+            hint.contains(&t!(input_history_none_here, chord = "ctrl-n")),
             "{hint}"
         );
 
@@ -8457,7 +8489,7 @@ mod tests {
         let narrow = rendered_at(&session, 120, 12);
         assert!(narrow.contains("This session 1/1"), "{narrow}");
         assert!(
-            narrow.contains(&t!(input_history_widen, chord = "ctrl-right")),
+            narrow.contains(&t!(input_history_widen, chord = "ctrl-n")),
             "{narrow}"
         );
 
@@ -8465,7 +8497,47 @@ mod tests {
         let wide = rendered_at(&session, 120, 12);
         assert!(wide.contains("All 2/2"), "{wide}");
         assert!(
-            wide.contains(&t!(input_history_narrow, chord = "ctrl-left")),
+            wide.contains(&t!(input_history_narrow, chord = "ctrl-n")),
+            "{wide}"
+        );
+    }
+
+    /// The scope key is a setting, so the border and the hint line name the key a settings file
+    /// moved it to rather than the default, or they would advertise a key that does nothing.
+    #[test]
+    fn the_border_and_hint_name_the_scope_chord_a_settings_file_moved() {
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("scope".to_string(), "alt-n".to_string());
+
+        let mut session = Session::new("none");
+        session.adopt_keybindings(&moved);
+        session.history =
+            crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
+                "old one", None,
+            )]);
+        session.recall_older();
+        let hint = rendered_at(&session, 120, 12);
+        assert!(
+            hint.contains(&t!(input_history_none_here, chord = "alt-n")),
+            "{hint}"
+        );
+        assert!(!hint.contains("ctrl-n"), "{hint}");
+
+        session.type_char('x');
+        session.submit().expect("the prompt is sent");
+        session.complete("ok", Vec::new(), 0);
+        session.recall_older();
+        let narrow = rendered_at(&session, 120, 12);
+        assert!(
+            narrow.contains(&t!(input_history_widen, chord = "alt-n")),
+            "{narrow}"
+        );
+        assert!(!narrow.contains("ctrl-n"), "{narrow}");
+
+        session.widen_history();
+        let wide = rendered_at(&session, 120, 12);
+        assert!(
+            wide.contains(&t!(input_history_narrow, chord = "alt-n")),
             "{wide}"
         );
     }

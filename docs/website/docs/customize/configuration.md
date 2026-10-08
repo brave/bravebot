@@ -1147,7 +1147,7 @@ own.
 { "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
 ```
 
-Nine actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
+Ten actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
 
 | Action | Default | What it does |
 |---|---|---|
@@ -1160,6 +1160,7 @@ Nine actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `al
 | `trail` | `ctrl-t` | toggle the [audit trail](../security/audit-trail.md) |
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](../using/sessions.md#telling-sessions-apart) |
+| `scope` | `ctrl-n` | switch Up between this session's prompts and every stored one |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is already answered (a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, the arrows move), so handing one to an action
@@ -1170,12 +1171,12 @@ are not rebindable.
 **Every action keeps a key of its own.** A chord that cannot be read, or that the input box already
 answers, leaves that action on its default. So does one two actions both asked for: both fall back
 rather than one winning, since which won would come down to the order the file was read in. Two
-actions *trading* chords is not a conflict and both get what they asked for. `panel` is the newest
-of the nine, so a file that already gave `ctrl-x` to another action now asks for the chord the panel
-stands on, and that action is back on its default until the file moves `panel` as well.
+actions *trading* chords is not a conflict and both get what they asked for. `scope` is the newest
+of the ten, so a file that already gave `ctrl-n` to another action now asks for the chord the switch
+stands on, and that action is back on its default until the file moves `scope` as well.
 
 The block layers per action the way `env` does, so a project file moving one action says nothing about
-the other eight. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
+the other nine. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
 
 ### `search`
 
