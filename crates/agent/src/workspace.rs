@@ -5756,4 +5756,50 @@ mod tests {
         let absolute = io_detail(&missing, "/home/me/todo.txt", Path::new("/work/project"));
         assert!(!absolute.contains("/work/project"), "{absolute}");
     }
+
+    /// A `~` reference whose home directory is not text is refused. The directory its lossy
+    /// rendering spells exists, so an implementation that rendered the path with replacement
+    /// characters would open that one instead (REFER-3).
+    #[cfg(unix)]
+    #[test]
+    fn a_tilde_reference_under_a_home_that_is_not_text_is_not_opened_by_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let base = crate::testutil::scratch_dir("reference-home-not-text");
+        let _ = std::fs::remove_dir_all(&base);
+        let project = base.join("project");
+        std::fs::create_dir_all(&project).expect("project");
+        let lookalike = base.join("home-\u{FFFD}");
+        std::fs::create_dir_all(lookalike.join("notes")).expect("lookalike");
+        let project = project.canonicalize().expect("canonical project");
+
+        let mut bytes = base.as_os_str().as_bytes().to_vec();
+        bytes.extend_from_slice(b"/home-\xff");
+        let home = PathBuf::from(OsStr::from_bytes(&bytes));
+        assert!(home.to_str().is_none());
+
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home))
+            .with_references(
+                &[bravebot_config::Reference {
+                    alias: "notes".to_string(),
+                    path: "~/notes".to_string(),
+                    description: None,
+                }],
+                &[],
+            );
+
+        assert_eq!(workspace.references().count(), 0);
+        assert!(workspace.added_directories().is_empty());
+        let problems = workspace.reference_problems();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems[0].0, "notes");
+        assert!(
+            matches!(&problems[0].1, ReferenceProblem::NotOpened(reason) if reason.contains("not text")),
+            "{problems:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
