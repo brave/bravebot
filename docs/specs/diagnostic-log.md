@@ -4,6 +4,7 @@ title: The diagnostic log
 status: normative
 governs:
   - crates/diag/src/lib.rs
+  - crates/cli/src/bug_report.rs
 documented-by: docs/website/docs/reference/cli.md
 ---
 
@@ -97,13 +98,14 @@ state directory moves with the profile variable, so the path is not one to be as
 ### DIAG-6: nothing in the program reads the log
 
 No code path opens a log file to decide, show or send anything. The log is written and left for a
-person.
+person. The one question asked of the directory is the name of the newest file, answered from the
+names alone ([DIAG-8](#DIAG-8)).
 
 **Why.** The planner and the driver never receive untrusted content and the driver does not branch
 on it. A log that was read back would be a channel from a remote party's failure into the next
 decision, whatever the log was meant for.
 
-`verified-by: by-construction (the crate exposes a function to write a line and none to read one; the directory name is read by the CLI only to be passed to the writer and to be shown by doctor)`
+`verified-by: by-construction (the crate exposes functions to write a line and to name the newest file, and none to read a file's content; the directory name is read by the CLI only to be passed to the writer, to be shown by doctor and to be handed to the naming function)`
 
 <a id="DIAG-7"></a>
 ### DIAG-7: a failed request, a retry and a server that did not start are recorded
@@ -125,3 +127,32 @@ retried, did the server it needs start. Each is a fact about the program and non
 `verified-by: bravebot_mcp::stdio::a_handshake_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_lsp::server::a_missing_server_binary_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_lsp::server::a_servers_launch_and_exit_are_written_to_the_diagnostic_log`
+
+<a id="DIAG-8"></a>
+### DIAG-8: `bug-report` writes one private file naming what to attach, and copies no log
+
+`bravebot bug-report` writes `bravebot-bug-report.txt` in the current directory, readable by its
+owner alone, and prints its path on stdout. A name already taken is left as it is and the next
+number is tried, so an earlier report is never overwritten. The file holds the build and the
+target, what `doctor` writes on each stream and the path of the newest diagnostic log, taken from
+the file names before `doctor` runs, since `doctor` may write a log of its own. It holds no
+transcript, trace, settings file, environment value, file of the working directory or line of a
+log. An incognito session, or a machine with no home, writes nothing and exits with status 1. An
+argument is refused with status 2 and nothing is written.
+
+**Why.** A person asked to attach something to a public issue is helped by a file that says what
+the program is and how it is set up, and harmed by one that carries what they were working on.
+Running `doctor` as the program itself started again makes the file the report the person would
+otherwise have copied from their terminal. Copying the log's lines would be a read of a log
+(DIAG-6), so the path is given and the person attaches the file.
+
+**Known costs.** `doctor` names paths, model services and the names of environment variables, so
+the file is for a person to read before it is posted. Two files are attached rather than one.
+
+`verified-by: bravebot_cli::running::a_bug_report_holds_the_build_doctors_report_and_the_logs_name_and_no_content`
+`verified-by: bravebot_cli::running::a_second_bug_report_does_not_overwrite_the_first`
+`verified-by: bravebot_cli::running::a_bug_report_in_an_incognito_session_writes_nothing`
+`verified-by: bravebot_cli::running::a_bug_report_with_an_argument_is_refused`
+`verified-by: bravebot_cli::bug_report::a_report_never_overwrites_one_and_is_private`
+`verified-by: bravebot_cli::bug_report::the_report_holds_the_build_both_streams_and_the_log_path`
+`verified-by: bravebot_diag::lib::the_newest_log_is_the_greatest_timestamp_among_files_this_crate_made`

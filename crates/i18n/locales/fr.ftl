@@ -43,6 +43,7 @@ cli-usage-resume-task = Envoyer une tâche unique comme tour suivant d'une sessi
 cli-usage-continue-task = Envoyer une tâche unique comme tour suivant de la session la plus récente
 cli-usage-fork = Dupliquer une session pour explorer une autre voie
 cli-usage-doctor = Vérifier la configuration et le confinement
+cli-usage-bug-report = Écrire la version, le rapport de doctor et le nom du journal le plus récent dans un fichier à joindre à un rapport de bogue
 cli-usage-import = Importer un abonnement Leo Premium
 cli-usage-import-providers = Importer un service de modèle configuré par Claude Code ou opencode
 cli-usage-auth-login = Se connecter à un service de modèle, en listant chaque façon si aucune n'est nommée
@@ -152,6 +153,9 @@ cli-option-version = Afficher la version
 cli-unknown-option = option inconnue : { $flag }
 cli-completion-needs-a-shell = completion attend l'un de bash, zsh ou fish
 cli-shell-init-needs-a-shell = shell-init attend l'un de bash, zsh ou fish
+cli-bug-report-takes-nothing-else = bug-report n'accepte aucun argument
+bug-report-no-state-directory = bug-report n'écrit rien dans une session incognito ou sans répertoire personnel
+bug-report-not-written = le rapport de bogue n'a pas été écrit : { $problem }
 cli-file-needs-a-path = --file demande un chemin
 cli-resume-needs-an-id = --resume demande l'identifiant d'une session lorsqu'il accompagne une tâche
 # Le drapeau est --resume ou --continue, tel qu'il a été tapé.

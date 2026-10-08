@@ -4,6 +4,7 @@
 
 mod auth;
 mod background;
+mod bug_report;
 mod completion;
 mod continued;
 mod exit;
@@ -336,6 +337,7 @@ fn main() -> ExitCode {
             }
         }
         Some("doctor") => doctor(),
+        Some("bug-report") => bug_report::command(&args[1..]),
         Some("auth") => auth::command(&args[1..]),
         Some("sessions") => background::sessions(&args[1..]),
         Some("--bg") => match carried {
@@ -457,7 +459,7 @@ fn continues_with_a_task(args: &[String]) -> bool {
 /// refused instead of ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_definition(first: Option<&str>) -> Option<String> {
     match first? {
-        command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
+        command @ ("doctor" | "bug-report" | "auth" | "mcp" | "sessions" | "attach" | "reply"
         | "import-leo-creds" | "import-providers" | "completion" | "shell-init") => {
             Some(t!(cli_agent_not_for_a_command, command = command).to_string())
         }
@@ -520,7 +522,7 @@ fn flag_named(prompts: &SystemPrompts) -> Option<&'static str> {
 /// rather than ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
     match first? {
-        command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
+        command @ ("doctor" | "bug-report" | "auth" | "mcp" | "sessions" | "attach" | "reply"
         | "import-leo-creds" | "import-providers" | "completion" | "shell-init") => Some(
             t!(
                 cli_system_prompt_not_for_a_command,
@@ -728,6 +730,7 @@ fn starts_no_program(first: Option<&str>) -> bool {
         first,
         Some(
             "doctor"
+                | "bug-report"
                 | "--help"
                 | "-h"
                 | "--version"
@@ -890,6 +893,7 @@ fn print_help() {
             "bravebot doctor --sandbox-check",
             t!(cli_usage_doctor_sandbox),
         ),
+        ("bravebot bug-report", t!(cli_usage_bug_report)),
         ("bravebot sessions [--json]", t!(cli_usage_sessions)),
         ("bravebot sessions stop <id>", t!(cli_usage_sessions_stop)),
         (
@@ -6733,6 +6737,7 @@ mod tests {
     fn a_definition_is_refused_where_nothing_would_work_under_it() {
         for first in [
             "doctor",
+            "bug-report",
             "auth",
             "mcp",
             "sessions",
@@ -6856,6 +6861,7 @@ mod tests {
     fn the_system_prompt_flags_are_refused_where_nothing_would_use_them() {
         for first in [
             "doctor",
+            "bug-report",
             "auth",
             "mcp",
             "sessions",
