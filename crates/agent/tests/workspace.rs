@@ -3,7 +3,7 @@
 mod repository;
 
 use bravebot_agent::SessionScratch;
-use bravebot_agent::workspace::{Paging, Remedy, Workspace, WorkspaceError};
+use bravebot_agent::workspace::{Match, Matches, Paging, Remedy, Workspace, WorkspaceError};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, Principle, RecordingSink};
 use bravebot_core::label::{Integrity, Label};
@@ -5040,6 +5040,99 @@ fn a_search_that_could_not_reach_every_file_offers_no_later_page() {
         None,
         "a walk that never reached the whole tree offered a page past its own cap"
     );
+}
+
+/// A count of the matches is the claim that the tree was read to its end. A walk that stopped
+/// short of the tree has counted only part of it, so an offset past what it found reports nothing
+/// about the end, or the planner reads a partial tally as the tree's.
+#[test]
+fn a_walk_that_stopped_short_has_no_end_of_matches_count() {
+    let scratch = Scratch::new("grep-past-the-end-unvisited");
+    // More files than the walk may visit, each holding a few matches.
+    for n in 0..12 {
+        std::fs::write(
+            scratch.path.join(format!("f{n:05}.txt")),
+            "needle\nneedle\nneedle\n",
+        )
+        .unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(10), None);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            500,
+        )
+        .expect("grep succeeds");
+    let proof = policy.authorise_content_release("test", "matches");
+    let found = found.declassify(&proof);
+
+    assert!(found.unvisited, "the walk must have stopped short");
+    assert!(found.matches.is_empty());
+    assert!(found.matched > 0, "the visited files held matches to count");
+    assert_eq!(
+        found.paging(),
+        None,
+        "a walk that never reached the whole tree reported how many matches there were"
+    );
+}
+
+/// A read that ran out of time stopped part way through the files, so what it counted is not the
+/// tree's count and the offset it would name is not the next match in the tree. Neither is offered,
+/// for a capped page and for a page past the end alike.
+#[test]
+fn a_search_that_ran_out_of_time_offers_no_page_and_no_count() {
+    let timed_out = |truncated: bool, first_match: usize, matches: Vec<Match>| Matches {
+        matches,
+        context: Vec::new(),
+        context_truncated: false,
+        truncated,
+        unvisited: false,
+        timed_out: true,
+        considered: 3,
+        searched: 2,
+        withheld: false,
+        first_match,
+        matched: 200,
+    };
+    let one = Match {
+        path: "a.txt".to_string(),
+        line: 1,
+        text: "needle".to_string(),
+    };
+
+    assert_eq!(
+        timed_out(true, 1, vec![one.clone()]).paging(),
+        None,
+        "a capped search that ran out of time named an offset to continue from"
+    );
+    assert_eq!(
+        timed_out(false, 500, Vec::new()).paging(),
+        None,
+        "a page past the end that ran out of time reported how many matches there were"
+    );
+
+    // The same fields with the clock not run out offer both, so the cases above are the clock's.
+    let mut finished = timed_out(true, 1, vec![one]);
+    finished.timed_out = false;
+    assert_eq!(finished.paging(), Some(Paging::Continue(2)));
+    let mut finished = timed_out(false, 500, Vec::new());
+    finished.timed_out = false;
+    assert_eq!(finished.paging(), Some(Paging::PastTheEnd { found: 200 }));
 }
 
 /// The offset is only worth reporting if it answers with the matches the cap left behind. One

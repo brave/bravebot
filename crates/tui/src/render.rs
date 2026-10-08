@@ -4434,6 +4434,35 @@ mod tests {
             assert!(!screen.contains("running "), "{screen}");
         }
 
+        /// A job that exited on its own is neither still running nor stopped by the turn, so its view
+        /// says how it ended from its outcome, whichever way that went.
+        #[test]
+        fn a_jobs_view_says_how_a_job_that_exited_ended() {
+            for (outcome, words) in [
+                (bravebot_agent::report::Outcome::Succeeded, "succeeded"),
+                (
+                    bravebot_agent::report::Outcome::Failed {
+                        detail: "exited with code 2".to_string(),
+                        confinement: None,
+                    },
+                    "exited with code 2",
+                ),
+            ] {
+                let mut session = Session::new("kernel-enforced");
+                job_started(&mut session, "job:1", "cargo build");
+                session.watch();
+                session.job(bravebot_agent::report::JobEvent::Ended {
+                    name: "job:1".to_string(),
+                    outcome,
+                });
+
+                let screen = rendered(&session);
+                assert!(screen.contains(words), "{words}: {screen}");
+                assert!(!screen.contains("running "), "{screen}");
+                assert!(!screen.contains("stopped when the turn ended"), "{screen}");
+            }
+        }
+
         /// A job that has printed nothing holds nothing the planner could have read or been kept
         /// from, so neither its view nor its row says the model read it.
         #[test]
