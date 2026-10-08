@@ -655,7 +655,9 @@ Either list is checked in full before a turn starts. Each of these refuses the s
 None of these lists may be named by a renderer in this app; see §9 and `src/main/sanitise.ts`. The
 app's main process composes `files` itself from native-picker grants. The window names a file a
 person dropped by an opaque grant id in its own `drops` list, which the main process turns into
-`dropped` and `attachments` itself and never forwards (DROP-11).
+`dropped` and `attachments` itself and never forwards (DROP-11). It names a picture a person pasted
+by an opaque grant id in its own `pastes` list, which the main process turns into `images` from the
+bytes it read off the clipboard, as `image/png`, and never forwards (PASTE-11).
 
 Unless `composed` is set, the bridge adds to `files` every name `prompt` gives with `@`, read with
 the terminal's rule (NAME-6): each word starting with `@`, without the `@`, except a bare `@` and a

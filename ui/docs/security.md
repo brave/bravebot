@@ -25,7 +25,7 @@ and limits. Do not assume every filesystem operation uses the helper.
 
 File contents **do** cross IPC for previews and bot-memory editing. These operations
 do not themselves send the contents to a model. A file reaches the agent as trusted
-context in one of three ways, each ending in an explicit send:
+context in one of four ways, each ending in an explicit send:
 
 - A native picker selection, which leaves a session-bound token.
 - A name written with `@` in the prompt, as the terminal accepts one
@@ -37,11 +37,18 @@ context in one of three ways, each ending in an explicit send:
   and the page is told an opaque grant id, the file's name and its kind. A page that dispatches
   its own drop event, even with File objects an earlier drop handed it, has nothing granted
   (DROP-11 in `docs/specs/dropping.md`).
+- A picture a person pasted into the composer. The preload acts only on a paste event the
+  browser marks trusted, inside the composer, and asks the main process to stage what is on the
+  clipboard. The main process reads the operating system's clipboard itself, writes the picture
+  out again as PNG, refuses one over 10 MiB, and keeps the bytes against an opaque grant id bound
+  to the session. The page is told the id and a small drawing, never the bytes, and a page that
+  dispatches its own paste event has nothing staged (PASTE-11 in `docs/specs/pasting.md`).
 
 The main process strips raw `files`, `dropped`, `attachments` and `images` from renderer turn requests
 and composes `files` itself from the picker's tokens, each checked through the helper as
 a regular text file by the agent's binary test. Drop ids (`drops`) become `dropped` for text
-files and `attachments` for pictures and PDFs, each checked again when the message is sent.
+files and `attachments` for pictures and PDFs, each checked again when the message is sent,
+and paste ids (`pastes`) become `images`, each an `image/png` whose bytes the main process holds.
 The `@` names are not the renderer's to
 list: at `turn.send` the bridge reads them back out of the prompt with the terminal's
 rule (`bravebot-mentions`) and surveys each with the agent's own read of a named file,

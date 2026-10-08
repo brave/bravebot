@@ -288,6 +288,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A pasted picture has no file name, so its label is words rather than a path. */
+.attachment-label.words {
+  font: var(--type-caption);
+}
 .attachment-marker {
   flex: none;
   font: var(--type-caption);

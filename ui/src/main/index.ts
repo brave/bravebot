@@ -49,6 +49,7 @@ import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
 import { sanitised } from './sanitise'
 import { SendRefused, forgetDrops, stageDrops, withDrops } from './drops'
+import { clipboardPng, forgetPastes, stagePaste, withPastes } from './pastes'
 import { isSubpath } from '../shared/files'
 import { chooseDirectory, mayOpenSessionIn, offerDirectories } from './opened'
 import {
@@ -185,7 +186,7 @@ async function sendBotTurn(
   model?: string | null,
   attachments?: unknown,
   composed?: 'consolidation',
-  drops?: unknown,
+  staged?: { drops?: unknown; pastes?: unknown },
 ): Promise<{ ok?: unknown; error?: BotFailure }> {
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
@@ -248,7 +249,8 @@ async function sendBotTurn(
     // this process wrote.
     params.files = [...((params.files as string[] | undefined) ?? []), ...attachmentPaths(session, attachments)]
     // What the person dropped goes after the briefing, which stays first in `dropped`.
-    return { ok: await bridge.request('turn.send', withDrops(session, drops, params)) }
+    const carried = withPastes(session, staged?.pastes, withDrops(session, staged?.drops, params))
+    return { ok: await bridge.request('turn.send', carried) }
   } catch (error) {
     if (error instanceof SendRefused) {
       return { error: { code: 'bad_request', message: error.message } }
@@ -622,6 +624,7 @@ app.whenReady().then(() => {
         if (isSessionId(closing)) {
           forgetRoot(closing)
           forgetDrops(closing)
+          forgetPastes(closing)
           botHandles.delete(closing)
           // A session being released takes any turn of its with it, this app's own included.
           consolidating.delete(closing)
@@ -821,7 +824,7 @@ app.whenReady().then(() => {
       if (typeof value !== 'object' || value === null) {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
-      const { session, slug, prompt, grounded, model, attachments, drops } = value as Record<string, unknown>
+      const { session, slug, prompt, grounded, model, attachments, drops, pastes } = value as Record<string, unknown>
       if (!isSessionId(session) || typeof prompt !== 'string') {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
@@ -843,7 +846,7 @@ app.whenReady().then(() => {
       // question about *its* session, which this process cannot see, so that answer stands.
       const nudge = grounded !== true && nudgeDue(held)
       if (nudge) noteBotNudged(held.slug)
-      return sendBotTurn(session, held, prompt, grounded === true || nudge, nudge, true, model as string | null | undefined, attachments, undefined, drops)
+      return sendBotTurn(session, held, prompt, grounded === true || nudge, nudge, true, model as string | null | undefined, attachments, undefined, { drops, pastes })
     },
   )
 
@@ -932,6 +935,13 @@ app.whenReady().then(() => {
       if (!bridge) throw new Error('the agent is not running')
       return bridge.request('drops.classify', { files })
     })
+  })
+  // A picture a person pasted, from the preload and nowhere else, on a paste the browser marked
+  // trusted. What is granted is what this process reads off the clipboard now, never bytes that
+  // crossed from the window, which says only which session the composer belongs to.
+  ipcMain.handle('bravebot:pastes:stage', async (event, session: unknown) => {
+    if (!window || event.senderFrame !== window.webContents.mainFrame) return null
+    return stagePaste(session, await clipboardPng())
   })
   ipcMain.handle('bravebot:files:choose-attachments', (_event, session: unknown) => {
     if (!window || typeof session !== 'string') throw new Error('No active project.')

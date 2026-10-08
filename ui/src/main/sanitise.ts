@@ -1,5 +1,6 @@
 import { withDrops } from './drops'
 import { attachmentPaths } from './files'
+import { withPastes } from './pastes'
 
 /**
  * The params a method is allowed to have arrived with.
@@ -32,6 +33,10 @@ import { attachmentPaths } from './files'
  * turns them into the agent's `dropped` and `attachments` after everything the window said under
  * those names is gone, so the only paths in either are ones a drop put there.
  *
+ * `pastes` is the window's list of pictures a person pasted, as ids `pastes.ts` minted for bytes
+ * this process read off the clipboard itself. They become the agent's `images` the same way, after
+ * whatever the window sent as `images` is gone, so the only bytes there are ones a paste put there.
+ *
  * Stripped silently. There is no legitimate caller to warn, and a message saying which key was
  * removed would be a message telling a compromised renderer what to try next.
  */
@@ -57,8 +62,9 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
     definition: _definition,
     attachments,
     drops,
+    pastes,
     ...rest
   } = held
   const session = typeof rest.session === 'string' ? rest.session : ''
-  return withDrops(session, drops, { ...rest, files: attachmentPaths(session, attachments) })
+  return withPastes(session, pastes, withDrops(session, drops, { ...rest, files: attachmentPaths(session, attachments) }))
 }

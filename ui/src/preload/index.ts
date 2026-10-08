@@ -28,6 +28,7 @@ import type { Listing, OpenOutcome, FilePreview, FileSearch, FileAttachment } fr
 import type { Appearance } from '../shared/theme'
 import type { Experience } from '../shared/experience'
 import type { Drop, DropOutcome } from '../shared/drops'
+import type { Paste, PasteOutcome } from '../shared/pastes'
 
 /** The appearance in force: System, Light, or Dark. */
 export interface ThemeState {
@@ -81,6 +82,34 @@ window.addEventListener('drop', (event) => {
       }
     }))
     for (const listener of dropListeners) listener({ session, outcomes })
+  })()
+}, true)
+
+/**
+ * Pictures pasted into the composer.
+ *
+ * Handled here rather than by the page for the reason a drop is: a pasted picture reaches the
+ * planner as the person's own words (PASTE-2), so it may come only from a person's paste. Only a
+ * paste event the browser marks trusted is looked at, and only inside an element carrying
+ * `data-paste-session`. When the clipboard holds a picture, the picture wins over any text beside it
+ * as in the terminal (PASTE-7), so the browser's own paste is cancelled and the main process is
+ * asked to stage what is on the clipboard. It reads the clipboard itself: nothing here, and nothing
+ * the page holds, carries the bytes. A paste of text alone is left to the browser.
+ */
+const pasteListeners = new Set<(paste: Paste) => void>()
+const carriesPicture = (event: ClipboardEvent): boolean =>
+  [...(event.clipboardData?.items ?? [])].some((item) => item.kind === 'file' && item.type.startsWith('image/'))
+
+window.addEventListener('paste', (event) => {
+  if (!event.isTrusted || !carriesPicture(event)) return
+  const session = event.target instanceof Element
+    ? event.target.closest<HTMLElement>('[data-paste-session]')?.dataset.pasteSession
+    : undefined
+  if (!session) return
+  event.preventDefault()
+  void (async () => {
+    const outcome = await ipcRenderer.invoke('bravebot:pastes:stage', session) as PasteOutcome | null
+    if (outcome) for (const listener of pasteListeners) listener({ session, outcome })
   })()
 }, true)
 
@@ -290,6 +319,7 @@ const api = {
     model?: string | null
     attachments?: string[]
     drops?: string[]
+    pastes?: string[]
   }): Promise<Answer<{ turn: number }>> {
     return ipcRenderer.invoke('bravebot:bots:send', request) as Promise<Answer<{ turn: number }>>
   },
@@ -443,6 +473,17 @@ const api = {
   onDrop(listener: (drop: Drop) => void): () => void {
     dropListeners.add(listener)
     return () => dropListeners.delete(listener)
+  },
+
+  /**
+   * Listen for pictures pasted into a session's composer. Returns an unsubscribe.
+   *
+   * Each is a grant id and a drawing of the picture, or a picture too large to carry. A turn names
+   * the grants it carries as `pastes`.
+   */
+  onPaste(listener: (paste: Paste) => void): () => void {
+    pasteListeners.add(listener)
+    return () => pasteListeners.delete(listener)
   },
 
   /** Listen for the window gaining and losing focus. Returns an unsubscribe. */

@@ -8,6 +8,10 @@ governs:
   - crates/tui/src/app.rs
   - crates/tui/src/invisible.rs
   - crates/ui-bridge/src/attached.rs
+  - ui/src/main/pastes.ts
+  - ui/src/preload/index.ts
+  - ui/src/renderer/staging.ts
+  - ui/src/shared/pastes.ts
 guards:
   - symbol: Policy::admit_pasted_image
 documented-by: docs/website/docs/using/context.md
@@ -299,7 +303,48 @@ Persian, Indic and emoji text needs only the first of each, after a character th
 `verified-by: bravebot_tui::app::text_read_off_the_clipboard_loses_what_a_terminal_draws_as_nothing`
 `verified-by: bravebot_tui::app::a_pasted_prompt_waits_in_the_box_without_what_a_terminal_draws_as_nothing`
 
+<a id="PASTE-11"></a>
+### PASTE-11: the desktop window takes a picture only from a trusted paste, off the clipboard itself
+
+The window keeps [PASTE-2](#PASTE-2) by never letting the page supply the bytes. The preload, in
+its isolated world, listens for the paste itself and looks only at an event the browser marks
+trusted, inside the composer. When the clipboard holds a picture, the picture wins over any text
+beside it, as in [PASTE-7](#PASTE-7): the browser's own paste is cancelled and the main process is
+asked to stage what is on the clipboard. A paste of text alone is left to the browser. The main
+process reads the operating system's clipboard itself, decodes the picture and writes it out again
+as PNG, so the type is always `image/png` and comes from this side's literal, never from the
+content ([PASTE-3](#PASTE-3)). A picture over the 10 MB cap is refused with a note giving its size
+and the limit, and nothing is staged. An empty clipboard stages nothing. The bytes stay in the main
+process against an opaque grant bound to the session, and the page is told the grant and a small
+drawing of the picture. A page that dispatches its own paste event, whatever it puts in it, has
+nothing staged, and the page has no call that reaches the clipboard read.
+
+At send the page names grants, never bytes. The main process takes away every `images` list the
+page sent and composes `images` from the grants the draft still names, in the order they were
+staged. A grant this session does not hold refuses the send rather than starting a turn without
+the picture. Grants end with the session.
+
+The rest follows the terminal where a window can. The marker is `[Image #n]`, numbered from the one
+counter a conversation's drops use, so a drop and then a paste in one draft are `#1` and `#2`. A
+chip with the drawing sits above the box; deleting the marker takes the picture off and removing
+the chip deletes the marker ([PASTE-6](#PASTE-6)). The transcript keeps the marker in the prompt,
+and a reopened session shows those words and draws no bytes ([PASTE-9](#PASTE-9)).
+
+Two parts do not follow. A message queued while a turn runs keeps its pictures and sends them as
+its own turn when the running one ends, as a dropped file does
+([DROP-11](dropping.md#DROP-11)), rather than becoming words; the window's queue never joins a
+running turn. And Plan is off while a picture is staged, where the terminal's `/manifest`
+carries one to the planner (PASTE-6): the bridge's `manifest.run` takes a task and no pictures.
+
+`verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/pastes.test.mjs pins the shared counter, the markers, and the main process's grants, its re-encode, its cap and its stripping of a window's images, and ui/scripts/drive-paste.mjs pastes from the real clipboard into the real app and bridge against a stub model and asserts a page-dispatched paste stages nothing; make check-ui runs the test)`
+
 ## Known costs
+
+- **The desktop decodes a pasted picture in its main process.** The clipboard's bytes come from
+  whatever application copied them, and the main process decodes them to write them out again as
+  PNG and to draw the chip's drawing. A dropped picture is decoded in the sandboxed renderer
+  instead. The decode is the one Electron's clipboard image read always did, and one over the cap
+  as it came off the clipboard is refused before it is decoded.
 
 - **A pasted picture lands on disk.** It is written into the session record so a resume can restore
   it (PASTE-9), which means a screenshot pasted into a session outlives the session. Deleting the

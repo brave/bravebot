@@ -53,9 +53,9 @@ export interface ComposerProps {
   attachments: FileAttachment[]
   onAttach: () => void
   onRemoveAttachment: (id: string) => void
-  /** What a drop staged that the draft still names. */
+  /** What a drop or a paste staged that the draft still names. */
   staged: Staged[]
-  /** Take a staged file off, by taking its marker out of the draft. */
+  /** Take a staged file or picture off, by taking its marker out of the draft. */
   onRemoveStaged: (marker: string) => void
   onPreview: (path: string) => void
   queued: string[]
@@ -81,7 +81,7 @@ type Mode = 'agent' | 'plan'
 const PLAN_BLOCKED: Record<'unavailable' | 'bot' | 'attachments', string> = {
   unavailable: 'A plan run cannot start here.',
   bot: 'A bot answers in turns, so it has no plan mode.',
-  attachments: 'A plan is fixed before anything is read, so it cannot take attached files. Remove them, and name the file in the task.',
+  attachments: 'A plan is fixed before anything is read, so it cannot take attached files or pictures. Remove them, and name the file in the task.',
 }
 
 /**
@@ -268,7 +268,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   }
 
   return (
-    <footer className="composer">
+    <footer className="composer" data-paste-session={session}>
       <div className="composer-stack">
         {backendReady === false && <BackendTray onSetup={onSetup} onCheckBackend={onCheckBackend} onDiagnostics={onDiagnostics} />}
         {queued.length > 0 && (
@@ -310,19 +310,23 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                     onClick={() => onRemoveAttachment(file.id)} />
                 </span>
               ))}
-              {staged.map((item) => (
-                <span className="attachment-chip dropped" key={item.marker} data-test="dropped-chip">
-                  {item.file.thumbnail
-                    ? <img className="attachment-thumb" src={item.file.thumbnail} alt="" />
-                    : <FileGlyph name={item.file.name} />}
-                  <span className="attachment-label" data-tooltip={item.file.name}>{item.file.name}</span>
-                  <span className="attachment-marker">{item.marker}</span>
-                  <IconButton icon="close" size="tiny" label={`Remove ${item.marker} ${item.file.name}`} tooltip="Remove"
-                    onClick={() => onRemoveStaged(item.marker)} />
-                </span>
-              ))}
+              {staged.map((item) => {
+                const name = item.via === 'drop' ? item.file.name : 'Pasted image'
+                const thumbnail = item.via === 'drop' ? item.file.thumbnail : item.picture.thumbnail
+                return (
+                  <span className="attachment-chip dropped" key={item.marker} data-test={item.via === 'drop' ? 'dropped-chip' : 'pasted-chip'}>
+                    {thumbnail
+                      ? <img className="attachment-thumb" src={thumbnail} alt="" />
+                      : <FileGlyph name={item.via === 'drop' ? item.file.name : 'image.png'} />}
+                    <span className={`attachment-label${item.via === 'paste' ? ' words' : ''}`} data-tooltip={name}>{name}</span>
+                    <span className="attachment-marker">{item.marker}</span>
+                    <IconButton icon="close" size="tiny" label={`Remove ${item.marker} ${name}`} tooltip="Remove"
+                      onClick={() => onRemoveStaged(item.marker)} />
+                  </span>
+                )
+              })}
               <span className="attachment-trust" tabIndex={0}
-                data-tooltip="Attached files are sent with your message as trusted context: the model reads them as you wrote them.">
+                data-tooltip="Attached files and pasted pictures are sent with your message as trusted context: the model reads them as you wrote them.">
                 <Icon name="warning-triangle-outline" />Sent as trusted context
               </span>
             </div>

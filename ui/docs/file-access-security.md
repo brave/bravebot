@@ -73,7 +73,9 @@ Previews never send content to a model. A file goes to a model only with a send,
 picked through the native picker, which the `attachment` check above covers, named with
 `@` in the prompt, or dropped on the window. The bridge reads `@` names back out of the prompt
 at `turn.send` and surveys each with the agent's own read, confined to the session's workspace,
-before the turn starts. See [security](security.md).
+before the turn starts. A picture pasted into the composer is not a file on the disk. The main
+process reads it off the clipboard itself and sends its bytes (PASTE-11). See
+[security](security.md).
 
 A dropped file may be anywhere on the disk (DROP-3), so it does not go through the project
 helper. `src/main/drops.ts` resolves the path the preload took from a trusted drop event with
