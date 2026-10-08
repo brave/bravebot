@@ -860,11 +860,13 @@ fn draw_aside(
     }
 
     // Counted back from the end, the way the transcript is, so the same keys walk back through a
-    // long answer.
-    let total = lines.len() as u16;
+    // long answer. Counted in drawn rows, because the paragraph wraps: an answer that is one long
+    // line would otherwise be clipped at the edge of the screen.
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let total = paragraph.line_count(areas[1].width) as u16;
     let max_offset = total.saturating_sub(areas[1].height);
     let offset = max_offset.saturating_sub(session.scroll.min(max_offset));
-    frame.render_widget(Paragraph::new(lines).scroll((offset, 0)), areas[1]);
+    frame.render_widget(paragraph.scroll((offset, 0)), areas[1]);
 
     draw_watching_footer(frame, areas[2], session);
     if let Some(selection) = &session.selection {
@@ -4529,6 +4531,21 @@ mod tests {
             let screen = rendered(&session);
             assert!(screen.contains("why is the parser recursive?"), "{screen}");
             assert!(screen.contains("because the grammar nests"), "{screen}");
+        }
+
+        /// An answer is usually one paragraph with no line break in it, and a row of the screen
+        /// holds fewer characters than that. The end of it has to be drawn on the rows below.
+        #[test]
+        fn an_asides_view_wraps_an_answer_that_is_one_long_line() {
+            let mut session = Session::new("kernel-enforced");
+            let answer = format!("{} and finally the last word", "word ".repeat(40));
+            asked(&mut session, "/recap", &answer, true);
+
+            let screen = rendered(&session);
+            assert!(
+                screen.contains("the last word"),
+                "the end of a long answer was clipped at the edge of the screen: {screen}"
+            );
         }
 
         /// The answer lands out of a loop that answers keys, so the person may have opened the
