@@ -99,6 +99,26 @@ pub struct GitQuestion<'a> {
     pub until: Option<i64>,
 }
 
+/// A directory the person's settings named and the workspace opened (REFER-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Referenced {
+    /// What the person calls it.
+    pub alias: String,
+    /// The directory, canonical.
+    pub path: PathBuf,
+    /// The person's own words about when to consult it.
+    pub description: Option<String>,
+}
+
+/// Why an entry of the `references` block did not open (REFER-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReferenceProblem {
+    /// The settings reader could not use the entry.
+    Unusable(bravebot_config::ReferenceFault),
+    /// The directory could not be opened, for the reason carried.
+    NotOpened(String),
+}
+
 /// Whether the first component of `named` is exactly `~`.
 fn named_home(named: &str) -> bool {
     Path::new(named).components().next() == Some(Component::Normal(std::ffi::OsStr::new("~")))
@@ -519,6 +539,14 @@ pub struct Workspace {
     /// The writes the session made to the working directory by a name the planner typed, in the
     /// order they were made (CHECKOUT-14). Shared for the reason `checkouts` is.
     working_writes: Arc<Mutex<WorkingWrites>>,
+    /// The directories the person's own settings named, in alias order (REFER-3).
+    ///
+    /// Each is also in `added`, which is what makes it reachable, so a reference is exactly as
+    /// reachable as a directory opened with `--add-dir`. Kept as well because the alias and the
+    /// description are what the planner is told about it.
+    references: Vec<Referenced>,
+    /// The entries of the `references` block that were not opened, and why (REFER-3).
+    reference_problems: Vec<(String, ReferenceProblem)>,
 }
 
 /// Which names the session wrote in the working directory, and when, counted in writes.
@@ -1148,6 +1176,8 @@ impl Workspace {
             checkout_numbers: Arc::new(AtomicU64::new(1)),
             temporary_checkouts: Arc::default(),
             working_writes: Arc::default(),
+            references: Vec::new(),
+            reference_problems: Vec::new(),
         })
     }
 
@@ -1390,6 +1420,72 @@ impl Workspace {
     /// Decided from the two paths alone, both of which a person typed.
     pub fn ends_checkouts(&self, directory: &Path) -> bool {
         self.root.starts_with(directory)
+    }
+
+    /// Open every directory the person's settings name as a reference, and keep what each is for
+    /// (REFER-3).
+    ///
+    /// Reachability and nothing else, as `--add-dir` is: no rule is recorded in the trust map, so
+    /// what a reference holds is read on the footing of any file the person has not vouched for.
+    /// A `~` starts a path from the home directory this workspace was built with. An entry that
+    /// cannot be opened is kept as a problem for the caller to report and the rest still open, since
+    /// one stale entry must not leave the others unavailable.
+    #[must_use]
+    pub fn with_references(
+        mut self,
+        entries: &[bravebot_config::Reference],
+        unread: &[(String, bravebot_config::ReferenceFault)],
+    ) -> Self {
+        for (alias, fault) in unread {
+            self.reference_problems
+                .push((alias.clone(), ReferenceProblem::Unusable(*fault)));
+        }
+        for entry in entries {
+            let opened = expand_home(&entry.path, self.home.as_deref())
+                .map_err(|reason| WorkspaceError::Invalid {
+                    path: entry.path.clone(),
+                    reason,
+                })
+                .and_then(|expanded| match expanded {
+                    // Refused rather than rendered with replacement characters, so the directory
+                    // opened is the one the home directory and the entry name together.
+                    Some(path) => match path.to_str() {
+                        Some(text) => self.add_directory(text),
+                        None => Err(WorkspaceError::Invalid {
+                            path: entry.path.clone(),
+                            reason: "expands to a path that is not text",
+                        }),
+                    },
+                    None => self.add_directory(&entry.path),
+                });
+            match opened {
+                Ok(path) => self.references.push(Referenced {
+                    alias: entry.alias.clone(),
+                    path,
+                    description: entry.description.clone(),
+                }),
+                Err(error) => self.reference_problems.push((
+                    entry.alias.clone(),
+                    ReferenceProblem::NotOpened(error.to_string()),
+                )),
+            }
+        }
+        self
+    }
+
+    /// The references that opened and are still open, in alias order (REFER-3).
+    ///
+    /// A reference closed since, with `/add-dir close`, `/clear` or a `/cd` that overlapped it, is
+    /// left out, so the planner is never told of a directory its file tools would refuse.
+    pub fn references(&self) -> impl Iterator<Item = &Referenced> {
+        self.references
+            .iter()
+            .filter(|reference| self.added.contains(&reference.path))
+    }
+
+    /// The entries that did not open, with the alias each was written under (REFER-3).
+    pub fn reference_problems(&self) -> &[(String, ReferenceProblem)] {
+        &self.reference_problems
     }
 
     /// The directories added by name, in the order they were added.
@@ -5659,5 +5755,51 @@ mod tests {
         assert!(detail.contains("/work/project/todo.txt"), "{detail}");
         let absolute = io_detail(&missing, "/home/me/todo.txt", Path::new("/work/project"));
         assert!(!absolute.contains("/work/project"), "{absolute}");
+    }
+
+    /// A `~` reference whose home directory is not text is refused. The directory its lossy
+    /// rendering spells exists, so an implementation that rendered the path with replacement
+    /// characters would open that one instead (REFER-3).
+    #[cfg(unix)]
+    #[test]
+    fn a_tilde_reference_under_a_home_that_is_not_text_is_not_opened_by_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let base = crate::testutil::scratch_dir("reference-home-not-text");
+        let _ = std::fs::remove_dir_all(&base);
+        let project = base.join("project");
+        std::fs::create_dir_all(&project).expect("project");
+        let lookalike = base.join("home-\u{FFFD}");
+        std::fs::create_dir_all(lookalike.join("notes")).expect("lookalike");
+        let project = project.canonicalize().expect("canonical project");
+
+        let mut bytes = base.as_os_str().as_bytes().to_vec();
+        bytes.extend_from_slice(b"/home-\xff");
+        let home = PathBuf::from(OsStr::from_bytes(&bytes));
+        assert!(home.to_str().is_none());
+
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home))
+            .with_references(
+                &[bravebot_config::Reference {
+                    alias: "notes".to_string(),
+                    path: "~/notes".to_string(),
+                    description: None,
+                }],
+                &[],
+            );
+
+        assert_eq!(workspace.references().count(), 0);
+        assert!(workspace.added_directories().is_empty());
+        let problems = workspace.reference_problems();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems[0].0, "notes");
+        assert!(
+            matches!(&problems[0].1, ReferenceProblem::NotOpened(reason) if reason.contains("not text")),
+            "{problems:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

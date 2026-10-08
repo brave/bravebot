@@ -489,3 +489,42 @@ fn a_turn_is_held_inside_the_project_where_its_settings_ask_for_it() {
         "a project that asked for nothing was confined anyway"
     );
 }
+
+/// REFER-3 for this front end: the home layer's `references` reach the workspace a turn runs on,
+/// and a project layer's do not. The bridge builds the settings and the workspace itself, so a
+/// front end that left the block out would offer no reference to anyone using the desktop app.
+#[test]
+fn a_turn_opens_the_references_the_home_layer_named_and_not_a_projects() {
+    let library = project("reference-library");
+    let theirs = project("reference-theirs");
+    let held = project("reference-project");
+    let home = project("reference-home");
+    std::fs::create_dir_all(held.path().join(".bravebot")).expect("a settings directory");
+    std::fs::write(
+        home.path().join("settings.json"),
+        format!(
+            r#"{{"references": {{"lib": {{"path": {:?}, "description": "the parser"}}}}}}"#,
+            library.path()
+        ),
+    )
+    .expect("the home layer");
+    std::fs::write(
+        held.path().join(".bravebot/settings.json"),
+        format!(r#"{{"references": {{"theirs": {:?}}}}}"#, theirs.path()),
+    )
+    .expect("the project layer");
+
+    let settings = Settings::layered(Some(home.path().to_path_buf()), Some(held.path()), None);
+    let workspace = turn_workspace(held.path().to_path_buf(), &settings, &Managed::default())
+        .expect("a workspace");
+
+    let opened: Vec<_> = workspace
+        .references()
+        .map(|reference| (reference.alias.as_str(), reference.description.as_deref()))
+        .collect();
+    assert_eq!(opened, [("lib", Some("the parser"))]);
+    assert_eq!(
+        workspace.added_directories(),
+        [library.path().canonicalize().unwrap()]
+    );
+}

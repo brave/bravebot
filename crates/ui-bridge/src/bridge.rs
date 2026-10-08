@@ -1864,7 +1864,8 @@ pub fn turn_workspace(
         .keeps_reads_in_the_workspace();
     Ok(Workspace::new(project)?
         .with_search_caps(caps.files, caps.time)
-        .with_reads_kept_inside(inside))
+        .with_reads_kept_inside(inside)
+        .with_references(settings.references(), settings.references_unread()))
 }
 
 /// The workspace a turn in this session reads through, as the session stands now.

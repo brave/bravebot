@@ -412,6 +412,32 @@ impl Notice {
         Self::new(t!(source_denied_by_rule, source = origin))
     }
 
+    /// That an entry of the `references` block was not offered to the planner, and why (REFER-3).
+    ///
+    /// Here for the reason [`Notice::denied_by_rule`] is: the preamble's own words are the
+    /// planner's, and this sentence is the person's.
+    pub(crate) fn reference_not_used(
+        alias: &str,
+        problem: &crate::workspace::ReferenceProblem,
+    ) -> Self {
+        use crate::workspace::ReferenceProblem;
+        use bravebot_config::ReferenceFault;
+        Self::new(match problem {
+            ReferenceProblem::Unusable(ReferenceFault::BadAlias) => {
+                t!(reference_bad_alias, alias = alias)
+            }
+            ReferenceProblem::Unusable(ReferenceFault::RepositoryNotFetched) => {
+                t!(reference_repository_not_fetched, alias = alias)
+            }
+            ReferenceProblem::Unusable(ReferenceFault::NoPath) => {
+                t!(reference_no_path, alias = alias)
+            }
+            ReferenceProblem::NotOpened(problem) => {
+                t!(reference_not_opened, alias = alias, problem = problem)
+            }
+        })
+    }
+
     /// That an `@path` import in an instructions file was left as written, and why (INSTR-11).
     pub(crate) fn import_refused(import: &str, why: ImportRefusal) -> Self {
         Self::new(match why {

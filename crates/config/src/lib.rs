@@ -43,9 +43,9 @@ pub use sandbox_filesystem::{
     settle_sandbox_filesystem, settle_sandbox_filesystem_in, settled_sandbox_filesystem,
 };
 pub use settings::{
-    Attribution, Narrowing, NotADocument, PermissionLists, RunDeadlines, Settings, check_document,
-    local_settings_file, name_a_settings_file, named_settings_file, project_settings_file,
-    user_settings_file,
+    Attribution, Narrowing, NotADocument, PermissionLists, Reference, ReferenceFault, RunDeadlines,
+    Settings, check_document, local_settings_file, name_a_settings_file, named_settings_file,
+    project_settings_file, user_settings_file,
 };
 
 pub mod bedrock;

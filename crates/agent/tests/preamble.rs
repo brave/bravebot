@@ -1198,3 +1198,147 @@ fn words_from_the_command_line_follow_the_projects_file_in_what_a_delegate_reads
         with.for_a_person
     );
 }
+
+fn reference(
+    alias: &str,
+    path: &std::path::Path,
+    description: Option<&str>,
+) -> bravebot_config::Reference {
+    bravebot_config::Reference {
+        alias: alias.to_string(),
+        path: path.to_str().expect("path is utf-8").to_string(),
+        description: description.map(str::to_string),
+    }
+}
+
+fn composed_for(workspace: &Workspace) -> preamble::Preamble {
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink, &["."]);
+    preamble::compose(
+        &mut policy,
+        workspace,
+        None,
+        &Catalogue::default(),
+        None,
+        None,
+        &Attribution::default(),
+    )
+}
+
+/// REFER-4: the planner is told each reference's alias, directory and the person's description,
+/// and nothing a reference holds is read into the prompt.
+#[test]
+fn a_reference_is_listed_with_its_directory_and_description() {
+    let scratch = Scratch::new("reference-listed");
+    let project = scratch.directory("project");
+    let library = scratch.directory("library");
+    std::fs::write(library.join("AGENTS.md"), "REFERENCE-CONVENTION").unwrap();
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_references(
+            &[reference("parser", &library, Some("how the parser works"))],
+            &[],
+        );
+
+    let preamble = composed_for(&workspace);
+
+    let canonical = library.canonicalize().unwrap();
+    assert!(
+        preamble.text.contains(&format!(
+            "- parser: {}. how the parser works",
+            canonical.display()
+        )),
+        "{}",
+        preamble.text
+    );
+    assert!(
+        !preamble.text.contains("REFERENCE-CONVENTION"),
+        "a reference's AGENTS.md became a standing instruction: {}",
+        preamble.text
+    );
+    assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
+}
+
+/// REFER-3: a reference is reachable the way an added directory is, and records no trust.
+#[test]
+fn a_reference_is_reachable_and_nothing_else_is_granted() {
+    let scratch = Scratch::new("reference-reach");
+    let project = scratch.directory("project");
+    let library = scratch.directory("library");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_references(&[reference("lib", &library, None)], &[]);
+
+    assert_eq!(
+        workspace.added_directories(),
+        [library.canonicalize().unwrap()]
+    );
+    assert!(
+        composed_for(&workspace).text.contains(&format!(
+            "- lib: {}\n",
+            library.canonicalize().unwrap().display()
+        )),
+        "an absent description left a separator behind"
+    );
+}
+
+/// REFER-3: an entry that cannot open is reported to the person and is not offered to the planner,
+/// and the entries after it still open.
+#[test]
+fn a_reference_that_cannot_open_is_a_notice_and_not_a_line() {
+    let scratch = Scratch::new("reference-problem");
+    let project = scratch.directory("project");
+    let library = scratch.directory("library");
+    let gone = scratch.path.join("gone");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_references(
+            &[
+                reference("missing", &gone, None),
+                reference("inside", &project, None),
+                reference("lib", &library, None),
+            ],
+            &[(
+                "upstream".to_string(),
+                bravebot_config::ReferenceFault::RepositoryNotFetched,
+            )],
+        );
+
+    let preamble = composed_for(&workspace);
+
+    assert!(preamble.text.contains("- lib: "), "{}", preamble.text);
+    assert!(!preamble.text.contains("- missing"), "{}", preamble.text);
+    assert!(!preamble.text.contains("- inside"), "{}", preamble.text);
+    let said: Vec<_> = preamble
+        .notices
+        .iter()
+        .map(|n| n.message.as_str())
+        .collect();
+    for alias in ["missing", "inside", "upstream"] {
+        assert!(
+            said.iter().any(|line| line.contains(alias)),
+            "no notice names {alias}: {said:?}"
+        );
+    }
+}
+
+/// REFER-4: a reference closed since it opened is not offered, since its files are refused again.
+#[test]
+fn a_closed_reference_is_no_longer_offered() {
+    let scratch = Scratch::new("reference-closed");
+    let project = scratch.directory("project");
+    let library = scratch.directory("library");
+    let mut workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_references(&[reference("lib", &library, None)], &[]);
+    workspace
+        .close_added_directory(library.to_str().unwrap())
+        .expect("close");
+
+    assert!(
+        !composed_for(&workspace)
+            .text
+            .contains("Reference directories"),
+        "a closed directory is still offered"
+    );
+}

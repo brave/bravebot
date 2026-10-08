@@ -9958,3 +9958,60 @@ fn a_tool_limit_that_limits_nothing_is_refused_by_name() {
         );
     }
 }
+
+/// REFER-3 and REFER-4 for the one-shot run: a directory the home layer names reaches the request
+/// as a listed reference, and the same block in a checkout's own settings file does not. The run
+/// builds its workspace in the entry point, so only the request on the wire says whether the block
+/// was read, opened and told to the planner.
+#[test]
+fn a_run_tells_the_planner_about_the_references_only_the_person_declared() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let library = Scratch::new("cli-running-reference-library");
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(&gateway)).expect("settings");
+    settings["references"] = serde_json::json!({
+        "parser": {"path": library.path, "description": "how the parser works"}
+    });
+    let scratch = Scratch::new("cli-running-reference-home").with_settings(&settings.to_string());
+
+    bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    let canonical = library.path.canonicalize().expect("the library");
+    assert!(
+        asked.contains(&format!(
+            "- parser: {}. how the parser works",
+            canonical.display()
+        )),
+        "the planner was not told about the reference: {asked}"
+    );
+
+    // A refused request is retried, so the first run may have left more than one body behind.
+    let _ = requests(&gateway);
+
+    let project = Scratch::new("cli-running-reference-project").with_file(
+        ".bravebot/settings.json",
+        &serde_json::json!({"references": {"theirs": {"path": library.path}}}).to_string(),
+    );
+    let alone = Scratch::new("cli-running-reference-alone").with_settings(&settings_for(&gateway));
+    bravebot_started_in(
+        &alone.path,
+        &project.path,
+        AT_A_GATEWAY,
+        &["-p", "say something"],
+    );
+    let second = requests(&gateway);
+    assert!(
+        !second.is_empty(),
+        "the second run never reached the gateway"
+    );
+    for asked in second {
+        assert!(
+            !asked.contains("Reference directories") && !asked.contains("theirs"),
+            "a checkout's settings declared a reference: {asked}"
+        );
+    }
+}

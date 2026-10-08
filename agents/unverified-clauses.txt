@@ -17,6 +17,8 @@ docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers 
 docs/specs/background-sessions.md:BG-11: a person can stop a session, and there is one supervisor per account
 docs/specs/background-sessions.md:BG-12: a process that ends between turns is restarted, and one that ends in a turn is not repeated
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
+docs/specs/references.md:REFER-5: a `repository` entry is fetched once, with the person's yes, into `~/.bravebot/references`
+docs/specs/references.md:REFER-6: `@alias/path` completes in the box and vouches for nothing more than naming a file does
 docs/specs/session-messages.md:MSG-1: `message_session` has one routing field, the target's name, and one content field, the text
 docs/specs/session-messages.md:MSG-2: a message is sent only from a context that has met nothing untrusted, and carries what that context held
 docs/specs/session-messages.md:MSG-3: the first message to a session is put to a person, with the target and the whole text
