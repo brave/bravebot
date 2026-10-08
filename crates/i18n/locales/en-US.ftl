@@ -126,6 +126,9 @@ cli-option-safe =
 cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
+cli-option-sandbox =
+    How far the programs `run` starts may reach: strict, standard or off. A managed file may set a
+    floor this cannot go below
 cli-option-dangerously-skip-permissions =
     Bypass all permission checks. Recommended only for sandboxes with no internet access
 cli-option-help = Show this message
@@ -181,6 +184,21 @@ cli-plain-working-under-model = every prompt is addressed to { $definition }, wh
 cli-bypass-unreachable =
     --dangerously-skip-permissions is refused: permissions.bypassUnreachable in { $path } makes
     that mode unreachable here. Remove it there, or run without the flag.
+cli-sandbox-needs-a-mode = --sandbox requires one of { $names }
+# The file that holds the floor is named, and the file that asked when there was one, because a
+# refusal that names neither sends somebody looking for a fault in the program.
+cli-sandbox-refused-flag =
+    --sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a run may
+    be stricter than that but not looser. Run with --sandbox { $pinned } or stricter, or without the flag.
+cli-sandbox-refused-file =
+    sandbox.mode { $asked } in { $asked_in } is refused: { $pinned_in } sets sandbox.mode to { $pinned },
+    and a run may be stricter than that but not looser. Change it there, or remove it.
+cli-sandbox-refused-network-flag =
+    --sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started
+    with no sandbox is not held to that. Run with --sandbox standard or stricter, or without the flag.
+cli-sandbox-refused-network-file =
+    sandbox.mode { $asked } in { $asked_in } is refused: { $pinned_in } pins run.network to closed, and
+    a program started with no sandbox is not held to that. Change it there, or remove it.
 cli-mode-needs-a-name = --mode requires one of { $names }
 cli-model-needs-a-name = --model requires the name of a model
 cli-advisor-needs-a-name = --advisor requires the name of a model
@@ -475,6 +493,17 @@ doctor-settings-unread-key =
 doctor-settings-mcp-declared =
     { $key } in { $path } declares an MCP server, which only ~/.bravebot/mcp.json may: nothing in it
     is started
+# A sandbox.mode a layer that may not loosen the sandbox wrote. Only `strict` is obeyed from a
+# project's files, because a mode is a bundle of what a program may reach and a checkout that could
+# pick a looser one would loosen it for whoever cloned it.
+doctor-settings-sandbox-ignored =
+    sandbox.mode { $mode } in { $path } is not obeyed: a project's file may ask for strict only, and the
+    other modes are read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-sandbox-unreadable =
+    sandbox.mode in { $path } is not strict, standard or off, so it is read as absent and the default applies
+doctor-sandbox-mode = sandbox mode
+doctor-sandbox-default = { $mode } (the default)
+doctor-sandbox-from = { $mode } from { $path }
 # The machine-level layer, above everything a person can set. The names rather than the values, for
 # the reason the settings lines give, and the path because a pin somebody wants lifted is lifted by
 # whoever can write that file.
@@ -521,6 +550,10 @@ doctor-confinement = confinement { $level }
 confinement-kernel = kernel-enforced
 confinement-partial = partial
 confinement-none = none
+# The platform level, then the sandbox mode a person chose. `off` says what it means because nothing
+# else on the screen shows that a program `run` starts is not confined.
+confinement-with-mode = { $level }, sandbox { $mode }
+confinement-with-mode-off = { $level }, sandbox off: programs run unconfined
 doctor-mechanisms = mechanisms
 doctor-network-denial = network denial
 doctor-kernel-enforced = kernel-enforced
@@ -2923,11 +2956,11 @@ reply-stopping = { $name } is stopping after an hour idle. Reply again to start 
 bg-restart-needs-a-terminal = { $name } is stopped, and only a terminal can start it again.
 resume-held-by-background = { $name } is held by a running background session. Join it with: bravebot attach { $id }
 
-# `bravebot doctor --sandbox`: git, gh, make, cargo and the other everyday programs, run the way a
+# `bravebot doctor --sandbox-check`: git, gh, make, cargo and the other everyday programs, run the way a
 # session runs them. A row is a workflow; a row that failed says where, what to do, and where the
 # program's output went. The output itself is never printed.
-cli-doctor-sandbox-takes-nothing-else = doctor --sandbox takes no other arguments.
-doctor-sandbox-not-here = doctor --sandbox runs programs under the sandbox on Linux and macOS. This platform confines programs another way, and the workflows are not run here.
+cli-doctor-sandbox-takes-nothing-else = doctor --sandbox-check takes no other arguments.
+doctor-sandbox-not-here = doctor --sandbox-check runs programs under the sandbox on Linux and macOS. This platform confines programs another way, and the workflows are not run here.
 doctor-sandbox-cannot-confine = This machine cannot confine a program, so there is nothing to check. bravebot doctor reports the confinement it can apply.
 doctor-sandbox-no-place = There is no state directory to run the workflows in. bravebot doctor says which variables name one.
 doctor-sandbox-temporary = The state directory { $path } is under the temporary directory, which the sandbox lets every program write, so a refused write could not be told from a permitted one. Move the state directory.

@@ -1,4 +1,4 @@
-//! `bravebot doctor --sandbox`: the everyday workflows, run under the sandbox default
+//! `bravebot doctor --sandbox-check`: the everyday workflows, run under the sandbox default
 //! ([SANDBOX-21]).
 //!
 //! A row names a workflow and says whether it worked. A row that did not says the stage it stopped

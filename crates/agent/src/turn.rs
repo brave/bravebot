@@ -842,6 +842,10 @@ pub struct Task {
     /// refused. A delegate inherits the spawning turn's answer, since the person's answer about
     /// what a program may reach does not stop being theirs because the work moved.
     pub confine_runs: bool,
+    /// Which profile those programs run under, or that none does (SANDBOX-22).
+    ///
+    /// Read only where `confine_runs` is true. A delegate inherits it with `confine_runs`.
+    pub sandbox: bravebot_sandbox::SandboxMode,
     /// Rules the user wrote in advance about which actions to ask them about.
     ///
     /// Supplied per turn for the reason `home` and `model` are: which file they came from is the
@@ -1073,6 +1077,7 @@ impl Task {
             deadlines: crate::exec::Deadlines::BUILT_IN,
             // Unconfined, which is what a turn has always done.
             confine_runs: false,
+            sandbox: bravebot_sandbox::SandboxMode::default(),
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
             permission_mode: crate::PermissionMode::default(),
@@ -1277,6 +1282,12 @@ impl Task {
     /// [`Task::confine_runs`].
     pub fn with_confined_runs(mut self, confine: bool) -> Self {
         self.confine_runs = confine;
+        self
+    }
+
+    /// Hold those programs to `mode`'s profile. See [`Task::sandbox`].
+    pub fn with_sandbox_mode(mut self, mode: bravebot_sandbox::SandboxMode) -> Self {
+        self.sandbox = mode;
         self
     }
 
@@ -1993,6 +2004,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             auto_vetting: task.auto_vetting,
             run_directory: &mut run_directory,
             confine_runs: false,
+            sandbox: bravebot_sandbox::SandboxMode::default(),
         },
         confirmer,
         id,
@@ -3398,7 +3410,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             }
         };
 
-        tools::state_confinement(&mut offered, task.confine_runs);
+        tools::state_confinement(&mut offered, task.confine_runs, task.sandbox);
 
         // Whether what a run printed can be read with nobody asked: bypassing with no screening, in a
         // turn offered read_output at all. A definition or a delegate left without it has no release
@@ -4524,6 +4536,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 auto_vetting: task.auto_vetting,
                                 run_directory: &mut run_directory,
                                 confine_runs: task.confine_runs,
+                                sandbox: task.sandbox,
                             },
                             &mut asking,
                             &mut reporter,
@@ -4606,6 +4619,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     task.output_cap,
                                     task.deadlines,
                                     task.confine_runs,
+                                    task.sandbox,
                                     task.mcp.as_ref(),
                                     cancel,
                                     &mut confirmer,

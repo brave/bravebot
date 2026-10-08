@@ -946,6 +946,8 @@ impl Bridge {
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let auto_vetting = open.auto_vetting;
+        let sandbox =
+            bravebot_config::sandbox::for_a_window(&settings, &bravebot_config::Managed::load());
         // Read once, here, and carried to the worker: the mode the planner is told and the mode its
         // prompts are answered in are then the same one, whatever the window chooses while the turn
         // runs (MODE-8).
@@ -1014,6 +1016,7 @@ impl Bridge {
                 output_cap,
                 deadlines,
                 auto_vetting,
+                sandbox,
                 permission_mode,
                 mcp_requested,
                 workspace,
@@ -1101,6 +1104,8 @@ impl Bridge {
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
+        let sandbox =
+            bravebot_config::sandbox::for_a_window(&settings, &bravebot_config::Managed::load());
         // Read when the run is accepted and kept to its end, as a turn keeps its own (MODE-8).
         let permission_mode = open.permission_mode;
         let workspace = session_workspace(open, &settings)?;
@@ -1153,6 +1158,7 @@ impl Bridge {
                 attribution,
                 output_cap,
                 deadlines,
+                sandbox,
                 model,
                 permission_mode,
                 workspace,
@@ -1881,6 +1887,8 @@ struct Work {
     deadlines: bravebot_agent::exec::Deadlines,
     /// The session's, settled when it opened.
     auto_vetting: bool,
+    /// How far the programs this turn runs may reach, from the settings and the managed file.
+    sandbox: bravebot_sandbox::SandboxMode,
     /// The session's as it stood when the turn was accepted.
     permission_mode: PermissionMode,
     /// Each MCP server the settings request, with the file that requested it.
@@ -1992,6 +2000,7 @@ fn work(work: Work) {
         output_cap,
         deadlines,
         auto_vetting,
+        sandbox,
         permission_mode,
         mcp_requested,
         watches,
@@ -2060,6 +2069,7 @@ fn work(work: Work) {
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
+        .with_sandbox_mode(sandbox)
         .with_auto_vetting(auto_vetting)
         .with_permission_mode(permission_mode)
         // The rules the session opened under, and not the files as they are now (PERM-12).

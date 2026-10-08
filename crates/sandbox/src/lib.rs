@@ -26,6 +26,7 @@ pub mod linux;
 // this backend reaches is itself a Unix one.
 #[cfg(any(target_os = "macos", all(test, unix)))]
 pub mod macos;
+pub mod mode;
 pub mod network;
 pub mod policy;
 pub mod process;
@@ -43,6 +44,7 @@ pub mod toolchain;
 #[cfg(any(windows, test))]
 pub mod windows;
 
+pub use mode::SandboxMode;
 use policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 #[cfg(windows)]
 pub use process::Attached;

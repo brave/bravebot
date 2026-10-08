@@ -7057,7 +7057,8 @@ fn manifest_animated(
         .with_attribution(attribution.clone())
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
-        .with_confined_runs(true);
+        .with_confined_runs(true)
+        .with_sandbox_mode(bravebot_config::sandbox::in_force().mode);
     // In the order the markers in the task number them, for the reason a turn's are: a planner
     // reading "[Image #2]" has to be able to count to the picture that answers it.
     for image in pasted {
@@ -7711,6 +7712,7 @@ fn run_turn_animated(
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
+        .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
         // Whether a check that finds nothing answers in the person's place. Read off the session
         // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
         // began with.

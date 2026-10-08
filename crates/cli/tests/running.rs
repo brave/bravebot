@@ -998,14 +998,18 @@ fn doctor_ends_on_the_configuration_status_and_says_its_identifier() {
     );
 }
 
-/// SANDBOX-21 over the argument list. `doctor --sandbox` runs programs, so a second argument that
+/// SANDBOX-21 over the argument list. `doctor --sandbox-check` runs programs, so a second argument that
 /// might have changed which ones is refused rather than ignored, with the status an argument error
 /// has.
 #[test]
 fn doctor_sandbox_refuses_a_further_argument() {
     let scratch = Scratch::new("cli-running-doctor-sandbox-argument");
 
-    let output = bravebot(&scratch.path, &[], &["doctor", "--sandbox", "--extra"]);
+    let output = bravebot(
+        &scratch.path,
+        &[],
+        &["doctor", "--sandbox-check", "--extra"],
+    );
 
     let (stdout, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
@@ -1028,7 +1032,7 @@ fn doctor_sandbox_skips_what_is_not_installed_and_cleans_up_after_a_clean_run() 
     let output = bravebot(
         &scratch.path,
         &[("PATH", "/bravebot-no-such-directory")],
-        &["doctor", "--sandbox"],
+        &["doctor", "--sandbox-check"],
     );
 
     let (stdout, stderr) = said(&output);
@@ -1751,7 +1755,7 @@ fn doctor_names_an_allow_rule_a_checkout_wrote() {
 ///
 /// Running the binary because the report is the whole of the behaviour. The key is collected in
 /// `bravebot-config`, worded in `bravebot-i18n` and printed here, and a fix that stops short of the
-/// command leaves somebody believing the `sandbox` block they pasted confines this agent.
+/// command leaves somebody believing the `hooks` block they pasted runs.
 ///
 /// The hooks value is a string nothing else in the report could print, which is what makes the
 /// second assertion say the line carries names and not values: a report that printed the block back
@@ -1762,7 +1766,7 @@ fn doctor_names_an_allow_rule_a_checkout_wrote() {
 #[test]
 fn doctor_names_a_top_level_key_it_does_not_read() {
     let scratch = Scratch::new("cli-running-unread-key").with_settings(
-        r#"{"sandbox": {"enabled": true},
+        r#"{"statusLine": {"type": "command"},
             "hooks": {"PreToolUse": "a-command-nothing-here-runs"},
             "env": {"AWS_REGION": "us-west-2"}}"#,
     );
@@ -1782,7 +1786,7 @@ fn doctor_names_a_top_level_key_it_does_not_read() {
     let (stdout, stderr) = said(&output);
     assert!(output.status.success(), "doctor did not run: {stderr}");
     let file = scratch.path.join(".bravebot").join("settings.json");
-    for key in ["sandbox", "hooks"] {
+    for key in ["statusLine", "hooks"] {
         assert!(
             stdout.contains(&format!("{key} in {}", file.display())),
             "{key} was read and discarded with nothing said: {stdout}"
@@ -6083,6 +6087,56 @@ fn the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable() 
     assert!(
         !stderr.contains("permissions.bypassUnreachable"),
         "the flag was refused where nothing asked for it: {stdout}{stderr}"
+    );
+}
+
+/// SANDBOX-22 through the process: `--sandbox` is read before anything dispatches, so a word that is
+/// not a mode stops the run with the three named, a mode that is one gets past it, and `--bg`, whose
+/// session starts in another process that would not carry it, refuses it by name.
+///
+/// Running the binary because the flag is taken off the command line in `main` and what happens to
+/// it afterwards is a property of that process. The failure this rejects is the flag ignored: the
+/// run carrying on under the default after being told `strict`.
+#[test]
+fn the_sandbox_flag_is_read_before_the_run_starts() {
+    let scratch = Scratch::new("cli-running-sandbox-flag");
+    for word in ["", "lenient", "Strict"] {
+        let output = bravebot(
+            &scratch.path,
+            CONFIGURED,
+            &["--sandbox", word, "-p", "say something"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{word:?}: {stdout}{stderr}");
+        assert!(
+            stderr.contains("strict, standard, off"),
+            "{word:?} was refused without naming the modes: {stderr}"
+        );
+    }
+
+    for word in ["strict", "standard", "off"] {
+        let output = bravebot(
+            &scratch.path,
+            CONFIGURED,
+            &["--sandbox", word, "-p", "say something"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert!(
+            !stderr.contains("--sandbox requires"),
+            "{word} was refused as not being a mode: {stdout}{stderr}"
+        );
+    }
+
+    let output = bravebot(
+        &scratch.path,
+        CONFIGURED,
+        &["--sandbox", "strict", "--bg", "say something"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("--sandbox"),
+        "--bg did not name the flag: {stderr}"
     );
 }
 

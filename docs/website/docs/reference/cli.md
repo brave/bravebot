@@ -21,7 +21,7 @@ Usage:
   bravebot -p "<task>" --continue        Send a one-shot task as the next turn of the most recent session
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
-  bravebot doctor --sandbox              Run everyday workflows under the sandbox and report which work
+  bravebot doctor --sandbox-check              Run everyday workflows under the sandbox and report which work
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
   bravebot auth logout <way>             Forget an imported Leo Premium subscription or a stored gateway key
   bravebot auth status [way]             Say whether a sign-in is usable, exiting 0 only if it is
@@ -46,7 +46,7 @@ Usage:
 | `bravebot -p "<task>" --continue` | the same, for the most recent session in this directory |
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |
-| `bravebot doctor --sandbox` | run `git`, `cargo`, `npm` and the other everyday programs under the sandbox and report which work |
+| `bravebot doctor --sandbox-check` | run `git`, `cargo`, `npm` and the other everyday programs under the sandbox and report which work |
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
 | `bravebot auth logout leo` | forget an imported Leo Premium subscription |
 | `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
@@ -475,7 +475,7 @@ Answers "what will this actually use", and changes nothing. It reports:
 - the state of any imported subscription.
 
 ```sh
-bravebot doctor --sandbox
+bravebot doctor --sandbox-check
 ```
 
 Runs everyday workflows under the sandbox the way a person's shell command would: `git` init, commit

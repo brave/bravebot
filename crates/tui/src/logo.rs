@@ -171,10 +171,25 @@ pub fn lines(confinement: &str, tier: &str, width: u16, available: u16) -> Vec<L
     lines_with_network(
         confinement,
         tier,
-        bravebot_config::run_network(),
+        network_shown(
+            bravebot_config::run_network(),
+            bravebot_config::sandbox::in_force().mode,
+        ),
         width,
         available,
     )
+}
+
+/// The network the opening screen reports: open under `off`, which confines nothing for a closed
+/// network to bind, so the screen does not claim a boundary the session does not have.
+fn network_shown(
+    network: bravebot_sandbox::network::Network,
+    mode: bravebot_sandbox::SandboxMode,
+) -> bravebot_sandbox::network::Network {
+    match mode {
+        bravebot_sandbox::SandboxMode::Off => bravebot_sandbox::network::Network::Open,
+        _ => network,
+    }
 }
 
 /// [`lines`] for a session whose programs have `network`, which is named under the tier where it is
@@ -318,6 +333,22 @@ mod tests {
             !drawn(Network::Open).contains("network"),
             "{}",
             drawn(Network::Open)
+        );
+    }
+
+    /// SANDBOX-22: under `off` nothing confines a program, so the opening screen does not claim a
+    /// closed network. The regression it rejects is "network closed" over a session whose programs
+    /// reach the network freely.
+    #[test]
+    fn a_closed_network_is_not_claimed_for_programs_nothing_confines() {
+        use bravebot_sandbox::SandboxMode;
+        use bravebot_sandbox::network::Network;
+        for mode in [SandboxMode::Standard, SandboxMode::Strict] {
+            assert_eq!(network_shown(Network::Closed, mode), Network::Closed);
+        }
+        assert_eq!(
+            network_shown(Network::Closed, SandboxMode::Off),
+            Network::Open
         );
     }
 

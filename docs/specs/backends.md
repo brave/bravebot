@@ -1444,7 +1444,7 @@ set, and neither is a key inside a block this build reads.
 
 That holds because the reason above is about the file rather than about the `env` block. The file is
 documented as largely the shape of another tool's, so a block pasted from one arrives holding
-`sandbox` or `hooks`, and both read to whoever wrote them as a restriction in force. Reporting the
+`hooks` or `statusLine`, and the first reads to whoever wrote it as a check in force. Reporting the
 key is also why the report still passes: a key written for a later release stopping an older binary
 is the refusal this clause exists to avoid, and a report that failed on one would be that refusal
 by a longer route.

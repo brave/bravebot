@@ -176,7 +176,8 @@ configured will serve a turn, the model in force
 and whether it was chosen or defaulted, where the state directory is or that there is none, what a
 TLS handshake is validated against and what a request is routed through, the
 confinement available on this platform, whether the network is closed for confined programs and
-which layer closed it ([SANDBOX-20](sandboxing.md#SANDBOX-20)), and the state of any imported subscription. Each AWS
+which layer closed it ([SANDBOX-20](sandboxing.md#SANDBOX-20)), the sandbox mode in force and the file
+or flag that chose it ([SANDBOX-22](sandboxing.md#SANDBOX-22)), and the state of any imported subscription. Each AWS
 account gets its profile and a line saying whether the AWS CLI gives it a credential a request can
 be signed with. Where it does not, the line says why: a session that is signed out names `bravebot
 auth login bedrock`, and a profile the CLI does not have, a CLI that is not installed and an answer
@@ -206,7 +207,7 @@ resolve first; on Windows a matching copy is healthy and a stale copy recommends
 path is changed. Missing direnv points to https://direnv.net/ and `brew install direnv`; shell
 hooks and `.envrc` approval are outside this check.
 
-`bravebot doctor --sandbox` runs the everyday workflows under the sandbox default instead of
+`bravebot doctor --sandbox-check` runs the everyday workflows under the sandbox default instead of
 reporting configuration ([SANDBOX-21](sandboxing.md#SANDBOX-21)). It takes no other argument, and
 `--agent` and `--system-prompt` are refused with it as with `doctor`. It ends on the failed status
 when a workflow failed, and on success when each worked or was skipped for a program that is not
@@ -341,6 +342,7 @@ the case a directory listing calls healthy, and it is the one the reader cannot 
 `verified-by: bravebot_cli::main::doctor_names_what_the_managed_layer_pinned_and_the_file_it_came_from`
 `verified-by: bravebot_cli::main::doctor_says_nothing_about_a_managed_layer_that_is_not_there`
 `verified-by: bravebot_cli::main::doctor_names_a_managed_file_that_pinned_nothing`
+`verified-by: bravebot_cli::main::doctor_names_the_sandbox_mode_and_where_it_came_from`
 
 <a id="CLI-8"></a>
 ### CLI-8: `--mode` chooses how a one-shot is run; the default is the turn loop

@@ -260,6 +260,14 @@ pub struct Managed {
     /// Whether the key was there and was neither word, for `doctor` to report for the reason
     /// `narrowing_unreadable` is.
     network_unreadable: bool,
+    /// The sandbox mode it pinned, as a floor (SANDBOX-22).
+    ///
+    /// Read from this layer for the reason the narrowing keys are: an administrator asking for
+    /// `strict` takes nothing from the person at the machine. Unlike them it is final, since the
+    /// modes are ordered: a request looser than this is refused, and a stricter one is kept.
+    sandbox: Option<bravebot_sandbox::SandboxMode>,
+    /// Whether it named `sandbox.mode` as something that is not a mode, which pins nothing.
+    sandbox_unreadable: bool,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -300,11 +308,17 @@ impl Managed {
             crate::settings::NetworkStated::Unreadable => (None, true),
             crate::settings::NetworkStated::Absent => (None, false),
         };
+        let sandbox = crate::sandbox::stated(&root);
         Self {
             narrowing,
             narrowing_unreadable,
             network,
             network_unreadable,
+            sandbox: match sandbox {
+                crate::sandbox::Stated::Mode(mode) => Some(mode),
+                _ => None,
+            },
+            sandbox_unreadable: sandbox == crate::sandbox::Stated::Unreadable,
             pins: PINNABLE
                 .iter()
                 .filter_map(|name| {
@@ -402,6 +416,16 @@ impl Managed {
         self.narrowing
     }
 
+    /// The sandbox mode it pinned, which no flag or settings file may loosen (SANDBOX-22).
+    pub fn sandbox(&self) -> Option<bravebot_sandbox::SandboxMode> {
+        self.sandbox
+    }
+
+    /// Whether it named `sandbox.mode` as something that is not a mode, which pins nothing.
+    pub fn sandbox_unreadable(&self) -> bool {
+        self.sandbox_unreadable
+    }
+
     /// The keys it named as something other than a boolean, which are absence.
     pub fn narrowing_unreadable(&self) -> impl Iterator<Item = &str> {
         self.narrowing_unreadable.iter().copied()
@@ -434,6 +458,7 @@ impl Managed {
             .chain((!self.models.denied.is_empty()).then_some(MODEL_DENY))
             .chain(self.narrowing.named())
             .chain(self.network.is_some().then_some(RUN_NETWORK))
+            .chain(self.sandbox.is_some().then_some("sandbox.mode"))
     }
 
     /// The file, where there is one there at all, read or not.

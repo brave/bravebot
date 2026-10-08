@@ -24,6 +24,7 @@ mod managed;
 pub mod mcp;
 mod obfuscate;
 mod run_network;
+pub mod sandbox;
 pub mod scrub;
 mod settings;
 #[cfg(test)]

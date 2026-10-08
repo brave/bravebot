@@ -393,6 +393,7 @@ fn a_delegate_does_not_open_a_wallet_of_its_own() {
             None,
             bravebot_agent::exec::Deadlines::BUILT_IN,
             false,
+            bravebot_sandbox::SandboxMode::default(),
             None,
             &cancel,
             &mut bravebot_agent::confirm::ApproveWrites,
