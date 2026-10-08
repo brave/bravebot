@@ -1,16 +1,18 @@
 // Files dropped on the desktop window (docs/specs/dropping.md).
 //
-// Three halves. The extension tables are the terminal's and the agent's, read here out of the Rust
-// source so a change to either fails until this side follows. The composer's markers decide what a
-// send carries. And the main process is the only place a dropped path becomes `dropped` or
-// `attachments`, from grants it minted, checked again at send.
+// Two halves. The composer's markers decide what a send carries. And the main process is the only
+// place a dropped path becomes `dropped` or `attachments`, from grants it minted, checked again at
+// send. What kind of file each is, its marker's noun, and the note for one too large to carry are
+// the bridge's answer to `drops.classify` (crates/ui-bridge/tests/attaching.rs), so here the bridge
+// is a stub that answers with a cap and words the agent does not use, to show the window takes them
+// from the answer and holds no cap or wording of its own.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 const require = createRequire(import.meta.url)
 const load = (contents) => {
@@ -21,55 +23,18 @@ const load = (contents) => {
   return module.exports
 }
 
-const shared = load("export * from './src/shared/drops'")
 const staging = load("export * from './src/renderer/staging'")
 const main = load("export * from './src/main/sanitise'; export * from './src/main/drops'; export { noteRoot } from './src/main/files'")
 
-// ---- the tables ---------------------------------------------------------------------------------
-
-const dropped = readFileSync('../crates/tui/src/dropped.rs', 'utf8')
-const workspace = readFileSync('../crates/agent/src/workspace.rs', 'utf8')
-const strings = (text) => [...text.matchAll(/"([^"]*)"/g)].map((match) => match[1])
-const rustList = (source, name) => {
-  const start = source.indexOf(`const ${name}: &[`)
-  assert.ok(start >= 0, `${name} is still a list in the Rust source`)
-  const open = source.indexOf('= &[', start) + '= &['.length
-  return source.slice(open, source.indexOf('];', open))
-}
-
-test('the extensions carried as bytes are the agent’s, with the agent’s media types', () => {
-  const pairs = [...rustList(workspace, 'ATTACHABLE').matchAll(/\("([^"]+)",\s*"([^"]+)"\)/g)].map((match) => [match[1], match[2]])
-  assert.ok(pairs.length > 0)
-  assert.deepEqual(shared.ATTACHABLE.map(([extension, media]) => [extension, media]), pairs)
-})
-
-test('the extensions and names read as text are the terminal’s', () => {
-  assert.deepEqual([...shared.TEXTUAL], strings(rustList(dropped, 'TEXTUAL')))
-  assert.deepEqual([...shared.TEXTUAL_NAMES], strings(rustList(dropped, 'TEXTUAL_NAMES')))
-  const body = dropped.slice(dropped.indexOf('pub fn kind_of'), dropped.indexOf('pub fn dropped_with'))
-  assert.deepEqual([...shared.TEXTUAL_PREFIXES], [...body.matchAll(/bare\.starts_with\("([^"]+)"\)/g)].map((match) => match[1]))
-})
-
-test('a marker uses the terminal’s noun for each kind', () => {
-  const noun = dropped.slice(dropped.indexOf('pub fn noun'))
-  assert.match(noun, /Kind::Attachment\("application\/pdf"\) => "PDF"/)
-  assert.match(noun, /Kind::Attachment\(_\) => "Image"/)
-  assert.match(noun, /Kind::Text => "File"/)
-  assert.deepEqual(shared.NOUN, { image: 'Image', pdf: 'PDF', text: 'File' })
-})
-
-test('a name is classified the way kind_of classifies it', () => {
-  const cases = {
-    '/a/SHOT.PNG': 'image', '/a/scan.Pdf': 'pdf', '/a/photo.jpeg': 'image', '/a/notes.md': 'text',
-    '/a/Makefile': 'text', '/a/.gitignore': 'text', '/a/.gitattributes': 'text', '/a/README': 'text',
-    '/a/x.dmg': null, '/a/notes.': null, '/a/archive.tar.gz': null, '/a/.png': null, '/a/plain': null,
-  }
-  for (const [path, kind] of Object.entries(cases)) assert.equal(shared.kindOf(path), kind, path)
-})
-
 // ---- the composer's markers ---------------------------------------------------------------------
 
-const file = (id, name, kind) => ({ kind: 'staged', file: { id, name, kind } })
+const NOUN = { image: 'Image', pdf: 'PDF', text: 'File' }
+const file = (id, name, kind) => ({ kind: 'staged', file: { id, name, kind, noun: NOUN[kind] } })
+
+test('a marker uses the noun the main process was told, whatever the kind', () => {
+  const { draft } = staging.stageDrop(staging.EMPTY_STAGING, [{ kind: 'staged', file: { id: 'a', name: 'x', kind: 'image', noun: 'Picture' } }], '', 0)
+  assert.equal(draft, '[Picture #1] ')
+})
 
 test('each dropped file gets its own number, and a second drop carries on from the first', () => {
   const first = staging.stageDrop(staging.EMPTY_STAGING, [file('a', 'shot.png', 'image'), file('b', 'scan.pdf', 'pdf'), file('c', 'notes.md', 'text')], 'look at ', 8)
@@ -119,24 +84,60 @@ main.noteRoot('s1', project)
 main.noteRoot('s2', project)
 test.after(() => rmSync(outside, { recursive: true, force: true }))
 
-const grant = (session, path) => {
-  const [outcome] = main.stageDrops(session, [path])
+/** The stub bridge's cap, one the agent does not use, so a check against 8 MiB here would show. */
+const MOST = 1024 * 1024
+const picture = { kind: 'image', noun: 'Image' }
+const ANSWERS = {
+  'shot.png': picture, 'scan.pdf': { kind: 'pdf', noun: 'PDF' }, 'notes.md': { kind: 'text', noun: 'File' },
+  'app.dmg': null, 'gone.md': { kind: 'text', noun: 'File' }, 'swapped.png': picture, 'grown.png': picture, 'big.png': picture,
+  'blob': null,
+}
+const asked = []
+const classify = async (files) => {
+  asked.push(files.map((file) => file.path))
+  return {
+    files: files.map(({ path, bytes }) => {
+      assert.ok(basename(path) in ANSWERS, path)
+      const answer = ANSWERS[basename(path)]
+      return answer?.kind === 'image' && bytes > MOST ? { note: `stub: ${basename(path)} weighs ${bytes}` } : answer
+    }),
+  }
+}
+
+const grant = async (session, path) => {
+  const [outcome] = await main.stageDrops(session, [path], classify)
   assert.equal(outcome.kind, 'staged', path)
   return outcome.file.id
 }
 
-test('a drop is granted per file, and the page is told an id and a name and never the path', () => {
-  const outcomes = main.stageDrops('s1', [png, pdf, md, join(outside, 'folder'), dmg, 'relative.md'])
+test('a drop is granted per file, and the page is told an id, a name and the bridge’s noun and never the path', async () => {
+  const outcomes = await main.stageDrops('s1', [png, pdf, md, join(outside, 'folder'), dmg, 'relative.md'], classify)
   assert.deepEqual(outcomes.map((outcome) => outcome.kind), ['staged', 'staged', 'staged', 'skipped', 'named', 'skipped'])
-  assert.deepEqual(outcomes.slice(0, 3).map((outcome) => [outcome.file.name, outcome.file.kind]), [['shot.png', 'image'], ['scan.pdf', 'pdf'], ['notes.md', 'text']])
+  assert.deepEqual(outcomes.slice(0, 3).map((outcome) => [outcome.file.name, outcome.file.kind, outcome.file.noun]), [['shot.png', 'image', 'Image'], ['scan.pdf', 'pdf', 'PDF'], ['notes.md', 'text', 'File']])
   for (const outcome of outcomes.slice(0, 3)) assert.ok(!JSON.stringify(outcome).includes(outside), 'no path crosses to the page')
   assert.equal(outcomes[3].why, 'folder')
   assert.deepEqual(outcomes[4], { kind: 'named', text: dmg })
-  assert.deepEqual(main.stageDrops('nobody', [png]), [], 'a session this process does not hold is granted nothing')
+  assert.deepEqual(asked.at(-1), [png, pdf, md, dmg], 'only the regular files are asked about, resolved')
+  assert.deepEqual(await main.stageDrops('nobody', [png], classify), [], 'a session this process does not hold is granted nothing')
 })
 
-test('a window’s turn carries what it dropped as dropped text and attachments, and nothing it named', () => {
-  const ids = [grant('s1', md), grant('s1', png), grant('s1', pdf)]
+test('a file is classified by the name it resolves to, not the name of a link to it', async () => {
+  const blob = at('blob'), link = join(outside, 'link.png')
+  symlinkSync(blob, link)
+  const [outcome] = await main.stageDrops('s1', [link], classify)
+  assert.deepEqual(outcome, { kind: 'named', text: link })
+  assert.deepEqual(asked.at(-1), [blob])
+})
+
+test('a bridge that cannot say what the files are stages none of them', async () => {
+  const failing = async () => { throw new Error('the agent is not running') }
+  assert.deepEqual((await main.stageDrops('s1', [png, md], failing)).map((outcome) => outcome.why), ['unreadable', 'unreadable'])
+  const short = async () => ({ files: [picture] })
+  assert.deepEqual((await main.stageDrops('s1', [png, md], short)).map((outcome) => outcome.why), ['unreadable', 'unreadable'])
+})
+
+test('a window’s turn carries what it dropped as dropped text and attachments, and nothing it named', async () => {
+  const ids = [await grant('s1', md), await grant('s1', png), await grant('s1', pdf)]
   const forwarded = main.sanitised('turn.send', {
     session: 's1', prompt: '[File #1] [Image #2] [PDF #3]', drops: ids,
     dropped: ['/etc/hosts'], attachments: undefined, images: [{ media: 'image/png', data: 'iVBORw0KGgo=' }],
@@ -144,37 +145,43 @@ test('a window’s turn carries what it dropped as dropped text and attachments,
   assert.deepEqual(forwarded, { session: 's1', prompt: '[File #1] [Image #2] [PDF #3]', files: [], dropped: [md], attachments: [png, pdf] })
 })
 
-test('a path where a grant id goes, or another session’s grant, refuses the send', () => {
+test('a path where a grant id goes, or another session’s grant, refuses the send', async () => {
   assert.throws(() => main.sanitised('turn.send', { session: 's1', prompt: 'p', drops: [png] }), main.SendRefused)
-  const theirs = grant('s2', png)
+  const theirs = await grant('s2', png)
   assert.throws(() => main.sanitised('turn.send', { session: 's1', prompt: 'p', drops: [theirs] }), main.SendRefused)
   main.forgetDrops('s2')
   assert.throws(() => main.sanitised('turn.send', { session: 's2', prompt: 'p', drops: [theirs] }), main.SendRefused, 'a closed session’s grants are gone')
 })
 
-test('a grant is checked again at send: gone, swapped for a link, or grown too large', () => {
+test('a grant is checked again at send: gone, or swapped for a link', async () => {
   const gone = at('gone.md'), swapped = at('swapped.png'), grown = at('grown.png')
-  const ids = { gone: grant('s1', gone), swapped: grant('s1', swapped), grown: grant('s1', grown) }
+  const ids = { gone: await grant('s1', gone), swapped: await grant('s1', swapped), grown: await grant('s1', grown) }
   rmSync(gone)
   assert.throws(() => main.sanitised('turn.send', { session: 's1', prompt: 'p', drops: [ids.gone] }), /gone\.md is no longer there/)
   rmSync(swapped)
   symlinkSync(png, swapped)
   assert.throws(() => main.sanitised('turn.send', { session: 's1', prompt: 'p', drops: [ids.swapped] }), /swapped\.png is no longer there/)
-  truncateSync(grown, 8 * 1024 * 1024 + 1)
-  assert.throws(() => main.sanitised('turn.send', { session: 's1', prompt: 'p', drops: [ids.grown] }), /grown\.png is larger than 8 MB/)
-  const big = at('big.png')
-  truncateSync(big, 8 * 1024 * 1024 + 1)
-  assert.equal(main.stageDrops('s1', [big])[0].why, 'too-large', 'and a picture too large to carry is never granted')
+  // A file that grew past the cap is the bridge's to refuse at `turn.send`, in its own note.
+  truncateSync(grown, 64 * MOST)
+  assert.deepEqual(main.sanitised('turn.send', { session: 's1', prompt: 'p', drops: [ids.grown] }).attachments, [grown], 'this process holds no cap')
 })
 
-test('a bot’s briefing stays first in dropped, with what the person dropped after it', () => {
-  const ids = [grant('s1', md), grant('s1', png)]
+test('a file the bridge says is too large is left out with the bridge’s note, as it stands', async () => {
+  const big = at('big.png')
+  truncateSync(big, MOST + 1)
+  assert.deepEqual(await main.stageDrops('s1', [big], classify), [{ kind: 'skipped', name: 'big.png', why: 'too-large', note: `stub: big.png weighs ${MOST + 1}` }], 'never granted, and told the size this process found')
+  truncateSync(big, MOST)
+  assert.equal((await main.stageDrops('s1', [big], classify))[0].kind, 'staged', 'one the bridge takes is')
+})
+
+test('a bot’s briefing stays first in dropped, with what the person dropped after it', async () => {
+  const ids = [await grant('s1', md), await grant('s1', png)]
   const carried = main.withDrops('s1', ids, { session: 's1', prompt: 'p', dropped: ['/app/briefing.md'], files: [] })
   assert.deepEqual(carried.dropped, ['/app/briefing.md', md])
   assert.deepEqual(carried.attachments, [png])
 })
 
-test('a manifest run takes no drop', () => {
-  const forwarded = main.sanitised('manifest.run', { session: 's1', task: 't', model: 'm', drops: [grant('s1', png)] })
+test('a manifest run takes no drop', async () => {
+  const forwarded = main.sanitised('manifest.run', { session: 's1', task: 't', model: 'm', drops: [await grant('s1', png)] })
   assert.deepEqual(forwarded, { session: 's1', task: 't', model: 'm' })
 })

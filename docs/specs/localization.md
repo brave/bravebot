@@ -114,7 +114,9 @@ only ever noticed afterwards.
 ### LOCALE-7: the locale is chosen once, by the program, and not by the library
 
 Nothing about the environment reaches a message until a binary says so, and it says so once,
-before anything is drawn. Anything that did not ask reads the reference.
+before anything is drawn. Anything that did not ask reads the reference. The terminal chooses from
+the environment. `bravebot-rpc` chooses `en-US` whatever the environment says, because the desktop
+window it serves is in English only and shows the notes the bridge builds as they stand.
 
 **Why.** A library that consulted the environment the first time something needed a word would
 make the output of every test depend on the machine it ran on, and a test that pins what a person
@@ -122,6 +124,8 @@ sees is worth nothing if two people running it see different things.
 
 `verified-by: bravebot_i18n::lib::a_process_that_never_chose_a_locale_reads_the_reference`
 `verified-by: bravebot_i18n::lib::a_process_whose_environment_names_a_language_still_reads_the_reference_until_asked`
+`verified-by: bravebot_i18n::sizes_in_french::the_size_notes_are_said_in_the_chosen_catalog`
+`verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
 
 ## Known costs
 

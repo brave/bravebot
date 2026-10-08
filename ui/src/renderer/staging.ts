@@ -11,7 +11,7 @@
  * number is never reused. A pasted picture is numbered from the same counter.
  */
 
-import { NOUN, type DropOutcome, type DroppedFile } from '../shared/drops'
+import type { DropOutcome, DroppedFile } from '../shared/drops'
 
 /** One staged thing and the marker that stands for it. Only drops for now; a paste is the next. */
 export type Staged = { marker: string; via: 'drop'; file: DroppedFile }
@@ -49,7 +49,7 @@ export function stageDrop(staging: Staging, outcomes: DropOutcome[], draft: stri
       written.push(outcome.text)
     } else {
       made += 1
-      const marker = `[${NOUN[outcome.file.kind]} #${made}]`
+      const marker = `[${outcome.file.noun} #${made}]`
       staged.push({ marker, via: 'drop', file: outcome.file })
       written.push(marker)
     }

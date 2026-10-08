@@ -2415,6 +2415,7 @@ paste-with-the-first-tick =
     cette image part avec le premier passage de cette boucle ; les suivants disent qu'elle a été
     collée
 paste-too-large = cette image fait { $size }, et un collage en porte au plus { $limit }
+attachment-too-large = { $name } fait { $size }, et une pièce jointe en porte au plus { $limit }
 paste-nothing-on-clipboard = il n'y a rien à coller dans le presse-papiers
 return-not-pressed =
     cette entrée est arrivée avec d'autres touches, donc ce n'était pas une frappe : appuyez sur Entrée pour envoyer cette ligne, ou Échap pour l'effacer

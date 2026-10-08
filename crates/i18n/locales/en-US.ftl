@@ -2838,6 +2838,7 @@ paste-not-with-a-command =
 paste-with-the-first-tick =
     that picture goes with the first tick of this loop; the ones after it say it was pasted
 paste-too-large = that picture is { $size }, and a paste carries at most { $limit }
+attachment-too-large = { $name } is { $size }, and an attachment carries at most { $limit }
 paste-nothing-on-clipboard = there is nothing on the clipboard to paste
 return-not-pressed =
     that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it

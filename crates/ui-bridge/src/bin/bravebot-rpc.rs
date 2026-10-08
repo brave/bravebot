@@ -21,6 +21,12 @@ fn main() {
     // See CRED-23.
     let _ = bravebot_agent::crash::disable_core_dumps();
 
+    // The desktop window is in English only, so the notes this process builds for it are too,
+    // whatever the machine's language: a French note in an English window reads as a fault. The
+    // terminal chooses from the environment instead (LOCALE-7). This is the one choice, made before
+    // anything is said.
+    bravebot_i18n::init(bravebot_i18n::Locale::EnUs);
+
     // Not a security decision. The only argument is `--settings <path>`, which names a
     // settings file for a developer driving this by hand, and what that file may then grant
     // is decided by the policy layer rather than here. Nothing is authorised by an argument.

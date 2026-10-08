@@ -17,6 +17,8 @@ bravebot-agent = { path = "../agent" }
 bravebot-aichat = { path = "../aichat" }
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
+# What a dropped file's name says it is, which the desktop window asks as well.
+bravebot-filetype = { path = "../filetype" }
 bravebot-i18n = { path = "../i18n" }
 bravebot-mentions = { path = "../mentions" }
 bravebot-net = { path = "../net" }

@@ -2972,20 +2972,12 @@ fn take_from_clipboard(session: &mut Session, pasted: crate::clipboard::Pasted) 
         Pasted::Image(_) if session.shell => session.note(t!(paste_not_a_command)),
         Pasted::Image(image) => session.attach(image),
         Pasted::Text(text) => session.paste_text(&text),
-        Pasted::TooLarge(bytes) => session.note(t!(
-            paste_too_large,
-            size = in_megabytes(bytes),
-            limit = in_megabytes(MAX_PASTED_IMAGE_BYTES)
+        Pasted::TooLarge(bytes) => session.note(bravebot_i18n::sizes::paste_too_large(
+            bytes as u64,
+            MAX_PASTED_IMAGE_BYTES as u64,
         )),
         Pasted::Nothing => session.note(t!(paste_nothing_on_clipboard)),
     }
-}
-
-/// A byte count as a person would say it, since nobody reads seven digits off a screen.
-fn in_megabytes(bytes: usize) -> String {
-    let size = format!("{:.1}", bytes as f64 / (1024.0 * 1024.0))
-        .replace('.', t!(number_decimal_separator));
-    t!(megabytes, size = size)
 }
 
 /// Interpret a mouse event.
@@ -7146,11 +7138,13 @@ fn aside_animated(
     let dropped: Vec<_> = attached
         .iter()
         .filter_map(|file| match file.kind {
-            crate::dropped::Kind::Attachment(media) => Some(bravebot_agent::turn::Attachment {
-                path: file.name.clone(),
-                media: media.to_string(),
-            }),
-            crate::dropped::Kind::Text => None,
+            bravebot_filetype::by_name::Kind::Attachment(media) => {
+                Some(bravebot_agent::turn::Attachment {
+                    path: file.name.clone(),
+                    media: media.to_string(),
+                })
+            }
+            bravebot_filetype::by_name::Kind::Text => None,
         })
         .collect();
     let asked = if recap {
@@ -7404,7 +7398,7 @@ fn manifest_animated(
     // names before the action was built: what is left here is a picture or a PDF, and the run reads
     // it before it plans.
     for file in attached {
-        if let crate::dropped::Kind::Attachment(media) = file.kind {
+        if let bravebot_filetype::by_name::Kind::Attachment(media) = file.kind {
             worker_task = worker_task.with_attachment(file.name.clone(), media);
         }
     }
@@ -8631,13 +8625,13 @@ fn with_session_advisor(task: Task, session: &Session) -> Task {
 pub fn with_submitted_attachments(mut task: Task, session: &Session) -> Task {
     for attached in session.sent_attachments() {
         task = match attached.kind {
-            crate::dropped::Kind::Attachment(media) => {
+            bravebot_filetype::by_name::Kind::Attachment(media) => {
                 task.with_attachment(attached.name.clone(), media)
             }
             // A text file is context, which is what `@` and `--file` already do with one. It
             // goes in as a drop rather than as a named file because a drop comes from wherever
             // the user dragged it from, and that is rarely inside the workspace.
-            crate::dropped::Kind::Text => task.with_dropped_text(attached.name.clone()),
+            bravebot_filetype::by_name::Kind::Text => task.with_dropped_text(attached.name.clone()),
         };
     }
     for image in session.sent_pasted() {

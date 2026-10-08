@@ -7,15 +7,21 @@
  * What the page gets back is an opaque id bound to the session the file was dropped on, and a name
  * to show, the way the native picker's grants work in `files.ts`.
  *
- * At send the page names ids, never paths, and each id is checked again: the file is still there,
- * still a regular file, and a picture or PDF is still within the agent's cap. A grant that fails
- * refuses the send with a message saying which file, so the turn never starts without it (DROP-10).
+ * What each file is, the word its marker uses, and whether it is too large to carry are asked of
+ * the bridge (`drops.classify`), which answers from the rules the terminal stages a drop by and
+ * builds the note for a file over the cap. This process checks the file and mints the grant; it
+ * holds none of those rules, no cap and no wording of a size.
+ *
+ * At send the page names ids, never paths, and each id is checked again: the file is still there
+ * and still a regular file. A grant that fails refuses the send with a message saying which file,
+ * so the turn never starts without it (DROP-10). One that grew past the cap since is refused by the
+ * bridge's `turn.send`, with the same note.
  */
 
 import { randomUUID } from 'node:crypto'
 import { lstatSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute } from 'node:path'
-import { MAX_ATTACHMENT_BYTES, kindOf, type DropKind, type DropOutcome } from '../shared/drops'
+import type { DropKind, DropOutcome } from '../shared/drops'
 import { rootForSession } from './files'
 
 interface Grant {
@@ -24,6 +30,24 @@ interface Grant {
   name: string
   kind: DropKind
 }
+
+/** A dropped path that is a regular file, before the bridge has said what it is. */
+interface Found {
+  path: string
+  name: string
+  /** The path resolved through any links. */
+  real: string
+  size: number
+}
+
+/**
+ * What the bridge says a dropped file is: its kind and marker noun, the note to show for one too
+ * large to carry, or `null` for a type nothing takes.
+ */
+export type Classified = { kind: DropKind; noun: string } | { note: string } | null
+
+/** Asks the bridge's `drops.classify` about each file, answering in the same order. */
+export type Classify = (files: { path: string; bytes: number }[]) => Promise<unknown>
 
 const grants = new Map<string, Map<string, Grant>>()
 
@@ -37,14 +61,13 @@ export class SendRefused extends Error {}
  * Grant each dropped path to `session`, in the order they were dropped.
  *
  * Only a session this process confirmed (one with a root in `files.ts`) can hold a grant, so a drop
- * cannot outlive or precede the session it was meant for.
+ * cannot outlive or precede the session it was meant for. A bridge that cannot say what the files
+ * are stages none of them.
  */
-export function stageDrops(session: unknown, paths: unknown): DropOutcome[] {
+export async function stageDrops(session: unknown, paths: unknown, classify: Classify): Promise<DropOutcome[]> {
   if (typeof session !== 'string' || rootForSession(session) === undefined) return []
   if (!Array.isArray(paths) || paths.length > MOST_IN_ONE_DROP) return []
-  const held = grants.get(session) ?? new Map<string, Grant>()
-  grants.set(session, held)
-  return paths.map((path): DropOutcome => {
+  const found = paths.map((path): Found | DropOutcome => {
     if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')) {
       return { kind: 'skipped', name: typeof path === 'string' ? basename(path) : '', why: 'unreadable' }
     }
@@ -55,18 +78,52 @@ export function stageDrops(session: unknown, paths: unknown): DropOutcome[] {
     } catch {
       return { kind: 'skipped', name, why: 'unreadable' }
     }
-    const found = regularFile(real)
-    if (found === 'folder') return { kind: 'skipped', name, why: 'folder' }
-    if (found === null) return { kind: 'skipped', name, why: 'unreadable' }
-    // Classified by the name the agent will check, which is the resolved one: a link named
-    // `shot.png` pointing at `blob` would otherwise pass here and be refused at send.
-    const kind = kindOf(real)
-    if (kind === null) return { kind: 'named', text: path }
-    if (kind !== 'text' && found > MAX_ATTACHMENT_BYTES) return { kind: 'skipped', name, why: 'too-large' }
-    const id = randomUUID()
-    held.set(id, { path: real, name, kind })
-    return { kind: 'staged', file: { id, name, kind } }
+    const size = regularFile(real)
+    if (size === 'folder') return { kind: 'skipped', name, why: 'folder' }
+    if (size === null) return { kind: 'skipped', name, why: 'unreadable' }
+    return { path, name, real, size }
   })
+  const files = found.filter((each): each is Found => !('kind' in each))
+  // Classified by the name the agent will check, which is the resolved one: a link named
+  // `shot.png` pointing at `blob` would otherwise pass here and be refused at send.
+  let classified: Classified[] | null
+  try {
+    classified = files.length > 0 ? parseClassified(await classify(files.map((file) => ({ path: file.real, bytes: file.size }))), files.length) : []
+  } catch {
+    classified = null
+  }
+  // The session may have closed while the bridge answered, and its grants with it.
+  if (rootForSession(session) === undefined) return []
+  const held = grants.get(session) ?? new Map<string, Grant>()
+  grants.set(session, held)
+  let next = 0
+  return found.map((each): DropOutcome => {
+    if ('kind' in each) return each
+    const answer = classified?.[next++]
+    if (answer === undefined) return { kind: 'skipped', name: each.name, why: 'unreadable' }
+    if (!answer) return { kind: 'named', text: each.path }
+    if ('note' in answer) return { kind: 'skipped', name: each.name, why: 'too-large', note: answer.note }
+    const id = randomUUID()
+    held.set(id, { path: each.real, name: each.name, kind: answer.kind })
+    return { kind: 'staged', file: { id, name: each.name, kind: answer.kind, noun: answer.noun } }
+  })
+}
+
+const KINDS: readonly DropKind[] = ['image', 'pdf', 'text']
+
+/** The bridge's `drops.classify` answer for `count` files, or `null` when it is not one. */
+function parseClassified(answer: unknown, count: number): Classified[] | null {
+  const files = (answer as { files?: unknown } | null)?.files
+  if (!Array.isArray(files) || files.length !== count) return null
+  const parsed: Classified[] = []
+  for (const file of files) {
+    if (file === null) { parsed.push(null); continue }
+    const { kind, noun, note } = file as Record<string, unknown>
+    if (typeof note === 'string') { parsed.push({ note }); continue }
+    if (!KINDS.includes(kind as DropKind) || typeof noun !== 'string') return null
+    parsed.push({ kind: kind as DropKind, noun })
+  }
+  return parsed
 }
 
 /**
@@ -103,7 +160,6 @@ export function dropsFor(session: string, ids: unknown): { dropped: string[]; at
     const size = regularFile(grant.path)
     if (typeof size !== 'number') throw new SendRefused(`${grant.name} is no longer there. Drop it again.`)
     if (grant.kind === 'text') composed.dropped.push(grant.path)
-    else if (size > MAX_ATTACHMENT_BYTES) throw new SendRefused(`${grant.name} is larger than 8 MB, too large to send.`)
     else composed.attachments.push(grant.path)
   }
   return composed

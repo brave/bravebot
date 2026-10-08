@@ -928,7 +928,10 @@ app.whenReady().then(() => {
   // drop event the browser marked trusted. Only the app window's own top frame is answered.
   ipcMain.handle('bravebot:drops:stage', (event, session: unknown, paths: unknown) => {
     if (!window || event.senderFrame !== window.webContents.mainFrame) return []
-    return stageDrops(session, paths)
+    return stageDrops(session, paths, async (files) => {
+      if (!bridge) throw new Error('the agent is not running')
+      return bridge.request('drops.classify', { files })
+    })
   })
   ipcMain.handle('bravebot:files:choose-attachments', (_event, session: unknown) => {
     if (!window || typeof session !== 'string') throw new Error('No active project.')

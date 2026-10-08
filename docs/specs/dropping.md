@@ -3,6 +3,7 @@ id: DROP
 title: Dropping a file on the window
 status: normative
 governs:
+  - crates/filetype/src/by_name.rs
   - crates/tui/src/dropped.rs
   - crates/tui/src/app.rs
   - crates/agent/src/attached.rs
@@ -115,8 +116,9 @@ dispatched at rest carries.
 `verified-by: bravebot_tui::drop::dropping_an_unsupported_type_writes_out_the_path`
 `verified-by: bravebot_tui::dropped::an_unsupported_type_is_a_drop_that_attaches_nothing`
 `verified-by: bravebot_tui::dropped::an_unsupported_file_beside_a_supported_one_leaves_it_attachable`
-`verified-by: bravebot_tui::dropped::an_extension_is_recognised_whatever_its_case`
-`verified-by: bravebot_tui::dropped::the_recognised_types_are_the_ones_claude_code_takes`
+`verified-by: bravebot_filetype::by_name::an_extension_is_recognised_whatever_its_case`
+`verified-by: bravebot_filetype::by_name::the_recognised_types_are_the_ones_claude_code_takes`
+`verified-by: bravebot_filetype::by_name::the_noun_names_what_was_dropped`
 `verified-by: bravebot_tui::app::a_picture_dropped_onto_a_question_goes_with_it`
 `verified-by: bravebot_tui::app::a_picture_dropped_onto_a_task_goes_with_the_plan`
 `verified-by: bravebot_tui::app::a_picture_dropped_onto_a_loop_goes_with_its_first_tick`
@@ -251,7 +253,8 @@ inside the project, and the lists differ in nothing else a caller can see, so ad
 mint the unconfined grant for a file its caller meant as an ordinary one. An operating system
 reports a drop as an absolute path, so a front end loses nothing by it. An entry in `attachments`
 is also refused when its extension is not one the agent carries as bytes, and when the file is
-larger than the agent will carry, so the send fails rather than the turn. `attachments` that is not
+larger than the agent will carry, so the send fails rather than the turn. That refusal's message is
+the note a front end shows for the file, the one `drops.classify` gives ([DROP-11](#DROP-11)). `attachments` that is not
 a list of strings is refused too.
 
 **Why a refusal rather than an entry left out.** A turn that lost the file it was sent with is not
@@ -274,14 +277,22 @@ Electron for each file's path, and sends the paths straight to the main process.
 an event the browser trusts, so the paths came from a person's drag: a page that dispatches its own
 drop event, even one carrying the very files an earlier drop handed it, has nothing taken. The main
 process resolves each path, refuses anything but a regular file, and mints an opaque grant bound
-to the session it was dropped on. The page is told the grant, the file's name and its kind, and
-for a picture a thumbnail the preload drew. It is never told the path.
+to the session it was dropped on. The page is told the grant, the file's name, its kind and its
+marker's noun, and for a picture a thumbnail the preload drew. It is never told the path.
+
+What kind of file each is, the noun its marker uses, and whether it is larger than the agent
+will carry come from the bridge's `drops.classify`, which answers from the rules the terminal
+stages a drop by ([DROP-4](#DROP-4)) and the agent's attachment cap. The main process asks it about
+the resolved paths and the sizes it found, and holds no table, cap or wording of its own, so the
+window and the terminal cannot disagree about a file. A picture or PDF over the cap is left out,
+and the window shows the note the bridge built for it, which names the file and says its size and
+the cap in the terminal's words, in `en-US` because the window is in English only.
 
 At send the page names grants, never paths. The main process takes away every list the page sent
 under the bridge's names and then composes `dropped` from the text files and `attachments` from
-the pictures and PDFs, each grant checked again: still there, still a regular file and not a link
-put in its place, and a picture or PDF still within the agent's cap. A grant that fails refuses the
-send with the file's name. A bot's turn keeps its briefing first in `dropped` and the dropped text
+the pictures and PDFs, each grant checked again: still there, and still a regular file and not a
+link put in its place. A grant that fails refuses the send with the file's name. A picture or PDF
+that grew past the cap since is refused by `turn.send` ([DROP-10](#DROP-10)) with the same note. A bot's turn keeps its briefing first in `dropped` and the dropped text
 files after it.
 
 The rest follows the terminal where a window can. Each file gets a marker at the caret, numbered
@@ -296,7 +307,10 @@ its own turn when the running one ends, where [DROP-8](#DROP-8) names the file i
 window's queue never joins a running turn: each queued message starts a turn of its own, which is
 the case DROP-8 already says carries its files.
 
-`verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/drops.test.mjs pins the tables against dropped.rs and workspace.rs, the markers, and the main process's grants, and ui/scripts/drive-drop.mjs drives a trusted drag into the real app and bridge against a stub model and asserts a page-dispatched drop stages nothing; make check-ui runs the test)`
+`verified-by: bravebot_ui_bridge::attaching::a_dropped_file_is_classified_by_the_terminals_rules`
+`verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
+`verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
+`verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/drops.test.mjs pins the markers and the main process's grants against a stub bridge whose nouns, cap and notes the agent does not use, so a rule, a number or a wording of the window's own would fail it; ui/scripts/drive-drop.mjs drives a trusted drag into the real app and bridge against a stub model, asserting the markers, the path written for a type nothing takes, the bridge's note for a picture over the cap at the drop and at the send, and that a page-dispatched drop stages nothing; make check-ui runs the test)`
 
 ## Known costs
 

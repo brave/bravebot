@@ -447,7 +447,10 @@ export function Transcript({
     if (!live || drop.session !== live.handle) return
     const field = input.current?.shadowRoot?.querySelector('textarea')
     const next = stageDrop(live.staging ?? EMPTY_STAGING, drop.outcomes, draft, field?.selectionEnd ?? draft.length)
-    for (const left of next.skipped) showToast(SKIPPED[left.why], left.name, 'note')
+    for (const left of next.skipped) {
+      if (left.why === 'too-large') showToast('Too large to attach', left.note, 'note')
+      else showToast(SKIPPED[left.why], left.name, 'note')
+    }
     if (next.draft === draft) return
     onStaging(live.handle, next.staging)
     onDraft(next.draft)
@@ -822,10 +825,12 @@ export function Transcript({
   )
 }
 
-/** What the window says about a dropped file it left out, above the file's name. */
-const SKIPPED: Record<'folder' | 'too-large' | 'unreadable', string> = {
+/**
+ * What the window says about a dropped file it left out, above the file's name. One too large to
+ * carry is told in the bridge's note instead, which names the file and says its size and the cap.
+ */
+const SKIPPED: Record<'folder' | 'unreadable', string> = {
   folder: 'Folders are not attached',
-  'too-large': 'Too large to attach, over 8 MB',
   unreadable: 'Could not attach a dropped file',
 }
 

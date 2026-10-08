@@ -162,6 +162,7 @@ impl Bridge {
                 let files = crate::mentions::named(&workspace, &request.string("prompt")?)?;
                 Ok(json!({ "files": files }))
             }
+            "drops.classify" => crate::attached::classified(request),
             "turn.cancel" => self.cancel_turn(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {

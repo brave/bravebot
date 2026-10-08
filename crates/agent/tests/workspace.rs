@@ -6193,7 +6193,7 @@ fn a_rewind_with_one_path_linked_out_still_puts_the_others_back() {
 /// since the type ends up in a `data:` URI.
 #[test]
 fn the_media_type_comes_from_the_extension() {
-    use bravebot_agent::workspace::media_for;
+    use bravebot_filetype::by_name::media_for;
     assert_eq!(media_for("shot.png"), Some("image/png"));
     assert_eq!(media_for("photo.jpg"), Some("image/jpeg"));
     assert_eq!(media_for("photo.jpeg"), Some("image/jpeg"));
@@ -6209,7 +6209,7 @@ fn the_media_type_comes_from_the_extension() {
 /// mentions one is not one either.
 #[test]
 fn a_file_that_names_no_picture_is_not_one() {
-    use bravebot_agent::workspace::media_for;
+    use bravebot_filetype::by_name::media_for;
     for named in [
         "src/main.rs",
         "notes.txt",
