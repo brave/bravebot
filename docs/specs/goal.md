@@ -268,7 +268,8 @@ sets a goal is the gesture that keeps it: while this session is open.
 Each verdict is announced as it arrives, and `/status` says the condition and how many rounds have
 gone. `/goal` and `/status` also say how long the goal has been set and what the session has spent
 since, and a goal that is met, cannot be met or gives up says the same as it ends. The figures are
-counts the driver already holds, counted from when the goal was armed. A session with no goal says
+counts the driver already holds, counted from when the goal was armed. The spend includes what the
+turn in flight has spent so far. A session with no goal says
 nothing about goals.
 
 **Why.** A turn nobody typed a prompt for is the one thing about a session that cannot be read off
@@ -280,6 +281,8 @@ about to give up.
 `verified-by: bravebot_tui::status::a_session_with_no_goal_does_not_mention_one`
 `verified-by: bravebot_tui::status::the_report_says_how_long_a_goal_has_run_and_what_it_has_spent`
 `verified-by: bravebot_tui::state::a_goal_says_what_it_has_cost_since_it_was_set`
+`verified-by: bravebot_tui::state::the_goal_report_counts_what_the_turn_in_flight_has_spent`
+`verified-by: bravebot_tui::status::the_goal_spend_includes_the_turn_in_flight`
 `verified-by: bravebot_tui::goals::a_goal_counts_what_was_spent_and_how_long_from_the_moment_it_was_armed`
 
 ## What a turn is told

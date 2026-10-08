@@ -1006,6 +1006,7 @@ fn status_report(
         auto_vetting: session.auto_vetting(),
         turns: session.turns,
         tokens: session.tokens,
+        tokens_in_flight: session.running_tokens(),
         timing: session.timing_total(),
         cached: session.cached(),
         trust: rules.map_or(&empty_trust, |(trust, _)| trust),
