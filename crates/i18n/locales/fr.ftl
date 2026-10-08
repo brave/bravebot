@@ -50,6 +50,7 @@ cli-usage-auth-logout = Oublier un abonnement Leo Premium importé ou une clé d
 cli-usage-auth-status = Dire si une connexion est utilisable, avec le code de sortie 0 seulement si elle l'est
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 cli-usage-completion = Afficher un script de complétion pour le shell
+cli-usage-shell-init = Afficher le hook de shell qui donne à @bravebot les commandes que vous avez lancées
 cli-usage-sessions = Lister les sessions qui continuent après la fermeture du terminal
 cli-usage-sessions-stop = En arrêter une
 cli-usage-sessions-import = Copier les sessions qu'un autre agent a gardées pour ce répertoire
@@ -142,6 +143,7 @@ cli-option-version = Afficher la version
 
 cli-unknown-option = option inconnue : { $flag }
 cli-completion-needs-a-shell = completion attend l'un de bash, zsh ou fish
+cli-shell-init-needs-a-shell = shell-init attend l'un de bash, zsh ou fish
 cli-file-needs-a-path = --file demande un chemin
 cli-resume-needs-an-id = --resume demande l'identifiant d'une session lorsqu'il accompagne une tâche
 # Le drapeau est --resume ou --continue, tel qu'il a été tapé.

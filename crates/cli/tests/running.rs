@@ -8710,3 +8710,232 @@ fn a_task_naming_a_manifest_record_is_refused_before_anything_is_sent() {
         "a refused run sent a request"
     );
 }
+
+/// `bravebot shell-init <shell>`'s script.
+fn a_shell_init_script(home: &Path, shell: &str) -> String {
+    let output = bravebot(home, &[], &["shell-init", shell]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{shell}: {stderr}");
+    assert_eq!(stderr, "", "{shell} wrote to stderr");
+    stdout
+}
+
+/// SHELLINT-1. A script that depended on the home would be a command reading private files, and one
+/// that wrote there would leave a record by being asked for.
+#[test]
+fn a_shell_init_script_reads_and_writes_nothing_under_the_home() {
+    let bare = Scratch::new("cli-running-shell-init-bare");
+    let busy = Scratch::new("cli-running-shell-init-busy")
+        .with_state("sessions/unique-session-id.json", "{}\n")
+        .with_state("shell/4242", "unique-recorded-line\n")
+        .with_settings(r#"{"model": "unique-model-name"}"#);
+
+    for shell in ["bash", "zsh", "fish"] {
+        let from_bare = a_shell_init_script(&bare.path, shell);
+        let from_busy = a_shell_init_script(&busy.path, shell);
+        assert!(
+            from_bare.contains("@bravebot"),
+            "{shell} defines no @bravebot"
+        );
+        assert_eq!(from_bare, from_busy, "{shell} depends on the home");
+        for name in [
+            "unique-session-id",
+            "unique-recorded-line",
+            "unique-model-name",
+        ] {
+            assert!(!from_busy.contains(name), "{shell} carries {name}");
+        }
+    }
+    assert_eq!(
+        std::fs::read_dir(&bare.path).expect("read home").count(),
+        0,
+        "asking for a script left something in the home"
+    );
+}
+
+/// SHELLINT-1. Naming no shell, one there is no script for, or two is refused with the argument
+/// status and nothing on stdout, so `eval "$(bravebot shell-init ...)"` evaluates nothing.
+#[test]
+fn a_shell_init_with_no_script_to_print_is_refused_with_the_argument_status() {
+    let scratch = Scratch::new("cli-running-shell-init-refused");
+    for arguments in [
+        &["shell-init"][..],
+        &["shell-init", "nu"][..],
+        &["shell-init", "bash", "zsh"][..],
+        &["shell-init", "BASH"][..],
+    ] {
+        let output = bravebot(&scratch.path, &[], arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert_eq!(stdout, "", "{arguments:?} printed on stdout");
+        assert!(stderr.contains("BB1002"), "{arguments:?}: {stderr}");
+    }
+}
+
+/// What an interactive bash made of `commands` printed, with `bravebot` on its path replaced by a
+/// program that prints its arguments and then its standard input between markers.
+///
+/// The hook is sourced first, from the script this build prints, under a umask that would leave a
+/// file readable by others if the hook did not ask for better.
+#[cfg(unix)]
+fn a_bash_session(scratch: &Scratch, commands: &[&str]) -> String {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = scratch.path.join("bin");
+    std::fs::create_dir_all(&bin).expect("create bin");
+    let fake = bin.join("bravebot");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\necho \"ARGS:$*\"\necho STDIN-BEGIN\ncat\necho STDIN-END\n",
+    )
+    .expect("write the stand-in");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let init = scratch.path.join("init.sh");
+    std::fs::write(&init, a_shell_init_script(&scratch.path, "bash")).expect("write the hook");
+
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let mut session = Command::new("bash")
+        .args(["--norc", "--noprofile", "-i"])
+        .env_clear()
+        .env("HOME", &scratch.path)
+        .env("PATH", path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("bash starts");
+    let mut script = format!("umask 022\nsource {}\n", init.display());
+    for command in commands {
+        script.push_str(command);
+        script.push('\n');
+    }
+    script.push_str("exit\n");
+    session
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(script.as_bytes())
+        .expect("send the commands");
+    let output = session.wait_with_output().expect("bash finishes");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// What stood between the `n`th pair of markers in a session's output.
+#[cfg(unix)]
+fn what_a_question_was_given(output: &str, n: usize) -> (String, Vec<String>) {
+    let mut found = Vec::new();
+    let mut lines = output.lines();
+    while let Some(line) = lines.next() {
+        if let Some(arguments) = line.strip_prefix("ARGS:") {
+            assert_eq!(lines.next(), Some("STDIN-BEGIN"), "{output}");
+            let given: Vec<String> = lines
+                .by_ref()
+                .take_while(|line| *line != "STDIN-END")
+                .map(str::to_string)
+                .collect();
+            found.push((arguments.to_string(), given));
+        }
+    }
+    found
+        .into_iter()
+        .nth(n)
+        .unwrap_or_else(|| panic!("no question {n} in {output}"))
+}
+
+/// SHELLINT-2 and SHELLINT-4. A question carries the lines run since the last one and no others, on
+/// standard input and never in an argument, and the question's own line is not among them.
+#[cfg(unix)]
+#[test]
+fn a_question_carries_the_commands_since_the_last_one_on_stdin() {
+    let scratch = Scratch::new("cli-running-shell-init-question");
+    let output = a_bash_session(
+        &scratch,
+        &[
+            "echo first-command",
+            "echo 'a;b' | cat >/dev/null",
+            "echo \"two\nlines\" >/dev/null",
+            "@bravebot-notes true",
+            "@bravebot \"what did I run?\"",
+            "echo second-command",
+            "@bravebot \"and now?\"",
+            "@bravebot \"nothing new?\"",
+        ],
+    );
+
+    let (arguments, given) = what_a_question_was_given(&output, 0);
+    assert_eq!(arguments, "-p what did I run?", "{output}");
+    assert_eq!(
+        given,
+        [
+            "source ".to_string() + &scratch.path.join("init.sh").display().to_string(),
+            "echo first-command".to_string(),
+            "echo 'a;b' | cat >/dev/null".to_string(),
+            "echo \"two lines\" >/dev/null".to_string(),
+            "@bravebot-notes true".to_string(),
+        ],
+        "{output}"
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 1);
+    assert_eq!(arguments, "-p and now?", "{output}");
+    assert_eq!(given, ["echo second-command"], "{output}");
+    let (_, given) = what_a_question_was_given(&output, 2);
+    assert!(given.is_empty(), "a repeated question was given {given:?}");
+}
+
+/// SHELLINT-2, SHELLINT-4. The directory and the file are the person's alone however the shell's
+/// umask is set, and closing the terminal removes the file.
+#[cfg(unix)]
+#[test]
+fn the_recorded_lines_are_private_and_end_with_the_terminal() {
+    let scratch = Scratch::new("cli-running-shell-init-private").with_state("history", "kept\n");
+    let output = a_bash_session(
+        &scratch,
+        &[
+            "echo recorded",
+            "ls -ld \"$HOME/.bravebot\" \"$HOME/.bravebot/shell\" \"$__bravebot_file\"",
+        ],
+    );
+    let modes: Vec<&str> = output
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|mode| mode.len() == 10 && (mode.starts_with('d') || mode.starts_with('-')))
+        .collect();
+    assert_eq!(
+        modes,
+        ["drwx------", "drwx------", "-rw-------"],
+        "the state directory, the shell directory and the file: {output}"
+    );
+    let left: Vec<_> = std::fs::read_dir(scratch.path.join(".bravebot/shell"))
+        .expect("the directory outlives the shell")
+        .collect();
+    assert!(left.is_empty(), "the terminal closed and left {left:?}");
+}
+
+/// SHELLINT-3. With the variable set, the shell records nothing, the run is started incognito, and
+/// the variable is read at each command so setting it after the hook was sourced still stops it.
+#[cfg(unix)]
+#[test]
+fn an_incognito_shell_records_nothing_and_asks_incognito() {
+    let scratch = Scratch::new("cli-running-shell-init-incognito");
+    let output = a_bash_session(
+        &scratch,
+        &[
+            "echo before-incognito",
+            "export BRAVEBOT_INCOGNITO=1",
+            "echo secret-command",
+            "@bravebot \"question\"",
+        ],
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 0);
+    assert_eq!(arguments, "--incognito -p question", "{output}");
+    assert!(
+        !given.iter().any(|line| line.contains("secret-command")),
+        "an incognito shell recorded {given:?}"
+    );
+    assert!(
+        !given
+            .iter()
+            .any(|line| line.contains("export BRAVEBOT_INCOGNITO")),
+        "the line that turned it on was recorded: {given:?}"
+    );
+}

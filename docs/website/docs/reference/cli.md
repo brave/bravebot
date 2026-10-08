@@ -29,6 +29,7 @@ Usage:
   bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
   bravebot completion <bash|zsh|fish>    Print a shell completion script
+  bravebot shell-init <bash|zsh|fish>    Print the shell hook that gives @bravebot the commands you ran
 ```
 
 ## Commands
@@ -56,6 +57,7 @@ Usage:
 | `bravebot sessions import claude-code` | copy Claude Code's sessions for this directory in as words to read ([Sessions](../using/sessions.md#importing-sessions-from-claude-code)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
+| `bravebot shell-init <shell>` | print a shell hook that gives `@bravebot` the commands you ran ([below](#shell-init)) |
 | `bravebot --version`, `-V` | print the build |
 | `bravebot --help`, `-h` | print this |
 
@@ -312,7 +314,7 @@ standing is better piped in, where it is quarantined.
 A flag with no words after it, a blank one, or one whose words open with `-` and hold no space is
 refused with status 2. A sentence opening with `-` is words. If a flag is given twice, the last is
 used. Both are refused with `--mode manifest`, and with `doctor`, `auth`, `mcp`,
-`import-leo-creds`, `import-providers` and `completion`. There is no settings key for them: words a checkout
+`import-leo-creds`, `import-providers`, `completion` and `shell-init`. There is no settings key for them: words a checkout
 always wants belong in its `AGENTS.md`.
 
 ## `--json`
@@ -632,6 +634,53 @@ bravebot completion fish > ~/.config/fish/completions/bravebot.fish
 
 Then type `bravebot ` and press Tab, or `bravebot --` and Tab. The command takes exactly one shell
 name and exits with status 2 for anything else.
+
+## `shell-init`
+
+```sh
+bravebot shell-init <bash|zsh|fish>
+```
+
+Prints a hook for your shell. It keeps the command lines you run in each terminal and defines
+`@bravebot`, which asks one question with the lines you ran since the last question.
+
+```sh
+# bash: add to ~/.bashrc
+eval "$(bravebot shell-init bash)"
+
+# zsh: add to ~/.zshrc
+eval "$(bravebot shell-init zsh)"
+
+# fish: add to ~/.config/fish/config.fish
+bravebot shell-init fish | source
+```
+
+Then, in that terminal:
+
+```sh
+cargo test
+@bravebot "why did that fail?"
+```
+
+`@bravebot "question"` runs `bravebot -p "question"` with up to the last 200 recorded lines (at most
+64 KiB) as piped input, so they are quarantined like any other piped input and the planner is given
+a reference to them. Quote the question. The lines are emptied once sent, so the next question
+carries only what you ran after it.
+
+- Only the command line is recorded, as you submitted it. What a command printed is not.
+- Lines are written to `~/.bravebot/shell/<process id of the shell>`, readable by you alone, and the
+  file is removed when the terminal closes. A terminal that is killed leaves its file until another
+  shell with the same process id starts.
+- A line that is `@bravebot` or begins with `@bravebot` and a space is not recorded. bash records a
+  line when the command finishes, and a line your `HISTCONTROL` or `HISTIGNORE` drops is not
+  recorded. Anything piped into `@bravebot` is ignored, and the lines are emptied when the question
+  is sent, even if the run then fails to start.
+- With `BRAVEBOT_INCOGNITO` set to a non-empty value, nothing is recorded and the question runs with
+  `--incognito`. It is read at each command, so `export BRAVEBOT_INCOGNITO=1` stops recording from the
+  next line.
+
+The command prints a fixed script and reads and writes nothing under `~/.bravebot`. It takes exactly
+one shell name and exits with status 2 for anything else.
 
 ## Interactive keys
 

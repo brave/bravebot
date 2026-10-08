@@ -41,6 +41,7 @@ cli-usage-auth-logout = Forget an imported Leo Premium subscription or a stored 
 cli-usage-auth-status = Say whether a sign-in is usable, exiting 0 only if it is
 cli-usage-mcp = Declare, list and approve MCP servers
 cli-usage-completion = Print a shell completion script
+cli-usage-shell-init = Print the shell hook that gives @bravebot the commands you ran
 cli-usage-sessions = List the sessions that keep running after the terminal closes
 cli-usage-sessions-stop = Stop one of them
 cli-usage-sessions-import = Copy sessions another agent kept for this directory
@@ -139,6 +140,7 @@ cli-option-version = Show the version
 
 cli-unknown-option = unknown option: { $flag }
 cli-completion-needs-a-shell = completion takes one of bash, zsh or fish
+cli-shell-init-needs-a-shell = shell-init takes one of bash, zsh or fish
 cli-file-needs-a-path = --file requires a path
 cli-resume-needs-an-id = --resume requires the id of a session when it goes with a task
 # The flag is --resume or --continue, as typed.
