@@ -8,6 +8,8 @@ export interface PlannerStep {
   say?: string
   /** The reply is withheld until `release(hold)` is called. */
   hold?: string
+  /** Runs when this step's request arrives, before the reply, so a test can change the world between steps. */
+  before?: () => void
 }
 
 /**
@@ -90,6 +92,7 @@ export class ModelStub {
     if (key === undefined) this.unmatched.push(body)
     const results = conversation.messages.slice(lastPrompt + 1).filter((message) => message.role === 'tool').length
     const step = (key === undefined ? undefined : this.plans[key]?.[results]) ?? { say: 'done' }
+    step.before?.()
     if (step.hold) {
       const gate = this.gate(step.hold)
       gate.arrive()

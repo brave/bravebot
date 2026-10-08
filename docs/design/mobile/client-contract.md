@@ -1,6 +1,6 @@
 # Client interface and prototype contract
 
-Status: the first Rust session-view block and the stdio TypeScript client's session lifecycle and approval replies are implemented. The local client program and the remaining stage 1–2a evidence are outstanding, so stages 1–2a are incomplete. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
+Status: stages 1–2a are complete: the Rust session view and the stdio TypeScript client in `packages/agent-client`, tested against a real `bravebot-rpc`. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
 
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
@@ -111,7 +111,14 @@ reports the view as detached, ending it on the bridge's response even if the det
 not arrived, and worker termination and save success as unknown. A failed close
 keeps the session subscribed to view updates and connection loss, unless the bridge answers that the session no longer exists.
 
-A request unanswered past its deadline (30 seconds by default) ends the connection and stops the
+A failed request carries an `outcome`: `rejected` when the request was refused and had no effect, and
+`unknown` when it may have reached the bridge (a lost connection, a failed write, a deadline, or the
+bridge reporting an `internal` error), so the
+caller must look at the current state before trying again. At most 256 requests wait for an answer at
+once and one request is at most 8 MiB; beyond that a request is refused before it is written. Cancel
+and close are exempt from the first limit, so a caller can always stop work. Parameters that cannot be
+written fail the request instead of throwing. A request
+unanswered past its deadline (30 seconds by default) ends the connection and stops the
 child, since its outcome cannot be known. Nothing is retried. The cleanup request sent after a
 failed session startup has no deadline, so a silent bridge cannot end the connection. Stdout EOF,
 a read error, or a failed write to the child also ends the connection immediately, even if the
@@ -125,6 +132,14 @@ shutdown. A diagnostic hook that throws does not lose the message being read.
 A startup that breaks the protocol (a malformed or out-of-order initial view, a repeated row id)
 refuses the session for good, even if a valid initial view follows. Startup trust questions are
 held only while a session is being created, and at most 64 sessions' worth are held, earliest first.
+
+**Local program.** `scripts/local-client.ts` drives one fresh session from a terminal: it requires an
+explicit `--trust yes|no`, answers an approval only as `--decide approve|reject|prompt` says (a
+prompt needs a terminal, and without one the answer is reject), declines a user question, and cancels
+a question it cannot answer. It prints each released payload as one line of JSON with every control, format and separator
+character escaped (zero-width, bidirectional and tag characters among them). The bridge's own version,
+build, event names and error messages are escaped the same way. It is a diagnostic dump, not a display surface, and does not
+render or mark released content.
 
 **Evidence.** The scenarios run under four read-chunkings against a scripted server: split and
 combined frames, early events, interleaved sessions, out-of-order responses, gaps, malformed
@@ -140,11 +155,21 @@ a scratch project. They show:
 - a fetched page arriving with its label in the view and never reaching a planner request, with a
   rejected fetch sending nothing;
 - a typed answer to a user question reaching the planner and a declined one not;
+- fetched page bytes copied into a file: the write is asked about as untrusted, shows those bytes
+  with their label, and the bytes never reach a planner request;
+- a write that lands while the session store cannot be written: the final reply carries a record id
+  that is not proof of saving, and a close still reports saving as unknown;
+- the local program approving or rejecting as told, refusing to start without an explicit trust
+  answer, rejecting by default without a terminal, declining a user question, and printing released
+  text with control, zero-width, separator and bidirectional characters escaped;
+- the same session driven through a proxy that hands the real bridge's output on one to three bytes
+  at a time, with multi-byte text intact and every update in sequence;
 - close, EOF, a killed process and unreadable input.
 
-**Not established.** A local program, fetched bytes copied into a file, a write that lands while the
-session cannot be saved, native rendering, remote security, reconnect and recovery, send deduplication,
-controller ownership, a stronger stale-action guarantee than the bridge's, a persistent host, and
+**Not established.** The local program cancelling a question of an unsupported kind (written, not
+exercised), native rendering, remote security, reconnect and recovery, send deduplication,
+qualifying a session by target and runtime instance (a session object belongs to one connection and
+ends with it, but carries no identity a caller could store across restarts), controller ownership, a stronger stale-action guarantee than the bridge's, a persistent host, and
 operating systems other than macOS.
 
 ## Common interface
