@@ -10,7 +10,7 @@ use std::io::Write;
 pub(crate) const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 
 /// The subcommands, as the usage table lists them.
-pub(crate) const COMMANDS: [&str; 9] = [
+pub(crate) const COMMANDS: [&str; 10] = [
     "doctor",
     "auth",
     "mcp",
@@ -20,6 +20,7 @@ pub(crate) const COMMANDS: [&str; 9] = [
     "import-leo-creds",
     "import-providers",
     "completion",
+    "shell-init",
 ];
 
 /// What follows `auth`.
@@ -119,7 +120,7 @@ fn bash() -> String {
         case "${{COMP_WORDS[1]}}" in
             auth) COMPREPLY=($(compgen -W "{auth}" -- "$cur")); return 0 ;;
             mcp) COMPREPLY=($(compgen -W "{mcp}" -- "$cur")); return 0 ;;
-            completion) COMPREPLY=($(compgen -W "{shells}" -- "$cur")); return 0 ;;
+            completion|shell-init) COMPREPLY=($(compgen -W "{shells}" -- "$cur")); return 0 ;;
         esac
     fi
     case "$cur" in
@@ -150,7 +151,7 @@ _bravebot() {{
         case "$words[2]" in
             auth) compadd -- {auth}; return ;;
             mcp) compadd -- {mcp}; return ;;
-            completion) compadd -- {shells}; return ;;
+            completion|shell-init) compadd -- {shells}; return ;;
         esac
     fi
     if [[ "$words[CURRENT]" == -* ]]; then
@@ -186,6 +187,7 @@ fn fish() -> String {
         ("auth", AUTH.join(" ")),
         ("mcp", MCP.join(" ")),
         ("completion", SHELLS.join(" ")),
+        ("shell-init", SHELLS.join(" ")),
     ] {
         script.push_str(&format!(
             "complete -c bravebot -f -n '__fish_seen_subcommand_from {command}' -a '{words}'\n"

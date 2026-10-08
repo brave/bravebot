@@ -29,7 +29,7 @@ documented-by: docs/website/docs/customize/configuration.md
 is written into it. The prompt history, the model, theme, effort and editing choices, the answer to
 the update question, the answer to `/caffeinate`'s explanation, session records, a language server's index of a workspace, skills, standing
 instructions, an imported subscription, the command lines somebody asked to be remembered past a
-session, the reach somebody remembered for a command, the permission rules somebody granted a checkout and the answers to the startup question
+session, the reach somebody remembered for a command, the command lines a shell hook recorded for the terminal still open ([shell-integration.md](shell-integration.md)), the permission rules somebody granted a checkout and the answers to the startup question
 somebody asked to be kept all live here, and so does the record of the definitions' memories a
 session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5)).
 [definition-memory.md](definition-memory.md) proposes one more, which nothing yet builds: the

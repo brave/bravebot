@@ -15,6 +15,7 @@ mod plain;
 mod progress;
 mod sandbox_check;
 mod session_import;
+mod shell_init;
 use bravebot_agent::servers;
 
 use crate::exit::{Ending, fail};
@@ -322,6 +323,12 @@ fn main() -> ExitCode {
                 stopped_before_the_turn(as_json, Ending::Argument, t!(cli_completion_needs_a_shell))
             }
         },
+        Some("shell-init") => match shell_init::command(&args[1..]) {
+            Some(()) => ExitCode::SUCCESS,
+            None => {
+                stopped_before_the_turn(as_json, Ending::Argument, t!(cli_shell_init_needs_a_shell))
+            }
+        },
         Some("import-leo-creds") => import_leo_creds(&args[1..]),
         Some("import-providers") => import::providers(&args[1..]),
         Some(flag) if flag.starts_with('-') => {
@@ -415,7 +422,7 @@ fn continues_with_a_task(args: &[String]) -> bool {
 fn without_a_definition(first: Option<&str>) -> Option<String> {
     match first? {
         command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
-        | "import-leo-creds" | "import-providers" | "completion") => {
+        | "import-leo-creds" | "import-providers" | "completion" | "shell-init") => {
             Some(t!(cli_agent_not_for_a_command, command = command).to_string())
         }
         _ => None,
@@ -478,7 +485,7 @@ fn flag_named(prompts: &SystemPrompts) -> Option<&'static str> {
 fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
     match first? {
         command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
-        | "import-leo-creds" | "import-providers" | "completion") => Some(
+        | "import-leo-creds" | "import-providers" | "completion" | "shell-init") => Some(
             t!(
                 cli_system_prompt_not_for_a_command,
                 flag = flag,
@@ -785,6 +792,10 @@ fn print_help() {
         (
             "bravebot completion <bash|zsh|fish>",
             t!(cli_usage_completion),
+        ),
+        (
+            "bravebot shell-init <bash|zsh|fish>",
+            t!(cli_usage_shell_init),
         ),
     ] {
         println!("  {form:<FORM$}{description}");
@@ -6366,6 +6377,7 @@ mod tests {
             "import-leo-creds",
             "import-providers",
             "completion",
+            "shell-init",
         ] {
             assert!(
                 without_a_definition(Some(first)).is_some(),
@@ -6488,6 +6500,7 @@ mod tests {
             "import-leo-creds",
             "import-providers",
             "completion",
+            "shell-init",
         ] {
             let refused = without_a_prompt_to_give("--system-prompt", Some(first))
                 .unwrap_or_else(|| panic!("{first} took the words"));
