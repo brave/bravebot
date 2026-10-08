@@ -824,9 +824,15 @@ A name opening with `-` is refused because it is the next flag. Taken as the nam
 be removed from the arguments and the run would answer in the other format. No definition's name
 may open with `-`, so no name is lost.
 
+**The `agent` setting.** Where no `--agent` is given, the `agent` key in the person's own settings
+file or in the file `--settings` names stands in for it, and the flag outranks it
+([ADDRESS-13](addressing-a-definition.md#ADDRESS-13)). A recorded name outranks it too. A name it
+gives that matches nothing is said and the run goes on without one, where the flag's is refused.
+
 **Known costs.** A self-paced `/loop` under a definition stops after one tick, because an addressed
-turn cannot schedule the next one. A `/loop` with an interval keeps running. There is no settings
-key for the definition, so a checkout that always wants one has to pass `--agent` each time.
+turn cannot schedule the next one. A `/loop` with an interval keeps running. A checkout's settings
+cannot choose the definition, so a checkout that always wants one has to be given it by each
+person's own file or by `--agent`.
 
 `verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`
 `verified-by: bravebot_cli::main::the_last_definition_named_is_the_one_worked_under`

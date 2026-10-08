@@ -1093,7 +1093,12 @@ fn run_task(
     // matched, because the model it asks for is the definition's where the definition names one.
     // A continued session may be recorded as having worked under one, which is not known until its
     // record is read.
-    let asked_below = (agent.is_some() || resume.is_some()) && model.is_none();
+    let settings = bravebot_config::Settings::load();
+    // The `agent` setting stands in for `--agent` where there is none, except in a manifest run,
+    // which no definition addresses (ADDRESS-13).
+    let configured = settings.agent().filter(|_| mode != Mode::Manifest);
+    let asked_below =
+        (agent.is_some() || configured.is_some() || resume.is_some()) && model.is_none();
     if !asked_below
         && let Some(how) = nothing_serves(&config, &model_for_this_run(model.as_deref(), &config))
     {
@@ -1107,8 +1112,6 @@ fn run_task(
         Some(Err(how)) => return stopped_before_the_turn(as_json, Ending::Configuration, how),
         None => None,
     };
-
-    let settings = bravebot_config::Settings::load();
 
     let mut workspace = match current_workspace(&settings, &Managed::load()) {
         Ok(w) => w,
@@ -1166,10 +1169,24 @@ fn run_task(
         .as_ref()
         .and_then(|record| record.agent.as_deref());
     let (agent, under) =
-        match bravebot_tui::app::settle_definition(agent.as_deref(), recorded, |name| {
+        match bravebot_tui::app::settle_definition(agent.as_deref(), recorded, configured, |name| {
             definition_for_a_run(&config, &workspace, &permissions, name, model.is_some())
         }) {
-            Ok(bravebot_tui::app::Settled::Under { name, found }) => (Some(name), found),
+            Ok(bravebot_tui::app::Settled::Under {
+                name,
+                found,
+                by_setting,
+            }) => {
+                if by_setting {
+                    eprintln!("{}", t!(session_working_under_by_setting));
+                }
+                (Some(name), found)
+            }
+            Ok(bravebot_tui::app::Settled::SettingGone { name, why }) => {
+                eprintln!("{}", t!(cli_agent_setting_gone, definition = name.as_str()));
+                eprintln!("{why}");
+                (None, None)
+            }
             Ok(bravebot_tui::app::Settled::Gone { name, why }) => {
                 eprintln!(
                     "{}",
@@ -2900,6 +2917,15 @@ fn doctor() -> ExitCode {
                     t!(doctor_settings_ignored),
                     t!(
                         doctor_settings_fallback_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            for path in settings.agent_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_agent_ignored,
                         path = path.display().to_string()
                     ),
                 );

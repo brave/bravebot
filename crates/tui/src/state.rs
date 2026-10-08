@@ -1679,6 +1679,8 @@ pub struct Session {
     /// (ADDRESS-3). A turn nobody typed carries it because the person started the session under
     /// it, and nothing a turn produced can set it.
     standing: Option<Addressed>,
+    /// Whether the `agent` setting is what chose `standing`, which `/status` says (ADDRESS-13).
+    standing_by_setting: bool,
     /// The standing watches this session holds, where a turn armed any.
     ///
     /// Private for the reason the loop and the goal are: a watch is looked at, fires, and has the
@@ -1954,6 +1956,7 @@ impl Session {
             addressing: None,
             system_prompts: bravebot_agent::turn::SystemPrompts::default(),
             standing: None,
+            standing_by_setting: false,
             rewind: Default::default(),
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
@@ -7616,6 +7619,7 @@ impl Session {
             self.model = Some(model.clone());
         }
         self.standing = Some(definition);
+        self.standing_by_setting = false;
     }
 
     /// Carry these words in the system prompt of every turn this session sends (CLI-19).
@@ -7630,6 +7634,16 @@ impl Session {
     /// The words the command line put in the system prompt of every turn this session sends.
     pub fn system_prompts(&self) -> &bravebot_agent::turn::SystemPrompts {
         &self.system_prompts
+    }
+
+    /// Say that the `agent` setting is what chose the definition this session works under.
+    pub fn standing_chosen_by_setting(&mut self) {
+        self.standing_by_setting = true;
+    }
+
+    /// Whether the `agent` setting, and not the command line or a record, chose the definition.
+    pub fn standing_is_by_setting(&self) -> bool {
+        self.standing_by_setting
     }
 
     /// The definition every turn of this session addresses, where it was started under one.

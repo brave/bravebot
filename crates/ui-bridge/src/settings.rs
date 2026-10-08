@@ -63,6 +63,7 @@ fn ignored(settings: &Settings) -> Vec<Value> {
         "fallbackModel",
         settings.fallback_ignored().collect(),
     ));
+    ignored.extend(named("agent", settings.agent_ignored().collect()));
     ignored
 }
 

@@ -272,6 +272,9 @@ without it, says which definition is gone and that the narrowing is gone with it
 recording the name. A recorded definition whose model needs a sign-in is refused rather than
 replaced by the planner.
 
+To start every session under one definition without typing the flag, set [`agent`](../customize/configuration.md#agent)
+in your settings. `--agent` outranks it, and so does the name a resumed session's record carries.
+
 A model the definition names is the one every turn uses. In a session, `/status` shows it as the
 definition's, and `/model` is refused. On a one-shot run, `--model` outranks the definition's model,
 and the run says so on stderr.

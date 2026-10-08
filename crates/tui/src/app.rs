@@ -965,6 +965,7 @@ fn status_report(
         checkouts: &checkouts,
         model: session.model(),
         agent: session.standing_definition(),
+        agent_by_setting: session.standing_is_by_setting(),
         effort: session.effort(),
         model_reads_effort: session.model_reads_effort(),
         served_model: session.served_model(),
@@ -2151,44 +2152,57 @@ impl Unusable {
     }
 }
 
-/// What a session or a run is to work under, once the name typed on the command line and the name
-/// its record carries have been weighed.
+/// What a session or a run is to work under, once the name typed on the command line, the name
+/// its record carries and the name the person's settings carry have been weighed.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Settled<T> {
-    /// Neither source named a definition.
+    /// No source named a definition.
     Nothing,
     /// The session works under `name`, which `work` accepted as `found`, and its record says so.
-    Under { name: String, found: T },
+    /// `by_setting` is true where the `agent` setting is what named it.
+    Under {
+        name: String,
+        found: T,
+        by_setting: bool,
+    },
     /// The record's definition no longer exists. The session goes on without it, says so, and
     /// stops recording the name.
     Gone { name: String, why: String },
+    /// The `agent` setting names a definition that does not exist. The session goes on without
+    /// one, says so, and records nothing.
+    SettingGone { name: String, why: String },
 }
 
 /// Decide which definition a session or run works under, the one policy every front end shares
-/// (ADDRESS-3).
+/// (ADDRESS-3, ADDRESS-13).
 ///
-/// A name typed on this command line wins and ends the session when `work` finds nothing for it. A
-/// recorded name is the person's own earlier `--agent`, so one that matches nothing now is
-/// reported as [`Settled::Gone`] for the caller to say in its own way, and one whose model is
-/// refused or needs a sign-in ends the session too, because going on would substitute the
-/// planner's model for the one the definition asked for (ADDRESS-11, CLI-9). `work` is given the
-/// name to try and is called at most once.
+/// A name typed on this command line wins and ends the session when `work` finds nothing for it.
+/// A recorded name is next. It is the person's own earlier `--agent`, so one that matches nothing
+/// now is reported as [`Settled::Gone`] for the caller to say in its own way, and one whose model
+/// is refused or needs a sign-in ends the session too, because going on would substitute the
+/// planner's model for the one the definition asked for (ADDRESS-11, CLI-9). The `agent` setting
+/// is last and is a default, so one that matches nothing is [`Settled::SettingGone`] and does not
+/// end a session that never asked for it, while one whose model is refused ends it for the reason
+/// a recorded name does. `work` is given the name to try and is called at most once.
 pub fn settle_definition<T>(
     typed: Option<&str>,
     recorded: Option<&str>,
+    configured: Option<&str>,
     work: impl FnOnce(&str) -> Result<T, Unusable>,
 ) -> Result<Settled<T>, String> {
-    match (typed, recorded) {
-        (Some(name), _) => work(name)
+    match (typed, recorded, configured) {
+        (Some(name), _, _) => work(name)
             .map(|found| Settled::Under {
                 name: name.to_string(),
                 found,
+                by_setting: false,
             })
             .map_err(Unusable::into_message),
-        (None, Some(name)) => match work(name) {
+        (None, Some(name), _) => match work(name) {
             Ok(found) => Ok(Settled::Under {
                 name: name.to_string(),
                 found,
+                by_setting: false,
             }),
             Err(Unusable::Missing(why)) => Ok(Settled::Gone {
                 name: name.to_string(),
@@ -2196,7 +2210,19 @@ pub fn settle_definition<T>(
             }),
             Err(refused) => Err(refused.into_message()),
         },
-        (None, None) => Ok(Settled::Nothing),
+        (None, None, Some(name)) => match work(name) {
+            Ok(found) => Ok(Settled::Under {
+                name: name.to_string(),
+                found,
+                by_setting: true,
+            }),
+            Err(Unusable::Missing(why)) => Ok(Settled::SettingGone {
+                name: name.to_string(),
+                why,
+            }),
+            Err(refused) => Err(refused.into_message()),
+        },
+        (None, None, None) => Ok(Settled::Nothing),
     }
 }
 
@@ -3860,6 +3886,7 @@ fn event_loop(
         &mut stored,
         named.as_deref(),
         recorded.as_deref(),
+        settings.agent(),
     ) {
         return Ok(Ended::Refused(refused));
     }
@@ -6236,6 +6263,9 @@ fn handle_after_clear(
 /// Work the session under the definition [`settle_definition`] settles on, writing the name into
 /// its record, or say why it cannot start.
 ///
+/// The `agent` setting is the last source (ADDRESS-13). A name it gives that matches nothing is
+/// said in the transcript and the session goes on without one.
+///
 /// A name typed on this command line that matches nothing ends the session before it begins. A
 /// recorded name that matches nothing is said in the transcript, with the definition named and
 /// that the narrowing is gone, and the session goes on without it and without recording it: the
@@ -6251,12 +6281,25 @@ fn settle_under(
     stored: &mut bravebot_session::sessions::Handle,
     typed: Option<&str>,
     recorded: Option<&str>,
+    configured: Option<&str>,
 ) -> Result<(), String> {
-    match settle_definition(typed, recorded, |name| {
+    match settle_definition(typed, recorded, configured, |name| {
         work_under(session, config, workspace, home, trust, permissions, name)
     })? {
         Settled::Nothing => {}
-        Settled::Under { name, .. } => stored.set_agent(Some(name)),
+        Settled::Under {
+            name, by_setting, ..
+        } => {
+            if by_setting {
+                session.note(t!(session_working_under_by_setting));
+                session.standing_chosen_by_setting();
+            }
+            stored.set_agent(Some(name));
+        }
+        Settled::SettingGone { name, why } => {
+            session.note(t!(session_agent_setting_gone, definition = name.as_str()));
+            session.note(why);
+        }
         Settled::Gone { name, why } => {
             session.note(t!(
                 session_recorded_definition_gone,
@@ -17133,6 +17176,7 @@ mod tests {
             &mut stored,
             Some("rule-reviewer"),
             None,
+            None,
         )
         .expect("the name is held");
         assert_eq!(stored.agent(), Some("rule-reviewer"));
@@ -17151,6 +17195,7 @@ mod tests {
             &mut resumed,
             None,
             Some("rule-reviewer"),
+            None,
         )
         .expect("the recorded name is held");
         assert_eq!(resumed_session.standing_definition(), Some(&standing()));
@@ -17188,6 +17233,7 @@ mod tests {
             &mut stored,
             None,
             Some("deleted-since"),
+            None,
         );
 
         assert_eq!(settled, Ok(()), "the session did not open");
@@ -17237,6 +17283,7 @@ mod tests {
             &mut stored,
             None,
             Some("rule-reviewer"),
+            None,
         );
 
         let refused = settled.expect_err("the session opened on the planner's model");
@@ -17275,6 +17322,7 @@ mod tests {
             &mut stored,
             Some("checker"),
             Some("rule-reviewer"),
+            None,
         )
         .expect("the typed name is held");
 
@@ -17285,6 +17333,152 @@ mod tests {
             "the session went on under the recorded definition"
         );
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-13. A session that typed and recorded no name works under the one the `agent`
+    /// setting names, says the setting chose it, and records the name so a resume follows the
+    /// session rather than whatever the setting says later.
+    #[test]
+    fn a_session_with_no_other_name_works_under_the_agent_setting() {
+        let home = a_home_with_a_definition("bravebot-setting-under-home", None);
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+
+        settle_under(
+            &mut session,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut stored,
+            None,
+            None,
+            Some("rule-reviewer"),
+        )
+        .expect("the setting's name is held");
+
+        assert_eq!(
+            session.standing_definition().map(|one| one.name.as_str()),
+            Some("rule-reviewer")
+        );
+        assert!(session.standing_is_by_setting());
+        assert_eq!(stored.agent(), Some("rule-reviewer"));
+        let said = said_in_the_transcript(&session).join("\n");
+        assert!(
+            said.contains(t!(session_working_under_by_setting)),
+            "{said}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-13. A name typed, or a name recorded, is not replaced by the setting, and a session
+    /// the command line chose does not say the setting did.
+    #[test]
+    fn the_agent_setting_does_not_replace_a_typed_or_recorded_name() {
+        let home = a_home_with_a_definition("bravebot-setting-outranked-home", None);
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+        for (typed, recorded, expected) in [
+            (Some("rule-reviewer"), None, "rule-reviewer"),
+            (None, Some("rule-reviewer"), "rule-reviewer"),
+        ] {
+            let mut stored = a_handle_for_test(&workspace);
+            let mut session = Session::new("none");
+            settle_under(
+                &mut session,
+                &mut config,
+                &workspace,
+                Some(&home),
+                &trust,
+                &Default::default(),
+                &mut stored,
+                typed,
+                recorded,
+                Some("another"),
+            )
+            .expect("the name is held");
+            assert_eq!(
+                session.standing_definition().map(|one| one.name.as_str()),
+                Some(expected)
+            );
+            assert!(!session.standing_is_by_setting());
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-13. A setting naming no definition is said and the session opens as the planner's:
+    /// the person did not type a name this time, so it does not end the session as a typed one does.
+    #[test]
+    fn an_agent_setting_naming_nothing_is_said_and_the_session_opens() {
+        let home = a_home_with_a_definition("bravebot-setting-missing-home", None);
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+
+        let settled = settle_under(
+            &mut session,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut stored,
+            None,
+            None,
+            Some("deleted-since"),
+        );
+
+        assert_eq!(settled, Ok(()), "the session did not open");
+        assert!(session.standing_definition().is_none());
+        assert_eq!(stored.agent(), None);
+        let said = said_in_the_transcript(&session).join("\n");
+        assert!(
+            said.contains("deleted-since") && said.contains("there is no definition called"),
+            "the loss was not said: {said}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-13. Only a setting naming something unusable by its model ends a session, and a
+    /// setting that names nothing never does.
+    #[test]
+    fn the_agent_setting_is_survivable_where_a_typed_name_is_not() {
+        let missing =
+            |name: &str| -> Result<(), Unusable> { Err(Unusable::Missing(format!("no {name}"))) };
+        let refused = |name: &str| -> Result<(), Unusable> {
+            Err(Unusable::Refused(format!("{name} needs a sign-in")))
+        };
+        assert_eq!(
+            settle_definition(None, None, Some("set"), |_| Ok(())),
+            Ok(Settled::Under {
+                name: "set".to_string(),
+                found: (),
+                by_setting: true
+            })
+        );
+        assert_eq!(
+            settle_definition(None, None, Some("set"), missing),
+            Ok(Settled::SettingGone {
+                name: "set".to_string(),
+                why: "no set".to_string()
+            })
+        );
+        assert_eq!(
+            settle_definition(None, None, Some("set"), refused),
+            Err("set needs a sign-in".to_string())
+        );
+        assert_eq!(
+            settle_definition(Some("typed"), None, Some("set"), missing),
+            Err("no typed".to_string()),
+            "the setting's name was tried in place of a typed one"
+        );
     }
 
     /// ADDRESS-3, ADDRESS-11. The policy both front ends share: the typed name wins and a typed
@@ -17307,40 +17501,44 @@ mod tests {
         };
 
         assert_eq!(
-            settle_definition(Some("typed"), Some("recorded"), found),
+            settle_definition(Some("typed"), Some("recorded"), None, found),
             Ok(Settled::Under {
                 name: "typed".to_string(),
-                found: ()
+                found: (),
+                by_setting: false
             })
         );
         assert_eq!(tried.take(), ["typed"], "the recorded name was tried too");
 
         assert_eq!(
-            settle_definition(Some("typed"), Some("recorded"), missing),
+            settle_definition(Some("typed"), Some("recorded"), None, missing),
             Err("no typed".to_string()),
             "a typed name that matches nothing did not end the run"
         );
         assert_eq!(tried.take(), ["typed"]);
 
         assert_eq!(
-            settle_definition(None, Some("recorded"), missing),
+            settle_definition(None, Some("recorded"), None, missing),
             Ok(Settled::Gone {
                 name: "recorded".to_string(),
                 why: "no recorded".to_string()
             })
         );
         assert_eq!(
-            settle_definition(None, Some("recorded"), refused),
+            settle_definition(None, Some("recorded"), None, refused),
             Err("recorded needs a sign-in".to_string()),
             "a recorded definition that cannot be used was dropped"
         );
         assert_eq!(
-            settle_definition(Some("typed"), None, refused),
+            settle_definition(Some("typed"), None, None, refused),
             Err("typed needs a sign-in".to_string())
         );
         tried.take();
 
-        assert_eq!(settle_definition(None, None, found), Ok(Settled::Nothing));
+        assert_eq!(
+            settle_definition(None, None, None, found),
+            Ok(Settled::Nothing)
+        );
         assert!(
             tried.take().is_empty(),
             "a name was tried where none was given"
@@ -17366,6 +17564,7 @@ mod tests {
             &Default::default(),
             &mut stored,
             Some("rule-reviewer"),
+            None,
             None,
         )
         .expect("the name is held");

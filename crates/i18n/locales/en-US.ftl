@@ -171,6 +171,10 @@ cli-agent-no-such-definition-unread =
         [one] there is no definition called { $name }; this run resolved { $names }. 1 definition in .bravebot/agents was not read: -p asks no trust question, so it reads only ~/.bravebot/agents
        *[other] there is no definition called { $name }; this run resolved { $names }. { $count } definitions in .bravebot/agents were not read: -p asks no trust question, so it reads only ~/.bravebot/agents
     }
+# Said where the agent setting names a definition this run or session in lines did not resolve. It
+# goes on without one, so the reason follows (ADDRESS-13).
+cli-agent-setting-gone =
+    the agent setting names { $definition }, which was not resolved: going on without a definition
 # Said when a session in lines started with --agent opens (CLI-17). It has no slash commands, so it
 # names no way to address another definition. The model is the one the definition names.
 cli-plain-working-under = every prompt is addressed to { $definition }
@@ -441,6 +445,8 @@ doctor-settings-advisor-ignored =
     advisorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-fallback-ignored =
     fallbackModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-agent-ignored =
+    agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 # A key that only ever refuses, spelled as something other than a boolean. It is read as absence, so
 # the session is as permissive as one that named nothing, and nothing else would say so.
 doctor-settings-narrowing-ignored =
@@ -1670,6 +1676,7 @@ status-model-default = the configured default
 status-model-definitions = the one { $definition } asks for
 status-agent = Agent
 status-agent-every-turn = every turn is addressed to it, named with --agent
+status-agent-by-setting = every turn is addressed to it, chosen by the agent setting
 status-effort = Effort
 status-effort-chosen = chosen with /effort
 status-effort-default = whatever the service does on its own
@@ -2673,6 +2680,14 @@ agent-answered = { $name } answered
 # Said when a session started with --agent opens, after the directory's trust is settled (CLI-17).
 session-working-under =
     every turn is addressed to { $definition }; /agent <name> <task> addresses another for one turn
+# Said after the line above where the agent setting, not --agent, chose the definition (ADDRESS-13).
+session-working-under-by-setting =
+    the agent setting chose this definition; --agent <name> chooses another for the session
+# Said when the agent setting names a definition this session did not resolve. The reason follows in
+# the next line, and the session goes on without one.
+session-agent-setting-gone =
+    the agent setting names { $definition }, which this session did not resolve: every turn is the
+    session's own, with the tools and model it would have without --agent
 # Said when a resumed session was started under a definition that cannot be used now. The reason
 # follows in the next line. The name is the one the driver recorded from the person's --agent.
 session-recorded-definition-gone =

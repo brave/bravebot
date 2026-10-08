@@ -171,6 +171,8 @@ cli-agent-no-such-definition-unread =
        *[other] aucune définition ne s'appelle { $name } ; cette exécution a résolu { $names }. { $count } définitions dans .bravebot/agents n'ont pas été lues : -p ne pose aucune question de confiance, donc il ne lit que ~/.bravebot/agents
     }
 cli-plain-working-under = chaque demande est adressée à { $definition }
+cli-agent-setting-gone =
+    le réglage agent désigne { $definition }, qui n'a pas été résolue : poursuite sans définition
 cli-plain-working-under-model = chaque demande est adressée à { $definition }, qui demande { $model }
 cli-bypass-unreachable =
     --dangerously-skip-permissions est refusé : permissions.bypassUnreachable dans { $path } rend
@@ -376,6 +378,9 @@ doctor-settings-advisor-ignored =
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-fallback-ignored =
     fallbackModel dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-agent-ignored =
+    agent dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-narrowing-ignored =
     { $key } dans { $path } n'est pas un booléen, il est donc lu comme absent et ne refuse rien
@@ -1482,6 +1487,7 @@ status-model-default = la valeur par défaut configurée
 status-model-definitions = celui que { $definition } demande
 status-agent = Agent
 status-agent-every-turn = chaque tour lui est adressé, désigné avec --agent
+status-agent-by-setting = chaque tour lui est adressé, choisi par le réglage agent
 status-effort = Effort
 status-effort-chosen = choisi avec /effort
 status-effort-default = ce que le service fait de lui-même
@@ -2279,6 +2285,11 @@ session-working-under =
     chaque tour est adressé à { $definition } ; /agent <nom> <tâche> en désigne une autre pour un tour
 # Dit quand une session reprise avait été démarrée sous une définition qui ne peut plus servir. La
 # raison suit à la ligne suivante. Le nom est celui que le pilote a enregistré depuis --agent.
+session-working-under-by-setting =
+    le réglage agent a choisi cette définition ; --agent <nom> en choisit une autre pour la session
+session-agent-setting-gone =
+    le réglage agent désigne { $definition }, que cette session n'a pas résolue : chaque tour est
+    celui de la session elle-même, avec les outils et le modèle qu'elle aurait sans --agent
 session-recorded-definition-gone =
     cette session avait été démarrée sous { $definition }, et la restriction est levée : chaque tour
     à partir d'ici est celui de la session elle-même, avec les outils et le modèle qu'elle aurait
