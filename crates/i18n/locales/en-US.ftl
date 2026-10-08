@@ -3048,6 +3048,8 @@ reply-needs-input = { $name } is waiting on a question. Answer it with: bravebot
 reply-not-sent = { $name } did not take the prompt.
 reply-stopping = { $name } is stopping after an hour idle. Reply again to start it.
 bg-restart-needs-a-terminal = { $name } is stopped, and only a terminal can start it again.
+bg-interrupted-needs-a-terminal = { $name } was interrupted, and only a terminal can start it again.
+bg-interrupted-not-repeated = { $name } was interrupted in the middle of a turn. Starting it again does not repeat that turn.
 resume-held-by-background = { $name } is held by a running background session. Join it with: bravebot attach { $id }
 
 # `bravebot doctor --sandbox-check`: git, gh, make, cargo and the other everyday programs, run the way a

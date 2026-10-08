@@ -21,12 +21,12 @@ The roster, `bravebot sessions`, `bravebot sessions stop`, `bravebot --bg`, `bra
 `bravebot reply` are built, and the session a background process runs is the session in lines. A
 clause that is built whole names its tests. A clause with a part still to build reads
 `verified-by: none` until all of it lands, and the parts not built are: the supervisor and restarts
-([BG-12](#BG-12)), starting an `interrupted` session again from `attach` or `reply`, `/bg`, and the
-checkout ([BG-14](#BG-14)). The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
+([BG-12](#BG-12)), `/bg`, and the checkout ([BG-14](#BG-14)). The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
 no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built. A question from an
 MCP server that has to be started is held like any other, and is drawn as a foreground session
-draws it. A `stopped` session is started again from `attach` or `reply` by a terminal, resuming the
-record the process wrote after each turn, and `--resume` and `--continue` refuse a record a running
+draws it. A `stopped` or `interrupted` session is started again from `attach` or `reply` by a terminal,
+resuming the record the process wrote after each turn (for `interrupted`, the terminal says first
+that the turn is not repeated, and the planner is told that turn ended), and `--resume` and `--continue` refuse a record a running
 session holds. The clauses
 that other specs would contradict are named under
 [What this changes in other specs](#what-this-changes-in-other-specs).
@@ -269,11 +269,11 @@ conversation.
 ### BG-10: a reply is the next prompt and answers nothing that was asked
 
 `bravebot reply <id> "text"` sends the text as the session's next prompt. The text is the person's
-own typed line and it starts a turn as a typed prompt does. A session that is `stopped` is started
-again first ([BG-8](#BG-8)).
+own typed line and it starts a turn as a typed prompt does. A session that is `stopped` or
+`interrupted` is started again first ([BG-8](#BG-8)).
 
 A reply is refused while the session is `working` or `needs input`, and says to wait, or to attach.
-It is refused for `interrupted` only after saying that the interrupted turn is not repeated
+For `interrupted` the terminal says, before it starts, that the interrupted turn is not repeated
 ([BG-12](#BG-12)). It does not read standard input: a prompt that arrived on a pipe is untrusted
 input and is not a line a person typed.
 
