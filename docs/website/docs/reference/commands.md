@@ -334,7 +334,7 @@ there and adds nothing, and says so. The record is `reach.jsonl` in `~/.bravebot
 
 When the planner asks a `run` for a credential scope by name and the question is drawn, `m` runs the
 line and remembers each scope it asked for, read only, for the programs of the line, for this
-session. `k` does the same for every session started in this checkout. It is the row `/reach` would
+session. `k` does the same until it is removed, in this checkout or, for a program the scope belongs to such as `git` for remote, in every checkout. It is the row `/reach` would
 have made, listed by `/reach` and taken away by `/reach remove`. The line is still asked about every
 time, with the scope shown on it, and neither key trusts what it prints. A toolchain list the
 planner asked for is not remembered, and a line with a `NAME=value` in front of a program, or a
