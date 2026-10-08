@@ -2796,6 +2796,16 @@ return-not-pressed =
     that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it
 leave-not-pressed =
     that arrived with other keys, so it was not a press: press it again to leave
+prompt-file-unreadable =
+    /{ $name } is a prompt file that could not be read as text, so the line was not sent: { $path }
+prompt-file-too-large =
+    /{ $name } is a prompt file over 64 KiB, so the line was not sent: { $path }
+prompt-file-empty =
+    /{ $name } is a prompt file with nothing in it, so the line was not sent: { $path }
+prompt-file-agent-not-a-name =
+    /{ $name } is a prompt file whose agent is not a single word, so the line was not sent: { $path }
+prompt-file-begins-with-a-command =
+    /{ $name } is a prompt file that begins with a command, which a file may not start, so the line was not sent: { $path }
 paste-folded = { $lines ->
     [one] [Pasted text #{ $number } +{ $lines } line]
    *[other] [Pasted text #{ $number } +{ $lines } lines]

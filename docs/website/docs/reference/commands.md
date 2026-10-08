@@ -1045,6 +1045,29 @@ and the line is still a prompt. The planner is told it is you asking for that sk
 `/commit-style` never runs anything itself, and no skill becomes a command whatever it is called. See
 [Skills](../customize/skills.md#naming-a-skill-after-a-slash).
 
+## Prompt files
+
+A prompt you use often can be a file: `~/.bravebot/prompts/review.md` is run by typing `/review the
+parser`. Enter replaces the line with the file's text and sends nothing, so you read it first and
+press Enter again to send it.
+
+```markdown
+---
+description: Review a change
+agent: reviewer
+---
+Review $1 for races, with attention to $ARGUMENTS.
+```
+
+- `$ARGUMENTS` is everything after the name, and `$1` to `$9` are its words. A word the line lacks is
+  empty.
+- `agent` makes the box `/agent reviewer <text>`, which runs when you press Enter on it. `description`
+  is not used yet.
+- Only your own `~/.bravebot/prompts` is read, never a project's. A file cannot take a command's name,
+  and a file whose text begins with a command word is refused, so no file carries out a command.
+- A file that is unreadable, over 64 KiB or empty is refused with a note, and the line stays as typed.
+- Names are not listed or completed.
+
 ## Not a command, but typed in the same place
 
 | | |

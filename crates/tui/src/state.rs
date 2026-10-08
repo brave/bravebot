@@ -1360,6 +1360,8 @@ pub struct Session {
     panel: bool,
     /// Whether `/caffeinate` is on, and the hold it keeps while work is pending.
     pub(crate) caffeinate: crate::caffeinate::KeepAwake,
+    /// The person's own prompt-file directory (CMD-17), or `None` where nothing reads one.
+    prompt_files: Option<std::path::PathBuf>,
     /// What the info panel says this session is.
     identity: Identity,
     /// Scroll offset from the bottom, in lines.
@@ -1901,6 +1903,7 @@ impl Session {
             show_trail: false,
             panel: false,
             caffeinate: Default::default(),
+            prompt_files: None,
             identity: Identity::default(),
             scroll: 0,
             scroller: None,
@@ -3639,6 +3642,50 @@ impl Session {
         };
         let rows = u16::try_from(rows).unwrap_or(WHEEL_ROWS_CEILING);
         self.wheel_rows = rows.clamp(WHEEL_ROWS_FLOOR, WHEEL_ROWS_CEILING);
+    }
+
+    /// Name the directory a line's first word is looked up in. Left unset, no line is one (CMD-17).
+    pub fn adopt_prompt_files(&mut self, directory: Option<std::path::PathBuf>) {
+        self.prompt_files = directory;
+    }
+
+    /// Replace a line that names a prompt file with the file's text, for the person to read and send.
+    ///
+    /// Returns whether the key was spent here. A line no file answers to, and a line with a row of
+    /// the list highlighted, are left for the arms that follow. A file that cannot be used is said
+    /// so and the line stays as typed. Nothing is sent from here: the expanded text is in the box
+    /// and Enter on it is an ordinary press (CMD-17).
+    pub fn expand_prompt_file(&mut self) -> bool {
+        use crate::prompt_files::{Expansion, Why, expand};
+        let Some(directory) = self.prompt_files.clone() else {
+            return false;
+        };
+        if self.completion != 0 {
+            return false;
+        }
+        let line = self.unfolded(self.input.trim());
+        match expand(&directory, &line) {
+            Expansion::NotOne => false,
+            Expansion::Expanded(text) => {
+                self.put_in_the_box(text);
+                true
+            }
+            Expansion::Refused { name, why } => {
+                let path = directory.join(format!("{name}.md")).display().to_string();
+                self.note(match why {
+                    Why::Unreadable => t!(prompt_file_unreadable, name = name, path = path),
+                    Why::TooLarge => t!(prompt_file_too_large, name = name, path = path),
+                    Why::Empty => t!(prompt_file_empty, name = name, path = path),
+                    Why::AgentNotAName => {
+                        t!(prompt_file_agent_not_a_name, name = name, path = path)
+                    }
+                    Why::BeginsWithACommand => {
+                        t!(prompt_file_begins_with_a_command, name = name, path = path)
+                    }
+                });
+                true
+            }
+        }
     }
 
     /// How many rows one wheel event moves the view by.
