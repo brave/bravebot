@@ -20,6 +20,7 @@
 use crate::diff::Diff;
 use bravebot_core::Pipeline;
 use bravebot_core::ask::{Answer, Asking};
+use bravebot_core::remembered::RememberedLine;
 use bravebot_core::vetting::Verdict;
 use bravebot_i18n::t;
 use std::fmt;
@@ -516,6 +517,18 @@ impl RunRequest {
         self.record.is_some()
     }
 
+    /// Whether the prompt may also offer to record this line with its number left free: it may
+    /// record at all, and the line is one the table in
+    /// [`bravebot_core::remembered::families`] lists.
+    pub fn offers_a_family(&self) -> bool {
+        self.may_record() && RememberedLine::family_of(&self.plan).is_some()
+    }
+
+    /// The line as the family answer would record it, drawn with its number free.
+    pub fn family_display(&self) -> Option<String> {
+        RememberedLine::family_of(&self.plan).map(|line| line.display())
+    }
+
     /// Whether the prompt says a pattern in a settings file is what answers this line.
     pub fn advises_a_pattern(&self) -> bool {
         self.pattern.is_some()
@@ -952,6 +965,15 @@ pub struct RunDecision {
     /// lifetimes, and one field could not carry both: this one stops the asking and leaves every
     /// label where it was, while `remember` also says what the command prints may be read.
     pub record: bool,
+    /// Whether the person asked for this line to stop being asked about past the session with its
+    /// number free ([RUN-20]).
+    ///
+    /// A third field rather than a variant of `record`, so a front end that sets `record` keeps
+    /// meaning exactly the line. Never set together with `record`: the acting layer takes `record`
+    /// first.
+    ///
+    /// [RUN-20]: ../../../docs/specs/tools/run.md
+    pub record_family: bool,
 }
 
 impl RunDecision {
@@ -961,6 +983,7 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: false,
             record: false,
+            record_family: false,
         }
     }
 
@@ -970,6 +993,7 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: true,
             record: false,
+            record_family: false,
         }
     }
 
@@ -983,6 +1007,18 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: false,
             record: true,
+            record_family: false,
+        }
+    }
+
+    /// Run it, and record this line with its number left free, so every session in this directory
+    /// runs the same sub-command on the same repository with any number unasked.
+    pub fn approve_and_record_family() -> Self {
+        Self {
+            decision: Decision::Approve,
+            remember: false,
+            record: false,
+            record_family: true,
         }
     }
 
@@ -992,11 +1028,30 @@ impl RunDecision {
             decision: Decision::Reject,
             remember: false,
             record: false,
+            record_family: false,
         }
     }
 
     pub fn approved(self) -> bool {
         self.decision == Decision::Approve
+    }
+
+    /// The line this answer asks to have recorded for `plan`, where it asks for one.
+    ///
+    /// The exact line for `record`, which outranks the other. The family for `record_family`, and
+    /// only where the table lists the plan: for any other plan that answer records nothing. The
+    /// caller still asks the policy whether the plan may be remembered at all.
+    pub fn line_to_record(&self, plan: &bravebot_core::command::Plan) -> Option<RememberedLine> {
+        if !self.approved() {
+            return None;
+        }
+        if self.record {
+            Some(RememberedLine::of(plan))
+        } else if self.record_family {
+            RememberedLine::family_of(plan)
+        } else {
+            None
+        }
     }
 }
 
@@ -2061,6 +2116,107 @@ impl fmt::Display for Decision {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn gh_plan(args: &[&str]) -> bravebot_core::command::Plan {
+        use bravebot_core::command::{Plan, Step, Steps};
+        Plan {
+            line: String::new(),
+            directory: std::path::PathBuf::from("/work"),
+            steps: Steps::Pipeline(vec![Step {
+                program: "gh".to_string(),
+                resolved: std::path::PathBuf::from("/usr/bin/gh"),
+                started_as: std::path::PathBuf::from("/usr/bin/gh"),
+                args: args.iter().map(|arg| (*arg).to_string()).collect(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            }]),
+            writes: Vec::new(),
+            reads: Vec::new(),
+            stdin: None,
+        }
+    }
+
+    fn a_listed_line() -> bravebot_core::command::Plan {
+        gh_plan(&["pr", "view", "1081", "--repo", "brave/bravebot"])
+    }
+
+    /// RUN-20: the family answer records the family, the exact answer records the line, and
+    /// neither records anything for a refusal.
+    #[test]
+    fn each_answer_records_the_line_it_names() {
+        let plan = a_listed_line();
+        assert_eq!(
+            RunDecision::approve_and_record().line_to_record(&plan),
+            Some(RememberedLine::of(&plan))
+        );
+        let family = RunDecision::approve_and_record_family()
+            .line_to_record(&plan)
+            .expect("a listed line has a family");
+        assert!(family.is_family());
+        assert_eq!(family, RememberedLine::family_of(&plan).unwrap());
+        assert_eq!(RunDecision::approve().line_to_record(&plan), None);
+        assert_eq!(RunDecision::approve_always().line_to_record(&plan), None);
+        let refused = RunDecision {
+            decision: Decision::Reject,
+            ..RunDecision::approve_and_record_family()
+        };
+        assert_eq!(refused.line_to_record(&plan), None);
+    }
+
+    /// RUN-20: the family answer for a line the table does not list records nothing, so a front
+    /// end that sends it for any line cannot widen the record.
+    #[test]
+    fn the_family_answer_for_an_unlisted_line_records_nothing() {
+        for plan in [
+            gh_plan(&["pr", "view", "1081", "--repo", "brave/bravebot", "--web"]),
+            gh_plan(&["pr", "merge", "1081", "--repo", "brave/bravebot"]),
+            gh_plan(&["pr", "view", "abc", "--repo", "brave/bravebot"]),
+        ] {
+            assert_eq!(
+                RunDecision::approve_and_record_family().line_to_record(&plan),
+                None
+            );
+        }
+    }
+
+    /// RUN-20: a front end that sets both keys gets the exact line, the narrower of the two.
+    #[test]
+    fn both_keys_at_once_record_the_exact_line() {
+        let plan = a_listed_line();
+        let both = RunDecision {
+            record: true,
+            record_family: true,
+            ..RunDecision::approve()
+        };
+        assert_eq!(both.line_to_record(&plan), Some(RememberedLine::of(&plan)));
+    }
+
+    /// RUN-20: the prompt offers the family key only where it offers to record at all and the
+    /// table lists the line.
+    #[test]
+    fn the_prompt_offers_the_family_key_for_a_listed_line_it_may_record() {
+        let request = |plan, record: Option<&str>| RunRequest {
+            plan,
+            record: record.map(std::path::PathBuf::from),
+            pattern: None,
+            stdin: None,
+            confined: None,
+        };
+        let offered = request(
+            a_listed_line(),
+            Some("/home/.bravebot/remembered/work.jsonl"),
+        );
+        assert!(offered.offers_a_family());
+        assert_eq!(
+            offered.family_display().as_deref(),
+            Some("/usr/bin/gh pr view <number> --repo brave/bravebot")
+        );
+        assert!(!request(a_listed_line(), None).offers_a_family());
+        let unlisted = gh_plan(&["pr", "merge", "1", "--repo", "brave/bravebot"]);
+        assert!(
+            !request(unlisted, Some("/home/.bravebot/remembered/work.jsonl")).offers_a_family()
+        );
+    }
 
     fn a_series() -> Asking {
         bravebot_core::ask::asking(&bravebot_core::ask::Series::new(vec![

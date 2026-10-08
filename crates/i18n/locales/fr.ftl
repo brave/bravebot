@@ -1339,6 +1339,10 @@ run-remember-only-asking =
     cela arrête seulement la question : ce qu'elle affiche reste en quarantaine
 run-remember-every-session =
     toute session ouverte dans ce répertoire la lit, pas seulement celle-ci
+run-remember-family-explained =
+    f : ne plus rien demander pour cette ligne avec n'importe quel nombre à la place de celui-ci, dans ce répertoire, à partir de maintenant
+run-remember-family-only-number =
+    seul un nombre entier peut changer : un autre dépôt, un autre drapeau ou une autre sous-commande est toujours soumis
 run-pattern-varies =
     ces arguments diffèrent de ceux qui vous ont déjà été soumis : aucune touche ici n'arrête la question
 run-pattern-where =
@@ -1350,6 +1354,7 @@ run-pattern-only-asking =
 run-yes = l'exécuter
 run-always = toujours pour cette session
 run-remember = s'en souvenir
+run-remember-family = n'importe quel nombre
 run-no = ne pas l'exécuter
 run-unseen =
     { $count ->
