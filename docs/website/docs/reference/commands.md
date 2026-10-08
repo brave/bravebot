@@ -28,6 +28,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/branch` | `[<name>]` | Copy this session and carry on in the copy, keeping the original to return to |
 | `/resume` | `[<id>]` | Pick up another session of this directory, by id or from a list |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
+| `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
@@ -265,6 +266,32 @@ It removes every answer kept about the path, including one given about a directo
 and made again there. In an incognito session it changes nothing, since nothing is written there
 either, and it names the file so you can remove it yourself. See
 [Remembering the answer](../security/trust.md#remembering-the-answer).
+
+## `/reach`
+
+Gives one command a place or a credential it needs, and remembers that, so the next plan for the
+command carries it and the same refusal is not met in every session.
+
+```
+/reach docker -- docker build .             # docker's credential directory, for this session
+/reach ~/cache write always -- make check   # make may read and write ~/cache, in every session
+/reach                                      # list what is remembered, numbered
+/reach remove 2                             # take the second one away
+```
+
+The first word is a credential scope (`remote`, `aws`, `kubernetes` or `docker`) or a directory.
+A directory is read, and written only with `write`. It lasts this session, and a resumed one,
+unless you add `always`. Each program of the line gets it, on its own: a grant for `git push` is not
+one for `git pull`, and a grant for one `make` is not one for another. A program started with a
+`NAME=value` in front of it gets none.
+
+The reach is shown with the command in the plan you are asked to approve, with the day you
+allowed it. A directory must exist and is refused if it is your home or above it, `~/.ssh` or
+inside it, and it is checked again each time it is used. A credential scope is never writable. What
+a program printed when it was refused is never read for a path.
+
+Typed while a turn runs, it waits for the turn to end. In an incognito session it reads what is
+there and adds nothing, and says so. The record is `reach.jsonl` in `~/.bravebot`.
 
 ## `/loop [interval] <prompt>`
 

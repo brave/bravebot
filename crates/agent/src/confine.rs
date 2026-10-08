@@ -11,8 +11,9 @@
 //! Nothing a program printed, and no value the model supplied, reaches a row. The inputs are the
 //! compiled [`Step`], which a person read, and the session's own directories.
 
-use crate::confirm::{Carried, Confined};
+use crate::confirm::{Carried, Confined, Remembered};
 use crate::exec::ExecError;
+use crate::reach::{Grant, Reached};
 use bravebot_core::command::Step;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
@@ -39,6 +40,8 @@ pub struct Confinement {
     /// in that mode builds none ([`Confinement::here`] is not asked), so the rows below are the
     /// two modes that confine.
     mode: SandboxMode,
+    /// The reach a person remembered for commands, which attaches to the steps its shape names.
+    grants: Vec<Grant>,
     /// The program a test has the platform fail to confine, which no machine's real mechanism does
     /// on demand.
     #[cfg(test)]
@@ -79,6 +82,7 @@ impl Confinement {
             scratch: scratch.map(canonical),
             network: Network::Open,
             mode: SandboxMode::Standard,
+            grants: Vec::new(),
             #[cfg(test)]
             unconfinable: None,
         }
@@ -114,7 +118,11 @@ impl Confinement {
         if Toolchain::of(&step.resolved).is_some_and(|toolchain| toolchain.fetches(&step.resolved))
         {
             Some("a toolchain that fetches")
-        } else if Scope::of(&step.resolved, &step.args, &step.environment).is_some() {
+        } else if Scope::of(&step.resolved, &step.args, &step.environment).is_some()
+            || self
+                .granted(step)
+                .any(|grant| matches!(grant.reached, Reached::Scope(_)))
+        {
             Some("a credential scope")
         } else if program_talks_to_a_remote(&step.resolved) {
             Some("a program that talks to a remote")
@@ -163,6 +171,25 @@ impl Confinement {
     pub fn with_mode(mut self, mode: SandboxMode) -> Self {
         self.mode = mode;
         self
+    }
+
+    /// This confinement with the reach a person remembered for commands.
+    ///
+    /// Grants are inputs from a person's recorded answer and nothing else. They add rows to the
+    /// steps they cover, and the plan says so before the step runs.
+    pub fn with_grants(mut self, grants: Vec<Grant>) -> Self {
+        self.grants = grants;
+        self
+    }
+
+    /// The grants that attach to `step`, where this confinement can judge a reach at all.
+    ///
+    /// None without a home directory, since a directory is judged against it, and none for a step
+    /// with an assignment in front of it ([`Grant::covers`]).
+    fn granted<'a>(&'a self, step: &'a Step) -> impl Iterator<Item = &'a Grant> {
+        self.grants
+            .iter()
+            .filter(move |grant| self.home.is_some() && grant.covers(step))
     }
 
     /// This confinement, failing for the step that starts `program` as the platform would for one
@@ -230,13 +257,32 @@ impl Confinement {
                         _ => Vec::new(),
                     };
                     let network = self.network.is_closed() && self.egress(step);
-                    (toolchain.is_some() || scope.is_some() || network).then(|| Carried {
-                        program: step.program.clone(),
-                        toolchain,
-                        scope,
-                        reaches,
-                        network,
-                    })
+                    let remembered: Vec<Remembered> = self
+                        .granted(step)
+                        .filter(|grant| match (&grant.reached, self.home.as_deref()) {
+                            (Reached::Directory(_), Some(home)) => grant.directory(home).is_some(),
+                            _ => true,
+                        })
+                        .map(|grant| Remembered {
+                            reached: match (&grant.reached, self.home.as_deref()) {
+                                (Reached::Directory(_), Some(home)) => grant
+                                    .directory(home)
+                                    .map_or(grant.reached.clone(), Reached::Directory),
+                                _ => grant.reached.clone(),
+                            },
+                            write: grant.write,
+                            allowed: grant.allowed.clone(),
+                        })
+                        .collect();
+                    (toolchain.is_some() || scope.is_some() || network || !remembered.is_empty())
+                        .then(|| Carried {
+                            program: step.program.clone(),
+                            toolchain,
+                            scope,
+                            reaches,
+                            network,
+                            remembered,
+                        })
                 })
                 .collect(),
         }
@@ -291,6 +337,16 @@ impl Confinement {
                     policy = policy.allow_write(socket);
                 }
             }
+            for grant in self.granted(step) {
+                policy = match &grant.reached {
+                    Reached::Scope(scope) => scope.grant(policy, home),
+                    Reached::Directory(_) => match grant.directory(home) {
+                        Some(path) if grant.write => policy.allow_read(&path).allow_write(path),
+                        Some(path) => policy.allow_read(path),
+                        None => policy,
+                    },
+                };
+            }
         }
 
         if !self.reads_the_machine() {
@@ -341,6 +397,11 @@ impl Confinement {
             scopes.extend(scope.map(Scope::name));
             if self.network.is_closed() {
                 reaching.extend(self.egress_reason(step));
+            }
+            for grant in self.granted(step) {
+                if let Reached::Scope(remembered) = grant.reached {
+                    scopes.insert(remembered.name());
+                }
             }
         }
         let named = |names: std::collections::BTreeSet<&str>| match names.is_empty() {
@@ -1338,6 +1399,224 @@ mod tests {
 
         assert!(!reads(&policy, &format!("{HOME}/.ssh/known_hosts")));
         assert!(!writes(&policy, "/run/agent.sock"));
+    }
+
+    fn remembered(binary: &str, operation: Option<&str>, reached: Reached, write: bool) -> Grant {
+        Grant {
+            binary: PathBuf::from(binary),
+            operation: operation.map(str::to_string),
+            reached,
+            write,
+            allowed: "2026-10-07".to_string(),
+            lifetime: crate::reach::Lifetime::Always,
+        }
+    }
+
+    fn a_scope(word: &str) -> Reached {
+        Reached::Scope(Scope::named(word).expect("a scope"))
+    }
+
+    /// A scope a person remembered for `make` is a row of `make`'s stage, and of no other program's.
+    /// The regressions it rejects: a grant that attaches to every stage of the plan, and one that
+    /// is ignored because the program is not one the scope table names.
+    #[test]
+    fn a_remembered_scope_reaches_the_command_it_was_made_for_and_no_other() {
+        let known_hosts = format!("{HOME}/.ssh/known_hosts");
+        let confined = confinement(&["/work/project"]).with_grants(vec![remembered(
+            "/usr/bin/make",
+            None,
+            a_scope("remote"),
+            false,
+        )]);
+
+        let make = confined.policy(&step("/usr/bin/make", &[]), Path::new("/work"), &[]);
+        let ls = confined.policy(&step("/bin/ls", &[]), Path::new("/work"), &[]);
+        let other_make = confined.policy(&step("/opt/make", &[]), Path::new("/work"), &[]);
+        let target = confined.policy(&step("/usr/bin/make", &["check"]), Path::new("/work"), &[]);
+
+        assert!(reads(&make, &known_hosts));
+        assert!(!reads(&make, &format!("{HOME}/.ssh/id_ed25519")));
+        for policy in [&ls, &other_make, &target] {
+            assert!(!reads(policy, &known_hosts));
+        }
+    }
+
+    /// A remembered scope is a credential scope for the closed network too, and a remembered
+    /// directory is not. The regressions it rejects: a remote credential lent to a stage with no
+    /// way to use it, and a directory read earning the network.
+    #[test]
+    fn a_remembered_scope_keeps_a_closed_network_and_a_remembered_directory_does_not() {
+        let named = crate::testutil::scratch_dir("confine-remembered-network");
+        let _ = std::fs::remove_dir_all(&named);
+        std::fs::create_dir_all(&named).expect("directory");
+        let named = std::fs::canonicalize(named).expect("canonical");
+        let closed = confinement(&["/work/project"])
+            .with_network(Network::Closed)
+            .with_grants(vec![
+                remembered("/usr/bin/make", None, a_scope("remote"), false),
+                remembered("/bin/cat", None, Reached::Directory(named), false),
+            ]);
+        let mut assigned = step("/usr/bin/make", &[]);
+        assigned.environment = vec![("A".to_string(), "b".to_string())];
+
+        assert!(closed.egress(&step("/usr/bin/make", &[])));
+        assert!(!closed.egress(&step("/bin/cat", &[])));
+        assert!(!closed.egress(&step("/bin/ls", &[])));
+        assert!(!closed.egress(&assigned));
+        assert_eq!(
+            closed.network_for_the_trail(&[&step("/usr/bin/make", &[])]),
+            Some(
+                "the network was closed for this run except for stage 1 (a credential scope)"
+                    .to_string()
+            )
+        );
+    }
+
+    /// A directory is read, and written only where the grant says. The regression it rejects:
+    /// every remembered directory written.
+    #[test]
+    fn a_remembered_directory_is_read_and_written_only_where_the_grant_says() {
+        let named = crate::testutil::scratch_dir("confine-remembered-directory");
+        let _ = std::fs::remove_dir_all(&named);
+        std::fs::create_dir_all(&named).expect("directory");
+        let named = std::fs::canonicalize(named).expect("canonical");
+        let path = named.to_str().expect("utf-8");
+        let confined = confinement(&["/work/project"]).with_grants(vec![
+            remembered(
+                "/usr/bin/make",
+                None,
+                Reached::Directory(named.clone()),
+                false,
+            ),
+            remembered(
+                "/usr/bin/cargo",
+                None,
+                Reached::Directory(named.clone()),
+                true,
+            ),
+        ]);
+
+        let make = confined.policy(&step("/usr/bin/make", &[]), Path::new("/work"), &[]);
+        let cargo = confined.policy(&step("/usr/bin/cargo", &[]), Path::new("/work"), &[]);
+        let ls = confined.policy(&step("/bin/ls", &[]), Path::new("/work"), &[]);
+
+        assert!(reads(&make, path) && !writes(&make, path));
+        assert!(reads(&cargo, path) && writes(&cargo, path));
+        assert!(!reads(&ls, path) && !writes(&ls, path));
+
+        let (make_step, cargo_step, ls_step) = (
+            step("/usr/bin/make", &[]),
+            step("/usr/bin/cargo", &[]),
+            step("/bin/ls", &[]),
+        );
+        let said = confined.describe(&[&make_step]).sentences();
+        // cargo's own toolchain sentence comes first; the remembered one is the last.
+        let wrote = confined.describe(&[&cargo_step]).sentences();
+        assert_eq!(said.len(), 1, "{said:?}");
+        let (read, write) = (&said[0], wrote.last().expect("a sentence"));
+        for sentence in [read, write] {
+            assert!(sentence.contains(path), "{sentence}");
+            assert!(sentence.contains("2026-10-07"), "{sentence}");
+        }
+        assert!(read.contains("make also reads "), "{said:?}");
+        assert!(!read.contains("writes"), "{said:?}");
+        assert!(write.contains("cargo also reads and writes "), "{wrote:?}");
+        assert!(confined.describe(&[&ls_step]).sentences().is_empty());
+    }
+
+    /// A step with an assignment, a session with no home and a directory that has since become a
+    /// link to `~/.ssh` each get nothing from a grant. The regressions they reject: a grant
+    /// outliving the assignment's removal of scopes, rows judged against no home, and a directory
+    /// checked when it was allowed and never again.
+    #[test]
+    fn a_remembered_reach_is_withheld_where_the_step_or_the_machine_has_changed() {
+        let known_hosts = format!("{HOME}/.ssh/known_hosts");
+        let grants = vec![remembered("/usr/bin/make", None, a_scope("remote"), false)];
+        let mut assigned = step("/usr/bin/make", &[]);
+        assigned.environment = vec![("GIT_SSH_COMMAND".to_string(), "ssh".to_string())];
+
+        let with_assignment = confinement(&["/work/project"])
+            .with_grants(grants.clone())
+            .policy(&assigned, Path::new("/work"), &[]);
+        let homeless = Confinement::new(
+            Prelude::Windows,
+            PathBuf::from("/tmp"),
+            None,
+            vec![PathBuf::from("/work/project")],
+            Some(Path::new("/var/scratch")),
+        )
+        .with_grants(grants);
+        let make = step("/usr/bin/make", &[]);
+        let described = homeless.describe(&[&make]).sentences();
+        let profile = homeless.profile(&[&make]);
+        let homeless = homeless.policy(&make, Path::new("/work"), &[]);
+        assert!(described.is_empty(), "{described:?}");
+        assert!(profile.contains("credential scopes: none"), "{profile}");
+
+        assert!(!reads(&with_assignment, &known_hosts));
+        assert!(!reads(&homeless, &known_hosts));
+
+        #[cfg(unix)]
+        {
+            let profile = crate::testutil::scratch_dir("confine-remembered-link");
+            let _ = std::fs::remove_dir_all(&profile);
+            std::fs::create_dir_all(profile.join(".ssh")).expect(".ssh");
+            let profile = std::fs::canonicalize(profile).expect("canonical");
+            let named = profile.join("shared");
+            std::os::unix::fs::symlink(profile.join(".ssh"), &named).expect("link");
+            let confined = Confinement::new(
+                Prelude::Windows,
+                PathBuf::from("/tmp"),
+                Some(&profile),
+                vec![PathBuf::from("/work/project")],
+                Some(Path::new("/var/scratch")),
+            )
+            .with_grants(vec![remembered(
+                "/usr/bin/make",
+                None,
+                Reached::Directory(named.clone()),
+                true,
+            )]);
+
+            let policy = confined.policy(&step("/usr/bin/make", &[]), Path::new("/work"), &[]);
+
+            let keys = profile.join(".ssh");
+            let keys = keys.to_str().expect("utf-8");
+            assert!(!reads(&policy, keys) && !writes(&policy, keys));
+            assert!(!reads(&policy, named.to_str().expect("utf-8")));
+            let described = confined.describe(&[&step("/usr/bin/make", &[])]);
+            assert!(
+                described.sentences().is_empty(),
+                "{:?}",
+                described.sentences()
+            );
+        }
+    }
+
+    /// The plan says what was remembered, with the day, and the failure line names the scope. The
+    /// regressions it rejects: a policy that carries a row the plan never showed, and a profile
+    /// line that says `none` for a scope the policy added.
+    #[test]
+    fn the_plan_and_the_failure_line_name_a_remembered_scope() {
+        let confined = confinement(&["/work/project"]).with_grants(vec![remembered(
+            "/usr/bin/make",
+            None,
+            a_scope("remote"),
+            false,
+        )]);
+        let make = step("/usr/bin/make", &[]);
+
+        let described = confined.describe(&[&make]);
+        let sentences = described.sentences();
+        let profile = confined.profile(&[&make]);
+
+        assert_eq!(sentences.len(), 1, "{sentences:?}");
+        assert!(sentences[0].contains("2026-10-07"), "{sentences:?}");
+        assert!(sentences[0].contains("make"), "{sentences:?}");
+        assert!(profile.contains("credential scopes: remote"), "{profile}");
+        let ls = step("/bin/ls", &[]);
+        assert!(confined.describe(&[&ls]).sentences().is_empty());
+        assert!(confined.profile(&[&ls]).contains("credential scopes: none"));
     }
 
     /// `gh` opens the directory its environment names, so a stage that carries the remote scope

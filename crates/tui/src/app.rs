@@ -111,6 +111,9 @@ const CD_COMMAND: &str = "/cd";
 /// directory, so the next session begun there is asked (TRUST-24).
 const FORGET_TRUST_COMMAND: &str = "/forget-trust";
 
+/// The line that lists, adds and removes the reach remembered for commands (SANDBOX-23).
+const REACH_COMMAND: &str = "/reach";
+
 /// The line that reports what this session is and what it may touch.
 const STATUS_COMMAND: &str = "/status";
 
@@ -274,7 +277,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 37] {
+pub fn commands() -> [Command; 38] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -377,6 +380,12 @@ pub fn commands() -> [Command; 37] {
             argument: "",
             description: t!(command_forget_trust),
             mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: REACH_COMMAND,
+            argument: "[<where> -- <command>]",
+            description: t!(command_reach),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: LOOP_COMMAND,
@@ -698,6 +707,9 @@ pub enum Action {
     Link(bravebot_session::sessions::Link, String),
     /// Report what this session is. Needs the workspace and the trust map, which the loop owns.
     Status,
+    /// List, add or remove the reach remembered for commands. Carries the argument unparsed, since
+    /// what it says back goes in the transcript, and needs the session's id and working directory.
+    Reach(String),
     /// Withdraw the remembered answer about the working directory. Needs the workspace, which the
     /// loop owns, and leaves this session's map as it is.
     ForgetTrust,
@@ -1878,6 +1890,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if line.trim() == FORGET_TRUST_COMMAND {
         return Action::ForgetTrust;
+    }
+    if let Some(argument) = argument_to(line, REACH_COMMAND) {
+        return Action::Reach(argument.to_string());
     }
     if line.trim() == COST_COMMAND {
         session.report_spend();
@@ -4270,6 +4285,24 @@ fn event_loop(
                     bravebot_agent::home::directory().as_deref(),
                     workspace.root(),
                 ));
+                needs_draw = true;
+            }
+            Action::Reach(argument) => {
+                let home = bravebot_agent::home::directory();
+                let profile = bravebot_agent::home::profile();
+                session.note(match home.as_deref() {
+                    Some(home) => bravebot_agent::reach::command(
+                        &bravebot_agent::reach::Typed {
+                            home,
+                            profile: profile.as_deref(),
+                            session: stored.id(),
+                            directory: workspace.root(),
+                            today: &bravebot_agent::reach::today(),
+                        },
+                        &argument,
+                    ),
+                    None => t!(reach_refused_no_home).to_string(),
+                });
                 needs_draw = true;
             }
             Action::ListCheckouts => {
@@ -20655,6 +20688,54 @@ mod tests {
                 "{line} did not wait to be carried out"
             );
         }
+    }
+
+    /// `/reach` carries its argument whole to the loop, bare for the list, and a longer word is
+    /// not the command. The regressions it rejects: the argument cut at the first word, which drops
+    /// the command line the reach is for, and `/reachable` read as `/reach`.
+    #[test]
+    fn the_reach_command_carries_its_argument_unparsed() {
+        let mut session = Session::new("none");
+        for (line, argument) in [
+            ("/reach", ""),
+            ("/reach docker -- ls -la", "docker -- ls -la"),
+            (
+                "/reach ~/work write always -- make",
+                "~/work write always -- make",
+            ),
+            ("/reach remove 2", "remove 2"),
+        ] {
+            type_line(&mut session, line);
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Reach(argument.to_string()),
+                "{line}"
+            );
+        }
+        type_line(&mut session, "/reachable");
+        assert!(!matches!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Reach(_)
+        ));
+    }
+
+    /// `/reach` changes what the next plan carries, so typed mid-turn it waits behind what was typed
+    /// first and lands where it was typed, like the other commands that change something kept.
+    #[test]
+    fn the_reach_command_waits_for_the_turn_in_flight() {
+        let mut session = a_turn_running_on("first");
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(
+                &mut session,
+                "/reach docker -- ls",
+                key(KeyCode::Enter),
+                beside,
+            )
+        });
+
+        assert!(said_under_the_turn(&session).is_empty());
+        assert_eq!(waiting_prompts(&session), vec!["/reach docker -- ls"]);
     }
 
     /// A command that changes something waits behind whatever was typed before it, so it lands
