@@ -619,6 +619,50 @@ fn doctor_names_each_filesystem_rule_with_where_it_came_from() {
     );
 }
 
+/// `doctor` says a checkout's `sandbox.network.allowedHosts` is not obeyed and that a misshapen
+/// `deniedHosts` is read as absent, each naming the file, rather than leaving both unreported.
+///
+/// The settings tests check the accessors. `doctor` is the only place that turns them into lines
+/// for a person, so a missing call would leave those tests passing while a checkout's host
+/// allowance went without a word.
+#[test]
+fn doctor_names_a_checkouts_host_allowance_and_a_misshapen_host_list() {
+    let scratch = Scratch::new("cli-running-doctor-network-hosts");
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"sandbox": {"network": {"allowedHosts": ["example.com"], "deniedHosts": "evil.test"}}}"#,
+    )
+    .expect("the checkout's settings");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("the report did not name {needle}: {stdout}{stderr}"))
+            .to_string()
+    };
+    let allowed = line("sandbox.network.allowedHosts");
+    assert!(
+        allowed.contains("not obeyed") && allowed.contains("settings.json"),
+        "a checkout's host allowance went unreported: {stdout}"
+    );
+    let denied = line("sandbox.network.deniedHosts");
+    assert!(
+        denied.contains("not a list of strings") && denied.contains("settings.json"),
+        "a misshapen host list went unreported: {stdout}"
+    );
+}
+
 /// A machine with nowhere to keep credentials has none imported, rather than a batch that could
 /// not be read.
 ///

@@ -17,6 +17,7 @@ governs:
   - crates/sandbox/src/scope.rs
   - crates/sandbox/src/mode.rs
   - crates/config/src/sandbox.rs
+  - crates/config/src/sandbox_network.rs
   - crates/agent/src/confine.rs
   - crates/agent/src/reach.rs
 documented-by: docs/website/docs/security/security.md
@@ -1218,11 +1219,20 @@ Letting a person name the hosts a program may reach keeps the build and removes 
 path to the rest. Deciding from the request line alone keeps the proxy from being a second reader
 of content, and a fixed refusal keeps a name the program chose out of a sentence the planner reads.
 
-Half built. The list, its defaults and the proxy are written and tested, and nothing starts a
-proxy for a session. Unbuilt: the `sandbox.network.allowedHosts`, `deniedHosts` and `onUnlisted`
-settings and the layers each may be read from, policy rows that allow only the proxy's port, the
-environment injection in `confine.rs`, the prompt for an unlisted host, the trace record and the
-`/status` line, and refusing the stage with the SANDBOX-19 sentence naming the setting.
+The list is named by `sandbox.network.allowedHosts`, `deniedHosts` and `onUnlisted` (`ask` or
+`refuse`). `deniedHosts` and `onUnlisted: refuse` only take reach away, so any layer may write them.
+`allowedHosts` and `onUnlisted: ask` give it back, so they are read from the person's own settings,
+the file `--settings` names outside the workspace and nothing a clone brings, as the allowances of
+`sandbox.filesystem` are; a project or local layer's is named by `doctor` and not read. A key that
+is not there is no list. A list that is set, even an empty one, is one, and a layer whose list was
+not read does not make one. A value that is not a list of strings, or an `onUnlisted` that is
+neither word, is reported and read as absent.
+
+Half built. The list, its defaults, the proxy and the settings that carry the list through the
+layers are written and tested, and nothing starts a proxy for a session. Unbuilt: the managed layer
+pinning the keys, policy rows that allow only the proxy's port, the environment injection in
+`confine.rs`, the prompt for an unlisted host, the trace record and the `/status` line, and refusing
+the stage with the SANDBOX-19 sentence naming the setting.
 
 `verified-by: bravebot_sandbox::hosts::an_exact_entry_covers_that_name_and_no_other`
 `verified-by: bravebot_sandbox::hosts::a_wildcard_covers_names_below_the_domain_and_not_the_domain`
@@ -1240,6 +1250,12 @@ environment injection in `confine.rs`, the prompt for an unlisted host, the trac
 `verified-by: bravebot_sandbox::proxy::every_decision_is_recorded_with_the_host_and_the_rule_that_decided_it`
 `verified-by: bravebot_sandbox::proxy::the_environment_points_every_proxy_variable_at_the_loopback_port`
 `verified-by: bravebot_sandbox::proxy::dropping_the_proxy_stops_it_listening`
+`verified-by: bravebot_config::settings::no_allowed_hosts_is_no_list_and_an_empty_one_is_a_list`
+`verified-by: bravebot_config::settings::the_home_layer_may_write_every_host_key`
+`verified-by: bravebot_config::settings::a_checkout_may_deny_a_host_and_never_allow_one`
+`verified-by: bravebot_config::settings::a_checkouts_list_alone_does_not_start_filtering`
+`verified-by: bravebot_config::settings::a_named_file_may_list_hosts_only_outside_the_workspace`
+`verified-by: bravebot_config::settings::a_misshapen_host_key_is_reported_and_not_read`
 
 <a id="SANDBOX-25"></a>
 ### SANDBOX-25: a person may add to and take from what a stage reads and writes, with four lists of paths

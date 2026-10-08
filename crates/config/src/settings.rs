@@ -398,6 +398,15 @@ pub struct Settings {
     sandbox_filesystem_ignored: Vec<(PathBuf, &'static str)>,
     /// The layers that gave one of the four keys something that is not a list of strings.
     sandbox_filesystem_misshapen: Vec<(PathBuf, &'static str)>,
+    /// What `sandbox.network.allowedHosts`, `deniedHosts` and `onUnlisted` came to across the layers.
+    ///
+    /// Settled by [`Settings::layered`]: a denial may come from any layer, and a list or an `ask`
+    /// only from a layer that may give reach back, as `sandbox.filesystem`'s allowances do.
+    sandbox_hosts: crate::sandbox_network::Hosts,
+    /// The layers that wrote `allowedHosts` or `onUnlisted: ask` and were not obeyed, with the key.
+    sandbox_hosts_ignored: Vec<(PathBuf, &'static str)>,
+    /// The layers that gave one of the three keys a value it cannot read.
+    sandbox_hosts_misshapen: Vec<(PathBuf, &'static str)>,
     /// What `tui.wheelRows` said, if it said a whole positive count.
     ///
     /// `None` is the built-in count, which belongs to the interface that moves the view for the
@@ -657,6 +666,9 @@ impl Settings {
         let mut sandbox_filesystem = bravebot_sandbox::rules::Lists::default();
         let mut sandbox_filesystem_ignored: Vec<(PathBuf, &'static str)> = Vec::new();
         let mut sandbox_filesystem_misshapen: Vec<(PathBuf, &'static str)> = Vec::new();
+        let mut sandbox_hosts = crate::sandbox_network::Hosts::default();
+        let mut sandbox_hosts_ignored: Vec<(PathBuf, &'static str)> = Vec::new();
+        let mut sandbox_hosts_misshapen: Vec<(PathBuf, &'static str)> = Vec::new();
         let mut model_above_home = false;
         let mut effort_above_home = false;
         for path in paths.into_iter().flatten() {
@@ -767,6 +779,13 @@ impl Settings {
                     }
                 }
             }
+            sandbox_hosts.absorb(
+                &root,
+                Some(&path),
+                granting,
+                &mut sandbox_hosts_ignored,
+                &mut sandbox_hosts_misshapen,
+            );
             let directory = settings_directory(&path);
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
@@ -828,6 +847,9 @@ impl Settings {
         settings.sandbox_filesystem = sandbox_filesystem;
         settings.sandbox_filesystem_ignored = sandbox_filesystem_ignored;
         settings.sandbox_filesystem_misshapen = sandbox_filesystem_misshapen;
+        settings.sandbox_hosts = sandbox_hosts;
+        settings.sandbox_hosts_ignored = sandbox_hosts_ignored;
+        settings.sandbox_hosts_misshapen = sandbox_hosts_misshapen;
         // Overwritten for the same reason, and the merged block is what it replaces: `deny` and
         // `ask` keep every layer's entries because both only ever narrow, and this one is put back
         // to the entries a layer entitled to grant wrote.
@@ -960,6 +982,14 @@ impl Settings {
             sandbox_filesystem: filesystem_lists(root, None),
             sandbox_filesystem_ignored: Vec::new(),
             sandbox_filesystem_misshapen: Vec::new(),
+            // As the lists above: one root has no file to name, and [`Settings::layered`] settles it.
+            sandbox_hosts: {
+                let mut hosts = crate::sandbox_network::Hosts::default();
+                hosts.absorb(root, None, true, &mut Vec::new(), &mut Vec::new());
+                hosts
+            },
+            sandbox_hosts_ignored: Vec::new(),
+            sandbox_hosts_misshapen: Vec::new(),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -1303,6 +1333,29 @@ impl Settings {
             .map(|(path, key)| (path.as_path(), *key))
     }
 
+    /// The hosts `sandbox.network` names across the layers (SANDBOX-24). Not setting `allowedHosts`
+    /// leaves [`Hosts::allowed`](crate::sandbox_network::Hosts::allowed) as `None`, which is no
+    /// list and no proxy. A project or local layer's list or `ask` is not here
+    /// ([`Settings::sandbox_hosts_ignored`]), so a cloned repository cannot name its own
+    /// destination.
+    pub fn sandbox_hosts(&self) -> &crate::sandbox_network::Hosts {
+        &self.sandbox_hosts
+    }
+
+    /// The layers that wrote `allowedHosts` or `onUnlisted: ask` and were not obeyed, with the key.
+    pub fn sandbox_hosts_ignored(&self) -> impl Iterator<Item = (&Path, &'static str)> {
+        self.sandbox_hosts_ignored
+            .iter()
+            .map(|(path, key)| (path.as_path(), *key))
+    }
+
+    /// The layers that gave one of the three keys a value it cannot read.
+    pub fn sandbox_hosts_misshapen(&self) -> impl Iterator<Item = (&Path, &'static str)> {
+        self.sandbox_hosts_misshapen
+            .iter()
+            .map(|(path, key)| (path.as_path(), *key))
+    }
+
     /// The layers that gave one of the four keys something other than a list of strings.
     pub fn sandbox_filesystem_misshapen(&self) -> impl Iterator<Item = (&Path, &'static str)> {
         self.sandbox_filesystem_misshapen
@@ -1353,6 +1406,9 @@ impl Settings {
             && self.sandbox_filesystem.is_empty()
             && self.sandbox_filesystem_ignored.is_empty()
             && self.sandbox_filesystem_misshapen.is_empty()
+            && self.sandbox_hosts.is_empty()
+            && self.sandbox_hosts_ignored.is_empty()
+            && self.sandbox_hosts_misshapen.is_empty()
             && self.providers.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
@@ -1500,6 +1556,7 @@ impl Settings {
                     .filter(|list| !self.sandbox_filesystem.of(*list).is_empty())
                     .map(|list| list.setting()),
             )
+            .chain(self.sandbox_hosts.keys())
             .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
             .chain(self.env.keys().map(String::as_str))
     }
@@ -1952,8 +2009,14 @@ fn unread_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String>
     let beside_the_mode = match root.get(SANDBOX_BLOCK) {
         Some(serde_json::Value::Object(block)) => block
             .keys()
-            .filter(|key| !matches!(key.as_str(), crate::sandbox::MODE_KEY | "filesystem"))
+            .filter(|key| {
+                !matches!(
+                    key.as_str(),
+                    crate::sandbox::MODE_KEY | "filesystem" | crate::sandbox_network::BLOCK
+                )
+            })
             .map(|key| format!("{SANDBOX_BLOCK}.{key}"))
+            .chain(crate::sandbox_network::unread_inside(root))
             .collect(),
         _ => Vec::new(),
     };
@@ -3713,6 +3776,122 @@ mod tests {
         assert_eq!(keys, ["denyRead", "denyWrite"]);
         assert_eq!(paths_of(&settings.sandbox_filesystem().allow_read), ["b"]);
         assert!(settings.sandbox_filesystem().deny_read.is_empty());
+    }
+
+    const HOSTS_WIDE: &str = r#"{"sandbox": {"network": {
+        "allowedHosts": ["github.com"], "deniedHosts": ["evil.example"], "onUnlisted": "ask"}}}"#;
+
+    fn spelled(entries: &[crate::sandbox_network::HostEntry]) -> Vec<&str> {
+        entries.iter().map(|entry| entry.entry.as_str()).collect()
+    }
+
+    /// No key is no list, so there is no proxy to start; a list that is set, even empty, is one.
+    #[test]
+    fn no_allowed_hosts_is_no_list_and_an_empty_one_is_a_list() {
+        let none = Layers::new("hosts-none").global("{}").read();
+        assert!(none.sandbox_hosts().allowed.is_none());
+        let empty = Layers::new("hosts-empty")
+            .global(r#"{"sandbox": {"network": {"allowedHosts": []}}}"#)
+            .read();
+        assert_eq!(empty.sandbox_hosts().allowed, Some(Vec::new()));
+    }
+
+    /// The person's own file may write all three keys, and each entry names the file that wrote it.
+    #[test]
+    fn the_home_layer_may_write_every_host_key() {
+        let settings = Layers::new("hosts-home").global(HOSTS_WIDE).read();
+        let hosts = settings.sandbox_hosts();
+        assert_eq!(spelled(hosts.allowed.as_deref().unwrap()), ["github.com"]);
+        assert_eq!(spelled(&hosts.denied), ["evil.example"]);
+        assert_eq!(
+            hosts.on_unlisted,
+            Some(crate::sandbox_network::OnUnlisted::Ask)
+        );
+        assert!(hosts.denied[0].by.is_some());
+        assert_eq!(settings.sandbox_hosts_ignored().count(), 0);
+    }
+
+    /// A checkout may deny a host and never allow one, and may not turn the question on: its
+    /// `allowedHosts` and `onUnlisted: ask` are named and not read, its denial is read, and
+    /// `onUnlisted: refuse` is read since it only takes reach away. A repository that could list its
+    /// own destination would have the exfiltration path the list exists to close.
+    #[test]
+    fn a_checkout_may_deny_a_host_and_never_allow_one() {
+        for layer in ["project", "local"] {
+            let layers = Layers::new(&format!("hosts-{layer}"))
+                .global(r#"{"sandbox": {"network": {"allowedHosts": ["mine.example"]}}}"#);
+            let layers = match layer {
+                "project" => layers.project(HOSTS_WIDE),
+                _ => layers.local(HOSTS_WIDE),
+            };
+            let settings = layers.read();
+            let hosts = settings.sandbox_hosts();
+            assert_eq!(
+                spelled(hosts.allowed.as_deref().unwrap()),
+                ["mine.example"],
+                "{layer}"
+            );
+            assert_eq!(spelled(&hosts.denied), ["evil.example"], "{layer}");
+            assert_eq!(hosts.on_unlisted, None, "{layer}");
+            let ignored: Vec<&str> = settings.sandbox_hosts_ignored().map(|(_, k)| k).collect();
+            assert_eq!(ignored, ["allowedHosts", "onUnlisted"], "{layer}");
+        }
+        let refuse = Layers::new("hosts-project-refuse")
+            .project(r#"{"sandbox": {"network": {"onUnlisted": "refuse"}}}"#)
+            .read();
+        assert_eq!(
+            refuse.sandbox_hosts().on_unlisted,
+            Some(crate::sandbox_network::OnUnlisted::Refuse)
+        );
+        assert_eq!(refuse.sandbox_hosts_ignored().count(), 0);
+    }
+
+    /// A checkout's list alone leaves no list: ignoring it must not turn filtering on with nothing
+    /// allowed, which would refuse every host a person had not asked to filter.
+    #[test]
+    fn a_checkouts_list_alone_does_not_start_filtering() {
+        let settings = Layers::new("hosts-project-alone")
+            .project(HOSTS_WIDE)
+            .read();
+        assert!(settings.sandbox_hosts().allowed.is_none());
+    }
+
+    /// A file the command line named outside the workspace is the person's act; one inside is a
+    /// checkout's file.
+    #[test]
+    fn a_named_file_may_list_hosts_only_outside_the_workspace() {
+        let outside = Layers::new("hosts-named-outside").named(HOSTS_WIDE).read();
+        assert!(outside.sandbox_hosts().allowed.is_some());
+        let inside = Layers::new("hosts-named-inside")
+            .named_inside_the_workspace(HOSTS_WIDE)
+            .read();
+        assert!(inside.sandbox_hosts().allowed.is_none());
+        assert_eq!(inside.sandbox_hosts_ignored().count(), 2);
+    }
+
+    /// A value that is not a list of strings, or a word that is neither answer, is reported and not
+    /// read, so a denial the person wrote is never silently half of itself.
+    #[test]
+    fn a_misshapen_host_key_is_reported_and_not_read() {
+        let settings = Layers::new("hosts-misshapen")
+            .global(
+                r#"{"sandbox": {"network": {"allowedHosts": "github.com", "deniedHosts": ["a", 3], "onUnlisted": "maybe"}}}"#,
+            )
+            .read();
+        let keys: Vec<&str> = settings.sandbox_hosts_misshapen().map(|(_, k)| k).collect();
+        assert_eq!(keys, ["allowedHosts", "deniedHosts", "onUnlisted"]);
+        assert!(settings.sandbox_hosts().is_empty());
+    }
+
+    /// The three keys are read, so they are not reported as keys nothing reads (BACKEND-36), and a
+    /// neighbour that is not read still is.
+    #[test]
+    fn the_host_keys_are_not_unread_and_a_neighbour_is() {
+        let settings = Layers::new("hosts-unread")
+            .global(r#"{"sandbox": {"network": {"allowedHosts": [], "typo": 1}, "other": 2}}"#)
+            .read();
+        let unread: Vec<&str> = settings.unread_keys().map(|(_, key)| key).collect();
+        assert_eq!(unread, ["sandbox.other", "sandbox.network.typo"]);
     }
 
     /// A word that is neither is not read as either, and is named so the person finds it.

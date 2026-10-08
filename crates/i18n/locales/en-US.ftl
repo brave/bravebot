@@ -508,6 +508,10 @@ doctor-settings-sandbox-filesystem-ignored =
     sandbox.filesystem.{ $key } in { $path } is not obeyed: a checkout can refuse reach and never add it, so it is read from ~/.bravebot/settings.json, the file --settings names and the managed file only
 doctor-settings-sandbox-misshapen =
     sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it is read as absent
+doctor-settings-sandbox-hosts-ignored =
+    sandbox.network.{ $key } in { $path } is not obeyed: a checkout can refuse a host and never allow one, so it is read from ~/.bravebot/settings.json, the file --settings names and the managed file only
+doctor-settings-sandbox-hosts-misshapen =
+    sandbox.network.{ $key } in { $path } is not a list of strings (onUnlisted: ask or refuse), so it is read as absent
 doctor-managed-sandbox-misshapen =
     sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it pins nothing
 doctor-managed-sandbox-unread =
