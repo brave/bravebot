@@ -20,6 +20,7 @@ pub mod env_var {
 
 pub mod hooks;
 pub mod keys;
+pub mod limit;
 mod managed;
 pub mod mcp;
 mod obfuscate;

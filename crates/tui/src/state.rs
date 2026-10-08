@@ -1807,6 +1807,11 @@ pub struct Session {
     /// Kept for the session only: the `advisorModel` setting is the saved route, and a turn that
     /// finds none here leaves it to that.
     advisor: Option<String>,
+    /// The most tokens this session may spend before a turn asks, shared with the turns it starts so
+    /// a figure typed at `/limit` reaches one already running.
+    ///
+    /// Kept for the session only: the `limit` setting is the saved route.
+    spend_limit: bravebot_agent::SpendLimit,
     /// The built-in output style `/style` chose, which opens the system prompt of each turn.
     ///
     /// Kept for the session only, as `advisor` is.
@@ -1983,6 +1988,7 @@ impl Session {
             effort: None,
             model_reads_effort: true,
             advisor: None,
+            spend_limit: bravebot_agent::SpendLimit::default(),
             style: None,
             completion: 0,
             workspace: std::path::PathBuf::new(),
@@ -2123,6 +2129,16 @@ impl Session {
     /// The model `/advisor` named, resolved, or `None` where it named none.
     pub fn advisor(&self) -> Option<&str> {
         self.advisor.as_deref()
+    }
+
+    /// The session's spend limit, which each turn it starts is held to.
+    pub fn spend_limit(&self) -> &bravebot_agent::SpendLimit {
+        &self.spend_limit
+    }
+
+    /// Start the session under the limit the settings name, if they name one.
+    pub fn adopt_limit(&mut self, settings: &bravebot_config::Settings) {
+        self.spend_limit.set(settings.limit());
     }
 
     /// The output style `/style` chose, or `None` where it chose none.

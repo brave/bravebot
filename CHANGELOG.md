@@ -1,5 +1,6 @@
 ## [0.14.0](https://github.com/brave/bravebot/releases/tag/v0.14.0)
 
+ - Added `/limit [tokens | off]` and a `limit` setting, which cap the tokens a terminal session may spend. At the limit the next request is not sent, and you are asked whether to stop, go on without a limit, or go on under a new one. A `/loop` or `/goal` run ends there. ([#1575](https://github.com/brave/bravebot/issues/1575))
  - Added MCP servers to the desktop app, with a Connectors page in Settings for GitHub, Gmail, Google Calendar, Brave Search and your own servers. Every question a server raises (use it, list its tools, call a tool, follow a move) is asked in the window.
  - Added a home folder to each desktop bot, where its conversations with no project run and its notes are kept, with one set of notes per folder it works in.
  - Added `bravebot --from-pr <number or url>`, which opens the resume picker on the sessions linked to that pull request. ([#1429](https://github.com/brave/bravebot/issues/1429))

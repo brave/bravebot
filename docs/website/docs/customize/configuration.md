@@ -452,6 +452,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
+| `limit` | the most tokens a session may spend before it asks ([below](#limit)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
 | `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
@@ -724,6 +725,19 @@ no choice at all: the box stays the ordinary one and nothing fails to start.
 A choice made with [`/config`](../reference/commands.md#config) outranks this file, which answers for
 somebody who has never made one. The style is a preference about the person rather than a property of
 a checkout, which is why a file in a repository is the weaker claim.
+
+### `limit`
+
+```json
+{ "limit": "500k" }
+```
+
+The most tokens a session may spend before the terminal client asks whether to stop, to go on without
+a limit or to go on under a new one. A whole number of tokens, or a string with `k` or `m` after it for
+thousands or millions. A value that is none of these, and zero, sets no limit. The nearest settings
+file that names it wins, and [`/limit`](../reference/commands.md#limit-tokens--off) changes it for one
+session. It counts the usage the model service reports, so it is a bound on tokens and not on money.
+The one-shot `-p` run and the desktop app do not apply it.
 
 ### `terminalTitle`
 
