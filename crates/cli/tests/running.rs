@@ -7445,7 +7445,8 @@ fn a_host_run_by_hand_has_nothing_to_start_with() {
     assert!(!job.join("state.json").exists());
 }
 
-/// BG-9, BG-10: `attach` and `reply` name a session that is not running as not running.
+/// BG-2, BG-9, BG-10: `attach` and `reply` from a pipe do not start a session that was interrupted,
+/// and say that only a terminal can.
 #[test]
 fn attach_and_reply_refuse_a_session_that_is_not_running() {
     let home = Scratch::new("bg-attach-dead").with_file(
@@ -7458,7 +7459,13 @@ fn attach_and_reply_refuse_a_session_that_is_not_running() {
     ] {
         let output = bravebot(&home.path, &[], arguments);
         assert!(!output.status.success(), "{arguments:?}");
-        assert!(said(&output).1.contains("is not running"), "{arguments:?}");
+        assert!(
+            said(&output)
+                .1
+                .contains("was interrupted, and only a terminal can start it again"),
+            "{arguments:?}: {}",
+            said(&output).1
+        );
     }
     for arguments in [
         &["attach", "ffffffff"][..],
@@ -7843,6 +7850,89 @@ fn a_session_started_again_continues_the_conversation_it_stopped_with() {
     let _ = host.wait();
 }
 
+/// BG-12: the process that starts an interrupted session again tells the planner the last turn
+/// never finished, and a session that was stopped is told nothing of the kind.
+///
+/// Started here by hand with nothing to start with, which is what `attach` leaves for it.
+#[cfg(unix)]
+#[test]
+fn a_session_started_after_an_interruption_tells_the_planner_and_one_after_a_stop_does_not() {
+    use std::os::unix::net::UnixStream;
+
+    for interrupted in [true, false] {
+        let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+        let home = ShortHome::new();
+        let work = a_stopped_session_with_one_turn(&home, &gateway);
+        let job = home.0.join(format!(".bravebot/jobs/{SESSION_ID}"));
+        if interrupted {
+            let state = job.join("state.json");
+            let written = std::fs::read_to_string(&state).expect("the entry");
+            assert!(written.contains(r#""state": "stopped""#), "{written}");
+            std::fs::write(
+                &state,
+                written.replace(r#""state": "stopped""#, r#""state": "working""#),
+            )
+            .expect("the entry as a dead process left it");
+            let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+            assert!(listed.contains("interrupted"), "{listed}");
+        }
+        std::fs::write(job.join("first-prompt"), "").expect("nothing to start with");
+        let _ = std::fs::remove_file(job.join("attach.sock"));
+        let mut host = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+            .env_clear()
+            .env("HOME", &home.0)
+            .env("BRAVEBOT_LOCALE", "en-US")
+            .env("OLLAMA_HOST", NO_OLLAMA)
+            .envs(AT_A_GATEWAY.iter().copied())
+            .args(["__bg-host", SESSION_ID])
+            .current_dir(&work)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the host starts");
+        let socket = job.join("attach.sock");
+        let until = std::time::Instant::now() + Duration::from_secs(60);
+        while !socket.exists() {
+            assert!(std::time::Instant::now() < until, "the host never listened");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        loop {
+            let mut stream = UnixStream::connect(&socket).expect("connect");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(30)))
+                .expect("timeout");
+            write!(stream, "reply\nand the tests\n").expect("write");
+            let mut answer = String::new();
+            BufReader::new(stream)
+                .read_line(&mut answer)
+                .expect("an answer");
+            if answer.trim() == "ok" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "the reply was never taken: {answer}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let second = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the reply reached the gateway");
+        assert!(second.contains("and the tests"), "{second}");
+        assert!(second.contains("fix the build"), "{second}");
+        assert_eq!(
+            second.contains("ended before it finished"),
+            interrupted,
+            "interrupted: {interrupted}: {second}"
+        );
+
+        let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+        let _ = host.wait();
+    }
+}
+
 /// BG-2: starting a stopped session again is a thing a terminal does. A `reply` or an `attach` whose
 /// input is a pipe says so, and starts nothing.
 #[cfg(unix)]
@@ -7900,6 +7990,88 @@ fn a_reply_from_a_terminal_starts_a_stopped_session_with_it() {
     assert!(second.contains("fix the build"), "{second}");
     let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
     assert!(!listed.contains("stopped"), "{listed}");
+}
+
+/// BG-10, BG-12: `reply` from a terminal starts an interrupted session, after saying that the turn it
+/// was in is not repeated. The earlier conversation and the reply are in the request, with the
+/// driver's note that the last turn never finished, and that note is not written to the record.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_reply_from_a_terminal_starts_an_interrupted_session_and_the_planner_is_told() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+    let state = home
+        .0
+        .join(format!(".bravebot/jobs/{SESSION_ID}/state.json"));
+    let written = std::fs::read_to_string(&state).expect("the entry");
+    assert!(written.contains(r#""state": "stopped""#), "{written}");
+    std::fs::write(
+        &state,
+        written.replace(r#""state": "stopped""#, r#""state": "working""#),
+    )
+    .expect("the entry as a dead process left it");
+    let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+    assert!(listed.contains("interrupted"), "{listed}");
+
+    let output = in_a_terminal(
+        &home.0,
+        AT_A_GATEWAY,
+        &["reply", "3f2a9c1e", "and the tests"],
+    );
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{out}{err}");
+    let shown = format!("{out}{err}");
+    let told = shown
+        .find("Starting it again does not repeat that turn")
+        .expect("the terminal said the turn is not repeated");
+    let sent = shown.find("Sent to").expect("the reply was sent");
+    assert!(told < sent, "{shown}");
+    let second = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(second.contains("and the tests"), "{second}");
+    assert!(second.contains("fix the build"), "{second}");
+    assert!(second.contains("ended before it finished"), "{second}");
+
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+        if listed.contains("idle") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "never idle again: {listed}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let sessions = home.0.join(".bravebot/sessions");
+    let mut kept = String::new();
+    for entry in walk(&sessions) {
+        kept.push_str(&std::fs::read_to_string(entry).unwrap_or_default());
+    }
+    assert!(kept.contains("and the tests"), "the turn was not recorded");
+    assert!(
+        !kept.contains("ended before it finished"),
+        "the note was written to the record"
+    );
+}
+
+/// All the files under `directory`.
+#[cfg(target_os = "linux")]
+fn walk(directory: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(walk(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
 }
 
 /// BG-9: `attach` from a terminal starts a stopped session idle, from the record it stopped with.

@@ -9,6 +9,8 @@
 
 fr:attach-detached
 fr:attach-stopping
+fr:bg-interrupted-needs-a-terminal
+fr:bg-interrupted-not-repeated
 fr:cli-doctor-sandbox-takes-nothing-else
 fr:cli-usage-doctor-sandbox
 fr:doctor-sandbox-at

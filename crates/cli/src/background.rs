@@ -218,23 +218,32 @@ enum Wake<'a> {
 
 /// The session `typed` names, running, or the complaint to give.
 ///
-/// One that is `stopped` is started again first, in the mode every session opens in (BG-9,
-/// BG-10), and only from a terminal: the start of a session is a thing a person did (BG-2). One
-/// that is `interrupted` is not, since what to tell the planner about the turn that ended is not
-/// built (BG-12). The prompt a reply carries is the line the new process starts with, so it is
-/// not sent again, and `None` is returned in its place.
+/// One that is `stopped` or `interrupted` is started again first, in the mode every session opens
+/// in (BG-9, BG-10), and only from a terminal: the start of a session is a thing a person did
+/// (BG-2). For `interrupted` the terminal says first that the turn it was in is not repeated, and
+/// the new process tells the planner that turn ended (BG-12). The prompt a reply carries is the
+/// line the new process starts with, so it is not sent again, and the third value is true.
 fn running(typed: &str, wake: Wake<'_>) -> Result<(Roster, Seen, bool), ExitCode> {
     let Some(roster) = Roster::writable() else {
         return Err(fail(Ending::Failed, t!(sessions_no_home)));
     };
     match roster.find(typed) {
         Ok(seen) if seen.live => Ok((roster, seen, false)),
-        Ok(seen) if seen.state() == State::Stopped => {
+        Ok(seen) if matches!(seen.state(), State::Stopped | State::Interrupted) => {
+            let name = shown(&seen.job.name);
+            let interrupted = seen.state() == State::Interrupted;
             if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
                 return Err(fail(
                     Ending::Argument,
-                    t!(bg_restart_needs_a_terminal, name = shown(&seen.job.name)),
+                    if interrupted {
+                        t!(bg_interrupted_needs_a_terminal, name = name)
+                    } else {
+                        t!(bg_restart_needs_a_terminal, name = name)
+                    },
                 ));
+            }
+            if interrupted {
+                eprintln!("{}", t!(bg_interrupted_not_repeated, name = name));
             }
             let first = match wake {
                 Wake::Attach => String::new(),

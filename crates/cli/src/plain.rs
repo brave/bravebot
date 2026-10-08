@@ -111,6 +111,9 @@ fn run(
     hosting: Option<crate::host::Hosting>,
 ) -> ExitCode {
     let hosted_as = hosting.as_ref().map(|hosting| hosting.id.clone());
+    let interrupted = hosting
+        .as_ref()
+        .is_some_and(|hosting| hosting.after_an_interruption);
     // Refused rather than read. The lines this reads are the person's own prompts, and a pipe has
     // nothing vouching for what it carries: CLI-3 quarantines piped bytes for exactly that reason,
     // so a session taking its prompts from one would be taking instruction from whatever fed it,
@@ -436,11 +439,17 @@ fn run(
         complained: None,
         home,
         profile,
-        conversation: match &resumed {
-            Some(record) => {
-                bravebot_agent::conversation::Conversation::restored(record.conversation.clone())
+        conversation: {
+            let mut conversation = match &resumed {
+                Some(record) => bravebot_agent::conversation::Conversation::restored(
+                    record.conversation.clone(),
+                ),
+                None => bravebot_agent::conversation::Conversation::new(),
+            };
+            if interrupted {
+                conversation.note_unfinished_turn();
             }
-            None => bravebot_agent::conversation::Conversation::new(),
+            conversation
         },
         trust,
         programs: match &resumed {

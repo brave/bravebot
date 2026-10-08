@@ -373,6 +373,8 @@ pub(crate) struct Hosting {
     pub(crate) input: Intake,
     pub(crate) output: Broadcast,
     pub(crate) watch: Box<dyn Watcher>,
+    /// The process that ran this session before ended in the middle of a turn (BG-12).
+    pub(crate) after_an_interruption: bool,
 }
 
 impl Hosting {
@@ -386,6 +388,14 @@ impl Hosting {
             },
             output: Broadcast(Arc::clone(shared)),
             watch: Box::new(Watching(Arc::clone(shared))),
+            after_an_interruption: false,
+        }
+    }
+
+    pub(crate) fn after_an_interruption(self, interrupted: bool) -> Self {
+        Self {
+            after_an_interruption: interrupted,
+            ..self
         }
     }
 }
@@ -457,6 +467,10 @@ mod socket {
         // Nothing to start with is what an attach leaves for a session it starts again: the
         // session opens idle, waiting for the person who attached.
         let first = Some(first).filter(|line| !line.trim().is_empty());
+        // Read before the lease is taken: with it the entry reads as live, and as what it says.
+        let interrupted = roster
+            .get(id)
+            .is_some_and(|seen| seen.state() == State::Interrupted);
         let Ok(Some(_lease)) = roster.claim(id) else {
             return ExitCode::FAILURE;
         };
@@ -481,7 +495,7 @@ mod socket {
                 std::thread::spawn(move || serve(stream, &shared));
             }
         });
-        let code = crate::plain::hosted(Hosting::of(&shared));
+        let code = crate::plain::hosted(Hosting::of(&shared).after_an_interruption(interrupted));
         shared.finish();
         code
     }
