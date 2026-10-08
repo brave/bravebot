@@ -5,7 +5,8 @@
 //! by the type of a field rather than by each caller's care: a [`Field`] is a sanitised host, a
 //! number or a fixed word, and there is no constructor from a string of unknown origin. The log is
 //! write-only. Nothing here reads a file back, so a line a hostile reply managed to influence
-//! cannot reach the driver or the planner.
+//! cannot reach the driver or the planner. The one thing that looks into the directory is
+//! [`newest`], which reads file names and never a file.
 
 #![forbid(unsafe_code)]
 
@@ -226,6 +227,20 @@ fn is_log_name(name: &str) -> bool {
         && pid.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// The path of the newest log this crate made in `dir`, chosen from the file names alone.
+///
+/// For a person to be told which file to attach. No file is opened, so a line in one cannot reach
+/// whatever asks (DIAG-6). The names start with a timestamp, so the greatest sorts newest.
+pub fn newest(dir: &Path) -> Option<PathBuf> {
+    fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| is_log_name(n))
+        .max()
+        .map(|name| dir.join(name))
+}
+
 fn file_name(millis: u128) -> String {
     let (date, time) = civil(millis);
     format!(
@@ -337,6 +352,28 @@ mod tests {
             .collect();
         assert_eq!(files.len(), 1, "expected one log file in {dir:?}");
         files.remove(0)
+    }
+
+    /// A person is told which log to attach by its name alone, and the newest is the greatest
+    /// timestamp, not the last one written or the one whose name sorts last as a plain file.
+    #[test]
+    fn the_newest_log_is_the_greatest_timestamp_among_files_this_crate_made() {
+        let dir = scratch();
+        assert_eq!(newest(&dir.path().join("absent")), None);
+        assert_eq!(newest(dir.path()), None);
+        for name in [
+            "20260101T000000Z-9.log",
+            "20260301T000000Z-2.log",
+            "20260201T000000Z-5.log",
+            "zzz.log",
+            "99999999T999999Z.log",
+        ] {
+            fs::write(dir.path().join(name), "x").unwrap();
+        }
+        assert_eq!(
+            newest(dir.path()),
+            Some(dir.path().join("20260301T000000Z-2.log"))
+        );
     }
 
     /// A URL's userinfo is a credential and its path and query are the page asked for, so only the

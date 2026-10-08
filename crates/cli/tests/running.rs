@@ -9521,3 +9521,156 @@ fn doctor_names_the_log_directory() {
         expected.display()
     );
 }
+
+/// The environment of [`NOTHING_CONFIGURED`] with the services key replaced by one that `doctor`
+/// is not meant to print.
+const A_KEY_DOCTOR_WITHHOLDS: &[(&str, &str)] = &[
+    ("SERVICES_KEY_AICHAT", "SECRET-SERVICES-KEY-VALUE"),
+    ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+    ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+    (
+        "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+        "https://ai-chat-premium.bsg.brave.com",
+    ),
+];
+
+/// DIAG-8: the file holds the build, what `doctor` prints and the name of the newest log, and
+/// nothing a person has not already been shown: not the log's lines, not an environment value, not
+/// a file of the directory it was run in. It is private, and its path is the whole of stdout.
+#[test]
+fn a_bug_report_holds_the_build_doctors_report_and_the_logs_name_and_no_content() {
+    let scratch = Scratch::new("cli-running-bug-report")
+        .with_state("logs/20260101T000000Z-1.log", "OLD-LOG-LINE\n")
+        .with_state("logs/20260301T000000Z-2.log", "NEWEST-LOG-LINE\n");
+    let work = Scratch::new("cli-running-bug-report-work")
+        .with_file("notes.txt", "PRIVATE-FILE-CONTENT\n");
+    let output = bravebot_started_in(
+        &scratch.path,
+        &work.path,
+        A_KEY_DOCTOR_WITHHOLDS,
+        &["bug-report"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(stderr, "", "stderr carries nothing on success");
+    let named = work.path.join(stdout.trim_end());
+    assert_eq!(
+        stdout.trim_end(),
+        "./bravebot-bug-report.txt",
+        "stdout is the path and nothing else"
+    );
+    let text = std::fs::read_to_string(&named).expect("the report was written");
+
+    let doctor = said(&bravebot_started_in(
+        &scratch.path,
+        &work.path,
+        A_KEY_DOCTOR_WITHHOLDS,
+        &["doctor"],
+    ))
+    .0;
+    assert!(
+        text.contains(&doctor),
+        "the report does not hold doctor's output:\n{text}"
+    );
+    assert!(text.starts_with("bravebot "), "{text}");
+    let newest = scratch
+        .path
+        .join(".bravebot/logs/20260301T000000Z-2.log")
+        .display()
+        .to_string();
+    assert!(
+        text.contains(&newest),
+        "the newest log is not named: {text}"
+    );
+    assert!(!text.contains("20260101T000000Z-1.log"), "{text}");
+    for content in [
+        "OLD-LOG-LINE",
+        "NEWEST-LOG-LINE",
+        "SECRET-SERVICES-KEY-VALUE",
+        "PRIVATE-FILE-CONTENT",
+    ] {
+        assert!(
+            !text.contains(content),
+            "the report holds {content}: {text}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&named)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+}
+
+/// DIAG-8: a second report is a new file, and the first is what it was.
+#[test]
+fn a_second_bug_report_does_not_overwrite_the_first() {
+    let scratch = Scratch::new("cli-running-bug-report-twice");
+    let work = Scratch::new("cli-running-bug-report-twice-work");
+    let run = || {
+        said(&bravebot_started_in(
+            &scratch.path,
+            &work.path,
+            NOTHING_CONFIGURED,
+            &["bug-report"],
+        ))
+        .0
+    };
+    assert_eq!(run().trim_end(), "./bravebot-bug-report.txt");
+    let first = std::fs::read(work.path.join("bravebot-bug-report.txt")).expect("first");
+    assert_eq!(run().trim_end(), "./bravebot-bug-report-1.txt");
+    assert_eq!(
+        std::fs::read(work.path.join("bravebot-bug-report.txt")).expect("first again"),
+        first
+    );
+}
+
+/// DIAG-8: an incognito session, or a machine with no home, writes no report and says so.
+#[test]
+fn a_bug_report_in_an_incognito_session_writes_nothing() {
+    let scratch = Scratch::new("cli-running-bug-report-incognito");
+    let work = Scratch::new("cli-running-bug-report-incognito-work");
+    let output = bravebot_started_in(
+        &scratch.path,
+        &work.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "bug-report"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("bug-report"), "{stderr}");
+    assert_eq!(
+        std::fs::read_dir(&work.path)
+            .expect("the directory")
+            .count(),
+        0,
+        "a file was written"
+    );
+}
+
+/// DIAG-8: an argument is refused with the argument status and nothing is written.
+#[test]
+fn a_bug_report_with_an_argument_is_refused() {
+    let scratch = Scratch::new("cli-running-bug-report-argument");
+    let work = Scratch::new("cli-running-bug-report-argument-work");
+    let output = bravebot_started_in(
+        &scratch.path,
+        &work.path,
+        NOTHING_CONFIGURED,
+        &["bug-report", "now"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        std::fs::read_dir(&work.path)
+            .expect("the directory")
+            .count(),
+        0
+    );
+}

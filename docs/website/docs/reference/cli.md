@@ -22,6 +22,7 @@ Usage:
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
   bravebot doctor --sandbox-check              Run everyday workflows under the sandbox and report which work
+  bravebot bug-report                    Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
   bravebot auth logout <way>             Forget an imported Leo Premium subscription or a stored gateway key
   bravebot auth status [way]             Say whether a sign-in is usable, exiting 0 only if it is
@@ -48,6 +49,7 @@ Usage:
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |
 | `bravebot doctor --sandbox-check` | run `git`, `cargo`, `npm` and the other everyday programs under the sandbox and report which work |
+| `bravebot bug-report` | write a text file to attach to a bug report ([below](#bug-report)) |
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
 | `bravebot auth logout leo` | forget an imported Leo Premium subscription |
 | `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
@@ -316,7 +318,7 @@ standing is better piped in, where it is quarantined.
 
 A flag with no words after it, a blank one, or one whose words open with `-` and hold no space is
 refused with status 2. A sentence opening with `-` is words. If a flag is given twice, the last is
-used. Both are refused with `--mode manifest`, and with `doctor`, `auth`, `mcp`,
+used. Both are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`,
 `import-leo-creds`, `import-providers`, `completion` and `shell-init`. There is no settings key for them: words a checkout
 always wants belong in its `AGENTS.md`.
 
@@ -441,6 +443,25 @@ directory](#doctor), readable by you alone, and the ten most recent are kept. At
 server starting, and `debug` adds the detail between them. `doctor` prints the directory.
 
 An [`--incognito`](../using/sessions.md) session writes no log.
+
+## `bug-report`
+
+```sh
+bravebot bug-report
+```
+
+Writes `bravebot-bug-report.txt` in the current directory, readable by you alone, and prints its
+path. A file of that name is never overwritten: the next report is `bravebot-bug-report-1.txt`.
+
+The file holds the version and target, everything `doctor` prints, and the path of the newest
+[diagnostic log](#--log-level-errorinfodebug). The log's own lines are not copied in, so attach
+that file as well. `doctor` names paths, model services and the names, never the values, of
+environment variables, so read the file before posting it. No transcript, trace, settings file,
+environment value or file of the directory holds a place in it.
+
+Nothing reads the file back. An [`--incognito`](../using/sessions.md) session, or a machine with no
+home directory, writes no report, and the command exits with status 1. Any argument is refused with
+status 2.
 
 ## `--vet`
 

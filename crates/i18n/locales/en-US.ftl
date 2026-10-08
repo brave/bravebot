@@ -34,6 +34,7 @@ cli-usage-continue-task = Send a one-shot task as the next turn of the most rece
 cli-usage-fork = Fork a session and start exploring a different path
 cli-usage-doctor = Check configuration and confinement
 cli-usage-doctor-sandbox = Run everyday workflows under the sandbox and report which work
+cli-usage-bug-report = Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
 cli-usage-import = Import a Leo Premium subscription
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
 cli-usage-auth-login = Sign in to a model service, listing every way when none is named
@@ -152,6 +153,9 @@ cli-option-version = Show the version
 cli-unknown-option = unknown option: { $flag }
 cli-completion-needs-a-shell = completion takes one of bash, zsh or fish
 cli-shell-init-needs-a-shell = shell-init takes one of bash, zsh or fish
+cli-bug-report-takes-nothing-else = bug-report takes no arguments
+bug-report-no-state-directory = bug-report writes nothing in an incognito session or where there is no home directory
+bug-report-not-written = the bug report was not written: { $problem }
 cli-file-needs-a-path = --file requires a path
 cli-resume-needs-an-id = --resume requires the id of a session when it goes with a task
 # The flag is --resume or --continue, as typed.
