@@ -364,7 +364,7 @@ pub enum Source {
     BuiltIn,
     /// The user's own directory, `~/.bravebot/skills`.
     Home,
-    /// The project's `.bravebot/skills`, which the trust map vouched for.
+    /// The project's own skill directories, which the trust map vouched for.
     Workspace,
 }
 
@@ -566,14 +566,28 @@ Either kind stops when the user stops it. You never need to ask them to.
 const SKILLS: &str = "skills";
 const WORKSPACE_SKILLS: &str = ".bravebot/skills";
 
+/// The project directories holding skills, least specific first.
+///
+/// `.bravebot/skills` is read last, so a skill there shadows one of the same name under a
+/// directory another agent keeps its skills in. That is the same "most specific wins" every other
+/// source follows, and it leaves a project able to override one ported skill without moving the
+/// rest. A project that keeps its skills for another agent offers them here without anybody
+/// copying or symlinking each one, which is the same reason `CLAUDE.md` is read where `AGENTS.md`
+/// is absent.
+///
+/// The project root only. Each name is relative to the root and holds no `..`, so there is no
+/// search of parent directories and no nested skills directory, and the paths are string literals
+/// in this file rather than anything read from a disk.
+const WORKSPACE_SKILL_ROOTS: [&str; 3] = [".agents/skills", ".claude/skills", WORKSPACE_SKILLS];
+
 /// The one file that makes a directory a skill.
 const SKILL_FILE: &str = "SKILL.md";
 
 /// Find the skills available to this turn.
 ///
-/// Two sources, visited least specific first so the more specific shadows it: the user's own
-/// directory, whose contents are trusted for being the user's own, and the project, whose
-/// contents are trusted only if the trust map says so.
+/// Sources are visited least specific first so the more specific shadows them: the user's own
+/// directory, whose contents are trusted for being the user's own, and then the project's own
+/// skill directories, whose contents are trusted only if the trust map says so.
 ///
 /// A skill from a path nobody vouched for is **dropped, not quarantined**. Its name and its
 /// description would go into the system prompt verbatim, so offering a reference in their place
@@ -637,7 +651,7 @@ pub fn resolved<S: Sink>(
     sink: &mut S,
 ) -> Catalogue {
     let mut routing = bravebot_core::policy::Routing::new();
-    routing.insert_trusted("skills", WORKSPACE_SKILLS);
+    routing.insert_trusted("skills", WORKSPACE_SKILL_ROOTS.join(", "));
     let Ok(policy) = Policy::begin(
         routing,
         bravebot_core::policy::ReleasePlan::new(),
@@ -705,14 +719,51 @@ fn discover_home<S: Sink>(
     }
 }
 
-/// Skills from `<workspace>/.bravebot/skills`, labelled by the trust map.
+/// Skills from a project's skill directories, labelled by the trust map.
+///
+/// Each root is visited in [`WORKSPACE_SKILL_ROOTS`] order, least specific first, so a skill in
+/// `.bravebot/skills` replaces one of the same name found under another agent's directory.
 fn discover_workspace<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
 ) {
-    let root = workspace.root().join(WORKSPACE_SKILLS);
+    // The skipped names are held back rather than reported as each root is read, because the roots
+    // are read least specific first and a more specific one later in the list may offer the same
+    // skill. Reporting in place would tell a person a skill was not loaded while they can see that
+    // it was: the layout `make init` creates in this repository symlinks the same skills into all
+    // three, so that notice would be wrong on every turn.
+    let mut skipped: Vec<(&str, Vec<String>)> = Vec::new();
+    for root in WORKSPACE_SKILL_ROOTS {
+        discover_workspace_root(policy, workspace, root, catalogue, notices, &mut skipped);
+    }
+    for (root, names) in skipped {
+        let missing = names.len()
+            - names
+                .iter()
+                .filter(|name| catalogue.get(name).is_some())
+                .count();
+        if missing == 0 {
+            continue;
+        }
+        let (count, verb) = counted(missing);
+        notices.push(Notice::new(format!(
+            "{count} in {root} {verb} not loaded: this directory is not trusted"
+        )));
+    }
+}
+
+/// Skills from one of a project's skill directories, labelled by the trust map.
+fn discover_workspace_root<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    skills_root: &'static str,
+    catalogue: &mut Catalogue,
+    notices: &mut Vec<Notice>,
+    skipped: &mut Vec<(&'static str, Vec<String>)>,
+) {
+    let root = workspace.root().join(skills_root);
     let names = skill_directories(&root);
     if names.is_empty() {
         return;
@@ -722,11 +773,11 @@ fn discover_workspace<S: Sink>(
     // content. A directory name is content too: a skill directory in a project nobody vouched
     // for could be named to read like an instruction, and it would reach the user's screen in a
     // notice even if it never reached the prompt.
-    if !policy.trusts_path(WORKSPACE_SKILLS) {
-        let (count, verb) = counted(names.len());
-        notices.push(Notice::new(format!(
-            "{count} in {WORKSPACE_SKILLS} {verb} not loaded: this directory is not trusted"
-        )));
+    if !policy.trusts_path(skills_root) {
+        // The names, so the caller can drop the ones a more specific root went on to offer. Held
+        // here and never put in a notice: a directory name in a project nobody vouched for is
+        // content, and only the count of it reaches a screen (SKILL-6).
+        skipped.push((skills_root, names));
         return;
     }
 
@@ -737,7 +788,7 @@ fn discover_workspace<S: Sink>(
     let mut distrusted = 0;
 
     for name in names {
-        let relative = format!("{WORKSPACE_SKILLS}/{name}/{SKILL_FILE}");
+        let relative = format!("{skills_root}/{name}/{SKILL_FILE}");
 
         if workspace.rule_denies_reading(policy, &relative) {
             denied += 1;
@@ -790,7 +841,7 @@ fn discover_workspace<S: Sink>(
         if n > 0 {
             let (count, verb) = counted(n);
             notices.push(Notice::new(format!(
-                "{count} in {WORKSPACE_SKILLS} {verb} not loaded: {why}"
+                "{count} in {skills_root} {verb} not loaded: {why}"
             )));
         }
     }

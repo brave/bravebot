@@ -8,7 +8,9 @@ description: Package a repeatable piece of know-how as a SKILL.md the planner lo
 
 A skill is instructions you wrote for a kind of task. Put one in
 `~/.bravebot/skills/<name>/SKILL.md` and it is available in every project; put it in
-`<workspace>/.bravebot/skills/<name>/SKILL.md` and it belongs to that project.
+`<workspace>/.bravebot/skills/<name>/SKILL.md` and it belongs to that project. A project's
+`.claude/skills` and `.agents/skills` are read too, so a skill written for another agent works
+here as it is.
 
 ```markdown
 ---
@@ -113,12 +115,15 @@ guessed at, because guessing would load instructions nobody asked for.
 |---|---|
 | `~/.bravebot/skills/<name>/SKILL.md` | it is your own directory: provenance, never the trust map |
 | `<workspace>/.bravebot/skills/<name>/SKILL.md` | you vouched for the directory |
+| `<workspace>/.claude/skills/<name>/SKILL.md` | you vouched for the directory |
+| `<workspace>/.agents/skills/<name>/SKILL.md` | you vouched for the directory |
 
-A workspace `.bravebot/skills` is checked for trust **before it is enumerated at all**, because a
+Each project skills directory is checked for trust **before it is enumerated at all**, because a
 directory name is content too. A source that fails the gate is dropped entirely, and what was skipped
 is counted rather than named. See [Instructions](instructions.md#trust).
 
-A project skill replaces a global one of the same name.
+A project skill replaces a global one of the same name, and one in `.bravebot/skills` replaces one
+of the same name in `.claude/skills` or `.agents/skills`.
 
 A project skill that a `deny` [rule](configuration.md#permissions) covers, under the name it was
 found by or the file it links to, is not offered, and you are told it was left out.
