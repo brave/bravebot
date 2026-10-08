@@ -184,25 +184,21 @@
 
 /* ----------------------------------------------------------------- about */
 
-.about-hero { text-align: center; }
-.about-stage { position: relative; display: grid; justify-items: center; padding: var(--leo-spacing-m) 0 var(--leo-spacing-xl); }
-.about .about-mascot { position: relative; display: grid; place-items: center; padding: 0; width: 156px; height: 156px; border: 0; border-radius: 0; background: transparent; cursor: pointer; }
-.about .about-mascot:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
-.about-figure { display: block; }
-.about .about-hero h2 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-s); font: var(--leo-font-heading-h2); color: var(--ink-primary); }
+.about-hero { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--leo-spacing-m); padding: var(--leo-spacing-xl) 0 var(--leo-spacing-l); }
+.about .about-hero h2 { margin: 0; font: var(--leo-font-heading-h2); color: var(--ink-primary); }
 .about-version {
   display: inline-block;
   max-width: 100%;
-  margin-top: var(--leo-spacing-m);
   padding: var(--leo-spacing-xs) var(--leo-spacing-l);
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-pill);
   background: var(--surface-sunken);
   color: var(--ink-secondary);
   font: var(--type-caption-strong);
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.about-links { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--leo-spacing-2xl); margin: var(--leo-spacing-2xl) 0; font: var(--type-body); }
+.about-links { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--leo-spacing-m) var(--leo-spacing-2xl); margin: 0 0 var(--leo-spacing-2xl); font: var(--type-body); }
 .about-links leo-icon { --leo-icon-size: var(--icon-caption); }
 .about-details {
   --leo-collapse-radius: var(--radius-card);

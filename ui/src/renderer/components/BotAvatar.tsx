@@ -14,7 +14,7 @@
 
 import { memo, useEffect, useRef } from 'react'
 import { Icon } from '../nala'
-import { show, tell, express, lookOf, type Expression, type Doing } from '../avatar/clock'
+import { show, tell, lookOf, type Doing } from '../avatar/clock'
 import { EYE_PUPIL, EYE_WHITE, LID, placeEyes, spriteOf, type Look, type Sprite } from '../avatar/pixels'
 
 export type { Doing }
@@ -30,30 +30,24 @@ interface Props {
    * screen.
    */
   doing?: Doing
-  /** An interactive expression for the About mascot; independent of task status. */
-  expression?: Expression
 }
 
-export function BotAvatar({ seed, size = 38, doing = 'idle', expression = 'neutral' }: Props): React.JSX.Element {
+export function BotAvatar({ seed, size = 38, doing = 'idle' }: Props): React.JSX.Element {
   const svg = useRef<SVGSVGElement>(null)
   // The state at mount goes in with the registration; changes after that are told to the clock.
   // A ref rather than a dependency, so a state change does not re-register the face.
-  const current = useRef({ doing, expression })
-  current.current = { doing, expression }
+  const current = useRef({ doing })
+  current.current = { doing }
 
   useEffect(() => {
     const element = svg.current
     if (!element) return
-    return show(element, seed, current.current.doing, current.current.expression)
+    return show(element, seed, current.current.doing)
   }, [seed])
 
   useEffect(() => {
     if (svg.current) tell(svg.current, doing)
   }, [doing])
-
-  useEffect(() => {
-    if (svg.current) express(svg.current, expression)
-  }, [expression])
 
   const hasStatus = doing === 'working' || doing === 'failed'
   return (
@@ -65,7 +59,7 @@ export function BotAvatar({ seed, size = 38, doing = 'idle', expression = 'neutr
       aria-hidden={hasStatus ? undefined : true}
       data-doing={doing}
     >
-      <PixelSprite ref={svg} sprite={spriteOf(seed)} size={size} look={lookOf(spriteOf(seed), doing, expression)} />
+      <PixelSprite ref={svg} sprite={spriteOf(seed)} size={size} look={lookOf(spriteOf(seed), doing)} />
       {hasStatus && (
         <span
           className={`bot-avatar-status bot-avatar-status-${doing}`}
@@ -87,7 +81,7 @@ export function BotFace({ seed, size = 16 }: { seed: string; size?: number }): R
   const sprite = spriteOf(seed)
   return (
     <span className="bot-face" style={{ width: size, height: size }} aria-hidden="true">
-      <PixelSprite sprite={sprite} size={size} look={lookOf(sprite, 'idle', 'neutral')} />
+      <PixelSprite sprite={sprite} size={size} look={lookOf(sprite, 'idle')} />
     </span>
   )
 }

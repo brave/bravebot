@@ -9,7 +9,7 @@ const seeds = (count, prefix = 'v2:bot-') => Array.from({ length: count }, (_, i
 const hexOf = Object.fromEntries(PAINT.map(paint => [paint.name, paint.hex]))
 const at = (sprite) => new Map(sprite.cells.map(cell => [`${cell.x},${cell.y}`, cell]))
 
-/** Every cell an eye can occupy in any pose: its own two, the row over (curious) and under (working). */
+/** Every cell an eye can occupy in any pose: its own two, the row over (looking up) and under (working). */
 function eyeReach(sprite) {
   return sprite.eyes.flatMap(eye => [-1, 0, 1].flatMap(dy => [0, 1].map(dx => `${eye.x + dx},${eye.y + dy}`)))
 }
@@ -90,17 +90,14 @@ test('a face chooses paints at least HUE_DISTANCE apart, and its eye whites stan
   }
 })
 
-test('a look moves the pupils, stretches or closes the eyes, and winks only the left one', () => {
+test('a look moves the pupils, or closes the eyes', () => {
   const sprite = buildSprite('v2:look')
-  const rest = { gaze: 1, drop: 0, blink: false, curious: false, wink: false, nod: false }
+  const rest = { gaze: 1, drop: 0, blink: false, nod: false }
   const [left] = sprite.eyes
   const right = placeEyes(sprite, rest)
   assert.deepEqual([right[0].whiteX, right[0].pupilX], [left.x, left.x + 1])
   const away = placeEyes(sprite, { ...rest, gaze: -1 })
   assert.deepEqual([away[0].whiteX, away[0].pupilX], [left.x + 1, left.x])
-  const curious = placeEyes(sprite, { ...rest, curious: true })
-  assert.deepEqual([curious[0].y, curious[0].height], [left.y - 1, 2])
-  assert.deepEqual(placeEyes(sprite, { ...rest, wink: true }).map(eye => eye.closed), [true, false])
   assert.deepEqual(placeEyes(sprite, { ...rest, blink: true }).map(eye => eye.closed), [true, true])
 })
 

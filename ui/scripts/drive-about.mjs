@@ -1,5 +1,4 @@
-// Exercise the actual About menu and rendered eyes in an isolated Electron profile.
-// Reduced motion freezes idle blinks so before/after comparisons measure the interaction.
+// Exercise the actual About menu in an isolated Electron profile.
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -23,43 +22,24 @@ try {
   })
   const dialog = page.getByRole('dialog', { name: 'About Brave Bot' })
   await dialog.waitFor()
-  const mascot = dialog.getByRole('button', { name: 'Make Brave Bot wink' })
-  const face = mascot.locator('svg.bot-avatar')
-  await face.waitFor()
-  const picture = () => face.evaluate(el => el.outerHTML)
-  await page.waitForTimeout(100)
-  const neutral = await picture()
-  await mascot.hover()
-  await page.waitForTimeout(100)
-  const curious = await picture()
-  assert.notEqual(curious, neutral, 'hover changes the rendered eyes')
-  assert.equal(await mascot.locator('.about-figure').evaluate(el => getComputedStyle(el).transform), 'none')
-  await mascot.click()
-  await page.waitForTimeout(90)
-  assert.notEqual(await picture(), curious, 'click closes one eye')
-  // A second click must not toggle it open or extend the cycle indefinitely.
-  await mascot.click()
-  assert.notEqual(await picture(), curious, 'a repeated click lets the wink finish')
-  await page.waitForTimeout(350)
-  assert.equal(await picture(), curious, 'the eye reopens automatically')
-  await page.keyboard.press('Space')
-  await page.waitForTimeout(90)
-  assert.notEqual(await picture(), curious, 'keyboard activation also winks')
-  await page.waitForTimeout(350)
-  assert.equal(await picture(), curious, 'keyboard wink completes')
-  await page.mouse.move(0, 0)
-  await page.keyboard.press('Tab')
-  await page.waitForTimeout(100)
-  assert.equal(await picture(), neutral, 'leaving the mascot restores its neutral expression')
+  assert.equal(await dialog.locator('svg.bot-avatar').count(), 0, 'the dialog shows no bot avatar')
   assert.equal(await dialog.getByText('Hello, there.', { exact: true }).count(), 0)
   const project = 'https://github.com/brave/bravebot'
+  // Each launch icon sits on the same line as its link text.
+  const links = dialog.locator('.about-links leo-link')
+  assert.equal(await links.count(), 2)
+  for (let i = 0; i < 2; i++) {
+    const link = links.nth(i)
+    const box = await link.evaluate(el => el.getBoundingClientRect().toJSON())
+    const icon = await link.locator('leo-icon').evaluate(el => el.getBoundingClientRect().toJSON())
+    assert.ok(icon.top >= box.top - 1 && icon.bottom <= box.bottom + 1, `link ${i}: icon is inside the link's line`)
+    assert.ok(box.height < 32, `link ${i}: icon does not stack under the text`)
+  }
   assert.equal(await dialog.getByRole('link', { name: 'GitHub' }).getAttribute('href'), project)
   await dialog.locator('summary').click()
   const build = await dialog.locator('dl > div').nth(1).locator('dd').textContent()
   assert.equal(await dialog.locator('.about-version').textContent(), `Version ${build.split(' ')[0]}`)
   await page.screenshot({ path: join(tmpdir(), 'bravebot-about.png') })
-  // Closing mid-wink must safely release the timer and avatar.
-  await mascot.click()
   await page.keyboard.press('Escape')
   await dialog.waitFor({ state: 'detached' })
   // A click on the backdrop closes it too; a keyboard click (no coordinates) above did not.
@@ -69,7 +49,7 @@ try {
   await dialog.waitFor({ state: 'detached' })
   await page.waitForTimeout(400)
   assert.deepEqual(errors, [])
-  console.log('PASS: About menu, hover, full wink, repeat click, keyboard, version, links, close')
+  console.log('PASS: About menu, no avatar, version, links, close')
 } finally {
   await app.close()
   rmSync(profile, { recursive: true, force: true })

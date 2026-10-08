@@ -30,8 +30,6 @@ import { LID, eyesToward, placeEyes, spriteOf, type Look, type Sprite } from './
  */
 export type Doing = 'idle' | 'waiting' | 'open' | 'working' | 'failed'
 
-export type Expression = 'neutral' | 'curious' | 'wink'
-
 /** Range of per-bot clock offsets, in seconds. */
 const CYCLE = 24
 /** How long a failed bot looks away before looking back, in seconds. */
@@ -45,7 +43,6 @@ export interface Registered {
   sprite: Sprite
   phase: number
   doing: Doing
-  expression: Expression
   /** What it was doing before, and when that changed, so the change can be played. */
   was: Doing
   since: number
@@ -93,20 +90,18 @@ let frame: number | null = null
 let drawn = 0
 
 /** How a face is held when nothing is moving it: the look React renders before the clock starts. */
-export function lookOf(sprite: Sprite, doing: Doing, expression: Expression): Look {
+export function lookOf(sprite: Sprite, doing: Doing): Look {
   return {
     gaze: sprite.gaze,
     drop: doing === 'working' ? 1 : 0,
     blink: false,
-    curious: expression === 'curious',
-    wink: expression === 'wink',
     nod: false,
   }
 }
 
 /** How a face is held at this moment. `still` is whether the person asked for reduced motion. */
 export function lookAt(entry: Registered, seconds: number, still = stillness): Look {
-  const look = lookOf(entry.sprite, entry.doing, entry.expression)
+  const look = lookOf(entry.sprite, entry.doing)
   if (still) return look
   const t = seconds + entry.phase
   const elapsed = seconds - entry.since
@@ -118,8 +113,7 @@ export function lookAt(entry: Registered, seconds: number, still = stillness): L
   const free = entry.doing === 'working' ? false : entry.doing !== 'failed' || elapsed >= LOOK_AWAY
   if (free && entry.aim) {
     if (entry.aim.side) look.gaze = entry.aim.side
-    // A curious eye already uses the row above, so it can only look down.
-    look.drop = look.curious ? (Math.max(0, entry.aim.drop) as 0 | 1) : entry.aim.drop
+    look.drop = entry.aim.drop
   }
   look.blink = blink(t, entry.seed) < 0.5
   look.nod = entry.was === 'working' && entry.doing === 'open' && completionNod(elapsed) > 0.08
@@ -184,7 +178,7 @@ function schedule(): void {
 }
 
 /** Start moving a face, and answer how to stop. */
-export function show(svg: SVGSVGElement, seed: string, doing: Doing = 'idle', expression: Expression = 'neutral'): () => void {
+export function show(svg: SVGSVGElement, seed: string, doing: Doing = 'idle'): () => void {
   const sprite = spriteOf(seed)
   const entry: Registered = {
     svg,
@@ -192,7 +186,6 @@ export function show(svg: SVGSVGElement, seed: string, doing: Doing = 'idle', ex
     sprite,
     phase: randomUnit(seed) * CYCLE,
     doing,
-    expression,
     was: doing,
     // Well in the past, so a face mounted while failed does not look away as if it just failed.
     since: performance.now() / 1000 - 60,
@@ -218,15 +211,6 @@ export function tell(svg: SVGSVGElement, doing: Doing): void {
   entry.doing = doing
   entry.since = performance.now() / 1000
   paint(entry, entry.since, true)
-  schedule()
-}
-
-/** Change the mascot's eyes without changing its task posture. */
-export function express(svg: SVGSVGElement, expression: Expression): void {
-  const entry = registered.get(svg)
-  if (!entry || entry.expression === expression) return
-  entry.expression = expression
-  paint(entry, performance.now() / 1000, true)
   schedule()
 }
 

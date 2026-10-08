@@ -122,10 +122,6 @@ export interface Look {
   /** Eyes moved by whole rows: 1 is down, at the work or at a pointer below; -1 is up. */
   drop: -1 | 0 | 1
   blink: boolean
-  /** Eyes two cells tall. */
-  curious: boolean
-  /** The bot's left eye closed. */
-  wink: boolean
   /** The whole figure one row down. */
   nod: boolean
 }
@@ -134,12 +130,12 @@ export interface EyePlacement { whiteX: number; pupilX: number; y: number; heigh
 
 /** Where each eye's white, pupil and lid go for a look, in grid cells. */
 export function placeEyes(sprite: Sprite, look: Look): EyePlacement[] {
-  return sprite.eyes.map((eye, i) => ({
+  return sprite.eyes.map((eye) => ({
     whiteX: look.gaze > 0 ? eye.x : eye.x + 1,
     pupilX: look.gaze > 0 ? eye.x + 1 : eye.x,
-    y: eye.y - (look.curious ? 1 : 0),
-    height: look.curious ? 2 : 1,
-    closed: look.blink || (look.wink && i === 0),
+    y: eye.y,
+    height: 1,
+    closed: look.blink,
   }))
 }
 
@@ -292,7 +288,7 @@ export function buildSprite(seed: string): Sprite {
   const bottom = top + widths.length - 1
 
   // The eyes sit as low on the body as leaves a body row under them, so looking down has
-  // somewhere to go, and a row over them, so a tall curious eye stays on the body.
+  // somewhere to go, and a row over them, so looking up has somewhere to go too.
   const outer = eyes === 'close' ? 2 : 3
   let eyeIndex = widths.length - (legs === 'none' ? 3 : 2)
   while (
