@@ -154,16 +154,8 @@
    A bot is a name, a purpose, a memory and a checkout. What a row shows is what tells two of them
    apart at a glance: the face, the name, and where it works. */
 
-/* The avatar: a small figure turning slowly, drawn by the shared renderer in `avatar/stage.ts`.
-   Nothing here paints the figure — its colours are its own, from a fixed set, and deliberately do
-   not follow the theme (see figure.ts for why). What this sheet does give it is the chip: a faint
-   neutral disc behind it, the shape every list of faces uses. It does two jobs. It makes every
-   avatar the same shape, so a tall head and a squat one sit in the row the same way, and it puts a
-   surface behind the pale pieces — a bobble, an ear — which on a light theme were otherwise pale
-   paint on a paler page. Mid-grey at low alpha, so it is a shade darker than a light column and a
-   shade lighter than a dark one, whichever the theme is. The canvas is transparent where there is
-   no figure, so the disc shows through around it and the body is cropped by the circle at the
-   bottom corners the way a headshot is. */
+/* The avatar: a pixel figure from `avatar/pixels.ts`, in its own colours, which do not follow the
+   theme. It is drawn straight onto the page, cropped to the figure so it fills its frame. */
 .bot-avatar-frame {
   position: relative;
   display: inline-block;
@@ -186,12 +178,7 @@
 .bot-avatar {
   flex: none;
   display: block;
-  border-radius: 50%;
-  background: var(--hover-wash);
 }
-/* The flat mark, which is what a machine with no WebGL gets instead. It carries its own fill — the
-   same shades the figure would have been — so there is nothing to paint here beyond the chip above,
-   which it shares. */
 
 @media (prefers-reduced-motion: reduce) { .entries { scroll-behavior: auto; } }
 

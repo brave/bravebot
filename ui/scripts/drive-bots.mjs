@@ -221,7 +221,7 @@ await page.screenshot({ path: '/tmp/bravebot-ui/21-bots-listed.png' })
 // changed when its name did would not be a face.
 await openBot(page, mine)
 check(
-  (await page.locator('main.transcript.bot-view h1').textContent())?.trim() === 'Release Notes',
+  (await page.locator('main.transcript.bot-view .head-titles h1').textContent())?.trim() === 'Release Notes',
   'opening a bot shows its own page',
 )
 check(
@@ -354,9 +354,10 @@ check(
   'opening the fold shows it by name',
 )
 check(
-  (await archivedRow.locator('canvas').count()) === 0,
-  'and draws no face — a page has a limited number of WebGL contexts, and an archive is exactly ' +
-    'the list that could spend them all on rows nobody is looking at',
+  (await archivedRow.locator('.bot-face .bot-avatar').count()) === 1 &&
+    (await archivedRow.locator('.bot-avatar-frame').count()) === 0,
+  'and draws its face still: an archive is the list that could grow to rows nobody is looking ' +
+    'at, so none of them is animated',
 )
 await back.screenshot({ path: '/tmp/bravebot-ui/23-bots-archived.png' })
 

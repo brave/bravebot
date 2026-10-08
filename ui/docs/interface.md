@@ -319,22 +319,28 @@ archived or not, and one opened from there is still that bot's conversation, so 
 continues the same record.
 
 An archived row is drawn like any other bot row, with the actions menu shown on hover or focus.
-Its face is a still picture (`BotFace`) instead of the animated figure. A page gets a limited number
-of WebGL contexts, as the avatar section below explains, and an archive is the list that can grow
-to forty rows nobody is looking at.
+Its face is a still picture (`BotFace`) instead of the animated one, because an archive is the list
+that can grow to forty rows nobody is looking at.
 
 #### The face
 
-Each bot has a seed-based three-dimensional avatar rendered with three.js. Its stored
-seed keeps the identity stable across renames. New avatars use versioned traits;
-older seeds retain their original appearance. Avatar colours do not change with appearance.
+Each bot has a pixel avatar generated from its stored seed, so it stays the same across renames
+and windows. The silhouette is a mirrored Space Invaders figure: a body, a crown, arms and legs
+picked from small sets, with about a third of bots breaking the mirror by a few cells. Some bodies
+are legless heads. The fill is a gradient between two or three paints at least 60 degrees apart in
+hue, walked through the paints between them, one colour per cell. The eyes are two cells each, a
+white cell and a pupil. Avatar colours do not change with appearance. A face has no background or
+rounded frame: it is drawn on the page and cropped to its own cells, so it fills whatever size it
+is given.
 
-The avatars share a WebGL renderer rather than allocating a context per bot.
-A flat canvas fallback uses the same traits when WebGL is unavailable. Motion is
-clock-based and deterministic: quiet pauses, brief glances and irregular blinks,
-with posture changes for running and failed turns and a single completion nod.
-Reduced-motion preferences suppress continuous movement. See
-`src/renderer/avatar/` and `src/renderer/components/BotAvatar.tsx`.
+Any stored seed draws a face, so every bot has one, new or old.
+
+Each face is an SVG with one rect per cell. One shared clock moves the animated ones by whole
+cells, writing attributes rather than re-rendering: idle glances swap the pupils, blinks close
+the eyes to a line, a running turn drops the eyes a row, a failed turn looks away for a few
+seconds, and finishing a turn nods the figure once. Reduced-motion preferences stop the clock, and
+a face then changes only when what its bot is doing changes. See `src/renderer/avatar/` and
+`src/renderer/components/BotAvatar.tsx`.
 
 #### How a purpose reaches the model
 
@@ -661,8 +667,8 @@ src/renderer/               the React app
   export.tsx                the PDF entry point, using the components the window uses
   components/               SettingsView, Sidebar, Transcript, BotView, FileTree,
                             Diff, TrustPrompt and BotAvatar are the load-bearing ones
-  avatar/stage.ts           one WebGL context, however many avatars, and their clock
-  avatar/figure.ts          what a friendly figure is made of, and what a seed varies
+  avatar/pixels.ts          the pixel figure a seed describes, and where its eyes go per look
+  avatar/clock.ts           one clock that blinks and moves every animated face
 src/shared/                 types both sides agree on
   protocol.ts               the wire format, mirroring the crate's own
   state.ts                  bravebot-ui.json as a whole, each key delegated to its parser

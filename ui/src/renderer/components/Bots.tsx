@@ -155,9 +155,8 @@ function BotRow({
  * One bot that has been put away.
  *
  * Drawn like the row above it, with the face as a still picture (`BotFace`) instead of the animated
- * figure. A page gets a limited number of WebGL contexts, and an archive is the list that can grow
- * to forty rows nobody is looking at, so spending one apiece would cost the bots in use their
- * faces. A still face also makes no claim about what the bot is doing.
+ * one. An archive is the list that can grow to forty rows nobody is looking at, so none of them is
+ * given to the animation clock. A still face also makes no claim about what the bot is doing.
  *
  * Two things to do with an archived bot, both in the row's actions menu, and they are not the same
  * size. Restore is free: it is the archive's whole point, and undoing it is one more click.
@@ -294,7 +293,7 @@ function BotForm({
 
       <div className="bot-form-identity">
         <div className="bot-form-avatar">
-          <BotAvatar seed={avatar} size={76} doing="waiting" />
+          <BotAvatar seed={avatar} size={80} doing="waiting" />
           <IconButton icon="refresh" label="Refresh avatar" tooltip="Try a new avatar appearance" kind="filled" size="tiny"
             className="bot-avatar-refresh" onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))} />
         </div>

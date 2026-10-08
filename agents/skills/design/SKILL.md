@@ -79,8 +79,8 @@ The structure is set in `styles/shell.css` and `columns.ts`. New surfaces fit in
    `node scripts/check-nala.mjs` (run by `npm run typecheck`) must pass. It only gets stricter.
    Never loosen it or raise a ratchet to make a change pass.
 2. **Icons are Leo `Icon`s.** Sizes are 12 (caption), 14 (meta), 16 (controls) and 20 (empty
-   states and dialog headers), from one stroke family. No inline `<svg>` except the `BotAvatar`
-   and `FlatAvatar` artwork, and no unicode glyphs as icons (`↑ ↓ ✓ ▸ › ⋯`, CSS `content:`
+   states and dialog headers), from one stroke family. No inline `<svg>` except the pixel avatar
+   artwork in `BotAvatar.tsx`, and no unicode glyphs as icons (`↑ ↓ ✓ ▸ › ⋯`, CSS `content:`
    arrows). Keyboard hints like "⌘N" are typography. `name` props are typed `IconName` literals,
    never `string`. Check that the name exists in `node_modules/@brave/leo/icons/*.svg`.
 3. **Icon-only controls use `IconButton`** (`components/IconButton.tsx`): a Leo `Button`, an `Icon`
