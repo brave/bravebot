@@ -259,6 +259,8 @@ file again is the cost of not keeping one.
 `verified-by: bravebot_agent::workspace::a_capped_search_says_where_to_continue_from`
 `verified-by: bravebot_agent::workspace::the_reported_offset_returns_the_following_matches`
 `verified-by: bravebot_agent::workspace::a_search_that_could_not_reach_every_file_offers_no_later_page`
+`verified-by: bravebot_agent::workspace::a_walk_that_stopped_short_has_no_end_of_matches_count`
+`verified-by: bravebot_agent::workspace::a_search_that_ran_out_of_time_offers_no_page_and_no_count`
 `verified-by: bravebot_agent::workspace::an_offset_past_the_last_match_says_how_many_there_were`
 `verified-by: bravebot_agent::workspace::an_offset_into_a_pattern_that_is_absent_is_not_a_page_past_the_end`
 `verified-by: bravebot_agent::turn::the_model_can_ask_for_a_later_page_of_matches`

@@ -75,6 +75,7 @@ released for display like any other line a tool puts on the screen. Nothing wait
 turn reads it back, and it is not sent anywhere.
 
 `verified-by: bravebot_agent::tools::what_the_turn_is_waiting_on_reaches_the_person_watching`
+`verified-by: bravebot_agent::tools::the_reason_is_labelled_from_its_context_and_released_for_display_alone`
 
 <a id="SCHED-6"></a>
 ### SCHED-6: a turn that will be asked again may arrange the next look

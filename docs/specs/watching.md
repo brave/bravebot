@@ -594,6 +594,7 @@ either word would be untrue.
 `verified-by: bravebot_tui::render::the_list_names_a_job_row_as_a_background_job`
 `verified-by: bravebot_tui::render::a_job_says_nothing_about_a_reading_until_it_has_printed`
 `verified-by: bravebot_tui::render::a_jobs_view_names_the_job_and_whether_it_still_runs`
+`verified-by: bravebot_tui::render::a_jobs_view_says_how_a_job_that_exited_ended`
 `verified-by: bravebot_tui::state::a_job_the_turn_stopped_reads_as_stopped_with_the_turn`
 `verified-by: bravebot_tui::state::a_turn_ending_ends_its_jobs_and_the_next_counts_only_its_own`
 
