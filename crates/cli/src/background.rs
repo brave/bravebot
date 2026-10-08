@@ -7,7 +7,7 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
-use bravebot_session::jobs::{Held, Lookup, Roster, Seen, State, Stopped};
+use bravebot_session::jobs::{Held, Lookup, Mode, Roster, Seen, State, Stopped};
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 
@@ -97,7 +97,7 @@ pub(crate) fn start(words: &[String]) -> ExitCode {
 
 fn launch(roster: &Roster, prompt: &str) -> ExitCode {
     let id = bravebot_session::jobs::new_id();
-    match start_host(roster, &id, prompt, None) {
+    match start_host(roster, &id, prompt, None, Mode::Ask) {
         Ok(()) => {
             let shown: String = id.chars().take(ID_SHOWN).collect();
             println!("{}", t!(bg_started, id = shown));
@@ -111,15 +111,16 @@ fn launch(roster: &Roster, prompt: &str) -> ExitCode {
 ///
 /// `first` is the line the process starts with, left where only it can take it (BG-2); an empty
 /// one starts the session idle. A session started again runs in the directory it worked in, since
-/// its record is found from there.
+/// its record is found from there. The process runs in `mode` for as long as it runs (BG-8).
 #[cfg(unix)]
 fn start_host(
     roster: &Roster,
     id: &str,
     first: &str,
     directory: Option<&str>,
+    mode: Mode,
 ) -> Result<(), ExitCode> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::time::{Duration, Instant};
 
     if let Err(err) = roster.leave_first_prompt(id, first) {
@@ -138,16 +139,11 @@ fn start_host(
         let _ = roster.take_first_prompt(id);
         return Err(fail(Ending::Failed, t!(bg_not_started)));
     };
-    let mut command = Command::new(me);
+    let mut command = host_command(&me, id, directory, mode);
     command
-        .arg("__bg-host")
-        .arg(id)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if let Some(directory) = directory {
-        command.current_dir(directory);
-    }
     if let Err(err) = command.spawn() {
         let _ = roster.take_first_prompt(id);
         return Err(fail(Ending::Failed, t!(bg_spawn_failed, problem = err)));
@@ -165,25 +161,67 @@ fn start_host(
     Err(fail(Ending::Failed, t!(bg_not_started)))
 }
 
+/// The command that runs the process for `id`: the hidden `__bg-host` with the mode word it runs in.
+#[cfg(unix)]
+fn host_command(
+    program: &std::path::Path,
+    id: &str,
+    directory: Option<&str>,
+    mode: Mode,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.arg("__bg-host").arg(id).arg(mode.word());
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    command
+}
+
 #[cfg(not(unix))]
 fn start_host(
     _roster: &Roster,
     _id: &str,
     _first: &str,
     _directory: Option<&str>,
+    _mode: Mode,
 ) -> Result<(), ExitCode> {
     Err(fail(Ending::Failed, t!(bg_unsupported)))
 }
 
-/// The hidden command a started session runs under.
+/// The hidden command a started session runs under, with the mode word it was started with.
 #[cfg(unix)]
-pub(crate) fn host(id: &str) -> ExitCode {
-    crate::host::host(id)
+pub(crate) fn host(id: &str, mode: Mode) -> ExitCode {
+    crate::host::host(id, mode)
 }
 
 #[cfg(not(unix))]
-pub(crate) fn host(_id: &str) -> ExitCode {
+pub(crate) fn host(_id: &str, _mode: Mode) -> ExitCode {
     ExitCode::FAILURE
+}
+
+/// `/bg`: hand the foreground session `left` to a background process, which resumes its record in
+/// `mode` and opens idle. Said on the terminal the foreground session leaves (BG-2).
+///
+/// Called after the interface has handed the terminal back, from the process the person ran, so
+/// the start of the session is still a thing a terminal did. The failure is the exit status to end
+/// with, and the record is still there to resume.
+pub(crate) fn hand_over(
+    left: &bravebot_session::sessions::Resumable,
+    mode: Mode,
+) -> Result<(), ExitCode> {
+    let Some(roster) = Roster::writable() else {
+        return Err(fail(Ending::Failed, t!(sessions_no_home)));
+    };
+    start_host(
+        &roster,
+        &left.id,
+        "",
+        Some(&left.directory.display().to_string()),
+        mode,
+    )?;
+    let shown: String = left.id.chars().take(ID_SHOWN).collect();
+    println!("{}", t!(bg_handed_over, id = shown));
+    Ok(())
 }
 
 /// Whether a background session is running under `id`, the id of a session record (BG-9).
@@ -249,7 +287,13 @@ fn running(typed: &str, wake: Wake<'_>) -> Result<(Roster, Seen, bool), ExitCode
                 Wake::Attach => String::new(),
                 Wake::Reply(text) => one_line(text),
             };
-            start_host(&roster, &seen.job.id, &first, Some(&seen.job.directory))?;
+            start_host(
+                &roster,
+                &seen.job.id,
+                &first,
+                Some(&seen.job.directory),
+                Mode::Ask,
+            )?;
             match roster.get(&seen.job.id) {
                 Some(started) => Ok((roster, started, true)),
                 None => Err(fail(Ending::Failed, t!(bg_not_started))),
@@ -518,6 +562,25 @@ fn state_in_words(seen: &Seen) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BG-8: the process is started with the word for the mode it runs in, in the directory the
+    /// session worked in, and a start that names no mode asks.
+    #[cfg(unix)]
+    #[test]
+    fn the_host_is_started_with_the_mode_it_runs_in() {
+        let command = host_command(
+            std::path::Path::new("/bin/bravebot"),
+            "3f2a9c1e",
+            Some("/work"),
+            Mode::AcceptEdits,
+        );
+        let arguments: Vec<_> = command.get_args().collect();
+        assert_eq!(arguments, ["__bg-host", "3f2a9c1e", "accept-edits"]);
+        assert_eq!(
+            command.get_current_dir(),
+            Some(std::path::Path::new("/work"))
+        );
+    }
     use bravebot_session::jobs::{Job, Mode};
     use std::path::Path;
 

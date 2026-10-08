@@ -8636,6 +8636,52 @@ fn a_record_a_running_session_holds_is_not_resumed() {
     let _ = host.wait();
 }
 
+/// BG-2 and BG-8: a process started with a mode word, as `/bg` starts one, runs in that mode and
+/// lists it; a word that names no mode starts nothing.
+#[cfg(unix)]
+#[test]
+fn a_handed_over_session_runs_in_the_mode_it_was_given() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let work = a_stopped_session_with_one_turn(&home, &gateway);
+    let job = home.0.join(format!(".bravebot/jobs/{SESSION_ID}"));
+
+    let host_with = |word: &str| {
+        std::fs::write(job.join("first-prompt"), "").expect("nothing to start with");
+        let _ = std::fs::remove_file(job.join("attach.sock"));
+        Command::new(env!("CARGO_BIN_EXE_bravebot"))
+            .env_clear()
+            .env("HOME", &home.0)
+            .env("BRAVEBOT_LOCALE", "en-US")
+            .env("OLLAMA_HOST", NO_OLLAMA)
+            .envs(AT_A_GATEWAY.iter().copied())
+            .args(["__bg-host", SESSION_ID, word])
+            .current_dir(&work)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the host starts")
+    };
+
+    let mut refused = host_with("bypass");
+    let status = refused.wait().expect("a host with no such mode ends");
+    assert!(!status.success());
+    assert!(!job.join("attach.sock").exists(), "a socket was bound");
+
+    let mut host = host_with("accept-edits");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while !job.join("attach.sock").exists() {
+        assert!(std::time::Instant::now() < until, "the host never listened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let listed = said(&bravebot(&home.0, &[], &["sessions", "--json"])).0;
+    assert!(listed.contains("\"mode\": \"accept-edits\""), "{listed}");
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = host.wait();
+}
+
 /// BG-10: a reply with no text is refused even when standard input carries some, because a prompt
 /// that arrived on a pipe is not a line a person typed.
 #[test]

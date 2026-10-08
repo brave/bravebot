@@ -72,7 +72,7 @@ pub fn session(
 /// A session in lines for a process no terminal owns, reading its prompts and its answers from
 /// the channel and writing everything to it (BG-1).
 ///
-/// The mode is the one every session opens in, bypass is not offered, and an allow rule in a
+/// The mode is the one the process was started in, bypass is not offered, and an allow rule in a
 /// settings file answers nothing: a rule is a decision about a session somebody is sitting in
 /// front of (BG-8). A question about starting a server is held for whoever attaches, so nothing a
 /// person did not see is started (BG-7).
@@ -84,6 +84,16 @@ pub(crate) fn hosted(hosting: crate::host::Hosting) -> ExitCode {
         bravebot_agent::turn::SystemPrompts::default(),
         Some(hosting),
     )
+}
+
+/// The mode every turn runs under: a background session's process holds the one it was started
+/// in and is never in bypass, and a session in lines is in bypass only when the flag asked (BG-8).
+fn mode_of(hosting: Option<&crate::host::Hosting>, skip_permissions: bool) -> PermissionMode {
+    match (hosting, skip_permissions) {
+        (Some(hosting), _) => hosting.mode.permission_mode(),
+        (None, true) => PermissionMode::Bypass,
+        (None, false) => PermissionMode::Ask,
+    }
 }
 
 /// The prompt line, the answers, what is said beside the work, and where a background session's
@@ -173,10 +183,7 @@ fn run(
         ),
     };
 
-    let mode = match skip_permissions {
-        true => PermissionMode::Bypass,
-        false => PermissionMode::Ask,
-    };
+    let mode = mode_of(hosting.as_ref(), skip_permissions);
 
     let pick = bravebot_agent::backend::pick(
         &config,
@@ -1501,6 +1508,33 @@ mod tests {
         }
     }
 
+    /// BG-8: a hosted session's turns run in the mode its process was started in, whatever the
+    /// flag that skips permissions says, and a session in lines is in bypass only by that flag.
+    #[test]
+    fn a_hosted_session_runs_in_the_mode_it_was_started_in() {
+        use crate::host::{Hosting, Shared};
+        use bravebot_session::jobs::{Mode, Roster};
+
+        const ID: &str = "11111111-1111-4111-8111-111111111111";
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("plain-mode-{}", std::process::id()));
+        let roster = Roster::at(root.clone());
+        for (mode, expected) in [
+            (Mode::Ask, PermissionMode::Ask),
+            (Mode::AcceptEdits, PermissionMode::AcceptEdits),
+            (Mode::Plan, PermissionMode::Plan),
+        ] {
+            let job = crate::host::entry(&roster, ID, None, mode);
+            let shared = Shared::new(Roster::at(root.clone()), job, None);
+            let hosting = Hosting::of(&shared);
+            assert_eq!(mode_of(Some(&hosting), false), expected);
+            assert_eq!(mode_of(Some(&hosting), true), expected);
+        }
+        assert_eq!(mode_of(None, false), PermissionMode::Ask);
+        assert_eq!(mode_of(None, true), PermissionMode::Bypass);
+    }
+
     /// BG-13: a hosted session that waits for a prompt for as long as it is allowed to leaves the
     /// loop, as a session whose input ended does, and what is recorded for it is `stopped`. The
     /// first prompt is a turn like any other, so the time counts from the prompt after it.
@@ -1515,7 +1549,12 @@ mod tests {
             .join("../../target/test-scratch")
             .join(format!("plain-idle-{}", std::process::id()));
         let roster = Roster::at(root.clone());
-        let job = crate::host::entry(&roster, ID, Some("fix the build"));
+        let job = crate::host::entry(
+            &roster,
+            ID,
+            Some("fix the build"),
+            bravebot_session::jobs::Mode::Ask,
+        );
         let shared = Shared::ending_when_idle_for(
             Roster::at(root),
             job,

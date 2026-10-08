@@ -140,6 +140,23 @@ impl Mode {
         }
     }
 
+    /// The mode the session's turns run under.
+    pub fn permission_mode(self) -> bravebot_agent::PermissionMode {
+        use bravebot_agent::PermissionMode;
+        match self {
+            Self::Ask => PermissionMode::Ask,
+            Self::AcceptEdits => PermissionMode::AcceptEdits,
+            Self::Plan => PermissionMode::Plan,
+        }
+    }
+
+    /// The mode a word names, the one [`Mode::word`] gives.
+    pub fn named(word: &str) -> Option<Self> {
+        [Self::Ask, Self::AcceptEdits, Self::Plan]
+            .into_iter()
+            .find(|mode| mode.word() == word)
+    }
+
     /// The word `--json` prints and the roster stores.
     pub fn word(self) -> &'static str {
         match self {
@@ -816,6 +833,19 @@ mod tests {
             Mode::of(PermissionMode::AcceptEdits),
             Some(Mode::AcceptEdits)
         );
+    }
+
+    /// BG-8: the word a host is started with names the mode it runs in, and no word names bypass.
+    #[test]
+    fn a_mode_word_names_the_mode_it_was_printed_for() {
+        use bravebot_agent::PermissionMode;
+        for mode in [Mode::Ask, Mode::AcceptEdits, Mode::Plan] {
+            assert_eq!(Mode::named(mode.word()), Some(mode));
+            assert_eq!(Mode::of(mode.permission_mode()), Some(mode));
+        }
+        assert_eq!(Mode::named("bypass"), None);
+        assert_eq!(Mode::named(""), None);
+        assert_eq!(Mode::Plan.permission_mode(), PermissionMode::Plan);
     }
 
     /// The last turn is stamped when the state leaves working, not before.

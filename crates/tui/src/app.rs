@@ -181,6 +181,9 @@ const BRANCH_COMMAND: &str = "/branch";
 /// The line that picks up another session of this directory, by id or from the picker (CMD-14).
 const RESUME_COMMAND: &str = "/resume";
 
+/// The line that hands this session to a background process and leaves this one (BG-2).
+const BACKGROUND_COMMAND: &str = "/bg";
+
 /// The line that renames this session, taking the new name as its argument.
 const RENAME_COMMAND: &str = "/rename";
 
@@ -444,6 +447,12 @@ pub fn commands() -> [Command; 44] {
             name: RESUME_COMMAND,
             argument: "[<id>]",
             description: t!(command_resume),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: BACKGROUND_COMMAND,
+            argument: "",
+            description: t!(command_background),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -739,6 +748,9 @@ pub enum Action {
     /// Close one directory `/add-dir` opened. Needs the workspace, the trust map and the session
     /// record, which the loop owns.
     CloseDirectory(String),
+    /// Hand this session to a background process and leave. Needs the session record, which the
+    /// loop owns.
+    Background,
     /// Work somewhere else from now on. Needs the workspace, the trust map and the session
     /// record, all of which the loop owns.
     ChangeDirectory(String),
@@ -2116,6 +2128,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(goal) = argument_to(line, HANDOFF_COMMAND) {
         return Action::Handoff(goal.to_string());
     }
+    if line.trim() == BACKGROUND_COMMAND {
+        return Action::Background;
+    }
     // Only names which record to pick up: nothing typed here is sent, and the record is read and
     // restored by the path `--resume` takes (CMD-14).
     if let Some(id) = argument_to(line, RESUME_COMMAND) {
@@ -3257,6 +3272,12 @@ pub enum Start {
 pub enum Ended {
     /// The person left, with the session left behind where there is one to pick up again.
     Left(Option<bravebot_session::sessions::Resumable>),
+    /// The person handed the session to a background process (BG-2). Its record is written, and
+    /// the caller starts the process in `mode` once the terminal is handed back.
+    Background {
+        left: bravebot_session::sessions::Resumable,
+        mode: bravebot_session::jobs::Mode,
+    },
     /// The session never began, because the definition it was started under was refused for this
     /// reason. The caller prints it after the terminal is handed back, so it stays on the screen.
     Refused(String),
@@ -3599,6 +3620,48 @@ fn show_transcript(
 /// eventually printed into did not move with it.
 fn left_behind(stored: &bravebot_session::sessions::Handle) -> Ended {
     Ended::Left(stored.to_resume())
+}
+
+/// The first option this session was started with that a background process does not read, set
+/// once by the command line before the interface opens.
+static BACKGROUND_LOSES: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Record an option the session was started with that `/bg` could not pass on. Only the first one
+/// is kept, since one is enough to refuse.
+pub fn background_cannot_carry(flag: &str) {
+    let _ = BACKGROUND_LOSES.set(flag.to_string());
+}
+
+/// How `/bg` ends the session, or the reason it cannot (BG-2, BG-8).
+///
+/// Everything refused here is something the background process would not carry: a mode that answers
+/// every question, an option given on the command line, which that process never receives, a loop,
+/// a goal or a watch, which the process has no way to run yet, and a session with no record, which
+/// is all it resumes from.
+fn handed_to_the_background(
+    session: &Session,
+    resumable: Option<bravebot_session::sessions::Resumable>,
+    lost: Option<&str>,
+) -> Result<Ended, String> {
+    if !cfg!(unix) {
+        return Err(t!(bg_unsupported).to_string());
+    }
+    let Some(mode) = bravebot_session::jobs::Mode::of(session.permission_mode()) else {
+        return Err(t!(session_bg_bypass).to_string());
+    };
+    if let Some(flag) = lost {
+        return Err(t!(session_bg_option_lost, flag = flag).to_string());
+    }
+    if session.looping().is_some() || session.goal().is_some() || !session.watches().is_empty() {
+        return Err(t!(session_bg_keeps_nothing_running).to_string());
+    }
+    let Some(left) = resumable else {
+        return Err(match bravebot_core::incognito::engaged() {
+            true => t!(session_bg_incognito).to_string(),
+            false => t!(session_bg_nothing_recorded).to_string(),
+        });
+    };
+    Ok(Ended::Background { left, mode })
 }
 
 /// The directory this session writes what is not part of the project into, made and reachable.
@@ -4459,6 +4522,14 @@ fn event_loop(
                 }
             }
             Action::Rename(name) => rename_session(&mut session, &mut stored, &name),
+            Action::Background => match handed_to_the_background(
+                &session,
+                stored.to_resume(),
+                BACKGROUND_LOSES.get().map(String::as_str),
+            ) {
+                Ok(ended) => return Ok(ended),
+                Err(refused) => session.note(refused),
+            },
             Action::Branch(name) => {
                 // And a directory of its own, as a session carrying on from another is given one
                 // (TRUST-15): the old one goes with the session that wrote in it.
@@ -25836,6 +25907,125 @@ mod tests {
         }
         handle_key_while_working(&mut session, key(KeyCode::Enter));
         assert_eq!(waiting_prompts(&session), vec!["/branch"]);
+    }
+
+    /// BG-2: `/bg` is a command of its own, a longer word or a sentence mentioning it stays a prompt
+    /// (CMD-2), and typed during a turn it waits for the turn (CMD-8).
+    #[test]
+    fn the_background_command_is_never_a_prompt_and_waits_for_the_turn() {
+        let mut session = Session::new("none");
+        for c in "/bg".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Background
+        );
+        for line in ["what does /bg do", "/bgx", "/bg now"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert!(
+                matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Submit(_)
+                ),
+                "{line:?} was taken for the command"
+            );
+        }
+        let mut session = a_turn_running_on("first");
+        for c in "/bg".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_eq!(waiting_prompts(&session), vec!["/bg"]);
+    }
+
+    fn a_record() -> Option<bravebot_session::sessions::Resumable> {
+        Some(bravebot_session::sessions::Resumable {
+            id: "3f2a9c1e-0000-4000-8000-000000000000".to_string(),
+            directory: std::path::PathBuf::from("/work"),
+        })
+    }
+
+    /// BG-2 and BG-8: `/bg` ends the session handing over its record and the mode it was in, for
+    /// every mode a background session can run in.
+    #[test]
+    fn the_background_command_carries_the_record_and_the_mode() {
+        use bravebot_session::jobs::Mode;
+        if !cfg!(unix) {
+            return;
+        }
+        let mut editing = Session::new("none");
+        editing.cycle_permission_mode();
+        let mut planning = Session::new("none");
+        planning.enter_plan_mode();
+        for (session, expected) in [
+            (Session::new("none"), Mode::Ask),
+            (editing, Mode::AcceptEdits),
+            (planning, Mode::Plan),
+        ] {
+            match handed_to_the_background(&session, a_record(), None) {
+                Ok(Ended::Background { left, mode }) => {
+                    assert_eq!(mode, expected);
+                    assert_eq!(left.directory, std::path::PathBuf::from("/work"));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    /// BG-8: a session in bypass is not handed over, and says why.
+    #[test]
+    fn the_background_command_is_refused_in_bypass() {
+        if !cfg!(unix) {
+            return;
+        }
+        let session = Session::new("none").starting_in_bypass();
+        assert_eq!(
+            handed_to_the_background(&session, a_record(), None).unwrap_err(),
+            t!(session_bg_bypass).to_string()
+        );
+    }
+
+    /// BG-2: an option given on the command line never reaches the background process, so a session
+    /// started with one is not handed over.
+    #[test]
+    fn the_background_command_is_refused_after_an_option_it_cannot_pass_on() {
+        if !cfg!(unix) {
+            return;
+        }
+        let session = Session::new("none");
+        let refused =
+            handed_to_the_background(&session, a_record(), Some("--no-shell")).unwrap_err();
+        assert_eq!(
+            refused,
+            t!(session_bg_option_lost, flag = "--no-shell").to_string()
+        );
+        assert!(refused.contains("--no-shell"), "{refused}");
+    }
+
+    /// BG-2: a session with nothing recorded has nothing to hand over, and a loop, a goal or a
+    /// watch would be dropped without a word, so each is refused.
+    #[test]
+    fn the_background_command_is_refused_without_a_record_or_with_work_it_would_drop() {
+        if !cfg!(unix) {
+            return;
+        }
+        let session = Session::new("none");
+        let refused = handed_to_the_background(&session, None, None).unwrap_err();
+        assert!(
+            refused == t!(session_bg_nothing_recorded) || refused == t!(session_bg_incognito),
+            "{refused}"
+        );
+
+        let mut session = Session::new("none");
+        session.start_goal("the tests pass".to_string());
+        assert_eq!(
+            handed_to_the_background(&session, a_record(), None).unwrap_err(),
+            t!(session_bg_keeps_nothing_running).to_string()
+        );
     }
 
     /// CMD-14: `/resume` alone asks for the picker and `/resume <id>` names a record, and neither is
