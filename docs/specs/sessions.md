@@ -211,6 +211,8 @@ format that could not read the previous one would be paid for in exactly the thi
 `verified-by: bravebot_tui::persist::an_appended_prompt_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::a_cancelled_prompt_is_removed_from_the_stored_history`
 `verified-by: bravebot_tui::persist::the_stored_history_is_capped`
+`verified-by: bravebot_tui::persist::a_history_grown_by_appending_is_capped_when_read`
+`verified-by: bravebot_session::store::the_entry_count_is_capped_on_read`
 `verified-by: bravebot_tui::persist::a_multiline_prompt_survives_a_round_trip_on_disk`
 `verified-by: bravebot_tui::persist::saving_replaces_what_was_stored`
 `verified-by: bravebot_tui::history::consecutive_duplicates_are_collapsed`

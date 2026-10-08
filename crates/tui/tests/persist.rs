@@ -117,6 +117,22 @@ fn the_stored_history_is_capped() {
     });
 }
 
+/// Appending never rewrites the file, so a history that grew one prompt at a time is longer than
+/// the cap on disk and is cut when it is read.
+#[test]
+fn a_history_grown_by_appending_is_capped_when_read() {
+    with_temp_home("cap-append", || {
+        for n in 0..1_200 {
+            store::append_history(&sent(&format!("prompt {n}")));
+        }
+
+        let loaded = store::load_history();
+        assert_eq!(loaded.len(), 1_000);
+        assert_eq!(loaded.first().unwrap().prompt, "prompt 200");
+        assert_eq!(loaded.last().unwrap().prompt, "prompt 1199");
+    });
+}
+
 /// A hand-edited or corrupt file must not stop a session starting.
 #[test]
 fn a_corrupt_file_reads_as_no_history() {
