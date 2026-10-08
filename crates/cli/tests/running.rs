@@ -6065,6 +6065,142 @@ fn an_agent_setting_naming_nothing_is_said_and_the_run_goes_on() {
     assert!(!stdout.contains(r#""agent":"nobody""#), "{stdout}");
 }
 
+/// ADDRESS-13 in a session in lines, which resolves the setting by its own code. The setting is the
+/// only thing naming the definition, so the opening lines name it only if the session took it, and
+/// they say the setting chose it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_works_under_the_agent_setting() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = Scratch::new("cli-running-plain-agent-setting")
+        .with_settings(&settings_naming_an_agent(&gateway, "rule-reviewer"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+
+    let output = in_a_terminal_answering(&scratch.path, AT_A_GATEWAY, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains("every prompt is addressed to rule-reviewer"),
+        "the session did not take the setting's definition: {transcript}"
+    );
+    assert!(
+        transcript.contains("the agent setting chose this definition"),
+        "the session did not say the setting chose it: {transcript}"
+    );
+}
+
+/// ADDRESS-13 in a session in lines: `--agent` outranks the setting, and a session that took the
+/// flag's definition does not say the setting chose it.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_agent_flag_outranks_the_agent_setting_in_a_session_in_lines() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = Scratch::new("cli-running-plain-agent-setting-flag")
+        .with_settings(&settings_naming_an_agent(&gateway, "rule-reviewer"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        )
+        .with_state(
+            "agents/scribe.md",
+            &a_definition("scribe", "kind: reader\n"),
+        );
+
+    let output = in_a_terminal_answering(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--plain", "--agent", "scribe"],
+        "y\n",
+    );
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains("every prompt is addressed to scribe"),
+        "{transcript}"
+    );
+    assert!(
+        !transcript.contains("rule-reviewer")
+            && !transcript.contains("the agent setting chose this definition"),
+        "the setting won over the flag: {transcript}"
+    );
+}
+
+/// ADDRESS-13 in a session in lines: a setting naming a definition that does not exist is said and
+/// the session opens without one, where the same name on the command line would refuse it. The
+/// startup question being put and the end of the input ending the session with success is what says
+/// it opened.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_agent_setting_naming_nothing_is_said_and_a_session_in_lines_goes_on() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = Scratch::new("cli-running-plain-agent-setting-missing")
+        .with_settings(&settings_naming_an_agent(&gateway, "nobody"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+
+    let output = in_a_terminal_answering(&scratch.path, AT_A_GATEWAY, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains("the agent setting names nobody")
+            && transcript.contains("there is no definition called nobody"),
+        "the missing name was not said: {transcript}"
+    );
+    assert!(
+        !transcript.contains("every prompt is addressed to"),
+        "the session worked under a definition that was not found: {transcript}"
+    );
+}
+
+/// ADDRESS-13: a manifest run is addressed to no definition, so the setting is not applied to it.
+/// The definition exists and the setting names it, so a run that applied the setting would say the
+/// setting chose it and name it in the result object.
+#[test]
+fn a_manifest_run_is_not_addressed_to_the_agent_setting() {
+    let gateway = a_gateway("[]", |_| http(401, r#"{"error":{"message":"denied"}}"#));
+    let scratch = Scratch::new("cli-running-agent-setting-manifest")
+        .with_settings(&settings_naming_an_agent(&gateway, "rule-reviewer"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "--mode",
+            "manifest",
+            "--dangerously-skip-permissions",
+            "--json",
+            "-p",
+            "say something",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !stderr.contains("the agent setting chose this definition")
+            && !stdout.contains("rule-reviewer")
+            && !stderr.contains("rule-reviewer"),
+        "the manifest run was addressed to the setting's definition: {stdout}\n{stderr}"
+    );
+    // The run reached the planner, which is what makes the absence above about the setting rather
+    // than about a run that stopped before it was read.
+    assert!(
+        gateway.asked.recv_timeout(Duration::from_secs(5)).is_ok(),
+        "the manifest run sent no request: {stdout}\n{stderr}"
+    );
+}
+
 /// A checkout's `agent` is dropped and `doctor` says so, for the reason its `fallbackModel` is
 /// (ADDRESS-13).
 #[test]

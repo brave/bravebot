@@ -482,6 +482,10 @@ reason in [ADDRESS-11](#ADDRESS-11).
 `verified-by: bravebot_cli::running::a_checkouts_agent_setting_does_not_address_a_run`
 `verified-by: bravebot_cli::running::an_agent_setting_naming_nothing_is_said_and_the_run_goes_on`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_agent_is_not_obeyed`
+`verified-by: bravebot_cli::running::a_manifest_run_is_not_addressed_to_the_agent_setting`
+`verified-by: bravebot_cli::running::a_session_in_lines_works_under_the_agent_setting`
+`verified-by: bravebot_cli::running::the_agent_flag_outranks_the_agent_setting_in_a_session_in_lines`
+`verified-by: bravebot_cli::running::an_agent_setting_naming_nothing_is_said_and_a_session_in_lines_goes_on`
 `verified-by: bravebot_tui::app::a_session_with_no_other_name_works_under_the_agent_setting`
 `verified-by: bravebot_tui::app::the_agent_setting_does_not_replace_a_typed_or_recorded_name`
 `verified-by: bravebot_tui::app::an_agent_setting_naming_nothing_is_said_and_the_session_opens`
