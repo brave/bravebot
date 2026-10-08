@@ -103,6 +103,9 @@ cli-options-heading = Options:
 cli-option-file = Include a workspace file as context (repeatable)
 cli-option-add-dir = Reach into a directory outside the working one (repeatable)
 cli-option-settings = Read this settings file for this run, above the ones found on disk
+cli-option-run-network =
+    Whether programs `run` starts may reach the network. closed denies it to every one except a package
+    manager's fetch, git or gh with a remote operation, curl, ssh and a stage with a remote scope
 cli-option-agent = Address every turn to this definition, as /agent does for one
 cli-option-system-prompt =
     Replace the opening sentence of the planner's system prompt for every turn. The rest of it stays
@@ -141,6 +144,8 @@ cli-add-dir-needs-a-path = --add-dir requires an absolute path to a directory
 cli-directory-ends-checkouts = { $directory } holds the working directory, so no delegate is given a checkout while it is open; start again without --add-dir { $directory } to have one
 cli-settings-needs-a-path = --settings requires a path to a settings file
 cli-settings-not-a-file = --settings names no file: { $path }
+cli-run-network-needs-a-word = --run-network requires open or closed
+cli-run-network-unknown = --run-network takes open or closed, not { $word }
 cli-agent-needs-a-name = --agent requires the name of a definition
 # The command is the first argument, one of this program's own subcommands.
 cli-agent-not-for-a-command =
@@ -439,6 +444,14 @@ doctor-settings-fallback-ignored =
 # the session is as permissive as one that named nothing, and nothing else would say so.
 doctor-settings-narrowing-ignored =
     { $key } in { $path } is not a boolean, so it is read as absent and refuses nothing
+doctor-run-network = run network
+doctor-run-network-closed = closed, except for steps that fetch or reach a remote ({ $source })
+doctor-settings-network-ignored =
+    run.network "open" in { $path } is not obeyed: a checkout can close the network and never open it
+doctor-settings-network-unreadable =
+    run.network in { $path } is neither open nor closed, so it is read as absent
+doctor-managed-network-unreadable =
+    run.network in { $path } is neither open nor closed, so the network is closed
 # An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
 # the reason the vetting line gives: a rule that looks like configuration and does nothing is the
 # one worth saying out loud.
@@ -1384,6 +1397,8 @@ run-carries-aws = { $program } also reads your aws credentials in ~/.aws
 run-carries-kubernetes = { $program } also reads your kubernetes credentials in ~/.kube
 run-carries-docker = { $program } also reads your docker credentials in ~/.docker
 run-carries-reach = { $program } also reads { $path }, where your { $variable } points
+run-network-closed = the network is closed for programs this session starts, except for those below
+run-keeps-network = { $program } also reaches the network
 # Said above the list of what a line reaches that nothing here holds: no credential is handed
 # over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
 # only where a line reaches one, so the list is never empty and never noise. The line above is
@@ -1716,6 +1731,16 @@ status-permissions-cycle = shift-tab to change
 status-vetting = Vetting
 status-vetting-auto = a check that finds nothing reads content to the model without asking
 status-vetting-where = kept in ~/.bravebot/vetting
+# Said only where the network for the programs a command starts is closed. The note says who closed
+# it, since that decides how it is opened again.
+status-network = Programs' network
+status-network-closed = closed, except for steps that fetch or reach a remote
+status-network-by-default = closed by default
+status-network-by-flag = closed by --run-network
+status-network-by-settings = closed by run.network in { $path }
+status-network-by-a-setting = closed by run.network in a settings file
+status-network-pinned = pinned closed by { $path } and not changeable by a flag or a settings file
+status-network-pinned-by-policy = pinned closed by the managed settings and not changeable by a flag or a settings file
 status-this-session = This session
 # Where a session's wall clock went. Four figures, because the whole is unactionable: a session
 # that took an hour on the model, an hour on subprocesses, and an hour waiting for its user to
@@ -2675,6 +2700,7 @@ agent-checkout-not-applied =
 # session is running inside: the agent's own work and the programs a person asks for are outside any
 # such boundary. /status carries the second half of that, which there is no room for here.
 opening-confinement = confinement available: { $level }
+opening-network-closed = network closed
 opening-invitation = Ask a question about this workspace.
 
 

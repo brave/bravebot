@@ -2537,6 +2537,86 @@ const AT_A_GATEWAY: &[(&str, &str)] = &[
     ("OPENROUTER_API_KEY", "a-token"),
 ];
 
+/// A gateway whose model asks to run `echo hello` and, once that call has an answer in the
+/// conversation, says it is done.
+#[cfg(unix)]
+fn a_gateway_asking_for_a_run() -> Gateway {
+    a_gateway(r#"["tools"]"#, |body| {
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"run",
+                        "arguments":"{\"command\":\"echo hello\",\"why\":\"say hello\"}"}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// SANDBOX: `--run-network closed` reaches the programs `run` starts, the planner's description of
+/// them and the trail, and a run without it reaches none of the three. Permissions are skipped so
+/// the call reaches the point where a line starts, which is where the trail entry is made.
+///
+/// A property of the process: the flag is read in `main`, settled once, and read again by the
+/// confinement a call builds, by the description the planner is offered and by the trail, and
+/// only a run that goes through all of them says whether they are joined up. Every in-crate test
+/// sets the network on the confinement itself, so a link that dropped the setting would leave them
+/// passing while a closed network ran open. `echo` earns no egress, so the entry names the whole
+/// run, and the open run is the control that fails if the entry or the sentence is written for
+/// every run.
+#[cfg(unix)]
+#[test]
+fn a_closed_network_reaches_the_description_and_the_trail_of_a_run() {
+    let run_in = |name: &str, flags: &[&str]| {
+        let gateway = a_gateway_asking_for_a_run();
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let mut arguments = flags.to_vec();
+        arguments.extend([
+            "--dangerously-skip-permissions",
+            "--trace",
+            "-p",
+            "say hello",
+        ]);
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(&scratch.path, &scratch.path, &environment, &arguments);
+        let (_, stderr) = said(&output);
+        let asked = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        (asked, stderr)
+    };
+
+    let (asked, stderr) = run_in("cli-running-network-closed", &["--run-network", "closed"]);
+    assert!(
+        asked.contains("The network is closed"),
+        "the planner was not told the network is closed: {asked}"
+    );
+    assert!(
+        stderr.contains("ok      run_network: the network was closed for every stage of this run"),
+        "the trail did not record the closed network: {stderr}"
+    );
+
+    let (asked, stderr) = run_in("cli-running-network-open", &[]);
+    assert!(
+        !asked.contains("The network is closed"),
+        "a run nobody closed the network for told the planner it was closed: {asked}"
+    );
+    assert!(
+        !stderr.contains("run_network"),
+        "a run nobody closed the network for recorded it: {stderr}"
+    );
+}
+
 /// A level recorded in the store does not reach a request to a model whose listing states which
 /// parameters it takes and does not name the field (BACKEND-22).
 ///

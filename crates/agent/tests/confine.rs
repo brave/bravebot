@@ -9,7 +9,11 @@ use bravebot_agent::confine::Confinement;
 use bravebot_agent::exec;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::command::Plan;
+use bravebot_sandbox::network::Network;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A session directory, a second one beside it that the session was not opened on, and a home
 /// directory holding a credential of each kind, all under the build directory.
@@ -262,4 +266,121 @@ fn a_program_left_running_is_confined_as_well() {
     assert!(job.ended(), "the job did not finish");
     assert!(!target.exists(), "the job wrote outside the session");
     assert_ne!(job.codes(), [Some(0)], "the write succeeded");
+}
+
+fn can_close_the_network() -> bool {
+    can_confine()
+        && bravebot_sandbox::for_current_platform()
+            .is_ok_and(|sandbox| sandbox.capabilities().network_denial_enforced)
+}
+
+/// Whether anything connected to a loopback listener while `line` ran under `confinement`.
+///
+/// What is observed is the listener's accept, not the program's exit status: a program that is
+/// refused and one that finds nothing listening exit alike, so only a connection that arrived says
+/// the network was reached.
+fn reached_a_listener(
+    places: &Places,
+    line: impl FnOnce(u16) -> String,
+    confinement: Option<&Confinement>,
+) -> bool {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    listener.set_nonblocking(true).expect("a polling listener");
+    let port = listener.local_addr().expect("the bound address").port();
+    let stop = Arc::new(AtomicBool::new(false));
+    let watching = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut seen = false;
+            while !stop.load(Ordering::Relaxed) {
+                if listener.accept().is_ok() {
+                    seen = true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            seen || listener.accept().is_ok()
+        })
+    };
+    let _ = places.run(&line(port), confinement);
+    stop.store(true, Ordering::Relaxed);
+    watching.join().expect("the watcher")
+}
+
+/// The regression it rejects: a closed setting that is read and never applied, so a program with
+/// no reason to reach the network reaches it. The same line under the open setting is the control
+/// that this machine lets the connection through, without which the refusal means nothing.
+#[test]
+fn a_closed_network_stops_a_program_with_no_reason_to_reach_it() {
+    if !can_close_the_network() {
+        return;
+    }
+    let places = Places::new("network-closed");
+    let line = |port: u16| format!("nc -z 127.0.0.1 {port}");
+
+    let control = reached_a_listener(&places, line, Some(&places.confinement()));
+    let closed = places.confinement().with_network(Network::Closed);
+    let refused = reached_a_listener(&places, line, Some(&closed));
+
+    assert!(control, "the open network did not reach the listener");
+    assert!(!refused, "a closed network let a connection through");
+}
+
+/// The regression it rejects: the closed setting taking egress from the stages it exists to leave
+/// it with. A `git ls-remote` carries the remote scope and `curl` exists to fetch, and both reach
+/// the listener with the network closed.
+#[test]
+fn a_closed_network_keeps_a_remote_stage_and_curl_reaching_it() {
+    if !can_close_the_network() {
+        return;
+    }
+    let places = Places::new("network-remote");
+    // Its own repository, since git finds the one above the build directory otherwise and is
+    // refused it for being outside the session.
+    let initialised = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&places.session)
+        .status()
+        .expect("git runs");
+    assert!(initialised.success());
+    let closed = places.confinement().with_network(Network::Closed);
+
+    let remote = reached_a_listener(
+        &places,
+        |port| format!("git ls-remote git://127.0.0.1:{port}/repository.git"),
+        Some(&closed),
+    );
+    let fetched = reached_a_listener(
+        &places,
+        |port| format!("curl -s --noproxy * -m 3 http://127.0.0.1:{port}/"),
+        Some(&closed),
+    );
+
+    assert!(remote, "a remote stage lost its network");
+    assert!(fetched, "curl lost its network");
+}
+
+/// The regression it rejects: a platform that cannot deny the network running the stage with it
+/// open. It refuses, and the refusal names the setting.
+#[test]
+fn a_platform_that_cannot_close_the_network_refuses_the_stage() {
+    if !can_confine() || can_close_the_network() {
+        return;
+    }
+    let places = Places::new("network-refused");
+    let closed = places.confinement().with_network(Network::Closed);
+
+    let refused = exec::run_plan_observed(
+        &places.plan("cat inside.txt"),
+        &Cancel::new(),
+        exec::LIMIT,
+        None,
+        None,
+        Some(&closed),
+        &mut |_| Ok(()),
+    );
+
+    assert!(
+        matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. }) if detail.contains("run.network")),
+        "{refused:?}"
+    );
 }

@@ -342,6 +342,22 @@ pub struct Settings {
     run_output: Option<usize>,
     /// What `run.defaultSeconds` and `run.maxSeconds` said, where they said anything.
     run_deadlines: RunDeadlines,
+    /// What `run.network` came to across the layers, if any of them said it.
+    ///
+    /// Settled by [`Settings::layered`] and not read off the merged root, because the layers are not
+    /// equal here: the person's own file and the one `--settings` names say `open` or `closed`, and
+    /// a checkout's file may say `closed` and never `open`, since the word it says removes reach
+    /// from whoever cloned it and the other would give reach back.
+    run_network: Option<bravebot_sandbox::network::Network>,
+    /// The file whose word is the answer above, for a report that has to name it.
+    run_network_by: Option<PathBuf>,
+    /// The checkout layers that said `open` and were not obeyed, weakest first, for `doctor`.
+    run_network_ignored: Vec<PathBuf>,
+    /// The layers that named `run.network` as something other than `open` or `closed`.
+    ///
+    /// Kept for the reason `narrowing_unreadable` is: a mistyped `"close"` leaves the network open,
+    /// and the person who wrote it believes it is not.
+    run_network_unreadable: Vec<PathBuf>,
     /// What `tui.wheelRows` said, if it said a whole positive count.
     ///
     /// `None` is the built-in count, which belongs to the interface that moves the view for the
@@ -583,6 +599,13 @@ impl Settings {
         // still name `model` and `provider`: the flag naming it is the person's own act
         // (BACKEND-24), where the project and local layers arrive with the clone.
         let named_path = named.map(Path::to_path_buf);
+        // Settled per layer, because the layers are not equal about it: see [`Settings::run_network`].
+        // `stated` is what the layers entitled to say either word last said, and `closed_by` is a
+        // checkout's file that asked for `closed`, which nothing below it can lift.
+        let mut run_network_stated: Option<(bravebot_sandbox::network::Network, PathBuf)> = None;
+        let mut run_network_closed_by: Option<PathBuf> = None;
+        let mut run_network_ignored: Vec<PathBuf> = Vec::new();
+        let mut run_network_unreadable: Vec<PathBuf> = Vec::new();
         let mut model_above_home = false;
         let mut effort_above_home = false;
         for path in paths.into_iter().flatten() {
@@ -651,6 +674,17 @@ impl Settings {
                 }
             }
             let granting = grants(&path, home_layer.as_deref(), named, cwd, started);
+            match network_word(&root) {
+                NetworkStated::Absent => {}
+                NetworkStated::Unreadable => run_network_unreadable.push(path.clone()),
+                NetworkStated::Word(network) if granting => {
+                    run_network_stated = Some((network, path.clone()));
+                }
+                NetworkStated::Word(network) if network.is_closed() => {
+                    run_network_closed_by.get_or_insert_with(|| path.clone());
+                }
+                NetworkStated::Word(_) => run_network_ignored.push(path.clone()),
+            }
             let directory = settings_directory(&path);
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
@@ -696,6 +730,15 @@ impl Settings {
         settings.narrowing = narrowing;
         settings.narrowed_by = narrowed_by;
         settings.narrowing_unreadable = narrowing_unreadable;
+        // Overwritten for the same reason: a checkout's `closed` stands over a person's `open`.
+        (settings.run_network, settings.run_network_by) =
+            match (run_network_closed_by, run_network_stated) {
+                (Some(by), _) => (Some(bravebot_sandbox::network::Network::Closed), Some(by)),
+                (None, Some((network, by))) => (Some(network), Some(by)),
+                (None, None) => (None, None),
+            };
+        settings.run_network_ignored = run_network_ignored;
+        settings.run_network_unreadable = run_network_unreadable;
         // Overwritten for the same reason, and the merged block is what it replaces: `deny` and
         // `ask` keep every layer's entries because both only ever narrow, and this one is put back
         // to the entries a layer entitled to grant wrote.
@@ -807,6 +850,15 @@ impl Settings {
             run_output: run_output_cap(root),
             run_deadlines: run_deadlines(root),
             wheel_rows: wheel_rows(root),
+            // The word one root states, there being no file to name. [`Settings::layered`]
+            // overwrites it with what the layers come to.
+            run_network: match network_word(root) {
+                NetworkStated::Word(network) => Some(network),
+                NetworkStated::Absent | NetworkStated::Unreadable => None,
+            },
+            run_network_by: None,
+            run_network_ignored: Vec::new(),
+            run_network_unreadable: Vec::new(),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -1068,6 +1120,31 @@ impl Settings {
         self.run_deadlines
     }
 
+    /// What the layers say `run.network` is, if any of them says: `closed` from a checkout's file or
+    /// from either word in the person's own, the file `--settings` names after them.
+    ///
+    /// `None` is every layer silent, which the caller reads as `open`. A checkout's `open` is not an
+    /// answer ([`Settings::run_network_ignored`]), and a checkout's `closed` is not lifted by a
+    /// person's `open`: only the flag does that, and only where no managed file has pinned it.
+    pub fn run_network(&self) -> Option<bravebot_sandbox::network::Network> {
+        self.run_network
+    }
+
+    /// The file whose word [`Settings::run_network`] is.
+    pub fn run_network_by(&self) -> Option<&Path> {
+        self.run_network_by.as_deref()
+    }
+
+    /// The checkout layers that said `run.network` is `open` and were not obeyed.
+    pub fn run_network_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.run_network_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The layers that spelled `run.network` as neither word.
+    pub fn run_network_unreadable(&self) -> impl Iterator<Item = &Path> {
+        self.run_network_unreadable.iter().map(PathBuf::as_path)
+    }
+
     /// How many rows the settings in force move the view by for one wheel event.
     ///
     /// `None` where nobody named one, for the reason [`Settings::run_output_cap`] answers `None`:
@@ -1101,6 +1178,9 @@ impl Settings {
             && self.run_output.is_none()
             && self.run_deadlines.is_empty()
             && self.wheel_rows.is_none()
+            && self.run_network.is_none()
+            && self.run_network_ignored.is_empty()
+            && self.run_network_unreadable.is_empty()
             && self.providers.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
@@ -1230,6 +1310,7 @@ impl Settings {
                     .is_some()
                     .then_some("run.maxSeconds"),
             )
+            .chain(self.run_network.is_some().then_some("run.network"))
             .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
             .chain(self.env.keys().map(String::as_str))
     }
@@ -1950,6 +2031,37 @@ fn run_deadlines(root: &serde_json::Map<String, serde_json::Value>) -> RunDeadli
     RunDeadlines {
         default: seconds("defaultSeconds"),
         ceiling: seconds("maxSeconds"),
+    }
+}
+
+/// What one root says about `run.network`.
+pub(crate) enum NetworkStated {
+    /// The key is not there.
+    Absent,
+    /// It is, spelled `open` or `closed`.
+    Word(bravebot_sandbox::network::Network),
+    /// It is, as anything else: a misspelling, a boolean, a number.
+    Unreadable,
+}
+
+/// The `run.network` key: `open` or `closed`, and nothing else.
+///
+/// A word and not a boolean, so the file says which way it is turning the network rather than
+/// something a reader has to know the polarity of. Anything else is reported by `doctor` and is
+/// absence, which leaves the network as open as it was.
+pub(crate) fn network_word(root: &serde_json::Map<String, serde_json::Value>) -> NetworkStated {
+    let Some(serde_json::Value::Object(run)) = root.get("run") else {
+        return NetworkStated::Absent;
+    };
+    match run.get("network") {
+        None => NetworkStated::Absent,
+        Some(serde_json::Value::String(word)) => {
+            match bravebot_sandbox::network::Network::parse(word) {
+                Some(network) => NetworkStated::Word(network),
+                None => NetworkStated::Unreadable,
+            }
+        }
+        Some(_) => NetworkStated::Unreadable,
     }
 }
 
@@ -3155,6 +3267,95 @@ mod tests {
                 self.named.as_deref(),
             )
         }
+    }
+
+    const NETWORK_CLOSED: &str = r#"{"run": {"network": "closed"}}"#;
+    const NETWORK_OPEN: &str = r#"{"run": {"network": "open"}}"#;
+
+    /// The home layer may say either word, since it is the person's own file.
+    #[test]
+    fn the_home_layer_may_set_the_network_either_way() {
+        use bravebot_sandbox::network::Network;
+        let closed = Layers::new("network-home-closed")
+            .global(NETWORK_CLOSED)
+            .read();
+        assert_eq!(closed.run_network(), Some(Network::Closed));
+        assert_eq!(closed.run_network_ignored().count(), 0);
+        let open = Layers::new("network-home-open").global(NETWORK_OPEN).read();
+        assert_eq!(open.run_network(), Some(Network::Open));
+        assert_eq!(Layers::new("network-none").read().run_network(), None);
+    }
+
+    /// A checkout may close the network and never open it: closing takes reach away from the
+    /// programs it runs, and opening would hand a repository the reach the person withheld.
+    #[test]
+    fn a_project_layer_may_close_the_network_and_never_open_it() {
+        use bravebot_sandbox::network::Network;
+        let closes = Layers::new("network-project-closes")
+            .global(NETWORK_OPEN)
+            .project(NETWORK_CLOSED)
+            .read();
+        assert_eq!(closes.run_network(), Some(Network::Closed));
+        assert_eq!(closes.run_network_ignored().count(), 0);
+
+        let opens = Layers::new("network-project-opens")
+            .global(NETWORK_CLOSED)
+            .project(NETWORK_OPEN)
+            .read();
+        assert_eq!(
+            opens.run_network(),
+            Some(Network::Closed),
+            "a checkout opened a network the home layer closed"
+        );
+        assert_eq!(opens.run_network_ignored().count(), 1);
+
+        let alone = Layers::new("network-project-alone")
+            .project(NETWORK_OPEN)
+            .read();
+        assert_eq!(alone.run_network(), None);
+        assert_eq!(alone.run_network_ignored().count(), 1);
+    }
+
+    /// The machine-local layer is a checkout's file under another name.
+    #[test]
+    fn the_local_layer_cannot_open_the_network_either() {
+        use bravebot_sandbox::network::Network;
+        let settings = Layers::new("network-local")
+            .global(NETWORK_CLOSED)
+            .local(NETWORK_OPEN)
+            .read();
+        assert_eq!(settings.run_network(), Some(Network::Closed));
+        assert_eq!(settings.run_network_ignored().count(), 1);
+    }
+
+    /// A file the command line named outside the workspace is the person's act, so it speaks for
+    /// them; one inside the workspace is a checkout's file and speaks as one.
+    #[test]
+    fn a_named_file_speaks_for_the_person_only_outside_the_workspace() {
+        use bravebot_sandbox::network::Network;
+        let outside = Layers::new("network-named-outside")
+            .global(NETWORK_CLOSED)
+            .named(NETWORK_OPEN)
+            .read();
+        assert_eq!(outside.run_network(), Some(Network::Open));
+        assert_eq!(outside.run_network_ignored().count(), 0);
+
+        let inside = Layers::new("network-named-inside")
+            .global(NETWORK_CLOSED)
+            .named_inside_the_workspace(NETWORK_OPEN)
+            .read();
+        assert_eq!(inside.run_network(), Some(Network::Closed));
+        assert_eq!(inside.run_network_ignored().count(), 1);
+    }
+
+    /// A word that is neither is not read as either, and is named so the person finds it.
+    #[test]
+    fn an_unreadable_network_word_is_reported_and_not_obeyed() {
+        let settings = Layers::new("network-unreadable")
+            .global(r#"{"run": {"network": "off"}}"#)
+            .read();
+        assert_eq!(settings.run_network(), None);
+        assert_eq!(settings.run_network_unreadable().count(), 1);
     }
 
     /// PERM-3: a `/x` rule starts at the directory of the file that wrote it, so the same text in

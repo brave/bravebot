@@ -1441,7 +1441,7 @@ pub fn state_confinement(tools: &mut [Tool], confine_runs: bool) {
     };
     if let Some(run) = tools.iter_mut().find(|tool| tool.function.name == "run") {
         run.function.description.push(' ');
-        run.function.description.push_str(stated);
+        run.function.description.push_str(&stated);
     }
 }
 
@@ -1839,6 +1839,7 @@ impl<'a> Tools<'a> {
             .chain(self.workspace.added_directories().iter().cloned())
             .collect();
         crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)
+            .map(|confinement| confinement.with_network(bravebot_config::run_network()))
     }
 
     /// Where this turn's credential findings are written, and under whose name.
@@ -7117,6 +7118,15 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // cannot name different things, and recorded below at each point the line actually starts: a
     // grant is a sentence somebody answered and a use is a thing that happened.
     let spends = bravebot_core::ambient::spent_by(&plan);
+
+    // Recorded per line, before anything starts, so a line a stage of which was refused still says
+    // what the network was for it. Nothing for an open network, which is what every line had.
+    if let Some(detail) = confinement
+        .as_ref()
+        .and_then(|confinement| confinement.network_for_the_trail(&plan.steps()))
+    {
+        policy.record_run_network(detail);
+    }
 
     if in_the_background {
         // What has to be refused is what start_steps cannot honour, and it honours no route at

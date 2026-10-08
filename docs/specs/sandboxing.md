@@ -122,7 +122,7 @@ egress also reaches the resolver's socket, which every host name lookup goes thr
 socket rule holds on a kernel carrying Landlock ABI version 9, and a socket in the abstract
 namespace, which has no path, is reachable whatever the policy names. A backend that cannot
 enforce the network denial refuses the policy instead, so the guarantee never degrades into one
-that is not in force.
+that is not in force. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
 
 **Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
 that reaches a Docker daemon's socket can start a container with the home directory mounted, which
@@ -450,7 +450,7 @@ supplied, no argument vector and no configuration file adds a row, and the devel
 granted only where the platform installs one. The home directory is in no row, no directory a
 credential sits in is in one, and the only paths granted for writing are the temporary directory
 and, where the platform has one as a file, the null device. Egress and children are left where they were, since what the base bounds is
-the filesystem. A platform whose prelude is not written down has no base, and so nothing to
+the filesystem; a session may take egress from a stage afterwards ([SANDBOX-20](#SANDBOX-20)). A platform whose prelude is not written down has no base, and so nothing to
 assemble a profile from. The Windows prelude is empty: an AppContainer reads `C:\Windows` and the
 Program Files directories without an entry of its own, and a row there would be an entry only an
 account holding the right to change those directories could write.
@@ -575,7 +575,10 @@ directory, `~/.config`, `~/.cache`, `~/Library` or `~/Library/Caches`. Each writ
 names, so a backend that cannot name an absent path has the cache created as the directory or file
 the toolchain expects there. A list is added to the policy it is given and takes nothing from it.
 What decides a row is the table and the platform: nothing on the machine is read, so `CARGO_HOME`,
-`GOCACHE` and `XDG_CACHE_HOME` move no row. `run` adds the list for each stage it starts
+`GOCACHE` and `XDG_CACHE_HOME` move no row. A list also says whether its program fetches, which is
+the egress a closed network leaves it ([SANDBOX-20](#SANDBOX-20)): cargo, npm and the other node
+package managers, pip, go, mvn and gradle fetch, and `node`, `python3` and a program no list knows
+do not. `run` adds the list for each stage it starts
 ([SANDBOX-18](#SANDBOX-18)).
 
 **Why.** The paths a build resolves through belong to that build and not to every program that runs,
@@ -842,7 +845,9 @@ A result whose step did not exit zero, from a run or from a job left running, ca
 sentence from the driver after the account of how it ended ([RUN-13](tools/run.md#RUN-13)): the
 directories the programs could read and write, that beyond those they reached only what a
 toolchain list or credential scope added for the steps that named one, the toolchain lists the plan
-brought by name and the credential scopes it brought by name, or `none`. A result whose steps all
+brought by name and the credential scopes it brought by name, or `none`, and whether the network
+was open or closed and, if closed, the reasons that kept it for the steps that had one
+([SANDBOX-20](#SANDBOX-20)). A result whose steps all
 exited zero carries no such sentence. The sentence is composed from the same two decisions the policy is
 ([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
 
@@ -869,6 +874,71 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::turn::a_run_that_succeeded_on_a_confining_turn_carries_no_profile_line`
 `verified-by: bravebot_agent::turn::a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_failure`
 `verified-by: bravebot_agent::turn::a_failed_job_on_a_confining_turn_says_what_it_ran_under`
+
+<a id="SANDBOX-20"></a>
+### SANDBOX-20: a session may close the network, and a stage keeps it only for a reason it carries
+
+A session carries a network setting, `open` or `closed`, and `open` is the default. Under `open`
+every stage keeps the egress the base leaves it ([SANDBOX-12](#SANDBOX-12)). Under `closed` a stage
+has none unless it carries one of three reasons: its toolchain list fetches ([SANDBOX-15](#SANDBOX-15)),
+it carries a credential scope ([SANDBOX-16](#SANDBOX-16): the remote, cloud, cluster and container
+scopes alike, since each lends a credential to something reached over a socket or the network), or
+its program resolved to the file `curl` or `ssh`. Each is read from the compiled step, never from
+what a program printed, and none is granted to a file under a directory the plan may write to, which
+it could have named `curl` itself. A stage that carries one is also granted the resolver ([SANDBOX-3](#SANDBOX-3)) and keeps the unix socket rule
+it already had, so the agent socket still reaches a remote stage. A stage started with `NAME=value`
+assignments carries no scope ([SANDBOX-16](#SANDBOX-16)), and so none of the third kind.
+
+The setting is read from `--run-network <open|closed>`, from `run.network` in a settings file, and
+from a managed pin, in that order of strength: a managed pin is final, the flag outranks a file, and
+a file outranks the default. A managed pin that is neither word is read as `closed`, not ignored,
+because a mistyped restriction must not open the network. A file in the person's home, or one named by `--settings` from outside
+the workspace, may set either word. A file a checkout carries, which includes a named file inside
+the workspace, may set `closed` and never `open`, and `doctor` says that it was ignored. A word that
+is neither is reported and not obeyed.
+
+Where the backend cannot deny the network (Landlock, [SANDBOX-5](#SANDBOX-5)) a stage that would
+lose egress is not started, and the result says that the network is closed and the platform cannot
+deny it, the refusal [SANDBOX-17](#SANDBOX-17) already gives. The planner is told once, in the `run`
+description, that the network is closed and which kinds of stage keep it. The failure sentence
+([SANDBOX-19](#SANDBOX-19)) names the setting beside the directories. A closed network is named on
+the opening screen, in `/status` with the layer that closed it, in `doctor`, in the run prompt once, with each
+stage that keeps it named, and in the trail once per run with each such stage by its place
+and a fixed reason, and never by a name the plan chose.
+
+**Why.** A profile gates egress as a whole, so with it open a confined program that read a file
+inside its grants can send the file anywhere. Most programs a plan names have no use for the
+network: `cat`, `grep`, `make`, a test run. Those that do are few and are told apart by what the
+step compiled to. Letting a checkout narrow the setting and never widen it is the rule the other
+narrowing settings follow: a repository the person did not write cannot give its own programs
+reach, but can ask for less of it.
+
+`verified-by: bravebot_sandbox::network::the_setting_is_read_from_exactly_its_two_words`
+`verified-by: bravebot_sandbox::network::curl_and_ssh_are_known_by_the_file_and_nothing_else_is`
+`verified-by: bravebot_sandbox::toolchain::only_the_programs_that_fetch_are_known_to_fetch`
+`verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_keeps_no_network_by_its_name`
+`verified-by: bravebot_config::run_network::a_managed_pin_that_is_neither_word_closes_the_network`
+`verified-by: bravebot_agent::confine::the_policy_the_line_and_the_description_agree_on_which_stages_keep_the_network`
+`verified-by: bravebot_agent::confine::the_fetch_bit_is_keyed_on_the_resolved_file`
+`verified-by: bravebot_agent::confine::a_closed_network_is_not_reopened_by_what_a_stage_is_started_with`
+`verified-by: bravebot_agent::confine::a_closed_network_is_told_to_the_planner_and_an_open_one_is_not`
+`verified-by: bravebot_agent::confine::a_backend_that_cannot_deny_the_network_refuses_a_closed_stage`
+`verified-by: bravebot_agent::confine::the_trail_names_the_stages_that_kept_a_closed_network_by_place_and_reason`
+`verified-by: bravebot_agent::confine::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
+`verified-by: bravebot_agent::confirm::a_closed_network_is_said_once_and_each_stage_that_keeps_it_is_named`
+`verified-by: bravebot_config::settings::the_home_layer_may_set_the_network_either_way`
+`verified-by: bravebot_config::settings::a_project_layer_may_close_the_network_and_never_open_it`
+`verified-by: bravebot_config::settings::the_local_layer_cannot_open_the_network_either`
+`verified-by: bravebot_config::settings::a_named_file_speaks_for_the_person_only_outside_the_workspace`
+`verified-by: bravebot_config::settings::an_unreadable_network_word_is_reported_and_not_obeyed`
+`verified-by: bravebot_config::managed::the_network_is_pinnable`
+`verified-by: bravebot_config::run_network::nobody_deciding_leaves_the_network_open`
+`verified-by: bravebot_config::run_network::the_flag_beats_the_settings`
+`verified-by: bravebot_config::run_network::a_managed_pin_beats_the_flag_and_the_settings`
+`verified-by: bravebot_cli::main::the_run_network_flag_is_taken_out_with_its_word_and_refuses_any_other`
+`verified-by: bravebot_tui::confirm::a_run_prompt_says_the_network_is_closed_and_which_stage_keeps_it`
+`verified-by: bravebot_tui::logo::a_closed_network_is_named_on_the_opening_screen_and_an_open_one_is_not`
+`verified-by: bravebot_tui::status::a_closed_network_is_reported_with_who_closed_it_and_an_open_one_is_not`
 
 ## Programs a person asked for
 
@@ -1131,9 +1201,10 @@ administrator sets up for somebody else to work on. `planned` is the default, be
 session needs a scope and a default people cannot work with is one they switch off wholesale. Either
 way the record of the run names each scope and the stage it was added for ([trace.md](trace.md)).
 
-**The network stays open to it.** A profile gates egress as a whole, so it cannot tell an approved
+**The network stays open to it, unless the session closed it.** A profile gates egress as a whole, so it cannot tell an approved
 `git push` or `gh api` from an exfiltration, and the endorsed argv already can. What confinement
-narrows is what a program may read and write, not what it may send: a confined one still sends
+narrows is what a program may read and write, and by default not what it may send
+([SANDBOX-20](#SANDBOX-20) is the setting that closes it): a confined one still sends
 anything inside its grants. The label on what a program prints is untouched, and no grant makes an
 output trusted.
 

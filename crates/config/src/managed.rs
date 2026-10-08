@@ -95,6 +95,10 @@ const MODEL_ALLOW: &str = "models.allow";
 /// Where the models it may not request are listed, and the name `doctor` reports that list by.
 const MODEL_DENY: &str = "models.deny";
 
+/// Where the network for the programs `run` starts is pinned, and the name `doctor` reports the pin
+/// by.
+const RUN_NETWORK: &str = "run.network";
+
 /// A server as the managed layer compares it with an entry (SERVERS-12).
 #[derive(Debug, Clone, Copy)]
 pub enum Server<'a> {
@@ -247,6 +251,15 @@ pub struct Managed {
     /// quoted `"true"` in a file nobody at the machine can change is the person least likely to find
     /// out the pin does nothing.
     narrowing_unreadable: Vec<&'static str>,
+    /// What it pinned `run.network` to, or `None` where it said nothing.
+    ///
+    /// Final, unlike the strictest-wins keys above: an administrator who pins `closed` takes the
+    /// flag from the person too, and one who pins `open` has said the programs on this machine keep
+    /// the network whatever a checkout asks. Anything but the two words is not a pin.
+    network: Option<bravebot_sandbox::network::Network>,
+    /// Whether the key was there and was neither word, for `doctor` to report for the reason
+    /// `narrowing_unreadable` is.
+    network_unreadable: bool,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -282,9 +295,16 @@ impl Managed {
         };
         let layer = Settings::from_map(&root);
         let (narrowing, narrowing_unreadable) = crate::settings::narrowing_stated(&root);
+        let (network, network_unreadable) = match crate::settings::network_word(&root) {
+            crate::settings::NetworkStated::Word(network) => (Some(network), false),
+            crate::settings::NetworkStated::Unreadable => (None, true),
+            crate::settings::NetworkStated::Absent => (None, false),
+        };
         Self {
             narrowing,
             narrowing_unreadable,
+            network,
+            network_unreadable,
             pins: PINNABLE
                 .iter()
                 .filter_map(|name| {
@@ -387,6 +407,17 @@ impl Managed {
         self.narrowing_unreadable.iter().copied()
     }
 
+    /// What this layer pinned the network for `run`'s programs to, which no flag and no settings
+    /// file changes.
+    pub fn network(&self) -> Option<bravebot_sandbox::network::Network> {
+        self.network
+    }
+
+    /// Whether the file named `run.network` as neither `open` nor `closed`, which pins nothing.
+    pub fn network_unreadable(&self) -> bool {
+        self.network_unreadable
+    }
+
     /// The names it pinned, for `doctor` to report.
     ///
     /// Names rather than values, for the reason the settings report gives: everyone on the machine
@@ -402,6 +433,7 @@ impl Managed {
             .chain(self.models.allowed.is_some().then_some(MODEL_ALLOW))
             .chain((!self.models.denied.is_empty()).then_some(MODEL_DENY))
             .chain(self.narrowing.named())
+            .chain(self.network.is_some().then_some(RUN_NETWORK))
     }
 
     /// The file, where there is one there at all, read or not.
@@ -613,6 +645,25 @@ mod tests {
             managed.pinned().collect::<Vec<_>>(),
             vec![env_var::ENDPOINT]
         );
+    }
+
+    /// A pin of the network is read from the managed file, named by `doctor`, and a word that is
+    /// neither `open` nor `closed` pins nothing and says so.
+    #[test]
+    fn the_network_is_pinnable() {
+        use bravebot_sandbox::network::Network;
+        let closed = scratch(
+            "managed-network-closed",
+            r#"{"run": {"network": "closed"}}"#,
+        );
+        assert_eq!(closed.network(), Some(Network::Closed));
+        assert!(closed.pinned().any(|name| name == "run.network"));
+        let open = scratch("managed-network-open", r#"{"run": {"network": "open"}}"#);
+        assert_eq!(open.network(), Some(Network::Open));
+        let unreadable = scratch("managed-network-bad", r#"{"run": {"network": "off"}}"#);
+        assert_eq!(unreadable.network(), None);
+        assert!(unreadable.network_unreadable());
+        assert!(!unreadable.pinned().any(|name| name == "run.network"));
     }
 
     /// A layer that can pin anything is a layer somebody uses to pin a preference. What an
