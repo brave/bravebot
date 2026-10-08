@@ -25,12 +25,26 @@ import importlib.util
 import json
 import random
 import re
-import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import time
 from pathlib import Path
 
-REPO = "brave/bravebot"
+
+def _load_helper():
+    path = Path(__file__).resolve().parents[2] / "issue_helper.py"
+    spec = importlib.util.spec_from_file_location("issue_helper", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The label and assignee checks, the `gh` call and `gh issue create` are agents/issue_helper.py, which
+# the `issue-poster` definition and the other scripted posters use too.
+helper = _load_helper()
+REPO = helper.REPO
+gh = helper.gh
+existing_labels = helper.existing_labels
+assignable = helper.assignable
 
 # One every ten seconds, plus one to five more. Both are the ceiling on how fast this writes to
 # something other people read, not a guess at an API limit.
@@ -59,48 +73,6 @@ def significant(title):
     """The words of a title that distinguish it from another title."""
     words = re.findall(r"[A-Za-z_][A-Za-z0-9_:]+", title.lower())
     return {word for word in words if len(word) > 2 and word not in STOP}
-
-
-def gh(args, repo=None):
-    """A `gh` call, as JSON where it asked for JSON.
-
-    Every argument is its own list element and no shell is involved, so a title or a search term is
-    an argument whatever it holds. That matters more here than in most scripts: a title is written by
-    a lane reading code that an attacker may have chosen the wording of.
-
-    `repo` is left out for the calls that name the repository in the path themselves, since `gh api`
-    takes no `--repo`.
-    """
-    result = subprocess.run(
-        ["gh", *args, *(["--repo", repo] if repo else [])],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout).strip())
-    return result.stdout
-
-
-def existing_labels(repo):
-    listed = json.loads(
-        gh(["label", "list", "--limit", "200", "--json", "name"], repo)
-    )
-    return {one["name"] for one in listed}
-
-
-def assignable(repo, login):
-    """Whether GitHub would accept this login as an assignee on this repository.
-
-    Checked before the first issue goes out, for the same reason a missing label is: `gh issue
-    create` fails on a login the repository would not take, and finding that out on the fourth of
-    six issues leaves half a report filed.
-    """
-    try:
-        gh(["api", f"repos/{repo}/assignees/{login}"])
-    except RuntimeError:
-        return False
-    return True
 
 
 def already_filed(repo, draft):
@@ -157,12 +129,7 @@ def already_filed(repo, draft):
 
 
 def post(repo, draft, assignee=None):
-    args = ["issue", "create", "--title", draft["title"], "--body-file", draft["body_file"]]
-    for label in draft["labels"]:
-        args += ["--label", label]
-    if assignee:
-        args += ["--assignee", assignee]
-    return gh(args, repo).strip().splitlines()[-1]
+    return helper.create(repo, draft["title"], draft["body_file"], draft["labels"], assignee)
 
 
 def load_drafts(work_dir):
@@ -198,27 +165,15 @@ def main():
         print("no drafts to post")
         return 0
 
-    wanted = sorted({label for draft in drafts for label in draft["labels"]})
-    try:
-        have = existing_labels(args.repo)
-    except RuntimeError as problem:
-        print(f"could not read the labels of {args.repo}: {problem}", file=sys.stderr)
-        return 2
-    missing = [label for label in wanted if label not in have]
-    if missing:
-        print(f"{args.repo} has no label {', '.join(missing)}", file=sys.stderr)
-        print("", file=sys.stderr)
-        print("Nothing was posted. Creating a label changes what everybody sees, so it is not", file=sys.stderr)
-        print("this script's to do:", file=sys.stderr)
-        for label in missing:
-            print(f"  gh label create {label} --repo {args.repo} --description ... --color ...", file=sys.stderr)
-        return 2
-
-    if args.assignee and not assignable(args.repo, args.assignee):
-        print(f"{args.repo} would not take {args.assignee} as an assignee", file=sys.stderr)
-        print("", file=sys.stderr)
-        print("Nothing was posted. A login the repository refuses fails the create it is passed to,", file=sys.stderr)
-        print("so it is checked here rather than partway through a report.", file=sys.stderr)
+    why = helper.refusal(
+        args.repo,
+        {label for draft in drafts for label in draft["labels"]},
+        args.assignee,
+        have=existing_labels,
+        can_assign=assignable,
+    )
+    if why:
+        print("\n".join(why), file=sys.stderr)
         return 2
 
     posted, skipped, left = [], [], []
