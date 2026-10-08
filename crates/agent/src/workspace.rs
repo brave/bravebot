@@ -3620,6 +3620,7 @@ impl Workspace {
                 pattern: pattern.as_ref(),
                 since,
                 until,
+                every_untracked: false,
                 deadline,
             };
             let withheld = |inside: &str| self.denies_in_repository(policy, &named, inside);
@@ -3864,11 +3865,83 @@ impl Workspace {
             .is_some_and(|last| *last > after)
     }
 
+    /// The paths a status over the session's checkout `id` lists (CHECKOUT-13).
+    ///
+    /// The same terms as `read_git`'s status in a checkout (GIT-11, CHECKOUT-12): the map has to
+    /// trust the whole checkout and all of `.git`, no deny rule may cover a file the status reads,
+    /// and nothing is read at `<checkout>/.git`. What comes back is a list of names the status
+    /// printed, which a planner could be shown on the same terms, and nothing compares any file's
+    /// bytes here.
+    pub fn checkout_status<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        id: &str,
+    ) -> Result<crate::git::Listing, crate::git::Declined> {
+        use crate::git::Declined;
+        let made = self
+            .session_checkouts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|made| made.id == id && made.path.exists())
+            .cloned()
+            .ok_or(Declined::NoRepository)?;
+        let root = made.path.to_string_lossy().into_owned();
+        let tree_key = self.trust_key(&root);
+        policy.capture_files(|policy, _capture| {
+            let git_key = self.trusted_git_dir(policy, ".")?;
+            if !policy.trusts_beneath(&tree_key) {
+                return Err(Declined::UntrustedTree);
+            }
+            let deadline = Instant::now() + self.search_time;
+            let entry = made.git_dir.join("worktrees").join(&made.id);
+            let query = crate::git::Query::Status;
+            self.surveyed_linked(policy, &made.git_dir, &entry, query, deadline)?;
+            let opened = crate::git::Repository::open_linked(&made.git_dir, &entry, &made.path)?;
+            let request = crate::git::Request {
+                query,
+                revision: None,
+                path: None,
+                count: crate::git::DEFAULT_COUNT,
+                skip: 0,
+                messages: false,
+                pattern: None,
+                since: None,
+                until: None,
+                every_untracked: true,
+                deadline,
+            };
+            let withheld = |inside: &str| {
+                let spelled = format!("{root}/{inside}");
+                policy.read_is_denied(&self.trust_key(&spelled))
+                    || self.rule_denies_reading(policy, &spelled)
+            };
+            let answer = opened.answer(&request, &withheld)?;
+            let shown: Vec<String> = answer
+                .shown
+                .iter()
+                .map(|inside| self.trust_key(&format!("{root}/{inside}")))
+                .collect();
+            let label = policy
+                .observe_repository(
+                    Capability::FileRead,
+                    &git_key,
+                    shown.iter().map(String::as_str),
+                )
+                .map_err(|_| Declined::Untrusted)?;
+            if label.integrity != bravebot_core::Integrity::Trusted {
+                return Err(Declined::UntrustedTree);
+            }
+            Ok(answer.listing.unwrap_or_default())
+        })
+    }
+
     /// The text of a file the driver recorded a write to in the session's checkout `id`, labelled
     /// as the same path is in the working directory (CHECKOUT-8, CHECKOUT-14).
     ///
     /// `relative` has to be one of the checkout's candidates, so what is read is a name a planner
-    /// holding nothing untrusted typed. It is read only as a plain file, with no link followed
+    /// holding nothing untrusted typed, or one `listed` holds, which is what
+    /// [`Workspace::checkout_status`] listed. It is read only as a plain file, with no link followed
     /// anywhere between the checkout's root and the file: a program that ran in the checkout could
     /// have left a link in its place that reaches a file outside it. Nothing in the answer is
     /// compared with anything. The label comes from the map's rule for the checkout's path, which
@@ -3879,6 +3952,7 @@ impl Workspace {
         policy: &Policy<'_, S>,
         id: &str,
         relative: &str,
+        listed: &std::collections::BTreeSet<String>,
     ) -> Result<Labelled<String>, CheckoutRead> {
         let made = self
             .session_checkouts
@@ -3894,7 +3968,8 @@ impl Workspace {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .named
-            .contains(relative);
+            .contains(relative)
+            || listed.contains(relative);
         if !candidate {
             return Err(CheckoutRead::NotACandidate);
         }

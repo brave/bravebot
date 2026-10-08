@@ -590,12 +590,24 @@ its spelling, with `.` and `..` resolved and nothing on disk read, so a link is 
 name and not by its target's. A write through a reference is counted. A name outside the checkout,
 in scratch or an added directory, is not recorded. A path a deny rule covered when it was written is
 never recorded, since that write was refused. One a rule added later covers stays recorded, and
-that rule would refuse bringing it back ([CHECKOUT-14](#CHECKOUT-14)). No status is read in a
-checkout, because the driver does not yet ask for one, so the candidates always say it could not be
-read.
+that rule would refuse bringing it back ([CHECKOUT-14](#CHECKOUT-14)). The report and
+`/checkouts` give only these names. `apply_checkout` and `/checkouts apply` also read a status over
+the checkout each time they are used, as `Workspace::checkout_status`, on the terms of
+[CHECKOUT-12](#CHECKOUT-12) with the map's trust over the whole checkout asked of the checkout's own
+path: one distrusted path in it, or a deny rule over a file the status reads, declines it, and the
+apply says the status could not be read. A listed path is a candidate for that call, with the names
+the driver recorded, less any it lists as deleted. It lists each untracked file, whatever
+`status.showUntrackedFiles` says, so a directory of new files names the files in it. A status that
+left something out, whether a path a rule withholds, a file git would convert on the way in, a
+conflict or a cut or late answer, says so beside the result, and nothing that was left out is a
+candidate. It is not read where `paths` names only paths the driver recorded itself. No path is a
+candidate for differing from HEAD on the driver's own comparison: the paths are the ones the status
+printed.
 
 `verified-by: bravebot_agent::workspace::a_checkout_records_the_paths_written_in_it`
 `verified-by: bravebot_agent::turn::a_kept_checkout_is_named_with_the_paths_written_in_it`
+`verified-by: bravebot_agent::workspace::a_checkouts_status_lists_what_changed_there_and_what_was_deleted`
+`verified-by: bravebot_agent::workspace::a_checkouts_status_is_declined_where_a_path_is_distrusted_and_says_what_it_left_out`
 
 <a id="CHECKOUT-14"></a>
 ### CHECKOUT-14: a file comes back as a write through the gate, one path at a time
@@ -653,8 +665,11 @@ only context is that request. The trust map comes back changed where a file land
 against the candidates as `apply_checkout`'s `paths` are: one that is not a candidate refuses the
 whole command before anything is asked, and a path typed twice is asked about once.
 
-Not built: a path a status lists as removed (no status is read in a checkout,
-[CHECKOUT-13](#CHECKOUT-13)) and a file written through a reference. A file over 16 MiB, or that is
+A path a status lists as deleted, in the index or in the working tree, is named in the result and
+the file stays in the working directory. Asking for one by `paths` is refused as a deletion. A path the status lists as untracked or changed is brought
+back as a recorded one is.
+
+Not built: removing a file, and a file written through a reference. A file over 16 MiB, or that is
 not text, is named and left.
 
 `verified-by: bravebot_agent::turn::the_question_says_the_working_directory_was_written_since_the_checkout`
@@ -668,6 +683,7 @@ not text, is named and left.
 `verified-by: bravebot_tui::app::the_checkouts_command_lists_and_removes_by_number`
 `verified-by: bravebot_tui::checkouts_command::apply_a_number_and_paths_brings_back_only_those_paths`
 `verified-by: bravebot_agent::turn::a_typed_checkouts_apply_with_paths_asks_only_about_those_paths`
+`verified-by: bravebot_agent::turn::a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status`
 
 ## How long one lasts
 
@@ -862,8 +878,8 @@ removed. It is one more item the driver writes beside the report
 Built. Beside the report the driver says where a kept checkout is and the commit it holds, the
 same for one that could not be removed, or that it was removed. For a kept one it names each
 candidate path whose name the planner typed, the first twenty and then how many more, counts the
-writes made through a reference, and says the status could not be read
-([CHECKOUT-13](#CHECKOUT-13)). It then says `apply_checkout` brings the files back ([CHECKOUT-14](#CHECKOUT-14)).
+writes made through a reference, and says a file a program wrote is named only when the apply reads
+the checkout's status ([CHECKOUT-13](#CHECKOUT-13)). It then says `apply_checkout` brings the files back ([CHECKOUT-14](#CHECKOUT-14)).
 
 The person's line for the delegate's ending names a kept checkout by its number and gives what it
 took on disk ([CHECKOUT-15](#CHECKOUT-15)), in kilobytes under a megabyte, megabytes under a
@@ -1012,14 +1028,16 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
   home directory ([CHECKOUT-7](#CHECKOUT-7)).
 - **A killed session that kept nothing leaves `worktrees/<id>/` entries** in the person's `.git`
   ([CHECKOUT-6](#CHECKOUT-6)). `git worktree prune` removes them.
-- **A file a program wrote is not found where a status is not answered**, and no status is answered
-  in a checkout yet ([CHECKOUT-12](#CHECKOUT-12)). The driver's record holds only what the file
-  tools and redirections wrote ([CHECKOUT-13](#CHECKOUT-13)).
+- **A file a program wrote is not found where a status is not answered**, which is where one path
+  in the checkout is distrusted or a rule covers a file the status reads
+  ([CHECKOUT-12](#CHECKOUT-12)). The driver's record holds only what the file tools and
+  redirections wrote, and the report and `/checkouts` name only those
+  ([CHECKOUT-13](#CHECKOUT-13)).
 - **A write through a reference is counted, not named**, so the planner learns that a file it
   cannot name was written and not which one ([CHECKOUT-13](#CHECKOUT-13)).
 - **No `lsp` in a checkout** ([CHECKOUT-20](#CHECKOUT-20)).
-- **Nothing brings a checkout's work back yet** ([CHECKOUT-14](#CHECKOUT-14)), and a kept checkout
-  stays until a person removes it with `/checkouts remove` ([CHECKOUT-15](#CHECKOUT-15)).
+- **A kept checkout stays** after its work comes back ([CHECKOUT-14](#CHECKOUT-14)), until a
+  person removes it with `/checkouts remove` ([CHECKOUT-15](#CHECKOUT-15)).
   `/status` and `/checkouts` say where it is ([CHECKOUT-21](#CHECKOUT-21)).
 - **In a session that keeps nothing, a checkout goes with the session**, with whatever was not
   brought back.

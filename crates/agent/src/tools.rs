@@ -4899,8 +4899,8 @@ fn apply_checkout<S: Sink, C: Confirmer>(
         ));
     };
 
-    let paths: Vec<String> = match arguments.get("paths") {
-        None | Some(Value::Null) => kept.candidates.named.iter().cloned().collect(),
+    let given: Option<Vec<String>> = match arguments.get("paths") {
+        None | Some(Value::Null) => None,
         Some(Value::Array(items)) => {
             let mut given = Vec::new();
             for item in items {
@@ -4909,30 +4909,105 @@ fn apply_checkout<S: Sink, C: Confirmer>(
                     None => return Produced::problem("error: 'paths' holds only strings"),
                 }
             }
-            match only_recorded(&id, &kept, given) {
-                Ok(paths) => paths,
-                Err(refusal) => return Produced::problem(refusal),
-            }
+            Some(given)
         }
         Some(_) => return Produced::problem("error: 'paths' is a list of paths"),
     };
-    bring_back(policy, tools, confirmer, &id, &kept, paths)
+    let offered = offered(policy, workspace, &kept, given.as_deref());
+    let paths: Vec<String> = match given {
+        None => offered.paths.iter().cloned().collect(),
+        Some(given) => match only_recorded(&id, &offered, given) {
+            Ok(paths) => paths,
+            Err(refusal) => return Produced::problem(refusal),
+        },
+    };
+    bring_back(policy, tools, confirmer, &id, &kept, &offered, paths)
+}
+
+/// What can come back from a kept checkout: the paths the driver recorded a write to, and the
+/// ones a status over the checkout listed (CHECKOUT-13).
+struct Offered {
+    /// Both kinds, each once.
+    paths: std::collections::BTreeSet<String>,
+    /// The ones only the status listed, which the file read has to be told are candidates.
+    listed: std::collections::BTreeSet<String>,
+    /// The paths the status listed as deleted, which are named and not removed (CHECKOUT-14).
+    removed: Vec<String>,
+    /// The driver's sentence about what the status could not say, where it could not say all.
+    gap: Option<String>,
+}
+
+/// The paths of the kept checkout that may come back. The status is read afresh on every call,
+/// since a program may have written there since the last one, unless `given` names only paths the
+/// driver recorded itself, which no status could add to or take from.
+fn offered<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    kept: &crate::workspace::SessionCheckout,
+    given: Option<&[String]>,
+) -> Offered {
+    let mut paths = kept.candidates.named.clone();
+    let mut listed = std::collections::BTreeSet::new();
+    let mut removed = Vec::new();
+    if given.is_some_and(|given| given.iter().all(|path| paths.contains(path))) {
+        return Offered {
+            paths,
+            listed,
+            removed,
+            gap: None,
+        };
+    }
+    let gap = match workspace.checkout_status(policy, &kept.id) {
+        Ok(listing) => {
+            for path in listing.changed {
+                if paths.insert(path.clone()) {
+                    listed.insert(path);
+                }
+            }
+            // A file written and then deleted is not there to come back.
+            for path in &listing.removed {
+                paths.remove(path);
+            }
+            removed = listing.removed;
+            (!listing.complete).then(|| {
+                "The status left something out (a path a rule withholds, a file it did not \
+                 compare, a conflict or a directory it did not open, or it was cut), so a file \
+                 may be missing here."
+                    .to_string()
+            })
+        }
+        Err(declined) => Some(format!(
+            "The status could not be read, so a file a program wrote other than by a redirection \
+             is not found: {}",
+            declined.describe("the checkout")
+        )),
+    };
+    Offered {
+        paths,
+        listed,
+        removed,
+        gap,
+    }
 }
 
 /// `given`, each path once, if every one is a candidate the driver recorded for the kept checkout
 /// `id`; otherwise the refusal naming the first that is not. Nothing is written either way.
 fn only_recorded(
     id: &str,
-    kept: &crate::workspace::SessionCheckout,
+    offered: &Offered,
     mut given: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    if let Some(unlisted) = given
-        .iter()
-        .find(|path| !kept.candidates.named.contains(*path))
-    {
+    if let Some(deleted) = given.iter().find(|path| offered.removed.contains(*path)) {
         return Err(format!(
-            "refused: the driver recorded no write to {unlisted} in checkout {id}, and only a \
-             path it recorded can be brought back. Nothing was written."
+            "refused: the status of checkout {id} lists {deleted} as deleted there, and a \
+             deletion is not brought back. Nothing was written."
+        ));
+    }
+    if let Some(unlisted) = given.iter().find(|path| !offered.paths.contains(*path)) {
+        return Err(format!(
+            "refused: the driver recorded no write to {unlisted} in checkout {id} and its status \
+             does not list it, and only a path it recorded or a status listed can be brought \
+             back. Nothing was written."
         ));
     }
     // Once each, so a path named twice is not put to the person twice.
@@ -4971,11 +5046,13 @@ pub(crate) fn apply_kept_checkout<S: Sink, C: Confirmer>(
     else {
         return Err(format!("the session keeps no checkout {id}"));
     };
+    let given = (!paths.is_empty()).then_some(paths.as_slice());
+    let offered = offered(policy, tools.workspace, &kept, given);
     let paths = match paths.is_empty() {
-        true => kept.candidates.named.iter().cloned().collect(),
-        false => only_recorded(id, &kept, paths)?,
+        true => offered.paths.iter().cloned().collect(),
+        false => only_recorded(id, &offered, paths)?,
     };
-    let produced = bring_back(policy, tools, confirmer, id, &kept, paths);
+    let produced = bring_back(policy, tools, confirmer, id, &kept, &offered, paths);
     let applied = produced.changed_a_file;
     // The driver's own sentences, which carry no byte of any file.
     let text = produced
@@ -4991,6 +5068,28 @@ pub(crate) fn apply_kept_checkout<S: Sink, C: Confirmer>(
     Ok(Brought { text, applied })
 }
 
+/// The driver's sentence naming the paths a checkout's status lists as deleted, which are not
+/// removed from the working directory (CHECKOUT-14). Empty where there are none.
+fn removed_sentence(removed: &[String]) -> String {
+    const SHOWN: usize = 20;
+    if removed.is_empty() {
+        return String::new();
+    }
+    let mut names: Vec<String> = removed
+        .iter()
+        .take(SHOWN)
+        .map(|path| format!("`{path}`"))
+        .collect();
+    if removed.len() > SHOWN {
+        names.push(format!("{} more", removed.len() - SHOWN));
+    }
+    format!(
+        " The checkout's status lists {} as deleted there; a deletion is not brought back, and \
+         the file stays in the working directory.",
+        names.join(", ")
+    )
+}
+
 /// Put each of `paths`, which are candidates of the kept checkout `id`, through the write gate.
 ///
 /// The half of [`apply_checkout`] that does not care who named the checkout: the planner's call
@@ -5001,14 +5100,21 @@ fn bring_back<S: Sink, C: Confirmer>(
     confirmer: &mut C,
     id: &str,
     kept: &crate::workspace::SessionCheckout,
+    offered: &Offered,
     paths: Vec<String>,
 ) -> Produced {
     let workspace = tools.workspace;
     if paths.is_empty() {
         return Produced::problem(format!(
-            "error: the driver recorded no write by name in checkout {id}, so there is nothing \
-             to bring back with this. A file written through a reference, or by a program other \
-             than through a redirection, is not found."
+            "error: the driver recorded no write by name in checkout {id} and its status lists \
+             no changed file, so there is nothing to bring back with this. A file written through \
+             a reference is not found.{}{}",
+            offered
+                .gap
+                .as_deref()
+                .map(|gap| format!(" {gap}"))
+                .unwrap_or_default(),
+            removed_sentence(&offered.removed)
         ));
     }
 
@@ -5034,7 +5140,7 @@ fn bring_back<S: Sink, C: Confirmer>(
                 continue;
             }
         };
-        let body = match workspace.read_checkout_file(policy, id, relative) {
+        let body = match workspace.read_checkout_file(policy, id, relative, &offered.listed) {
             Ok(body) => body,
             Err(why) => {
                 said.push(format!(
@@ -5097,6 +5203,12 @@ fn bring_back<S: Sink, C: Confirmer>(
         "{applied} of {} from checkout {id} brought back.",
         tally(paths.len(), "file", "files")
     );
+    if let Some(gap) = &offered.gap {
+        said.push(gap.clone());
+    }
+    if !offered.removed.is_empty() {
+        said.push(removed_sentence(&offered.removed).trim().to_string());
+    }
     let text = format!("{summary}\n{}", said.join("\n"));
     let produced = confirmed(text, format!("{summary} {}", notes.join("; ")));
     let produced = Produced {
