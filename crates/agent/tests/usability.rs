@@ -9,6 +9,7 @@
 use bravebot_agent::usability::{
     self, Expect, Failure, Kind, Outcome, Report, Stage, Unavailable, Workflow,
 };
+use bravebot_sandbox::rules::{Entry, Lists};
 use std::path::{Path, PathBuf};
 
 fn root(name: &str) -> PathBuf {
@@ -274,4 +275,147 @@ fn the_suite_will_not_run_under_the_temporary_directory() {
 
     assert!(matches!(refused, Err(Unavailable::Root(_))));
     let _ = std::fs::remove_dir_all(under_temporary);
+}
+
+/// A scratch home holding a credential file the sandbox refuses and one it allows, and a `gh`
+/// whose `auth token` runs `script`. Returns the root, the stub and the home.
+fn login_fixture(name: &str, script: &str) -> (PathBuf, PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let root = root(name);
+    let _ = std::fs::remove_dir_all(&root);
+    let home = root.join("home");
+    std::fs::create_dir_all(home.join(".ssh")).expect("ssh dir");
+    std::fs::create_dir_all(home.join(".config/gh")).expect("gh dir");
+    std::fs::write(home.join(".ssh/id_ed25519"), "TOKEN-IN-A-REFUSED-FILE").expect("key");
+    std::fs::create_dir_all(home.join(".aws")).expect("aws dir");
+    std::fs::write(home.join(".aws/credentials"), "TOKEN-IN-A-REFUSED-FILE").expect("aws");
+    std::fs::write(home.join(".config/gh/hosts.yml"), "TOKEN-IN-HOSTS").expect("hosts");
+    let gh = root.join("gh");
+    std::fs::write(&gh, format!("#!/bin/sh\n{script}\n")).expect("stub");
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    (root.join("run"), gh, home)
+}
+
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(files_under(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// The regression it rejects: a doctor that is green while `gh` holds a login the sandbox keeps it
+/// from reading. The stub reads a file the base refuses, as `gh` does a keychain item, and
+/// succeeds outside the sandbox only.
+#[test]
+fn a_login_the_sandbox_refuses_is_reported_as_a_login_failure() {
+    if !usability::available() {
+        return;
+    }
+    let (root, gh, home) = login_fixture(
+        "login-refused",
+        r#"cat "$HOME/.ssh/id_ed25519" >/dev/null || exit 1"#,
+    );
+
+    let row = usability::login_row_for(&root, &gh, &home, &Lists::default())
+        .expect("the probe runs")
+        .expect("a row");
+
+    match row.outcome {
+        Outcome::Failed(failure) => assert!(matches!(failure.kind, Kind::Login)),
+        other => panic!("expected a failure, got {other:?}"),
+    }
+}
+
+/// The regression it rejects: a probe that reports a login `gh` can read. The stub reads the file
+/// `gh` keeps with `--insecure-storage`, which the remote scope lets through.
+#[test]
+fn a_login_the_sandbox_lets_through_passes() {
+    if !usability::available() {
+        return;
+    }
+    let (root, gh, home) = login_fixture(
+        "login-allowed",
+        r#"cat "$HOME/.config/gh/hosts.yml" >/dev/null || exit 1"#,
+    );
+
+    let row = usability::login_row_for(&root, &gh, &home, &Lists::default())
+        .expect("the probe runs")
+        .expect("a row");
+
+    assert_eq!(row.outcome, Outcome::Passed);
+}
+
+/// The regression it rejects: a false alarm for a person with no login. A `gh` that cannot print a
+/// token outside the sandbox gives no row, so the doctor says nothing about it.
+#[test]
+fn no_login_outside_the_sandbox_gives_no_row() {
+    if !usability::available() {
+        return;
+    }
+    let (root, gh, home) = login_fixture("login-none", "exit 1");
+
+    let row =
+        usability::login_row_for(&root, &gh, &home, &Lists::default()).expect("the probe runs");
+
+    assert!(row.is_none());
+}
+
+/// The regression it rejects: the probe keeping the token. The stub prints a marker on both
+/// streams; it appears in neither the report row nor any file the probe leaves under the root.
+#[test]
+fn the_login_probe_keeps_no_token() {
+    if !usability::available() {
+        return;
+    }
+    let (root, gh, home) = login_fixture(
+        "login-output",
+        r#"echo MARKER-TOKEN; echo MARKER-TOKEN >&2; cat "$HOME/.ssh/id_ed25519" || exit 1"#,
+    );
+
+    let row =
+        usability::login_row_for(&root, &gh, &home, &Lists::default()).expect("the probe runs");
+
+    assert!(!format!("{row:?}").contains("MARKER-TOKEN"));
+    for file in files_under(&root) {
+        let content = std::fs::read_to_string(&file).unwrap_or_default();
+        assert!(
+            !content.contains("MARKER-TOKEN") && !content.contains("TOKEN-IN-A-REFUSED-FILE"),
+            "{} holds the token",
+            file.display()
+        );
+    }
+}
+
+/// The regression it rejects: a fix that names `sandbox.filesystem.allowRead` and a probe that
+/// ignores it, which leaves the row red after the person has done what it says. The same stub that
+/// is refused by default passes once its file is on the person's allowRead list.
+#[test]
+fn a_login_file_on_the_allow_read_list_passes() {
+    if !usability::available() {
+        return;
+    }
+    let (root, gh, home) = login_fixture(
+        "login-allow-read",
+        r#"cat "$HOME/.aws/credentials" >/dev/null || exit 1"#,
+    );
+    let lists = Lists {
+        allow_read: vec![Entry {
+            path: "~/.aws/credentials".to_string(),
+            by: None,
+            pinned: false,
+        }],
+        ..Lists::default()
+    };
+
+    let row = usability::login_row_for(&root, &gh, &home, &lists)
+        .expect("the probe runs")
+        .expect("a row");
+
+    assert_eq!(row.outcome, Outcome::Passed);
 }

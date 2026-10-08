@@ -25,6 +25,7 @@ fr:doctor-sandbox-exited
 fr:doctor-sandbox-failed
 fr:doctor-sandbox-fix
 fr:doctor-sandbox-fix-allowed
+fr:doctor-sandbox-fix-login
 fr:doctor-sandbox-fix-not-confined
 fr:doctor-sandbox-fix-refused
 fr:doctor-sandbox-fix-setup

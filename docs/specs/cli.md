@@ -214,7 +214,7 @@ hooks and `.envrc` approval are outside this check.
 reporting configuration ([SANDBOX-21](sandboxing.md#SANDBOX-21)). It takes no other argument, and
 `--agent` and `--system-prompt` are refused with it as with `doctor`. It ends on the failed status
 when a workflow failed, and on success when each worked or was skipped for a program that is not
-installed.
+installed. It also checks that `gh` can read the login it holds in the real home, when it holds one.
 
 `verified-by: bravebot_cli::main::doctor_development_checks_only_apply_to_the_source_tree`
 `verified-by: bravebot_cli::main::doctor_reports_agent_discovery_conflicts_without_changing_them`

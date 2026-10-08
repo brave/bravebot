@@ -1026,6 +1026,16 @@ that kind of failure and where the stage's output went. It exits with the failed
 ([CLI-6](cli.md#CLI-6)) when a row failed. It runs nothing on Windows, where programs are confined
 by container.
 
+`bravebot doctor --sandbox-check` adds one row to the suite for the login `gh` keeps in the real
+home, which the scratch home cannot hold. It runs `gh auth token` with the person's home and sends
+the output to the null device, first outside the sandbox and then under it, held to the person's
+filesystem lists as a session is ([SANDBOX-25](#SANDBOX-25)). The row appears only
+when `gh` is installed and the run outside the sandbox exits zero. It passes when the run under the
+sandbox exits zero and fails otherwise, with a fix that names `sandbox.filesystem.allowRead`
+([SANDBOX-25](#SANDBOX-25)) and `gh auth login --insecure-storage`. The CI suite does not run it,
+since it depends on the host's login. Token variables are removed from the environment of both
+runs, so the row measures the stored login.
+
 **Why.** Each clause above is tested on the policy it builds, and a default that is sound by every
 one of them can still stop `git commit` from working. That is found by running `git commit` under
 it, which no policy test does, and a person finds it first when it is already the default.
@@ -1046,8 +1056,14 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_program_a_shell_line_starts_is_skipped_by_name_when_it_is_not_installed`
 `verified-by: bravebot_agent::usability::the_report_holds_no_program_output`
 `verified-by: bravebot_agent::usability::the_suite_will_not_run_under_the_temporary_directory`
+`verified-by: bravebot_agent::usability::a_login_the_sandbox_refuses_is_reported_as_a_login_failure`
+`verified-by: bravebot_agent::usability::a_login_the_sandbox_lets_through_passes`
+`verified-by: bravebot_agent::usability::a_login_file_on_the_allow_read_list_passes`
+`verified-by: bravebot_agent::usability::no_login_outside_the_sandbox_gives_no_row`
+`verified-by: bravebot_agent::usability::the_login_probe_keeps_no_token`
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_prints_a_failed_row_with_its_stage_and_its_fix`
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_gives_each_kind_of_failure_its_own_fix`
+`verified-by: bravebot_cli::sandbox_check::doctor_sandbox_tells_a_refused_login_to_allow_the_read`
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_names_a_skipped_workflow_and_does_not_fail_on_it`
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_counts_passed_failed_and_skipped_apart`
 `verified-by: bravebot_cli::running::doctor_sandbox_skips_what_is_not_installed_and_cleans_up_after_a_clean_run`

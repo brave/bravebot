@@ -52,6 +52,7 @@ mod unix {
                         Kind::Allowed => t!(doctor_sandbox_fix_allowed).to_string(),
                         Kind::WithoutTheSandbox => t!(doctor_sandbox_fix_without).to_string(),
                         Kind::Setup => t!(doctor_sandbox_fix_setup).to_string(),
+                        Kind::Login => t!(doctor_sandbox_fix_login).to_string(),
                         Kind::NotConfined(detail) => {
                             t!(doctor_sandbox_fix_not_confined, detail = detail).to_string()
                         }
@@ -93,7 +94,9 @@ mod unix {
         };
         let root = directory.join("doctor-sandbox");
         let _ = std::fs::remove_dir_all(&root);
-        let report = match usability::run(&root, &usability::workflows()) {
+        let report = match usability::run(&root, &usability::workflows())
+            .and_then(|report| with_the_login(report, &root))
+        {
             Ok(report) => report,
             Err(Unavailable::NoBase) => {
                 return fail(Ending::Failed, t!(doctor_sandbox_cannot_confine));
@@ -124,6 +127,11 @@ mod unix {
             remove(&root);
         }
         ending.code()
+    }
+
+    fn with_the_login(mut report: Report, root: &Path) -> Result<Report, Unavailable> {
+        report.rows.extend(usability::login_row(root)?);
+        Ok(report)
     }
 
     fn remove(root: &Path) {
@@ -210,6 +218,7 @@ mod tests {
             Kind::WithoutTheSandbox,
             Kind::Setup,
             Kind::NotConfined("no profile".to_string()),
+            Kind::Login,
         ];
         let fixes: Vec<String> = kinds
             .into_iter()
@@ -235,6 +244,21 @@ mod tests {
                 "two kinds share a fix: {fixes:?}"
             );
         }
+    }
+
+    /// The regression it rejects: a login failure whose fix does not say how to lift the refusal,
+    /// which leaves the person with a red row and no setting to change.
+    #[test]
+    fn doctor_sandbox_tells_a_refused_login_to_allow_the_read() {
+        let report = Report {
+            rows: vec![row(Outcome::Failed(failure(Kind::Login)))],
+        };
+
+        let (text, ending) = text(&report);
+
+        assert!(text.contains("sandbox.filesystem.allowRead"), "{text}");
+        assert!(text.contains("--insecure-storage"), "{text}");
+        assert_eq!(ending, Ending::Failed);
     }
 
     /// The regression it rejects: a skipped workflow read as a failure, which fails the report on

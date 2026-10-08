@@ -3172,6 +3172,7 @@ doctor-sandbox-fix-allowed = The sandbox let a program reach something it exists
 doctor-sandbox-fix-without = The workflow fails without the sandbox too, so the sandbox is not the cause. Check that the program works on this machine.
 doctor-sandbox-fix-setup = Setting the workflow up failed outside the sandbox. Check that the program works on this machine.
 doctor-sandbox-fix-not-confined = The platform would not confine the program: { $detail }
+doctor-sandbox-fix-login = gh has a login outside the sandbox that it cannot read under it. It may be kept in a file the sandbox refuses, such as a keychain other than the login keychain. Add that file to sandbox.filesystem.allowRead in your settings, or store the token in a file the sandbox lets a program read with: gh auth login --insecure-storage
 doctor-sandbox-log = log
 doctor-sandbox-total = total
 doctor-sandbox-counts = { $passed } passed, { $failed } failed, { $skipped } skipped
