@@ -5,13 +5,15 @@
 //!
 //! Typing filters rather than jumping, since a title is remembered as a few words out of the
 //! middle of it rather than as the way it starts. The branch and the issue and pull request the
-//! person linked are searched as well, and `--from-pr` opens the list already narrowed to the
+//! person linked are searched as well, and so is what was said in the session (SESSION-33), read
+//! the first time something is typed. A `since:7d` word limits the list to recent sessions. `--from-pr` opens the list already narrowed to the
 //! sessions linked to one pull request. Escape leaves without resuming anything, which
 //! starts an ordinary session: nothing here can strand a user who opened it by mistake.
 
 use crate::input;
 use crate::theme;
 use bravebot_i18n::t;
+use bravebot_session::search::{Corpus, Query};
 use bravebot_session::sessions::{self, Summary};
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -21,7 +23,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// What the picker is showing and where the cursor is.
 #[derive(Debug)]
@@ -41,6 +44,13 @@ pub struct Picker {
     from_pr: Option<String>,
     /// Whether it is drawn over a running session, where leaving it stays in that session.
     within_a_session: bool,
+    /// Where to read what the sessions say from, once something is typed.
+    reads_from: Option<PathBuf>,
+    /// What the sessions say. Read on the first key that types a phrase, so opening the picker
+    /// costs what it did before.
+    corpus: Option<Corpus>,
+    /// For each session whose words hold the phrase, the line that does.
+    said: HashMap<String, String>,
 }
 
 impl Picker {
@@ -53,6 +63,55 @@ impl Picker {
             project: project.into(),
             from_pr: None,
             within_a_session: false,
+            reads_from: None,
+            corpus: None,
+            said: HashMap::new(),
+        }
+    }
+
+    /// Search what the sessions of `project` say, as well as their titles.
+    pub fn reading(mut self, project: &Path) -> Self {
+        self.reads_from = Some(project.to_path_buf());
+        self
+    }
+
+    /// Search these lines for what the sessions say, instead of reading them from disk.
+    #[cfg(test)]
+    fn with_corpus(mut self, corpus: Corpus) -> Self {
+        self.corpus = Some(corpus);
+        self
+    }
+
+    /// What is typed as a query. A `since:` word that is not one is typed text like any other.
+    fn query(&self) -> Query {
+        Query::parse(&self.search).unwrap_or_else(|_| Query::plain(&self.search))
+    }
+
+    /// The line of this session's words that holds what is typed, if one does.
+    fn said_in(&self, session: &Summary) -> Option<&str> {
+        self.said.get(&session.id).map(String::as_str)
+    }
+
+    /// Find the sessions whose words hold what has been typed.
+    fn search_words(&mut self) {
+        let query = self.query();
+        self.said.clear();
+        if !query.has_phrase() {
+            return;
+        }
+        if self.corpus.is_none() {
+            let Some(project) = &self.reads_from else {
+                return;
+            };
+            self.corpus = Some(Corpus::read(project));
+        }
+        let Some(corpus) = &self.corpus else {
+            return;
+        };
+        for session in &self.sessions {
+            if let Some(line) = corpus.found(&session.id, &query) {
+                self.said.insert(session.id.clone(), line);
+            }
         }
     }
 
@@ -72,8 +131,16 @@ impl Picker {
     /// text. A pasted pull request address then finds the session that was given it, rather than
     /// that one and every session whose pull request number merely starts with the same digits.
     /// The title and the branch still match by what they contain.
+    ///
+    /// A session whose words hold the typed text matches too, and a `since:` word keeps only the
+    /// sessions written within it.
     pub fn matching(&self) -> Vec<&Summary> {
-        let needle = self.search.to_lowercase();
+        let query = self.query();
+        let needle = if query.has_window() {
+            query.phrase().to_string()
+        } else {
+            self.search.to_lowercase()
+        };
         let links = |session: &'_ Summary| {
             [session.issue.as_deref(), session.pull_request.as_deref()]
                 .into_iter()
@@ -93,6 +160,7 @@ impl Picker {
                     .as_deref()
                     .is_none_or(|wanted| is_pull_request(session, wanted))
             })
+            .filter(|session| query.admits_now(session.updated))
             .filter(|session| {
                 let words = [Some(session.title.as_str()), session.branch.as_deref()]
                     .into_iter()
@@ -105,7 +173,7 @@ impl Picker {
                         link.contains(&needle)
                     }
                 });
-                words || linked
+                words || linked || self.said_in(session).is_some()
             })
             .collect()
     }
@@ -131,11 +199,13 @@ impl Picker {
     /// Narrow the list, keeping the cursor inside it.
     fn typed(&mut self, c: char) {
         self.search.push(c);
+        self.search_words();
         self.clamp();
     }
 
     fn backspace(&mut self) {
         self.search.pop();
+        self.search_words();
         self.clamp();
     }
 
@@ -335,7 +405,7 @@ fn pick<B: Backend>(
 ) -> Choice {
     let mut listed = sessions::list(project);
     listed.retain(|session| Some(session.id.as_str()) != current);
-    let mut picker = Picker::new(listed, project.display().to_string());
+    let mut picker = Picker::new(listed, project.display().to_string()).reading(project);
     picker.within_a_session = current.is_some();
     if let Some(wanted) = from_pr {
         picker = picker.from_pull_request(wanted);
@@ -499,7 +569,10 @@ fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
             format!("  {}", describe(session)),
             Style::default().fg(theme::muted()),
         )));
-        lines.push(Line::raw(""));
+        lines.push(match picker.said_in(session) {
+            Some(line) => Line::from(Span::raw(format!("  {line}"))),
+            None => Line::raw(""),
+        });
     }
     lines
 }
@@ -846,5 +919,116 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("a clock")
             .as_secs()
+    }
+
+    const DAY: u64 = 24 * 3600;
+
+    fn remembering() -> Picker {
+        let now = sessions_now();
+        Picker::new(
+            vec![
+                summary("new", "Tidy the docs", now - DAY),
+                summary("mid", "Fix the build", now - 5 * DAY),
+                summary("old", "Add retries", now - 30 * DAY),
+            ],
+            "/work/bravebot",
+        )
+        .with_corpus(Corpus::of([
+            (
+                "new".to_string(),
+                vec!["move the ledger rounding into one place".to_string()],
+            ),
+            (
+                "mid".to_string(),
+                vec!["the Ledger Rounding test flakes on CI".to_string()],
+            ),
+            ("old".to_string(), vec!["retry the upload".to_string()]),
+        ]))
+    }
+
+    /// The title is the first thing asked; the session is remembered by something said later.
+    #[test]
+    fn typing_words_said_in_a_session_finds_it_and_enter_resumes_it() {
+        let mut picker = remembering();
+        typed(&mut picker, "LEDGER rounding");
+        assert_eq!(ids(&picker), ["new", "mid"]);
+        assert_eq!(
+            handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
+            Outcome::Resume
+        );
+        assert_eq!(picker.chosen().expect("a session").id, "new");
+    }
+
+    #[test]
+    fn a_session_whose_words_do_not_hold_the_phrase_is_left_out() {
+        let mut picker = remembering();
+        typed(&mut picker, "ledger");
+        assert!(!ids(&picker).contains(&"old"));
+        typed(&mut picker, " nowhere");
+        assert!(picker.matching().is_empty());
+    }
+
+    #[test]
+    fn backspacing_the_phrase_away_brings_every_session_back() {
+        let mut picker = remembering();
+        typed(&mut picker, "ledger");
+        for _ in 0.."ledger".len() {
+            handle_key(&mut picker, KeyCode::Backspace, KeyModifiers::NONE);
+        }
+        assert_eq!(ids(&picker), ["new", "mid", "old"]);
+    }
+
+    #[test]
+    fn a_since_word_keeps_only_the_sessions_written_within_it() {
+        let mut picker = remembering();
+        typed(&mut picker, "since:7d");
+        assert_eq!(ids(&picker), ["new", "mid"]);
+        typed(&mut picker, " since:2d");
+        assert_eq!(ids(&picker), ["new"]);
+    }
+
+    #[test]
+    fn a_since_word_narrows_the_words_found_and_is_not_part_of_them() {
+        let mut picker = remembering();
+        typed(&mut picker, "ledger rounding since:2d");
+        assert_eq!(ids(&picker), ["new"]);
+    }
+
+    /// Halfway through typing the word it is only text, which no session holds.
+    #[test]
+    fn a_since_word_not_yet_finished_is_typed_text() {
+        let mut picker = remembering();
+        typed(&mut picker, "since:2");
+        assert!(picker.matching().is_empty());
+        typed(&mut picker, "d");
+        assert_eq!(ids(&picker), ["new"]);
+    }
+
+    /// Opening the picker costs what it did before; the records are read for the first phrase.
+    #[test]
+    fn what_the_sessions_say_is_not_read_until_a_phrase_is_typed() {
+        let mut picker = Picker::new(vec![summary("a", "anything", 100)], "/work")
+            .reading(Path::new("/work/does-not-exist"));
+        assert!(picker.corpus.is_none());
+        typed(&mut picker, "w");
+        assert!(picker.corpus.is_some());
+    }
+
+    #[test]
+    fn a_found_session_shows_the_line_that_matched_and_a_title_match_shows_none() {
+        let mut picker = remembering();
+        typed(&mut picker, "ledger");
+        let screen = drawn(&picker);
+        assert!(screen.contains("Tidy the docs"), "{screen}");
+        assert!(
+            screen.contains("move the ledger rounding into one place"),
+            "{screen}"
+        );
+
+        let mut by_title = remembering();
+        typed(&mut by_title, "tidy");
+        let screen = drawn(&by_title);
+        assert!(screen.contains("Tidy the docs"), "{screen}");
+        assert!(!screen.contains("ledger"), "{screen}");
     }
 }

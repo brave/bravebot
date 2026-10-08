@@ -15,6 +15,7 @@ mod plain;
 mod progress;
 mod sandbox_check;
 mod session_import;
+mod session_search;
 mod shell_init;
 use bravebot_agent::servers;
 
@@ -86,6 +87,7 @@ fn main() -> ExitCode {
                     | "--sandbox-deny-read"
                     | "--sandbox-allow-write"
                     | "--sandbox-deny-write"
+                    | "--log-level"
             )
         })
         .cloned();
@@ -161,6 +163,18 @@ fn main() -> ExitCode {
         Ok(lists) => {
             bravebot_config::settle_sandbox_filesystem(&lists);
         }
+        Err(complaint) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+        }
+    }
+
+    // After the mode above is engaged, because an incognito session is given no directory to log
+    // into, and before the first thing that could fail in a way worth recording.
+    match take_log_level(&mut args) {
+        Ok(level) => bravebot_diag::configure(
+            level.unwrap_or(bravebot_diag::Level::Error),
+            log_directory(),
+        ),
         Err(complaint) => {
             return stopped_before_the_turn(as_json, Ending::Argument, complaint);
         }
@@ -633,6 +647,40 @@ fn take_run_network(
     Ok(named)
 }
 
+/// Take `--log-level <error|info|debug>` out of the arguments, answering with the level it named.
+///
+/// Removed before dispatch for the reason `--run-network` is, and refused on a missing or unknown
+/// word for the same one: a typo read as the default would leave a person without the log they
+/// asked for, discovered only when the failure they wanted it for had already happened.
+fn take_log_level(args: &mut Vec<String>) -> Result<Option<bravebot_diag::Level>, String> {
+    let mut named = None;
+    let mut kept = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] != "--log-level" {
+            kept.push(args[index].clone());
+            index += 1;
+            continue;
+        }
+        let Some(word) = args.get(index + 1) else {
+            return Err(t!(cli_log_level_needs_a_word).to_string());
+        };
+        match bravebot_diag::Level::parse(word) {
+            Some(level) => named = Some(level),
+            None => return Err(t!(cli_log_level_unknown, word = word.clone()).to_string()),
+        }
+        index += 2;
+    }
+    *args = kept;
+    Ok(named)
+}
+
+/// Where this process's diagnostic log goes, or `None` when it writes none: an incognito session,
+/// and a machine with no home to keep one in.
+fn log_directory() -> Option<PathBuf> {
+    bravebot_agent::home::writable().map(|home| home.join(bravebot_diag::DIRECTORY))
+}
+
 /// Take `--sandbox <mode>` out of the arguments, answering with the mode it named.
 ///
 /// Removed before dispatch for the reason `--settings` is: how far a program may reach is a
@@ -923,6 +971,7 @@ fn print_help() {
             "--sandbox-deny-write <path>",
             t!(cli_option_sandbox_deny_write),
         ),
+        ("--log-level <error|info|debug>", t!(cli_option_log_level)),
         ("--agent <name>", t!(cli_option_agent)),
         ("--system-prompt <prompt>", t!(cli_option_system_prompt)),
         (
@@ -4436,6 +4485,13 @@ fn state_directory(
         )
         .to_string(),
     ];
+    lines.push(
+        t!(
+            doctor_state_directory_logs,
+            path = path.join(bravebot_diag::DIRECTORY).display().to_string()
+        )
+        .to_string(),
+    );
     if !restricted {
         lines.push(aligned(
             t!(doctor_state_directory_unprotected),
@@ -5071,6 +5127,52 @@ mod tests {
                 .any(|line| line.contains(&t!(doctor_state_directory_forgotten).to_string())),
             "a machine with a state directory was told what it is not keeping: {lines:?}"
         );
+    }
+
+    /// A person filing a bug is told where the logs are, and the place is the one the log is
+    /// written to, since a line naming a different directory sends them to look in an empty one.
+    #[test]
+    fn doctor_names_the_diagnostic_log_directory() {
+        let lines = state_directory(
+            Some(("HOME", Path::new("/home/someone/.bravebot"))),
+            &["HOME"],
+            true,
+        );
+        let expected = Path::new("/home/someone/.bravebot")
+            .join(bravebot_diag::DIRECTORY)
+            .display()
+            .to_string();
+        assert!(
+            lines.iter().any(|line| line.contains(&expected)),
+            "the log directory is not in the report: {lines:?}"
+        );
+    }
+
+    /// The flag is taken out wherever it was typed, with its word, and a word that is not a level
+    /// is refused rather than read as the default.
+    #[test]
+    fn the_log_level_flag_is_taken_out_with_its_word_and_refuses_any_other() {
+        use bravebot_diag::Level;
+        for typed in [
+            &["--log-level", "debug", "-p", "do a thing"][..],
+            &["-p", "--log-level", "debug", "do a thing"][..],
+            &["-p", "do a thing", "--log-level", "debug"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert_eq!(take_log_level(&mut arguments), Ok(Some(Level::Debug)));
+            assert_eq!(arguments, args(&["-p", "do a thing"]), "{typed:?}");
+        }
+        let mut none = args(&["-p", "do a thing"]);
+        assert_eq!(take_log_level(&mut none), Ok(None));
+        for typed in [
+            &["-p", "x", "--log-level"][..],
+            &["--log-level", "Debug", "-p", "x"][..],
+            &["--log-level", "trace", "-p", "x"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(take_log_level(&mut arguments).is_err(), "{typed:?}");
+            assert_eq!(arguments, args(typed), "a refusal rewrote the list");
+        }
     }
 
     /// The mode `home` asks for as it creates is what keeps a prompt history out of another

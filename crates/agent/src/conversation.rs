@@ -805,6 +805,19 @@ impl Conversation {
         }
     }
 
+    /// Tell the planner that the turn the process was in when it ended never finished.
+    ///
+    /// The driver writes the words and they name nothing the turn did: that turn was never kept,
+    /// and what it had read or run is not known to anything that could say (BG-12). Recorded as a
+    /// resume's note is, so it is not written down and is not drawn as something anyone said.
+    pub fn note_unfinished_turn(&mut self) {
+        self.messages.push(Stored {
+            message: Message::user(UNFINISHED_TURN),
+            composed: Some(Composed::Resumed),
+            source: None,
+        });
+    }
+
     /// A conversation read back from one.
     ///
     /// The quarantine starts empty, since a snapshot has none: see [`Snapshot`]. Anything but
@@ -971,6 +984,16 @@ pub const TOOL_RESULT_PREFIX: &str = "Result of ";
 /// Words for the planner to read. The note is recorded with [`Composed::Resumed`] and nothing
 /// decides from the words.
 pub const RESUMED_PREFIX: &str = "This session was resumed.";
+
+/// What the planner is told when a background session starts again after the process running it
+/// ended in the middle of a turn.
+///
+/// Fixed words. The prompt of that turn is not in the record and nothing the turn did is known, so
+/// the note says neither, and it holds nothing from a file or a tool.
+const UNFINISHED_TURN: &str = "This session was resumed. Its last turn ended before it finished, \
+because the process running it ended. That turn is not repeated and is not part of this \
+conversation. Work it had started may be partly done: look at the state of the files before \
+relying on it.";
 
 /// How the summary standing in for a compacted exchange begins.
 ///
@@ -1485,6 +1508,28 @@ mod tests {
             })
             .count();
         assert_eq!(notes, 1, "the note was added again on top of itself");
+    }
+
+    /// BG-12: the note that a turn never finished is in front of the planner, is not something
+    /// anyone said, and is not written down, so a second restart does not stack another copy.
+    #[test]
+    fn the_note_about_an_unfinished_turn_is_sent_but_neither_drawn_nor_kept() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("fix the build"));
+        conversation.push(Message::assistant("done"));
+        let before = conversation.recounted();
+
+        conversation.note_unfinished_turn();
+
+        let sent: Vec<_> = conversation
+            .messages()
+            .iter()
+            .filter_map(|stored| stored.message.content.as_text())
+            .collect();
+        assert_eq!(sent.len(), 3);
+        assert!(sent[2].contains("ended before it finished"), "{sent:?}");
+        assert_eq!(conversation.recounted(), before);
+        assert_eq!(conversation.snapshot().messages.len(), 2);
     }
 
     /// Four exchanges, the shape most of the compaction tests need.

@@ -428,6 +428,7 @@ impl<'a> BedrockClient<'a> {
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
+                    log_retry(attempt + 1, backoff(self.backoff, attempt));
                     if !self.wait(backoff(self.backoff, attempt)) {
                         return Err(BedrockError::Cancelled);
                     }
@@ -791,6 +792,7 @@ impl<'a> BedrockClient<'a> {
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
                     attempt += 1;
+                    log_retry(attempt, backoff(self.backoff, attempt - 1));
                     // Announced before the wait rather than after it, so the pause is explained
                     // while it is happening. Reply progress resets; completed costs remain charged.
                     progress(Progress {
@@ -1363,6 +1365,17 @@ fn worth_another_attempt(attempt: u32, error: &BedrockError) -> bool {
 
 fn backoff(base: Duration, failures: u32) -> Duration {
     base * 2u32.pow(failures - 1)
+}
+
+/// Writes the decision to send again to the diagnostic log: which attempt, and the wait before it.
+fn log_retry(attempt: u32, wait: Duration) {
+    bravebot_diag::info(
+        "bedrock.retry",
+        &[
+            ("attempt", bravebot_diag::Field::num(attempt)),
+            ("backoff_ms", bravebot_diag::Field::num(wait.as_millis())),
+        ],
+    );
 }
 
 /// Validate reported counts independently of assistant content.
@@ -3060,6 +3073,68 @@ mod tests {
             "it waited out the pause: {:?}",
             started.elapsed()
         );
+    }
+
+    /// Serialises the tests that read the process-wide diagnostic log.
+    static DIAG_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A retry is a decision worth reading after the fact, so each of the two loops that make one
+    /// leaves the attempt it is and the wait before it, and nothing of the request. The backoffs
+    /// differ per loop so one loop's lines cannot stand in for the other's.
+    #[test]
+    fn a_retry_is_written_to_the_diagnostic_log() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().join("logs")));
+        for (streaming, base_ms) in [(false, 7), (true, 11)] {
+            let config = config();
+            let egress = Egress::new();
+            let (http, received) = refused_requests(vec![503; 3]);
+            let mut client =
+                BedrockClient::new(&config, &egress).with_backoff(Duration::from_millis(base_ms));
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let request = ChatRequest::new("opus-arn", vec![]);
+            let result = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            };
+            assert!(result.is_err(), "streaming={streaming}");
+            assert_eq!(client.attempts(), 3, "streaming={streaming}");
+            for _ in 0..3 {
+                received.recv_timeout(Duration::from_secs(2)).unwrap();
+            }
+        }
+        let log: String = std::fs::read_dir(dir.path().join("logs"))
+            .expect("a retry makes the log")
+            .flatten()
+            .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+            .collect();
+        bravebot_diag::configure(bravebot_diag::Level::Error, None);
+
+        for line in [
+            "INFO bedrock.retry attempt=2 backoff_ms=7",
+            "INFO bedrock.retry attempt=3 backoff_ms=14",
+            "INFO bedrock.retry attempt=2 backoff_ms=11",
+            "INFO bedrock.retry attempt=3 backoff_ms=22",
+        ] {
+            assert!(log.contains(line), "missing {line:?} in {log}");
+        }
     }
 
     /// Real exception frames follow the existing retry policy and keep the final protocol kind.

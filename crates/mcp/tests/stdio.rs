@@ -1022,3 +1022,79 @@ fn a_handshake_not_answered_within_its_bound_is_a_timeout_naming_the_request() {
 
     let _ = std::fs::remove_file(&script);
 }
+
+/// Runs `run` with the diagnostic log at `level` in a scratch directory and returns what it wrote.
+/// Called with `one_at_a_time` held, which is what keeps another test from writing to it.
+fn logged(level: bravebot_diag::Level, run: impl FnOnce()) -> String {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    bravebot_diag::configure(level, Some(dir.path().join("logs")));
+    run();
+    bravebot_diag::configure(bravebot_diag::Level::Error, None);
+    std::fs::read_dir(dir.path().join("logs"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A server that did not start is the first thing a bug report asks about, so the log says which
+/// kind of failure it was, and not the program that was tried or the name the server was given.
+#[test]
+fn a_launch_that_failed_is_written_to_the_diagnostic_log() {
+    let _spawning = one_at_a_time();
+    let log = logged(bravebot_diag::Level::Error, || {
+        for sandbox in [&Unavailable as &dyn Sandbox, &ProgramWouldNotStart] {
+            let _ = StdioServer::launch(
+                "private-alias",
+                "/bravebot-no-such-server/never-installed",
+                &[],
+                Variables::new(),
+                sandbox,
+                &SandboxPolicy::strict(),
+                Stream::Inherited,
+            );
+        }
+    });
+
+    assert!(log.contains("ERROR mcp.launch kind=confinement"), "{log}");
+    assert!(log.contains("ERROR mcp.launch kind=transport"), "{log}");
+    assert!(!log.contains("never-installed"), "{log}");
+    assert!(!log.contains("private-alias"), "{log}");
+}
+
+/// Each step of getting a server going is written as having worked or as the kind of failure it
+/// was, so a bug report can say whether the server started and whether it answered.
+#[test]
+fn a_handshake_is_written_to_the_diagnostic_log() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let working = fake_server("logged-handshake", WORKING_SERVER);
+    let exits = fake_server("logged-exits", "#!/bin/sh\nexit 0\n");
+
+    let log = logged(bravebot_diag::Level::Info, || {
+        let mut server = launched(sandbox.as_ref(), &working);
+        server.initialize("bravebot", "0.1.0").expect("handshake");
+        server.list_tools().expect("tools listed");
+
+        let mut dead = launched(sandbox.as_ref(), &exits);
+        dead.initialize("bravebot", "0.1.0")
+            .expect_err("a dead server cannot handshake");
+    });
+    let _ = std::fs::remove_file(&working);
+    let _ = std::fs::remove_file(&exits);
+
+    for line in [
+        "INFO mcp.launch outcome=ok",
+        "INFO mcp.initialize outcome=ok",
+        "INFO mcp.list_tools outcome=ok",
+        "ERROR mcp.initialize kind=transport",
+    ] {
+        assert!(log.contains(line), "missing {line:?} in {log}");
+    }
+    assert!(!log.contains("tool output"), "{log}");
+}

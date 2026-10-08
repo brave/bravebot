@@ -1807,6 +1807,10 @@ pub struct Session {
     /// Kept for the session only: the `advisorModel` setting is the saved route, and a turn that
     /// finds none here leaves it to that.
     advisor: Option<String>,
+    /// The built-in output style `/style` chose, which opens the system prompt of each turn.
+    ///
+    /// Kept for the session only, as `advisor` is.
+    style: Option<&'static bravebot_agent::styles::Style>,
     /// Which offered command is under the cursor while one is being typed.
     ///
     /// An index into what [`Session::offered`] returns for the current input rather than a copy of
@@ -1979,6 +1983,7 @@ impl Session {
             effort: None,
             model_reads_effort: true,
             advisor: None,
+            style: None,
             completion: 0,
             workspace: std::path::PathBuf::new(),
             skills: None,
@@ -2118,6 +2123,16 @@ impl Session {
     /// The model `/advisor` named, resolved, or `None` where it named none.
     pub fn advisor(&self) -> Option<&str> {
         self.advisor.as_deref()
+    }
+
+    /// The output style `/style` chose, or `None` where it chose none.
+    pub fn style(&self) -> Option<&'static bravebot_agent::styles::Style> {
+        self.style
+    }
+
+    /// Open every later turn's system prompt with this style, or `None` to clear the pick.
+    pub fn choose_style(&mut self, style: Option<&'static bravebot_agent::styles::Style>) {
+        self.style = style;
     }
 
     /// Name the model the planner may consult from the next turn on, or `None` to drop the choice.

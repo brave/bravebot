@@ -7287,6 +7287,105 @@ fn a_claude_code_session_is_copied_once_and_only_when_asked() {
     assert!(said(&output).1.contains("No Claude Code session"));
 }
 
+/// SESSION-33: a script finds past sessions by what was said in them and gets ids and titles back.
+/// A tool result and an imported session are not searched, `since:` limits by age, `workspace:`
+/// names the directory, and no match exits 1 with nothing on stdout.
+#[test]
+fn sessions_search_prints_the_ids_and_titles_of_the_sessions_that_said_it() {
+    let home = Scratch::new("sessions-search");
+    let work = home.path.join("work");
+    std::fs::create_dir_all(&work).expect("create the workspace");
+    let work = work.canonicalize().expect("canonical workspace");
+    let project = work.to_str().expect("utf-8");
+    let key: String = project
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' => c,
+            _ => '-',
+        })
+        .collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock")
+        .as_secs();
+    let record = |id: &str, title: &str, updated: u64, front: &str, messages: serde_json::Value| {
+        serde_json::json!({
+            "id": id, "directory": project, "title": title, "updated": updated,
+            "front": front,
+            "conversation": {"messages": messages, "context": "trusted"},
+        })
+        .to_string()
+    };
+    let typed = |text: &str| serde_json::json!([{"role": "user", "content": text}]);
+    let read_a_file = serde_json::json!([
+        {"role": "user", "content": "read it"},
+        {"role": "tool", "tool_call_id": "c1", "content": "PASSWORD-IN-A-FILE"},
+    ]);
+    let day = 86_400;
+    let mut home = home;
+    for (id, body) in [
+        (
+            "recent",
+            record(
+                "recent",
+                "Tidy the docs",
+                now - day,
+                "terminal",
+                typed("move the ledger rounding"),
+            ),
+        ),
+        (
+            "older",
+            record(
+                "older",
+                "Fix the build",
+                now - 9 * day,
+                "desktop",
+                typed("the Ledger Rounding flakes"),
+            ),
+        ),
+        (
+            "result",
+            record("result", "Read a file", now - day, "terminal", read_a_file),
+        ),
+        (
+            "copied",
+            record(
+                "copied",
+                "Copied one",
+                now - day,
+                "claude-code",
+                typed("ledger rounding too"),
+            ),
+        ),
+    ] {
+        home = home.with_file(&format!(".bravebot/sessions/{key}/{id}.json"), &body);
+    }
+    let search = |words: &[&str]| {
+        let mut arguments = vec!["sessions", "search"];
+        arguments.extend_from_slice(words);
+        bravebot(&home.path, &[], &arguments)
+    };
+    let workspace = format!("workspace:{project}");
+
+    let output = search(&[&workspace, "LEDGER", "rounding"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    assert_eq!(out, "recent  Tidy the docs\nolder  Fix the build\n");
+
+    let (out, _) = said(&search(&[&workspace, "since:7d", "ledger"]));
+    assert_eq!(out, "recent  Tidy the docs\n");
+
+    let output = search(&[&workspace, "PASSWORD-IN-A-FILE"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(said(&output).0, "");
+    assert!(said(&output).1.contains("No session matches"));
+
+    let output = search(&[&workspace, "since:3m", "ledger"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(said(&output).1.contains("sessions search takes"));
+}
+
 /// BG-2: `--bg` cannot start with a flag that would not reach the session it starts, with bypass,
 /// or from anything but a terminal, and each refusal leaves nothing in the roster.
 #[test]
@@ -7346,7 +7445,8 @@ fn a_host_run_by_hand_has_nothing_to_start_with() {
     assert!(!job.join("state.json").exists());
 }
 
-/// BG-9, BG-10: `attach` and `reply` name a session that is not running as not running.
+/// BG-2, BG-9, BG-10: `attach` and `reply` from a pipe do not start a session that was interrupted,
+/// and say that only a terminal can.
 #[test]
 fn attach_and_reply_refuse_a_session_that_is_not_running() {
     let home = Scratch::new("bg-attach-dead").with_file(
@@ -7359,7 +7459,13 @@ fn attach_and_reply_refuse_a_session_that_is_not_running() {
     ] {
         let output = bravebot(&home.path, &[], arguments);
         assert!(!output.status.success(), "{arguments:?}");
-        assert!(said(&output).1.contains("is not running"), "{arguments:?}");
+        assert!(
+            said(&output)
+                .1
+                .contains("was interrupted, and only a terminal can start it again"),
+            "{arguments:?}: {}",
+            said(&output).1
+        );
     }
     for arguments in [
         &["attach", "ffffffff"][..],
@@ -7744,6 +7850,89 @@ fn a_session_started_again_continues_the_conversation_it_stopped_with() {
     let _ = host.wait();
 }
 
+/// BG-12: the process that starts an interrupted session again tells the planner the last turn
+/// never finished, and a session that was stopped is told nothing of the kind.
+///
+/// Started here by hand with nothing to start with, which is what `attach` leaves for it.
+#[cfg(unix)]
+#[test]
+fn a_session_started_after_an_interruption_tells_the_planner_and_one_after_a_stop_does_not() {
+    use std::os::unix::net::UnixStream;
+
+    for interrupted in [true, false] {
+        let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+        let home = ShortHome::new();
+        let work = a_stopped_session_with_one_turn(&home, &gateway);
+        let job = home.0.join(format!(".bravebot/jobs/{SESSION_ID}"));
+        if interrupted {
+            let state = job.join("state.json");
+            let written = std::fs::read_to_string(&state).expect("the entry");
+            assert!(written.contains(r#""state": "stopped""#), "{written}");
+            std::fs::write(
+                &state,
+                written.replace(r#""state": "stopped""#, r#""state": "working""#),
+            )
+            .expect("the entry as a dead process left it");
+            let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+            assert!(listed.contains("interrupted"), "{listed}");
+        }
+        std::fs::write(job.join("first-prompt"), "").expect("nothing to start with");
+        let _ = std::fs::remove_file(job.join("attach.sock"));
+        let mut host = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+            .env_clear()
+            .env("HOME", &home.0)
+            .env("BRAVEBOT_LOCALE", "en-US")
+            .env("OLLAMA_HOST", NO_OLLAMA)
+            .envs(AT_A_GATEWAY.iter().copied())
+            .args(["__bg-host", SESSION_ID])
+            .current_dir(&work)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the host starts");
+        let socket = job.join("attach.sock");
+        let until = std::time::Instant::now() + Duration::from_secs(60);
+        while !socket.exists() {
+            assert!(std::time::Instant::now() < until, "the host never listened");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        loop {
+            let mut stream = UnixStream::connect(&socket).expect("connect");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(30)))
+                .expect("timeout");
+            write!(stream, "reply\nand the tests\n").expect("write");
+            let mut answer = String::new();
+            BufReader::new(stream)
+                .read_line(&mut answer)
+                .expect("an answer");
+            if answer.trim() == "ok" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "the reply was never taken: {answer}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let second = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the reply reached the gateway");
+        assert!(second.contains("and the tests"), "{second}");
+        assert!(second.contains("fix the build"), "{second}");
+        assert_eq!(
+            second.contains("ended before it finished"),
+            interrupted,
+            "interrupted: {interrupted}: {second}"
+        );
+
+        let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+        let _ = host.wait();
+    }
+}
+
 /// BG-2: starting a stopped session again is a thing a terminal does. A `reply` or an `attach` whose
 /// input is a pipe says so, and starts nothing.
 #[cfg(unix)]
@@ -7801,6 +7990,88 @@ fn a_reply_from_a_terminal_starts_a_stopped_session_with_it() {
     assert!(second.contains("fix the build"), "{second}");
     let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
     assert!(!listed.contains("stopped"), "{listed}");
+}
+
+/// BG-10, BG-12: `reply` from a terminal starts an interrupted session, after saying that the turn it
+/// was in is not repeated. The earlier conversation and the reply are in the request, with the
+/// driver's note that the last turn never finished, and that note is not written to the record.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_reply_from_a_terminal_starts_an_interrupted_session_and_the_planner_is_told() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+    let state = home
+        .0
+        .join(format!(".bravebot/jobs/{SESSION_ID}/state.json"));
+    let written = std::fs::read_to_string(&state).expect("the entry");
+    assert!(written.contains(r#""state": "stopped""#), "{written}");
+    std::fs::write(
+        &state,
+        written.replace(r#""state": "stopped""#, r#""state": "working""#),
+    )
+    .expect("the entry as a dead process left it");
+    let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+    assert!(listed.contains("interrupted"), "{listed}");
+
+    let output = in_a_terminal(
+        &home.0,
+        AT_A_GATEWAY,
+        &["reply", "3f2a9c1e", "and the tests"],
+    );
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{out}{err}");
+    let shown = format!("{out}{err}");
+    let told = shown
+        .find("Starting it again does not repeat that turn")
+        .expect("the terminal said the turn is not repeated");
+    let sent = shown.find("Sent to").expect("the reply was sent");
+    assert!(told < sent, "{shown}");
+    let second = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(second.contains("and the tests"), "{second}");
+    assert!(second.contains("fix the build"), "{second}");
+    assert!(second.contains("ended before it finished"), "{second}");
+
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+        if listed.contains("idle") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "never idle again: {listed}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let sessions = home.0.join(".bravebot/sessions");
+    let mut kept = String::new();
+    for entry in walk(&sessions) {
+        kept.push_str(&std::fs::read_to_string(entry).unwrap_or_default());
+    }
+    assert!(kept.contains("and the tests"), "the turn was not recorded");
+    assert!(
+        !kept.contains("ended before it finished"),
+        "the note was written to the record"
+    );
+}
+
+/// All the files under `directory`.
+#[cfg(target_os = "linux")]
+fn walk(directory: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(walk(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
 }
 
 /// BG-9: `attach` from a terminal starts a stopped session idle, from the record it stopped with.
@@ -9076,5 +9347,133 @@ fn an_incognito_shell_records_nothing_and_asks_incognito() {
             .iter()
             .any(|line| line.contains("export BRAVEBOT_INCOGNITO")),
         "the line that turned it on was recorded: {given:?}"
+    );
+}
+
+/// A gateway on loopback that lists one model and refuses every chat request with a body naming a
+/// secret, so a log that kept what the server said would keep it.
+fn a_gateway_refusing_with_a_secret() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            let reply = if request.starts_with("GET") {
+                http(
+                    200,
+                    r#"{"data": [{"id": "reasons-only", "context_length": 262144}]}"#,
+                )
+            } else {
+                http(401, r#"{"error": "SERVER-SECRET-BODY"}"#)
+            };
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    port
+}
+
+/// A run against the refusing gateway, with the flags a test adds, and the home it ran in.
+fn a_run_the_gateway_refuses(name: &str, flags: &[&str]) -> (Scratch, u16) {
+    let port = a_gateway_refusing_with_a_secret();
+    let scratch = Scratch::new(name).with_settings(&format!(
+        r#"{{"provider": {{"openrouter": {{"env": ["OPENROUTER_API_KEY"],
+            "options": {{"baseURL": "http://127.0.0.1:{port}/api/v1"}}}}}},
+            "model": "openrouter/reasons-only"}}"#
+    ));
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("OPENROUTER_API_KEY", "placeholder-variable-key"));
+    let mut arguments = flags.to_vec();
+    arguments.extend(["-p", "say something"]);
+    let _ = bravebot(&scratch.path, &environment, &arguments);
+    (scratch, port)
+}
+
+fn logs_of(scratch: &Scratch) -> Vec<PathBuf> {
+    std::fs::read_dir(scratch.path.join(".bravebot").join("logs"))
+        .map(|entries| entries.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default()
+}
+
+/// DIAG-1, DIAG-2: a failed request leaves its host and status in a private file under the state
+/// directory, and nothing the server said or the run sent.
+#[test]
+fn a_failed_request_leaves_its_host_and_status_and_no_content_in_the_log() {
+    let (scratch, port) = a_run_the_gateway_refuses("cli-running-log-written", &[]);
+
+    let logs = logs_of(&scratch);
+    assert_eq!(logs.len(), 1, "expected one log: {logs:?}");
+    let text = std::fs::read_to_string(&logs[0]).expect("read the log");
+    assert!(text.contains(&format!("host=127.0.0.1:{port}")), "{text}");
+    assert!(text.contains("status=401"), "{text}");
+    for kept in [
+        "SERVER-SECRET-BODY",
+        "placeholder-variable-key",
+        "say something",
+        "/api/v1",
+    ] {
+        assert!(!text.contains(kept), "{kept} reached the log: {text}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode(&logs[0]), 0o600);
+        assert_eq!(mode(logs[0].parent().expect("directory")), 0o700);
+    }
+}
+
+/// DIAG-4: the same failure in an incognito session leaves no log, and no directory for one.
+#[test]
+fn an_incognito_session_writes_no_log() {
+    let (scratch, _) = a_run_the_gateway_refuses("cli-running-log-incognito", &["--incognito"]);
+    assert!(
+        !scratch.path.join(".bravebot").join("logs").exists(),
+        "an incognito session left a log behind"
+    );
+}
+
+/// DIAG-3: a word that is not a level is refused as an argument, not read as the default.
+#[test]
+fn a_log_level_that_is_not_one_is_refused() {
+    let scratch = Scratch::new("cli-running-log-level-refused");
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--log-level", "trace", "-p", "x"],
+    );
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("--log-level"), "{stderr}");
+    assert!(!scratch.path.join(".bravebot").join("logs").exists());
+}
+
+/// DIAG-5: `doctor` names the directory the logs are in.
+#[test]
+fn doctor_names_the_log_directory() {
+    let scratch = Scratch::new("cli-running-log-doctor");
+    let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["doctor"]);
+    let (stdout, _) = said(&output);
+    let expected = scratch.path.join(".bravebot").join("logs");
+    assert!(
+        stdout.contains(&expected.display().to_string()),
+        "doctor does not name {}: {stdout}",
+        expected.display()
     );
 }

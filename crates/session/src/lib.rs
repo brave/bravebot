@@ -18,5 +18,6 @@ pub mod audit;
 pub mod import;
 pub mod jobs;
 pub mod rewind;
+pub mod search;
 pub mod sessions;
 pub mod store;

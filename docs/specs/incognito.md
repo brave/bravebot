@@ -27,6 +27,9 @@ credentials, which a session spends and records as spent, and the record
 [MEMORY-5](definition-memory.md#MEMORY-5) keeps of a definition's memory the session left
 untrusted.
 
+Neither does it write the diagnostic log ([diagnostic-log.md](diagnostic-log.md)): there is no
+directory to write one into.
+
 The boundary here is the directory this process owns. It is not confinement:
 [sandboxing.md](sandboxing.md) is the operating-system boundary, it applies to subprocesses running
 code we did not write, and it is a different mechanism answering a different question. A mode that

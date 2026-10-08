@@ -17,6 +17,7 @@ checks is a bug against this directory rather than an entry in it.
 | [best-practices/writing.md](best-practices/writing.md) | what a comment is for |
 | [best-practices/dependencies.md](best-practices/dependencies.md) | what a dependency has to be worth across package managers |
 | [best-practices/shared-implementation.md](best-practices/shared-implementation.md) | where shared client behavior lives and how callers reuse it |
+| [best-practices/paths.md](best-practices/paths.md) | carrying paths, programs and arguments as bytes so a lossy rendering never decides what is approved, granted or started |
 | [best-practices/ui.md](best-practices/ui.md) | what a change to the desktop UI is held to before it lands, and where its logic lives |
 
 The review pass over the rule this repository exists for is

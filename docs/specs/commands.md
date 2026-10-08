@@ -267,7 +267,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/advisor` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches only what the session keeps | `/cost`; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
@@ -275,7 +275,7 @@ it stays where it was. The exception is a line of the same command already waiti
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
 were typed. A command that changes something, `/rename`, `/issue`, `/pr`, `/forget-trust`,
-`/theme <name>`, `/effort <level>` or `/advisor`, is carried out as it is typed only when nothing is waiting, and otherwise waits
+`/theme <name>`, `/effort <level>`, `/advisor` or `/style`, is carried out as it is typed only when nothing is waiting, and otherwise waits
 behind what is, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, and `/forget-trust` ahead of a waiting `/cd` would forget the directory
 `/cd` leaves. A command carried out as it is typed comes off the box and is not remembered, as at
@@ -330,6 +330,9 @@ does not read:
   ([ADVISOR-9](tools/advisor.md#ADVISOR-9)). A turn is offered its advisor, or none, when it
   begins and does not read the choice again, so one named mid-turn is the next turn's. The bare word
   opens no picker, so it is carried out too.
+- **`/style`.** It picks the words that open a later turn's system prompt
+  ([INSTR-12](instructions.md#INSTR-12)). A turn reads the pick when it begins, so one made mid-turn
+  is the next turn's. It opens no picker, so every form is carried out.
 
 - **`/copy`.** It reads the transcript and writes to the clipboard, which a sweep with the mouse
   may do at any time. Mid-turn the latest reply may be what the running turn said on its way to a

@@ -42676,6 +42676,71 @@ fn a_replaced_opening_takes_the_place_of_the_opening_alone() {
     }
 }
 
+/// INSTR-12. A style stands in for the opening and for nothing after it, and the words a person
+/// gave with `--system-prompt` win over it. The control is the same turn with no style, which must
+/// carry the opening.
+#[test]
+fn a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt() {
+    let scratch = Scratch::new("style-replaces-opening");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("done"),
+        reply_with("done"),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let concise = bravebot_agent::styles::named("concise");
+
+    for (style, words, label) in [
+        (None, None, "control"),
+        (concise, None, "styled"),
+        (concise, Some("You are REPLACEMENT-PERSONA."), "both"),
+    ] {
+        let task = Task::new("go")
+            .with_permission_mode(bravebot_agent::PermissionMode::Plan)
+            .with_style(style)
+            .with_system_prompts(prompts(words, None));
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut RecordingSink::new(),
+        )
+        .expect("turn runs");
+
+        let request = received.recv().expect("the request");
+        for kept in [
+            PLANNING_MARKER,
+            "Plan mode. The user is deciding what to do",
+            "Working directory",
+        ] {
+            assert!(
+                request.contains(kept),
+                "{label}: {kept} is missing: {request}"
+            );
+        }
+        assert_eq!(
+            request.contains(OPENING_MARKER),
+            label == "control",
+            "{label}: the opening is not where the style says: {request}"
+        );
+        assert_eq!(
+            request.contains("Lead with the result"),
+            label == "styled",
+            "{label}: the style's words are not where they belong: {request}"
+        );
+        assert_eq!(
+            request.contains("REPLACEMENT-PERSONA"),
+            label == "both",
+            "{label}"
+        );
+    }
+}
+
 /// INSTR-10 and INSTR-4. The appended words are the last standing source, after the project's
 /// own instructions, so where the two disagree the person who typed the flag has the last word.
 #[test]

@@ -116,6 +116,9 @@ cli-option-sandbox-allow-write =
     Let programs `run` starts write this path, which they may read too. Settings: sandbox.filesystem.allowWrite (repeatable)
 cli-option-sandbox-deny-write =
     Refuse programs `run` starts writing this path, a session directory included. Settings: sandbox.filesystem.denyWrite (repeatable)
+cli-option-log-level =
+    How much of a failure's shape is written to the diagnostic log: error (the default), info or debug.
+    Hosts, statuses and counts only, never content; an incognito session writes none
 cli-option-agent = Address every turn to this definition, as /agent does for one
 cli-option-system-prompt =
     Replace the opening sentence of the planner's system prompt for every turn. The rest of it stays
@@ -162,6 +165,8 @@ cli-run-network-needs-a-word = --run-network requires open or closed
 cli-run-network-unknown = --run-network takes open or closed, not { $word }
 # The flag is one of the four --sandbox-* flags, as typed.
 cli-sandbox-flag-needs-a-path = { $flag } requires a path
+cli-log-level-needs-a-word = --log-level requires error, info or debug
+cli-log-level-unknown = --log-level takes error, info or debug, not { $word }
 cli-agent-needs-a-name = --agent requires the name of a definition
 # The command is the first argument, one of this program's own subcommands.
 cli-agent-not-for-a-command =
@@ -564,6 +569,9 @@ doctor-subscription =
 # Which variable answered as well as where the directory is: more than one can name a profile
 # directory, and the one that won is what somebody has to change to put the directory elsewhere.
 doctor-state-directory = state directory { $path }, from { $variable }
+# Where the diagnostic log goes, so a person filing a bug knows what to attach and where to look.
+# The session writes nothing there when incognito, which `doctor` cannot know to say.
+doctor-state-directory-logs = diagnostic logs { $path }
 # What this program asks for as each file is created is a mode no other account can read. Where the
 # platform is not told that, the files carry whatever the profile directory grants them instead. A
 # prompt history holds every path, branch name and pasted fragment somebody has typed, so which of
@@ -1357,7 +1365,7 @@ input-history-none-here = nothing sent this session  ·  { $chord } for earlier 
 input-history-search = { $chord } to search
 input-history-scope = { $chord } this project
 resume-heading = Resume session
-resume-search-placeholder = Search…
+resume-search-placeholder = Search titles and what was said… (since:7d for recent)
 resume-keys = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc for a new session
 resume-from-pr = for pull request { $pull_request }
 resume-keys-within = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc to stay in this session
@@ -2210,6 +2218,7 @@ command-model = Choose which model to think with
 command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering
 command-advisor = Name the model the planner may consult, say which it may, or drop the choice
+command-style = Choose how the planner answers: list the styles, pick one, or clear the pick
 command-config = Choose how the input box edits text
 command-add-dir = Open another directory and trust it for this session, or close one
 command-reach = Remember a directory or credential for a command, or list and remove them
@@ -2409,6 +2418,12 @@ session-advisor-dropped = advisor dropped
 session-advisor-dropped-setting-remains = advisor dropped; the advisorModel setting still names { $model }
 session-advisor-nothing-serves = nothing is configured to answer { $model }, so it cannot advise
 session-advisor-needs-sign-in = { $model } needs a sign-in first, so it cannot advise
+session-style-set = answering in the { $style } style from the next turn
+session-style-in-force = style: { $style }; available: { $styles }
+session-style-none = no style; available: { $styles }
+session-style-set-but-replaced = style { $style } picked, but --system-prompt supplies the opening for this run, so it does not show
+session-style-cleared = style cleared
+session-style-unknown = no style called { $style }; available: { $styles }
 session-trusting = trusting { $directory }
 session-trusting-as-left = trusting { $directory } (as this session left it)
 # Said where the question was never put, because the mode in force answers it. Naming the flag is
@@ -2990,7 +3005,7 @@ doctor-direnv-missing = not found on PATH; see https://direnv.net/ or run `brew 
 
 status-undecided = not decided
 
-sessions-usage = sessions takes --json, stop and a session's id, or import and a tool's name
+sessions-usage = sessions takes --json, stop and a session's id, import and a tool's name, or search and some text
 sessions-none = No background sessions.
 sessions-no-home = There is no state directory to find background sessions in.
 sessions-missing = No background session { $id }.
@@ -3011,6 +3026,8 @@ sessions-import-there = "{ $title }" is already here, and was left as it was.
 sessions-import-missing = No Claude Code session here begins with { $id }.
 sessions-import-ambiguous = More than one Claude Code session here begins with { $id }.
 sessions-import-failed = Could not write "{ $title }": { $problem }
+sessions-search-usage = sessions search takes some text to find, and may add since:<n>h, since:<n>d or since:<n>w, and workspace:<directory> if it is not this one
+sessions-search-none = No session matches.
 sessions-state-working = working
 sessions-state-idle = idle
 sessions-state-stopped = stopped
@@ -3052,6 +3069,8 @@ reply-needs-input = { $name } is waiting on a question. Answer it with: bravebot
 reply-not-sent = { $name } did not take the prompt.
 reply-stopping = { $name } is stopping after an hour idle. Reply again to start it.
 bg-restart-needs-a-terminal = { $name } is stopped, and only a terminal can start it again.
+bg-interrupted-needs-a-terminal = { $name } was interrupted, and only a terminal can start it again.
+bg-interrupted-not-repeated = { $name } was interrupted in the middle of a turn. Starting it again does not repeat that turn.
 resume-held-by-background = { $name } is held by a running background session. Join it with: bravebot attach { $id }
 
 # `bravebot doctor --sandbox-check`: git, gh, make, cargo and the other everyday programs, run the way a

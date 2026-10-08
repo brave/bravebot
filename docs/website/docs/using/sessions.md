@@ -36,6 +36,24 @@ bravebot -c                # the same
 
 The list is sorted on what each record says it was last written, not by id.
 
+Typing narrows the list by title, branch and linked issue or pull request, and by what was said in
+the session: the prompts you typed, the model's replies, and the paths and commands its calls
+named. A session found that way shows the first matching line under its title. Add `since:7d`
+(`h` for hours, `d` for days, `w` for weeks) to keep only sessions written within that long. Tool
+results, files you attached and [imported sessions](#importing-sessions-from-claude-code) are not
+searched. The records are read when you type the first character, so a long list pauses once.
+
+From a script, `bravebot sessions search` does the same and prints a session's id and title on a
+line each, newest first:
+
+```sh
+bravebot sessions search ledger rounding
+bravebot sessions search since:2w workspace:../app flaky test
+```
+
+`workspace:` names the directory whose sessions are searched, and defaults to the current one. It
+exits 1 and prints nothing when no session matches.
+
 `--continue` takes the session the picker would offer first and picks it up exactly as naming its id
 would. It passes over a [manifest run](#a-manifest-run-is-recorded-but-cannot-be-continued) rather
 than refusing it. Where this directory holds nothing continuable it says so and fails rather than
