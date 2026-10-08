@@ -116,6 +116,13 @@ const VETTING_BLOCK: &str = "vetting";
 /// whether the file saying it was entitled to, and the parse of one root, both spell it here.
 const PROVIDER_BLOCK: &str = "provider";
 
+/// The block naming directories outside the working one, which the home layer and a file the person
+/// named alone may write.
+///
+/// Named as a constant because the per-layer look that removes it from a checkout's file and the
+/// parse of the merged root both spell it here.
+const REFERENCES_BLOCK: &str = "references";
+
 /// The block holding the rules and the two keys that refuse without naming what they refuse.
 ///
 /// Named as a constant for the reason [`VETTING_BLOCK`] is: the rule lists and [`narrowing_stated`]
@@ -143,6 +150,7 @@ const READ_KEYS: &[&str] = &[
     PERMISSIONS_BLOCK,
     "promptCacheTtl",
     PROVIDER_BLOCK,
+    REFERENCES_BLOCK,
     "run",
     SANDBOX_BLOCK,
     "search",
@@ -343,6 +351,15 @@ pub struct Settings {
     /// Kept because a definition chosen for every turn is a prompt and a narrowing nobody vouched
     /// for where a checkout wrote it, so only a file the person wrote or named can choose one.
     agent_ignored: Vec<PathBuf>,
+    /// The layers that named `references` and were not obeyed, weakest first.
+    ///
+    /// Kept because an entry makes a directory reachable and puts its description in front of the
+    /// planner, so a checkout's file would be choosing both for whoever opened the checkout.
+    references_ignored: Vec<PathBuf>,
+    /// The entries of the `references` block that name a directory, in alias order (REFER-1).
+    references: Vec<Reference>,
+    /// The aliases of entries this build could not use, and why (REFER-1).
+    references_unread: Vec<(String, ReferenceFault)>,
     /// The `permissions` blocks and rule lists a layer spelled as another shape, with the file each
     /// came from. The merge keeps the weaker block or list in their place, so the merged root no
     /// longer holds them and only the layer that wrote one can say it was ignored (PERM-11).
@@ -656,6 +673,7 @@ impl Settings {
         let mut fallback_ignored = Vec::new();
         let mut summary_ignored = Vec::new();
         let mut agent_ignored = Vec::new();
+        let mut references_ignored = Vec::new();
         let mut misshapen = Vec::new();
         let mut mcp_declared = Vec::new();
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
@@ -719,6 +737,9 @@ impl Settings {
                 }
                 if root.remove("agent") {
                     agent_ignored.push(path.clone());
+                }
+                if root.remove(REFERENCES_BLOCK) {
+                    references_ignored.push(path.clone());
                 }
             }
             if root.contains_key(VETTING_BLOCK) {
@@ -888,6 +909,7 @@ impl Settings {
         settings.fallback_ignored = fallback_ignored;
         settings.summary_ignored = summary_ignored;
         settings.agent_ignored = agent_ignored;
+        settings.references_ignored = references_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -931,6 +953,7 @@ impl Settings {
                 .collect(),
             _ => BTreeMap::new(),
         };
+        let (references, references_unread) = reference_entries(root);
         Self {
             env,
             scrub: scrub_list(root),
@@ -940,6 +963,9 @@ impl Settings {
             fallback_model: word(root, "fallbackModel"),
             summary_model: word(root, "summaryModel"),
             agent: word(root, "agent"),
+            references_ignored: Vec::new(),
+            references,
+            references_unread,
             effort: word(root, "effort"),
             prompt_cache_ttl: word(root, "promptCacheTtl")
                 .and_then(|word| crate::CacheTtl::parse(&word)),
@@ -1478,6 +1504,7 @@ impl Settings {
             && self.fallback_ignored.is_empty()
             && self.summary_ignored.is_empty()
             && self.agent_ignored.is_empty()
+            && self.references_ignored.is_empty()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -1521,6 +1548,22 @@ impl Settings {
     /// The files that named `agent` from a layer not entitled to, weakest first.
     pub fn agent_ignored(&self) -> impl Iterator<Item = &Path> {
         self.agent_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The layers that wrote `references` without being entitled to, weakest first.
+    pub fn references_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.references_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The directories the `references` block names, by alias (REFER-1).
+    pub fn references(&self) -> &[Reference] {
+        &self.references
+    }
+
+    /// The entries of the `references` block this build could not use, with the alias each was
+    /// written under (REFER-1).
+    pub fn references_unread(&self) -> &[(String, ReferenceFault)] {
+        &self.references_unread
     }
 
     /// The files that were read, weakest first, for `doctor` to report.
@@ -2240,6 +2283,87 @@ fn scrub_list(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> 
             _ => None,
         })
         .collect()
+}
+
+/// One directory the `references` block names (REFER-1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reference {
+    /// What the person calls it.
+    pub alias: String,
+    /// The directory as written: absolute, or starting with `~`, which the workspace expands.
+    pub path: String,
+    /// The person's own words about when to consult it, if they wrote any.
+    pub description: Option<String>,
+}
+
+/// Why an entry of the `references` block was not used (REFER-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceFault {
+    /// The alias is empty or holds `/`, whitespace, a backtick or a comma.
+    BadAlias,
+    /// The entry names a `repository`, which this build does not fetch.
+    RepositoryNotFetched,
+    /// The entry is neither a path nor an object with a `path`.
+    NoPath,
+}
+
+/// Whether `alias` may stand for a directory: not empty, and free of the characters an `@` name
+/// could not carry.
+fn alias_is_usable(alias: &str) -> bool {
+    !alias.is_empty()
+        && !alias
+            .chars()
+            .any(|c| c == '/' || c == '`' || c == ',' || c.is_whitespace())
+}
+
+/// The `references` block: an alias and the directory it stands for.
+///
+/// An entry is a string, which is the path, or an object with a `path` and an optional
+/// `description`. The `description` is read as written, since the layers that may write the block
+/// are the person's own. An entry that cannot be used is reported by its alias and leaves the rest
+/// standing, on the footing of every other block here.
+fn reference_entries(
+    root: &serde_json::Map<String, serde_json::Value>,
+) -> (Vec<Reference>, Vec<(String, ReferenceFault)>) {
+    let mut used = Vec::new();
+    let mut unread = Vec::new();
+    let Some(serde_json::Value::Object(block)) = root.get(REFERENCES_BLOCK) else {
+        return (used, unread);
+    };
+    for (alias, entry) in block {
+        if !alias_is_usable(alias) {
+            unread.push((alias.clone(), ReferenceFault::BadAlias));
+            continue;
+        }
+        let (path, description) = match entry {
+            serde_json::Value::String(path) => (Some(path.as_str()), None),
+            serde_json::Value::Object(fields) => {
+                if fields.contains_key("repository") && !fields.contains_key("path") {
+                    unread.push((alias.clone(), ReferenceFault::RepositoryNotFetched));
+                    continue;
+                }
+                (
+                    fields.get("path").and_then(serde_json::Value::as_str),
+                    fields
+                        .get("description")
+                        .and_then(serde_json::Value::as_str),
+                )
+            }
+            _ => (None, None),
+        };
+        match path.map(str::trim).filter(|path| !path.is_empty()) {
+            Some(path) => used.push(Reference {
+                alias: alias.clone(),
+                path: path.to_string(),
+                description: description
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_string),
+            }),
+            None => unread.push((alias.clone(), ReferenceFault::NoPath)),
+        }
+    }
+    (used, unread)
 }
 
 /// The `attribution` block: what a commit message and a pull request may carry.
@@ -5722,6 +5846,81 @@ mod tests {
             .read();
         assert_eq!(named.agent(), Some("named-reviewer"));
         assert_eq!(named.agent_ignored().count(), 0);
+    }
+
+    /// REFER-1: an entry is a path or an object, and one that cannot be used is named and leaves
+    /// the others standing.
+    #[test]
+    fn the_references_block_reads_each_entry_and_names_the_ones_it_cannot_use() {
+        let settings = Layers::new("references-entries")
+            .global(
+                r#"{"references": {
+                    "notes": "~/notes",
+                    "lib": {"path": "/srv/lib", "description": "  how the parser works "},
+                    "bare": {"path": "/srv/bare", "description": "   "},
+                    "upstream": {"repository": "owner/repo"},
+                    "bad/alias": "/srv/x",
+                    "two words": "/srv/y",
+                    "empty": {"path": " "},
+                    "number": 7
+                }}"#,
+            )
+            .read();
+        let used: Vec<_> = settings
+            .references()
+            .iter()
+            .map(|r| (r.alias.as_str(), r.path.as_str(), r.description.as_deref()))
+            .collect();
+        assert_eq!(
+            used,
+            [
+                ("bare", "/srv/bare", None),
+                ("lib", "/srv/lib", Some("how the parser works")),
+                ("notes", "~/notes", None),
+            ]
+        );
+        let mut unread: Vec<_> = settings
+            .references_unread()
+            .iter()
+            .map(|(alias, fault)| (alias.as_str(), *fault))
+            .collect();
+        unread.sort_by_key(|(alias, _)| *alias);
+        assert_eq!(
+            unread,
+            [
+                ("bad/alias", ReferenceFault::BadAlias),
+                ("empty", ReferenceFault::NoPath),
+                ("number", ReferenceFault::NoPath),
+                ("two words", ReferenceFault::BadAlias),
+                ("upstream", ReferenceFault::RepositoryNotFetched),
+            ]
+        );
+    }
+
+    /// REFER-2: a checkout's layers cannot make a directory reachable or write words the planner is
+    /// shown, and each is reported; the home layer and a named file outside the workspace can.
+    #[test]
+    fn a_project_layer_cannot_declare_references() {
+        let settings = Layers::new("references-layers")
+            .global(r#"{"references": {"mine": "/srv/mine"}}"#)
+            .project(r#"{"references": {"theirs": "/etc"}}"#)
+            .local(r#"{"references": {"also-theirs": "/root"}}"#)
+            .read();
+        let aliases: Vec<_> = settings.references().iter().map(|r| &*r.alias).collect();
+        assert_eq!(aliases, ["mine"]);
+        assert_eq!(settings.references_ignored().count(), 2);
+
+        let only_project = Layers::new("references-only-project")
+            .project(r#"{"references": {"theirs": "/etc"}}"#)
+            .read();
+        assert!(only_project.references().is_empty());
+        assert_eq!(only_project.references_ignored().count(), 1);
+
+        let named = Layers::new("references-named")
+            .named(r#"{"references": {"chosen": "/srv/chosen"}}"#)
+            .read();
+        assert_eq!(named.references().len(), 1);
+        assert_eq!(named.references_ignored().count(), 0);
     }
 
     #[test]

@@ -420,6 +420,9 @@ doctor-settings-fallback-ignored =
 doctor-settings-agent-ignored =
     agent dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-references-ignored =
+    references dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-narrowing-ignored =
     { $key } dans { $path } n'est pas un booléen, il est donc lu comme absent et ne refuse rien
 doctor-run-network = réseau de run
@@ -1943,6 +1946,10 @@ skill-model-refused = { $skill } demande { $model }, que cette machine ne demand
 skill-model-kept-for-definition = { $skill } demande { $model }, mais ce tour reste sur le modèle que { $definition } a désigné
 skill-model-substituted = { $skill } a demandé { $model } et a reçu la réponse d'un autre modèle
 source-denied-by-rule = { $source } n'a pas été chargé : une règle deny de vos réglages le couvre
+reference-bad-alias = la référence { $alias } n'a pas été utilisée : un alias ne peut pas être vide ni contenir /, espaces, accents graves ou virgules
+reference-repository-not-fetched = la référence { $alias } n'a pas été utilisée : une entrée qui nomme un dépôt n'est pas récupérée, donnez-lui un chemin
+reference-no-path = la référence { $alias } n'a pas été utilisée : elle ne nomme aucun répertoire
+reference-not-opened = la référence { $alias } n'a pas été ouverte : { $problem }
 import-too-deep = { $import } n'a pas été importé : les imports sont trop imbriqués ou trop nombreux
 import-cycle = { $import } n'a pas été importé : un fichier au-dessus l'importe déjà
 import-not-loaded = { $import } n'a pas été importé : il est hors de ce projet, illisible ou non approuvé

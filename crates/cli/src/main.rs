@@ -3016,6 +3016,9 @@ fn current_workspace(
         .and_then(|dir| Workspace::new(dir).map_err(|e| e.to_string()))
         .map(|workspace| workspace.with_search_caps(caps.files, caps.time))
         .map(|workspace| workspace.with_reads_kept_inside(inside))
+        .map(|workspace| {
+            workspace.with_references(settings.references(), settings.references_unread())
+        })
 }
 
 /// Import a Leo Premium subscription from a local Brave install.
@@ -3513,6 +3516,15 @@ fn doctor() -> ExitCode {
                     t!(doctor_settings_ignored),
                     t!(
                         doctor_settings_agent_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            for path in settings.references_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_references_ignored,
                         path = path.display().to_string()
                     ),
                 );

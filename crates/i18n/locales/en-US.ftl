@@ -501,6 +501,8 @@ doctor-settings-summary-ignored =
     summaryModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-agent-ignored =
     agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-references-ignored =
+    references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 # A key that only ever refuses, spelled as something other than a boolean. It is read as absence, so
 # the session is as permissive as one that named nothing, and nothing else would say so.
 doctor-settings-narrowing-ignored =
@@ -3059,6 +3061,13 @@ skill-model-substituted = { $skill } asked for { $model } and was answered by a 
 # settings deny reading, so it was left out of the turn. The source is its workspace-relative path
 # and stays as it is. "deny" is the name of the settings list the rule sits in.
 source-denied-by-rule = { $source } was not loaded: a deny rule in your settings covers it
+# An entry of "references" in the person's settings that was not offered. The alias is the name they
+# gave it. One message per reason: the alias cannot be used, the entry names a repository, which
+# is not fetched, the entry names no directory, and a directory that could not be opened.
+reference-bad-alias = reference { $alias } was not used: an alias cannot be empty or contain /, spaces, backticks or commas
+reference-repository-not-fetched = reference { $alias } was not used: an entry that names a repository is not fetched, so give it a path
+reference-no-path = reference { $alias } was not used: it names no directory
+reference-not-opened = reference { $alias } was not opened: { $problem }
 # An `@path` line in AGENTS.md that was left as written. The import is the workspace-relative path
 # and stays as it is. One message per reason: nesting or count past the limit, the file already
 # being expanded further up, and a file that is outside the project, cannot be read or is untrusted.
