@@ -29,6 +29,7 @@
  - Added to the desktop app's permissions list when each remembered answer was given.
  - Added the program a bare command name resolves to in the question `bravebot mcp add`, `approve` and `enable` ask, so you see which one a yes would start.
  - Added to the audit trail how each delegate ended and why, each checkout made and removed, the permission mode a turn began in, and who answered each approval. ([#1358](https://github.com/brave/bravebot/issues/1358))
+ - Added `bravebot doctor --sandbox-check`, which runs everyday git, gh, cargo, npm, make and shell work under the sandbox on your machine and prints, for each workflow, whether it passed, was skipped for want of a tool, or failed with the setting that would lift it. ([#1750](https://github.com/brave/bravebot/issues/1750))
  - Changed the desktop app's sessions to Chats, with a search box and filter in the sidebar, a project and branch on each row, and a Settings view with General and Agent pages that replaces the Agent settings dialog and the appearance picker. Plan first now sits in the Agent menu beside the model picker.
  - Changed a desktop bot to be defined by a file in `~/.bravebot/agents/`, and every turn of its conversations to be addressed to it. A bot made earlier gets one on its first turn, and its old notes are treated as untrusted.
  - Changed the desktop app to open a session only in a folder you picked or that it already lists. ([#1195](https://github.com/brave/bravebot/issues/1195))
