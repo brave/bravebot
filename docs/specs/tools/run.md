@@ -1321,6 +1321,7 @@ the alternative of withholding it from the case it exists for.
 `verified-by: bravebot_agent::confirm::both_keys_at_once_record_the_exact_line`
 `verified-by: bravebot_agent::confirm::the_prompt_offers_the_family_key_for_a_listed_line_it_may_record`
 `verified-by: bravebot_agent::turn::the_family_answer_for_a_program_the_table_does_not_list_records_nothing`
+`verified-by: bravebot_agent::run_family::a_family_remembered_in_one_session_covers_another_number_in_the_next`
 `verified-by: bravebot_tui::confirm::the_family_key_approves_and_records_the_family_only`
 `verified-by: bravebot_tui::confirm::the_family_key_is_unbound_where_the_prompt_does_not_offer_it`
 `verified-by: bravebot_tui::confirm::refusing_a_run_records_no_family`
