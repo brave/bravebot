@@ -9,6 +9,26 @@
 //! but a task list nobody is drawing is merely unseen, and failing the turn over it would let the
 //! display outrank the work.
 
+/// What a person is told when `summaryModel` names a model a side request cannot run on.
+///
+/// Here rather than beside [`crate::compact::SideModelRefusal`] because every string in that module
+/// is read by the planner and nothing in it may be looked up in a catalog, and this sentence is
+/// read by a person: it names the key to correct. `crates/agent/tests/audience.rs` is the rule.
+pub fn summary_model_refusal(refusal: &crate::compact::SideModelRefusal) -> String {
+    use crate::compact::SideModelRefusal;
+    match refusal {
+        SideModelRefusal::NeedsSignIn(model) => {
+            bravebot_i18n::t!(summary_model_needs_sign_in, model = model).to_string()
+        }
+        SideModelRefusal::Refused(model) => {
+            bravebot_i18n::t!(summary_model_refused, model = model).to_string()
+        }
+        SideModelRefusal::NotServed(model) => {
+            bravebot_i18n::t!(summary_model_not_served, model = model).to_string()
+        }
+    }
+}
+
 use crate::diff::Change;
 use bravebot_core::todo::Row;
 use bravebot_core::vetting::Checking;

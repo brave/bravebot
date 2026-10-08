@@ -3377,6 +3377,15 @@ fn doctor() -> ExitCode {
                     ),
                 );
             }
+            for path in settings.summary_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_summary_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
             for path in settings.agent_ignored() {
                 fact(
                     t!(doctor_settings_ignored),

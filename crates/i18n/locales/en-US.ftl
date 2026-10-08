@@ -488,6 +488,8 @@ doctor-settings-advisor-ignored =
     advisorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-fallback-ignored =
     fallbackModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-summary-ignored =
+    summaryModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-agent-ignored =
     agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 # A key that only ever refuses, spelled as something other than a boolean. It is read as absence, so
@@ -2920,6 +2922,18 @@ delegate-model-needs-sign-in =
 # The endpoint substitutes a model it will not serve rather than refusing. The name it answered
 # with is left out, because a notice is the driver's own words.
 delegate-model-substituted = { $definition } asked for { $model } and was answered by a different model
+# The model `summaryModel` named, from the person's own settings file. A compaction or a goal check
+# is refused rather than sent to the session's model, since the setting is a cost boundary.
+summary-model-needs-sign-in =
+    { $model } is set as the summary model and needs a sign-in first, so nothing was sent
+# The same setting naming a model this machine's managed layer excludes (BACKEND-48). Refused rather
+# than sent, and rather than fallen back from, for the same reason.
+summary-model-refused =
+    { $model } is set as the summary model and this machine's managed settings do not allow it, so nothing was sent
+# The same setting naming a model no configured service answers for. Refused rather than sent, since
+# a judge or a summariser answering without the exchange reads as a verdict rather than a failure.
+summary-model-not-served =
+    { $model } is set as the summary model and no configured service answers for it, so nothing was sent
 # A definition's skills line named skills this session did not find. The definition is its file's
 # path and the skills are that file's own words, joined with a comma, both from a vouched-for file.
 delegate-skills-not-found =

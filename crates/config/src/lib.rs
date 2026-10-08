@@ -1031,6 +1031,12 @@ pub struct Config {
     /// `None` names none. [`Config::fallback`] resolves a tier word in it and applies the
     /// machine-level lists.
     pub fallback_model: Option<String>,
+    /// The model the settings in force name for compaction summaries and goal checks, as the file
+    /// spelled it.
+    ///
+    /// `None` leaves both on the session's own model. [`Config::summary`] resolves a tier word in
+    /// it.
+    pub summary_model: Option<String>,
     /// The cache lifetime the settings in force chose for requests to a gateway, if they chose one.
     ///
     /// `None` sends no lifetime, so every service keeps its own default. Bedrock accounts carry the
@@ -1271,6 +1277,7 @@ impl Config {
         config.models = managed.models().clone();
         config.advisor_model = settings.advisor_model().map(str::to_string);
         config.fallback_model = settings.fallback_model().map(str::to_string);
+        config.summary_model = settings.summary_model().map(str::to_string);
         let ttl = settings.prompt_cache_ttl();
         config.prompt_cache_ttl = ttl;
         config.bedrock = config.bedrock.map(|account| account.with_cache_ttl(ttl));
@@ -1398,6 +1405,7 @@ impl Config {
             default_model,
             advisor_model: None,
             fallback_model: None,
+            summary_model: None,
             prompt_cache_ttl: None,
             context_budget,
             budget_was_chosen,
@@ -1596,6 +1604,22 @@ impl Config {
     pub fn fallback(&self) -> Option<String> {
         let resolved = self.model_named(self.fallback_model.as_deref()?);
         self.model_refused(&resolved).is_none().then_some(resolved)
+    }
+
+    /// The model compaction summaries and goal checks run on, resolved like `--model`.
+    ///
+    /// `None` where the settings name none, which leaves both on the session's own model.
+    ///
+    /// Unlike [`Config::fallback`], a model the machine-level layer refuses is still returned here,
+    /// because the two want different answers to it: a fallback that cannot be used leaves the turn
+    /// on the model it already had, while a summary model that cannot be used has to stop the
+    /// request rather than quietly spend the rate the person named this key to cap. So the refusal
+    /// is the caller's to make, and `agent::compact::side_request_model` makes it, next to the
+    /// sign-in question and for BACKEND-48's reason.
+    pub fn summary(&self) -> Option<String> {
+        self.summary_model
+            .as_deref()
+            .map(|name| self.model_named(name))
     }
 
     /// Why the machine-level layer refuses `name`, and the file that refuses it (BACKEND-48).
@@ -3785,6 +3809,27 @@ mod tests {
             let settings = Settings::parse(&format!(r#"{{"advisorModel": "{written}"}}"#));
             let config = resolved(&settings, bedrock, complete_env).expect("configured");
             assert_eq!(config.advisor().as_deref(), Some(expected), "{written}");
+        }
+    }
+
+    /// The summary setting is a model name like any other, so a tier word in it means the model the
+    /// same word means for the main model, and a setting that is not there leaves both side requests
+    /// on the session's own model.
+    #[test]
+    fn the_summary_setting_resolves_a_tier_word_and_is_absent_when_unset() {
+        let bedrock = |key: &str| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+            other => complete_env(other),
+        };
+        let unset = resolved(&Settings::default(), bedrock, complete_env).expect("configured");
+        assert_eq!(unset.summary(), None);
+
+        for (written, expected) in [("haiku", "haiku-arn"), ("some-model", "some-model")] {
+            let settings = Settings::parse(&format!(r#"{{"summaryModel": "{written}"}}"#));
+            let config = resolved(&settings, bedrock, complete_env).expect("configured");
+            assert_eq!(config.summary().as_deref(), Some(expected), "{written}");
         }
     }
 

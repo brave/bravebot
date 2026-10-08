@@ -145,6 +145,7 @@ const READ_KEYS: &[&str] = &[
     "run",
     SANDBOX_BLOCK,
     "search",
+    "summaryModel",
     "terminalTitle",
     "tui",
     "updateCheck",
@@ -216,6 +217,10 @@ pub struct Settings {
     ///
     /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
     fallback_model: Option<String>,
+    /// What the top-level `summaryModel` key named, if it named anything.
+    ///
+    /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
+    summary_model: Option<String>,
     /// What the top-level `agent` key named, if it named anything.
     ///
     /// The name as the file spelled it. Matching it against the definitions a session resolved is
@@ -325,6 +330,11 @@ pub struct Settings {
     /// Kept for the same reason: the model it names is sent the whole conversation once the
     /// primary fails, which makes it a destination, and a checkout cannot choose one.
     fallback_ignored: Vec<PathBuf>,
+    /// The layers that named `summaryModel` and were not obeyed, weakest first.
+    ///
+    /// Kept for the same reason: the model it names is sent the conversation to summarise and the
+    /// exchange to judge, which makes it a destination, and a checkout cannot choose one.
+    summary_ignored: Vec<PathBuf>,
     /// The layers that named `agent` and were not obeyed, weakest first.
     ///
     /// Kept because a definition chosen for every turn is a prompt and a narrowing nobody vouched
@@ -641,6 +651,7 @@ impl Settings {
         let mut model_ignored = Vec::new();
         let mut advisor_ignored = Vec::new();
         let mut fallback_ignored = Vec::new();
+        let mut summary_ignored = Vec::new();
         let mut agent_ignored = Vec::new();
         let mut misshapen = Vec::new();
         let mut mcp_declared = Vec::new();
@@ -699,6 +710,9 @@ impl Settings {
                 }
                 if root.remove("fallbackModel") {
                     fallback_ignored.push(path.clone());
+                }
+                if root.remove("summaryModel") {
+                    summary_ignored.push(path.clone());
                 }
                 if root.remove("agent") {
                     agent_ignored.push(path.clone());
@@ -869,6 +883,7 @@ impl Settings {
         settings.model_ignored = model_ignored;
         settings.advisor_ignored = advisor_ignored;
         settings.fallback_ignored = fallback_ignored;
+        settings.summary_ignored = summary_ignored;
         settings.agent_ignored = agent_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
@@ -920,6 +935,7 @@ impl Settings {
             model: word(root, "model"),
             advisor_model: word(root, "advisorModel"),
             fallback_model: word(root, "fallbackModel"),
+            summary_model: word(root, "summaryModel"),
             agent: word(root, "agent"),
             effort: word(root, "effort"),
             prompt_cache_ttl: word(root, "promptCacheTtl")
@@ -997,6 +1013,7 @@ impl Settings {
             model_ignored: Vec::new(),
             advisor_ignored: Vec::new(),
             fallback_ignored: Vec::new(),
+            summary_ignored: Vec::new(),
             agent_ignored: Vec::new(),
         }
     }
@@ -1054,6 +1071,14 @@ impl Settings {
         self.fallback_model.as_deref()
     }
 
+    /// The model the settings in force name for compaction summaries and goal checks, if they name
+    /// one.
+    ///
+    /// Read from the person's own file and the file `--settings` names only, for the reason
+    /// [`Settings::model`] is.
+    pub fn summary_model(&self) -> Option<&str> {
+        self.summary_model.as_deref()
+    }
     /// The definition the settings in force name for every turn of a session to be addressed to,
     /// where `--agent` did not name one (ADDRESS-13).
     ///
@@ -1432,6 +1457,7 @@ impl Settings {
             && self.model_ignored.is_empty()
             && self.advisor_ignored.is_empty()
             && self.fallback_ignored.is_empty()
+            && self.summary_ignored.is_empty()
             && self.agent_ignored.is_empty()
     }
 
@@ -1469,6 +1495,10 @@ impl Settings {
         self.fallback_ignored.iter().map(PathBuf::as_path)
     }
 
+    /// The files that named `summaryModel` from a layer not entitled to, weakest first.
+    pub fn summary_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.summary_ignored.iter().map(PathBuf::as_path)
+    }
     /// The files that named `agent` from a layer not entitled to, weakest first.
     pub fn agent_ignored(&self) -> impl Iterator<Item = &Path> {
         self.agent_ignored.iter().map(PathBuf::as_path)
@@ -1514,6 +1544,7 @@ impl Settings {
             .into_iter()
             .chain(self.advisor_model.is_some().then_some("advisorModel"))
             .chain(self.fallback_model.is_some().then_some("fallbackModel"))
+            .chain(self.summary_model.is_some().then_some("summaryModel"))
             .chain(self.agent.is_some().then_some("agent"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
@@ -5588,6 +5619,33 @@ mod tests {
         assert_eq!(named.fallback_model(), Some("named-fallback"));
     }
 
+    /// COMPACT-15: the summary model is a destination for the conversation, so a checkout's layers
+    /// cannot name it, and the layers that can are reported for the ones that could not.
+    #[test]
+    fn a_project_layer_cannot_name_the_summary_model() {
+        let settings = Layers::new("summary-layers")
+            .global(r#"{"summaryModel": "  personal-summary "}"#)
+            .project(r#"{"summaryModel": "this-checkout"}"#)
+            .local(r#"{"summaryModel": "also-this-checkout"}"#)
+            .read();
+        assert_eq!(settings.summary_model(), Some("personal-summary"));
+        assert_eq!(settings.summary_ignored().count(), 2);
+
+        let only_project = Layers::new("summary-only-project")
+            .project(r#"{"summaryModel": "this-checkout"}"#)
+            .read();
+        assert_eq!(only_project.summary_model(), None);
+        assert_eq!(only_project.summary_ignored().count(), 1);
+
+        // The file `--settings` named is the person's own act, so it may name one and wins over the
+        // home file.
+        let named = Layers::new("summary-named")
+            .global(r#"{"summaryModel": "personal-summary"}"#)
+            .named(r#"{"summaryModel": "named-summary"}"#)
+            .read();
+        assert_eq!(named.summary_model(), Some("named-summary"));
+        assert_eq!(named.summary_ignored().count(), 0);
+    }
     /// ADDRESS-13: a definition chosen for every turn narrows and prompts them all, so a checkout's
     /// layers cannot choose one, and the layers that can are reported for the ones that could not.
     #[test]

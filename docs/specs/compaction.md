@@ -329,3 +329,39 @@ again, as in COMPACT-8.
 `verified-by: bravebot_agent::turn::a_request_refused_as_too_large_is_sent_again_after_one_compaction`
 `verified-by: bravebot_agent::turn::a_second_refusal_is_reported_and_compacts_nothing_more`
 `verified-by: bravebot_agent::turn::a_refusal_with_nothing_to_cut_is_reported_without_a_summary`
+
+<a id="COMPACT-15"></a>
+### COMPACT-15: the `summaryModel` setting names the model a summary runs on
+
+`summaryModel` holds one model name. The summariser runs on it, and on the session's own model
+where the key names nothing. A tier word in it resolves as it does for `model`. The key is read from
+`~/.bravebot/settings.json` and from the file `--settings` names, and from no project or local layer
+([BACKEND-24](backends.md#BACKEND-24)): the model it names is sent the conversation, which makes it
+a destination, so a layer that names it is dropped and `doctor` names the file.
+
+A model needing a sign-in this machine has not made refuses the compaction, which leaves the
+conversation exactly as it was, as every other refusal here does. It is not replaced by the
+session's model. A model the machine-level layer excludes is refused on the same terms: a model that
+layer rules out is requested by no route, and a key in a person's own file is a route, so this one
+asks before it sends rather than leaving an administrator's exclusion to the request. A name no
+configured service answers for is refused too, by the same question `model` and the advisor are put:
+sent anyway, it reaches a service that answers without the exchange, and a summary or a verdict
+written from nothing reads as an answer rather than as a failure.
+
+**Why refuse rather than fall back.** A cheaper model is a cost boundary. A summary quietly sent to
+the session's model instead spends the rate the person named this key to avoid, on the longest
+prefix a session sends.
+
+**What does not change with the model.** The labelling is the summariser's context, which is the
+planner's context ([COMPACT-1](#COMPACT-1)), so the model that answers does not enter into it. The
+summariser is still offered no tools ([COMPACT-2](#COMPACT-2)), and the budget is still measured
+against the window of the planner's model rather than this one
+([COMPACT-9](#COMPACT-9)).
+
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_summary_model`
+`verified-by: bravebot_config::lib::the_summary_setting_resolves_a_tier_word_and_is_absent_when_unset`
+`verified-by: bravebot_agent::turn::a_compaction_runs_on_the_summary_model_the_settings_name`
+`verified-by: bravebot_agent::turn::a_compaction_with_no_summary_model_runs_on_the_sessions_own`
+`verified-by: bravebot_agent::turn::a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conversation_whole`
+`verified-by: bravebot_agent::compact::a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on`
+`verified-by: bravebot_agent::compact::a_summary_model_nothing_serves_is_named_in_the_refusal_it_causes`

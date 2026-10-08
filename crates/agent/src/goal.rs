@@ -212,6 +212,10 @@ pub enum GoalError {
     Denied(Denial),
     /// The call failed or was refused in transit.
     Chat(crate::backend::BackendError),
+    /// The configured summary model cannot be used, so nothing was sent.
+    ///
+    /// Holds why and the resolved model name, for a sentence naming what could not be reached.
+    SummaryModel(crate::compact::SideModelRefusal),
 }
 
 impl fmt::Display for GoalError {
@@ -219,11 +223,21 @@ impl fmt::Display for GoalError {
         match self {
             Self::Denied(d) => write!(f, "{d}"),
             Self::Chat(e) => write!(f, "{e}"),
+            // Rendered by the reporting surface, for the reason `tests/audience.rs` gives.
+            Self::SummaryModel(refusal) => {
+                write!(f, "{}", crate::report::summary_model_refusal(refusal))
+            }
         }
     }
 }
 
 impl std::error::Error for GoalError {}
+
+impl From<crate::compact::SideModelRefusal> for GoalError {
+    fn from(value: crate::compact::SideModelRefusal) -> Self {
+        Self::SummaryModel(value)
+    }
+}
 
 impl From<Denial> for GoalError {
     fn from(value: Denial) -> Self {
@@ -252,7 +266,8 @@ pub fn assess<S: Sink>(
     // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
     // below adds to it. A judge that could call a tool would be a turn, and it would be a turn
     // whose job is deciding whether turns stop.
-    let model = chat.model.unwrap_or(&chat.config.default_model);
+    let model = crate::compact::side_request_model(chat.config, chat.egress, chat.model)?;
+    let model = model.as_ref();
     // The exchange is given up once this answers, so nothing asks for a cache of it: the next
     // check carries a turn's work on the end of the same exchange, in front of the same condition,
     // so the prefix this one would pay to store is never sent again. The instructions in front of

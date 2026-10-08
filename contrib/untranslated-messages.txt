@@ -40,5 +40,9 @@ fr:doctor-sandbox-temporary
 fr:doctor-sandbox-total
 fr:doctor-scrub-pattern
 fr:doctor-scrub-pattern-matched
+fr:doctor-settings-summary-ignored
 fr:doctor-state-directory-logs
 fr:reply-stopping
+fr:summary-model-needs-sign-in
+fr:summary-model-not-served
+fr:summary-model-refused
