@@ -16,6 +16,7 @@
 
 pub mod base;
 pub mod crash;
+pub mod hosts;
 #[cfg(target_os = "linux")]
 pub mod linux;
 // Compiled under test on any Unix as well as on the platform it confines, so what this
@@ -30,6 +31,7 @@ pub mod mode;
 pub mod network;
 pub mod policy;
 pub mod process;
+pub mod proxy;
 pub mod scope;
 pub mod swap;
 // Compiled under test on every platform as well as on the one it confines, so what this
