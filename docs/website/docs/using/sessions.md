@@ -227,10 +227,12 @@ The title says which session a terminal holds. The info panel says the rest: pre
 `/panel`, and a column 36 wide opens on the right of the screen with
 
 - the session's name, its directory and its branch,
+- the model you chose and the effort level in force,
 - the goal, while one stands,
 - the pull request and the issue the session is for, once you give them with `/pr` and `/issue`,
   each cut from the left where it is long so the number at the end stays in view,
-- how full the context is, the cache hit rate, and what the last turn read from the cache and wrote
+- how full the context is, the tokens the session has spent (the figure `/cost` opens with), the
+  cache hit rate, and what the last turn read from the cache and wrote
   into it, as two figures,
 - the language servers the session has started, by program name, and the MCP servers, by alias,
 - the plan, which stays after the turn ends. Where it runs past the bottom it keeps the task in

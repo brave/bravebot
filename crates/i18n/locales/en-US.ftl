@@ -2032,6 +2032,7 @@ caffeinate-unavailable = /caffeinate is unavailable: `{ $program }` could not be
 caffeinate-ended = /caffeinate is off: `{ $program }` stopped holding the computer awake
 # The info panel's section headings.
 panel-session = Session
+panel-model = Model
 panel-goal = Goal
 panel-goal-paused = paused
 panel-context = Context
@@ -2042,6 +2043,9 @@ panel-links = Links
 # The rows of the info panel's Links section, each followed by the link.
 panel-pull-request = Pull request
 panel-issue = Issue
+# The reasoning effort and the session's token total in the info panel, one to a row.
+panel-effort = effort { $level }
+panel-spent = { $tokens } this session
 # The last turn's cache figures in the info panel, one to a row and never added together.
 panel-cache-read = cache read { $tokens }
 panel-cache-written = cache written { $tokens }
