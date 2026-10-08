@@ -11254,6 +11254,67 @@ mod tests {
         }
     }
 
+    /// The description says what the token settles, for a file the planner may be shown and one it
+    /// may not, and the two ways a comparison falls short. A planner not told the second reports a
+    /// moved token as a changed file, or an unmoved one as a file nobody wrote.
+    #[test]
+    fn read_file_says_what_a_change_token_does_and_does_not_settle() {
+        let description = read_file_description(Scheduling::ArrangingALook);
+
+        for stated in [
+            "The same token on a later read means nobody wrote the file in between",
+            "a different one means somebody did",
+            "the size in its reference is what there is to compare instead",
+            "say which looks you compared",
+            "a rewrite of the same bytes moves it too",
+            "a change that leaves the file's modification time alone moves nothing",
+        ] {
+            assert!(
+                description.contains(stated),
+                "read_file's description no longer says '{stated}'"
+            );
+        }
+    }
+
+    /// Inside a loop the next tick is the next look, so the description must not send the planner
+    /// to arrange one. Told to schedule a look from inside a loop, it starts a second clock beside
+    /// the one already running.
+    #[test]
+    fn inside_a_loop_read_file_says_there_is_nothing_to_arrange() {
+        for scheduling in [Scheduling::PacingALoop, Scheduling::TheirInterval] {
+            let description = read_file_description(scheduling);
+
+            assert!(
+                description.contains("there is nothing to arrange"),
+                "a loop's read_file does not say the next tick is the next look: {description}"
+            );
+            assert!(
+                !description.contains("call schedule_next"),
+                "a loop's read_file sends the planner to schedule a look: {description}"
+            );
+        }
+        assert!(
+            !read_file_description(Scheduling::ArrangingALook)
+                .contains("there is nothing to arrange"),
+            "a turn with a look to arrange is told there is nothing to arrange"
+        );
+    }
+
+    fn read_file_description(scheduling: Scheduling) -> String {
+        available(
+            scheduling,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "read_file")
+        .expect("read_file is offered")
+        .function
+        .description
+        .clone()
+    }
+
     /// A read hands the token over and a slot fill does not. What a slot holds is the file's text,
     /// for a processor to work on or a write to put back, so a note about the file appended there
     /// would put a line into every file that went through one.

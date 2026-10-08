@@ -199,6 +199,8 @@ leaving the person with neither a watch nor the file's contents. A description t
 to a technique has to say which end of it happens in the turn that read it.
 
 `verified-by: bravebot_agent::tools::read_file_sends_a_question_about_change_to_a_token_it_can_compare`
+`verified-by: bravebot_agent::tools::read_file_says_what_a_change_token_does_and_does_not_settle`
+`verified-by: bravebot_agent::tools::inside_a_loop_read_file_says_there_is_nothing_to_arrange`
 
 <a id="READ-7"></a>
 ### READ-7: a read carries a token that differs once the file has been written

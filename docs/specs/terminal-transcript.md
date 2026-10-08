@@ -250,6 +250,9 @@ user file may not take either name: it would load and then be unreachable.
 `verified-by: bravebot_tui::theme::a_user_file_cannot_take_a_name_that_reaches_the_default_theme`
 `verified-by: bravebot_session::store::an_empty_theme_file_is_not_a_choice`
 `verified-by: bravebot_session::store::an_over_long_theme_name_is_not_a_choice`
+`verified-by: bravebot_tui::themes::a_theme_file_in_the_workspace_is_not_a_theme`
+`verified-by: bravebot_tui::themes::user_theme_files_are_read_from_the_themes_directory_of_the_state_directory`
+`verified-by: bravebot_tui::themes::a_stored_name_nothing_offers_is_brave`
 
 <a id="VIEW-12"></a>
 ### VIEW-12: the theme picker is a centred panel over the session

@@ -2548,6 +2548,111 @@ done
         .expect("the server answers");
     }
 
+    /// A language server that answers a definition and then reads nothing more, so `shutdown` and
+    /// `exit` both go unanswered. It records its process id before anything else.
+    #[cfg(unix)]
+    const IGNORING_SHUTDOWN_SERVER: &str = r#"#!/bin/sh
+here=$(dirname "$0")
+echo $$ > "$here/pid"
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r _blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"rustAnalyzer/cachePriming","value":{"kind":"end"}}}'
+      ;;
+    *'"textDocument/definition"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[]}"
+      while :; do sleep 1; done
+      ;;
+  esac
+done
+"#;
+
+    #[cfg(unix)]
+    const IGNORES_SHUTDOWN: &str = "bravebot-lsp-ignores-shutdown";
+
+    #[cfg(unix)]
+    fn the_server_that_ignores_shutdown(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(IGNORES_SHUTDOWN).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn a_process_is_running(pid: u32) -> bool {
+        std::process::Command::new("sh")
+            .args(["-c", &format!("kill -0 {pid}")])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    /// LSP-8: a server that answers neither `shutdown` nor `exit` is gone once its set is dropped,
+    /// and dropping the set does not wait on it.
+    ///
+    /// Driven against a process that is still running when the set goes, because the clause is
+    /// about a process that outlives the agent. A watchdog ends the process after ten seconds so
+    /// that an implementation which waits on it fails here rather than hanging the run.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_that_ignores_shutdown_does_not_outlive_its_set() {
+        let (_launching, scratch, workspace, file) =
+            a_workspace_with_a_reporting_server(IGNORES_SHUTDOWN);
+        std::fs::write(scratch.join("server"), IGNORING_SHUTDOWN_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            workspace,
+            None,
+            the_server_that_ignores_shutdown,
+            false,
+            Vec::new,
+        );
+
+        a_definition_in(&mut servers, &file);
+        let pid: u32 = std::fs::read_to_string(scratch.join("pid"))
+            .expect("the server records its process id before it answers anything")
+            .trim()
+            .parse()
+            .expect("a process id");
+        assert!(
+            a_process_is_running(pid),
+            "the server was not running when its set was dropped"
+        );
+
+        let (finished, waiting) = std::sync::mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            if waiting
+                .recv_timeout(Duration::from_secs(10))
+                .is_err_and(|error| error == std::sync::mpsc::RecvTimeoutError::Timeout)
+            {
+                let _ = std::process::Command::new("sh")
+                    .args(["-c", &format!("kill -9 {pid}")])
+                    .status();
+            }
+        });
+        let started = Instant::now();
+        drop(servers);
+        let took = started.elapsed();
+        let _ = finished.send(());
+        watchdog.join().expect("the watchdog");
+
+        assert!(
+            took < Duration::from_secs(5),
+            "dropping the set waited {took:?} on a server that ignores shutdown"
+        );
+        assert!(
+            !a_process_is_running(pid),
+            "a server that ignored shutdown outlived the set that started it"
+        );
+    }
+
     /// LSP-10: an incognito session keeps no index under `~/.bravebot`, and what it does instead
     /// is index somewhere else, never inside the workspace.
     ///
