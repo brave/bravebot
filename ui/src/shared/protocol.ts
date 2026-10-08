@@ -20,6 +20,8 @@ export type Phase = 'planning' | 'thinking' | 'compacting' | 'reconnecting'
 export type Waiting = Phase | 'starting-servers'
 
 /** What a running confined check was given: lines of text, or one picture or PDF, which has none. */
+/** A hook holding the turn open: the moment's word and the program as the person's file spells it. */
+export type Hook = { moment: string; program: string }
 export type Checking = { lines: number } | { file: 'picture' | 'pdf' }
 export type Reach = 'not_the_planner' | 'no_model'
 export type Landing = 'context' | 'quarantined' | 'reserved'
@@ -782,6 +784,8 @@ export interface EventMap {
   'tool.finished': Activity
   'check.started': Checking
   'check.finished': Record<string, never>
+  'hook.started': Hook
+  'hook.finished': Record<string, never>
   landed: { landing: Landing }
   quarantined: Shown
   todos: { rows: TodoRow[] }

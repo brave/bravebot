@@ -59,6 +59,7 @@ while [ $# -gt 0 ]; do
     *) url="$1"; shift ;;
   esac
 done
+[ -z "$REQUESTS" ] || printf '%s\n' "$url" >> "$REQUESTS"
 case "$url" in
   */releases/latest) printf '{"tag_name": "v0.0.0"}\n'; exit 0 ;;
 esac
@@ -372,6 +373,8 @@ struct Install<'a> {
     absent: Vec<&'static str>,
     /// What the stand-in for `powershell.exe` reports.
     authenticode: (&'static str, &'static str),
+    /// What the script is given after its name, as a person writes `sh -s 1.2.3`.
+    arguments: Vec<&'static str>,
 }
 
 /// What an install left behind.
@@ -387,6 +390,8 @@ struct Outcome {
     /// Anything in the directory the executable goes to besides the executable, where the npm
     /// installer stages a download before it has been checked.
     left_beside_destination: Vec<PathBuf>,
+    /// Every URL the script asked `curl` for, in order.
+    requests: Vec<String>,
 }
 
 impl<'a> Install<'a> {
@@ -402,7 +407,13 @@ impl<'a> Install<'a> {
             gpg_on_path: true,
             absent: Vec::new(),
             authenticode: ("Valid", "Brave Software, Inc."),
+            arguments: Vec::new(),
         }
+    }
+
+    fn with_arguments(mut self, arguments: &[&'static str]) -> Self {
+        self.arguments = arguments.to_vec();
+        self
     }
 
     fn on(mut self, platform: Platform) -> Self {
@@ -485,6 +496,7 @@ impl<'a> Install<'a> {
         let home = self.directory(installer, "home");
         let bin = self.directory(installer, "bin");
         let path = self.path(installer);
+        let requests = self.directory(installer, "log").join("requests");
 
         let (mut command, destination) = match installer {
             Installer::Script => {
@@ -493,12 +505,13 @@ impl<'a> Install<'a> {
                     .env_clear()
                     .arg("-c")
                     .arg(
-                        r#"fingerprint="$2"; key="$3"; . "$1"; SIGNING_KEY_FINGERPRINT="$fingerprint"; RELEASE_PUBKEY="$key"; main"#,
+                        r#"fingerprint="$2"; key="$3"; . "$1"; SIGNING_KEY_FINGERPRINT="$fingerprint"; RELEASE_PUBKEY="$key"; shift 3; main "$@""#,
                     )
                     .arg("sh")
                     .arg(workspace().join("install.sh"))
                     .arg(self.fingerprint)
                     .arg(self.release_key)
+                    .args(&self.arguments)
                     .env("BRAVEBOT_INSTALL_SH_TEST", "1")
                     .env("INSTALL_DIR", &bin)
                     .env("SERVED", &served)
@@ -536,6 +549,7 @@ impl<'a> Install<'a> {
             .env("HOME", &home)
             .env("TMPDIR", &temporary)
             .env("GNUPGHOME", &own_keyring)
+            .env("REQUESTS", &requests)
             .env("FAKE_AUTH_STATUS", self.authenticode.0)
             .env("FAKE_AUTH_SIGNER", self.authenticode.1)
             .output()
@@ -560,6 +574,11 @@ impl<'a> Install<'a> {
             left_beside_destination: entries(&bin)
                 .into_iter()
                 .filter(|path| *path != destination)
+                .collect(),
+            requests: std::fs::read_to_string(&requests)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
                 .collect(),
         }
     }
@@ -726,6 +745,82 @@ fn a_linux_checksum_signed_by_the_release_key_installs() {
             "{installer:?} wrote to the person's own keyring"
         );
     }
+}
+
+/// What each argument to the script does, observed as the requests it makes. The version is the one
+/// input from outside that reaches a URL, so what matters is which URLs: a good version downloads
+/// from that tag under the fixed repository with no lookup of the newest, and anything else makes
+/// no request at all.
+#[test]
+fn the_script_installs_the_version_it_is_given_and_refuses_what_is_not_one() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let files: [(&str, &[u8]); 3] = [
+        ("bravebot-linux-arm64", &release.binary),
+        ("bravebot-linux-arm64.sha256", &release.checksum),
+        ("bravebot-linux-arm64.sha256.asc", &release.signature),
+    ];
+    let base = "https://github.com/brave/bravebot/releases/download/v1.2.3";
+    for argument in ["1.2.3", "v1.2.3"] {
+        let install = Install::new(tools, release, "pinned").with_arguments(&[argument]);
+        let outcome = install.run(Installer::Script, &files);
+        assert_installed(Installer::Script, &outcome, &release.binary);
+        assert_eq!(
+            outcome.requests,
+            [
+                format!("{base}/bravebot-linux-arm64"),
+                format!("{base}/bravebot-linux-arm64.sha256"),
+                format!("{base}/bravebot-linux-arm64.sha256.asc"),
+            ],
+            "{argument:?} did not download from the tag it names"
+        );
+        assert!(outcome.output.contains("v1.2.3"), "{}", outcome.output);
+    }
+
+    let newest = Install::new(tools, release, "newest").run(Installer::Script, &files);
+    assert_installed(Installer::Script, &newest, &release.binary);
+    assert!(
+        newest.requests[0].ends_with("/releases/latest")
+            && newest.requests[1].contains("/releases/download/v0.0.0/"),
+        "no argument stopped asking for the newest release: {:?}",
+        newest.requests
+    );
+
+    let refused: [&[&str]; 11] = [
+        &["../x"],
+        &["1.2"],
+        &[""],
+        &["1.2.3.4"],
+        &["1.2.3."],
+        &[".1.2.3"],
+        &["1..3"],
+        &["1.2.3/../../x"],
+        &["vv1.2.3"],
+        &["V1.2.3"],
+        &["1.2.3", "1.2.4"],
+    ];
+    for arguments in refused {
+        let install = Install::new(tools, release, "refused").with_arguments(arguments);
+        let outcome = install.run(Installer::Script, &files);
+        assert_refused(Installer::Script, &outcome, "version");
+        assert_eq!(
+            outcome.requests,
+            Vec::<String>::new(),
+            "{arguments:?} reached the network"
+        );
+    }
+}
+
+/// A version with no release stops at the asset, with the version named.
+#[test]
+fn a_version_with_no_release_is_refused_naming_the_version() {
+    let Some((tools, release)) = setup() else {
+        return;
+    };
+    let install = Install::new(tools, release, "missing").with_arguments(&["9.9.9"]);
+    let outcome = install.run(Installer::Script, &[]);
+    assert_refused(Installer::Script, &outcome, "v9.9.9");
 }
 
 /// Replacing the binary and its checksum together is what the checksum alone cannot catch, since

@@ -1632,7 +1632,7 @@ fn walk(directory: &Path, pieces: &[Piece]) -> Result<Vec<String>, Reason> {
                 for (name, is_dir) in entries(&base.join(&relative)) {
                     if !is_dir
                         || name.starts_with('.')
-                        || crate::workspace::is_ignored_directory(&name)
+                        || bravebot_filetype::is_ignored_directory(&name)
                     {
                         continue;
                     }

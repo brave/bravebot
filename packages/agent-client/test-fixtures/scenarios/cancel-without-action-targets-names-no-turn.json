@@ -1,0 +1,22 @@
+{
+  "name": "cancel-without-action-targets-names-no-turn",
+  "description": "Against a runtime that does not advertise action targets, a cancel names only the session, as that runtime understands it.",
+  "steps": [
+    {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
+    {"expectRequest": "info", "method": "agent.info", "params": {}},
+    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}}}}]},
+    {"expectRequest": "new", "method": "session.new", "params": {"directory": "/work"}},
+    {"send": [{"event": "trust.request", "session": "s1", "data": {"directory": "/work", "keeping": null}}, {"id": "$new", "ok": {"session": "s1"}}]},
+    {"expectRequest": "view", "method": "session.view.start", "params": {"session": "s1", "version": 1}},
+    {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "status": "idle", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
+    {"await": "a", "bindSession": "a"},
+    {"start": "send", "call": "send", "session": "a", "args": {"text": "go"}},
+    {"expectRequest": "send", "method": "turn.send", "params": {"session": "s1", "prompt": "go"}},
+    {"send": [{"id": "$send", "ok": {"turn": 1}}]},
+    {"await": "send", "result": {"turn": 1}},
+    {"start": "cancel", "call": "cancel", "session": "a"},
+    {"expectRequest": "c", "method": "turn.cancel", "params": {"session": "s1"}},
+    {"send": [{"id": "$c", "ok": {}}]},
+    {"await": "cancel"}
+  ]
+}

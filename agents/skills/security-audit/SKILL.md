@@ -59,7 +59,8 @@ cannot be relied on to pace itself, to compare a title against forty existing on
 at a cap it read about several thousand tokens ago. So `gh` is deliberately absent from this
 skill's `allowed-tools`: a `gh issue create` typed out here asks first, and the script's calls
 do not. That is on purpose, and reaching for `gh` to work around the script is the one move that
-loses the dedup, the pacing and the cap at once.
+loses the dedup, the pacing and the cap at once. An issue that is not a finding of this audit goes
+through the [issue-poster](../../agents/issue-poster.md) definition.
 
 **A run never fixes anything.** It reports, it drafts, it files. Fixing is a separate task the
 user asks for afterwards, because a pass that decides what to change should not also be the pass

@@ -1,0 +1,24 @@
+{
+  "name": "ask-answers-have-a-known-shape",
+  "description": "Answers that are not a list of typed text, chosen indexes or null are refused locally.",
+  "steps": [
+    {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
+    {"expectRequest": "info", "method": "agent.info", "params": {}},
+    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}}}}]},
+    {"expectRequest": "new", "method": "session.new", "params": {"directory": "/work"}},
+    {"send": [{"event": "trust.request", "session": "s1", "data": {"directory": "/work", "keeping": null}}, {"id": "$new", "ok": {"session": "s1"}}]},
+    {"expectRequest": "view", "method": "session.view.start", "params": {"session": "s1", "version": 1}},
+    {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "status": "idle", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
+    {"await": "a", "bindSession": "a"},
+    {"start": "send", "call": "send", "session": "a", "args": {"text": "go"}},
+    {"expectRequest": "send", "method": "turn.send", "params": {"session": "s1", "prompt": "go"}},
+    {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 1, "turn": 1, "status": "running", "pending": null, "rows": [{"id": 1, "turn": 1, "kind": "prompt", "event": null, "data": {"text": "go"}, "resolved": false}]}}, {"id": "$send", "ok": {"turn": 1}}]},
+    {"await": "send"},
+    {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 2, "turn": 1, "status": "waiting", "pending": {"row": 2, "request": 6, "kind": "ask", "supported": true, "data": {"request": 6, "questions": []}}, "rows": [{"id": 2, "turn": 1, "kind": "approval", "event": "ask.request", "data": {"request": 6, "questions": []}, "resolved": false}]}}]},
+    {"start": "bad", "call": "answer", "session": "a", "args": {"request": 6, "answers": [{"typed": 5}]}},
+    {"await": "bad", "error": {"name": "UnsupportedError"}},
+    {"start": "worse", "call": "answer", "session": "a", "args": {"request": 6, "answers": [{"chosen": [-1]}]}},
+    {"await": "worse", "error": {"name": "UnsupportedError"}},
+    {"expectNoRequest": true}
+  ]
+}

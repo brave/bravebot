@@ -121,6 +121,10 @@ pub struct Request<'a> {
     pub since: Option<i64>,
     /// Seconds since the epoch; a commit newer than this is not shown but is walked past.
     pub until: Option<i64>,
+    /// Whether a status lists each untracked file, as `status.showUntrackedFiles=all` does, in
+    /// place of what the repository's configuration asks for. A directory of new files is then
+    /// not one entry that names no file in it.
+    pub every_untracked: bool,
     pub deadline: Instant,
 }
 
@@ -143,6 +147,22 @@ pub struct Answer {
     /// The text with every line of a file's contents left blank: the ids, names and messages
     /// around them, which are `.git`'s own.
     pub around: String,
+    /// What a status listed, as paths and not as text. `None` for any other question.
+    pub listing: Option<Listing>,
+}
+
+/// The paths a status listed, with whether it listed them all (CHECKOUT-13).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Listing {
+    /// Paths git's short status shows as added, modified, replaced by another kind, or untracked
+    /// as a file, relative to the repository's root.
+    pub changed: Vec<String>,
+    /// Paths it shows as deleted, in the index or in the working tree.
+    pub removed: Vec<String>,
+    /// False where the status left something out that it could have listed: a path a rule
+    /// withholds, a file it did not compare, a conflict, an untracked directory it did not open,
+    /// a path that is not text, or an answer that was cut or ran out of time.
+    pub complete: bool,
 }
 
 /// Lines of one file, as an answer printed them.
@@ -1238,6 +1258,9 @@ impl Repository {
             timed_out: false,
             withheld,
             deadline: request.deadline,
+            listing: None,
+            listing_partial: false,
+            every_untracked: request.every_untracked,
         };
         let filter = match request.path {
             None => None,
@@ -1264,6 +1287,11 @@ impl Repository {
         let mut shown = out.shown;
         shown.sort();
         shown.dedup();
+        let listing = out.listing.map(|mut listing| {
+            listing.complete =
+                !(out.listing_partial || out.withheld_any || out.timed_out || out.text.cut);
+            listing
+        });
         Ok(Answer {
             text: out.text.body,
             shown,
@@ -1273,6 +1301,7 @@ impl Repository {
             timed_out: out.timed_out,
             printed: out.printed,
             around: out.text.around,
+            listing,
         })
     }
 
@@ -2678,6 +2707,13 @@ struct Out<'w> {
     timed_out: bool,
     withheld: &'w dyn Fn(&str) -> bool,
     deadline: Instant,
+    /// Set by a status, for [`Answer::listing`].
+    listing: Option<Listing>,
+    /// Whether a status left out something it could have listed, beyond what the answer's own
+    /// flags say.
+    listing_partial: bool,
+    /// From [`Request::every_untracked`].
+    every_untracked: bool,
 }
 
 impl Out<'_> {
@@ -3154,6 +3190,7 @@ mod tests {
             pattern: None,
             since: None,
             until: None,
+            every_untracked: false,
             deadline: later(),
         }
     }
@@ -5774,6 +5811,34 @@ mod tests {
             );
         }
 
+        /// A directory whose `.git` is a file is a repository of its own, as a worktree or a
+        /// submodule checkout is, so it is one line however many files it holds. A name holding a
+        /// quote or a backslash is quoted with each escaped, since printing either raw makes the
+        /// line ambiguous.
+        #[test]
+        fn a_git_file_makes_a_nested_repository_and_a_quote_or_backslash_is_escaped() {
+            let repo = Repo::new("status-git-file");
+            commit(&repo, &[]);
+            let other = Repo::new("status-git-file-target");
+            write(
+                &repo,
+                "nested/.git",
+                &format!("gitdir: {}\n", other.git.display()),
+            );
+            write(&repo, "nested/inside.txt", "x\n");
+            write(&repo, "nested/also.txt", "x\n");
+            // Listing every file would show a directory that is not a repository file by file, so
+            // this is what tells one from the other.
+            repo.put("config", "[status]\n\tshowUntrackedFiles = all\n");
+            write(&repo, "q\"x.txt", "x\n");
+            write(&repo, "b\\s.txt", "x\n");
+            index(&repo, &[]);
+            assert_eq!(
+                text(&repo),
+                "?? \"b\\\\s.txt\"\n?? nested/\n?? \"q\\\"x.txt\"\n"
+            );
+        }
+
         /// A v3 index of one entry `git add -N` wrote.
         fn intent_to_add(repo: &Repo, path: &str) {
             let mut bytes = b"DIRC".to_vec();
@@ -6814,6 +6879,36 @@ mod tests {
             std::os::unix::fs::symlink(&moved, &repo.git).expect("link");
             assert!(sweep(&repo.git, &at, &|_| false).is_empty());
             assert!(at.join("c2/README").exists());
+        }
+
+        /// CHECKOUT-16: where nothing is removed, the checkouts to name are the plain numbered
+        /// directories no record lists, by number and not by spelling, and nothing is removed.
+        #[test]
+        fn the_unlisted_checkouts_are_the_numbered_directories_no_record_lists() {
+            use crate::git::checkout::unlisted;
+            let repo = Repo::new("checkout-unlisted");
+            let at = repo.root.join("checkouts");
+            for name in ["c1", "c2", "c10", "c9", "scratch", "c", "cx", "c1x", "c-3"] {
+                std::fs::create_dir_all(at.join(name)).expect("directory");
+            }
+            std::fs::write(at.join("c4"), "a file").expect("a file");
+            #[cfg(unix)]
+            {
+                let outside = repo.root.join("outside");
+                std::fs::create_dir_all(&outside).expect("outside");
+                std::os::unix::fs::symlink(&outside, at.join("c5")).expect("link");
+            }
+
+            let named: Vec<String> = unlisted(&at, &|id| id == "c1")
+                .into_iter()
+                .map(|(id, path)| {
+                    assert_eq!(path, at.join(&id), "the path is the directory's own");
+                    id
+                })
+                .collect();
+            assert_eq!(named, ["c2", "c9", "c10"]);
+            assert!(at.join("c2").exists() && at.join("c10").exists());
+            assert!(unlisted(&at.join("absent"), &|_| false).is_empty());
         }
 
         #[cfg(unix)]

@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/workspace.rs
   - crates/agent/src/conversation.rs
+  - crates/filetype/src/lib.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
 
@@ -36,14 +37,22 @@ bytes at another.
 <a id="READ-2"></a>
 ### READ-2: a long file is paged, and says where to continue from
 
-Reads cap at 500 lines and 2000 characters per line, report the range returned, and give the
-offset to continue from.
+Reads cap at 500 lines, 2000 characters per line and 100,000 characters per page, report the range
+returned, and give the offset to continue from. The page cap counts characters, a newline after each
+line included, and ends the page at the last whole line that fits, so a few long lines cannot fill
+the context. A page always holds at least one line. The offset to continue from is worded as it is
+for the line cap, and a read the planner may not see reports only its size
+([READ-1](#READ-1)). The change token stays that of the whole file ([READ-7](#READ-7)).
 
 `verified-by: bravebot_agent::workspace::a_paged_read_is_capped_and_says_where_to_continue`
 `verified-by: bravebot_agent::workspace::the_reported_next_offset_returns_the_following_lines`
 `verified-by: bravebot_agent::workspace::an_over_long_line_is_shortened_and_counted`
 `verified-by: bravebot_agent::workspace::a_multi_byte_line_inside_the_cap_is_returned_whole`
 `verified-by: bravebot_agent::workspace::the_cap_keeps_two_thousand_characters_of_a_multi_byte_line`
+`verified-by: bravebot_agent::workspace::a_page_of_long_lines_ends_at_the_size_cap_on_a_whole_line`
+`verified-by: bravebot_agent::workspace::paging_by_the_reported_offset_reads_a_file_cut_by_size_whole`
+`verified-by: bravebot_agent::workspace::the_size_cap_counts_characters_of_a_multi_byte_page`
+`verified-by: bravebot_agent::turn::a_read_cut_by_size_says_where_to_continue`
 `verified-by: bravebot_agent::workspace::an_offset_past_the_end_returns_nothing_and_says_the_length`
 `verified-by: bravebot_agent::turn::the_model_can_ask_for_a_later_page`
 
@@ -58,6 +67,11 @@ picture is the exception and is [READ-5](#READ-5): there is something to do with
 `verified-by: bravebot_agent::workspace::a_paged_read_of_a_binary_file_is_refused`
 `verified-by: bravebot_agent::workspace::text_files_are_not_mistaken_for_binary`
 `verified-by: bravebot_agent::workspace::an_empty_file_is_not_binary`
+`verified-by: bravebot_filetype::lib::a_null_byte_in_the_sniffed_head_is_binary`
+`verified-by: bravebot_filetype::lib::only_the_sniffed_head_is_judged`
+`verified-by: bravebot_filetype::lib::thirty_percent_control_characters_is_text_and_thirty_one_is_not`
+`verified-by: bravebot_filetype::lib::tab_newline_form_feed_and_carriage_return_are_text`
+`verified-by: bravebot_filetype::lib::an_empty_file_is_not_binary`
 
 <a id="READ-4"></a>
 ### READ-4: the planner may choose which file to read

@@ -180,6 +180,8 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
       queuePaused={false}
       onResumeQueued={noop}
       onRemoveQueued={noop}
+      refusal={null}
+      onDismissRefusal={noop}
       backendReady={backendReady}
       onSetup={onSetup}
       onCheckBackend={onCheckBackend}

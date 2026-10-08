@@ -42,10 +42,13 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   log` prints commit messages whoever contributed wrote.
 - **What lands in a trusted directory afterwards.** A rule is about a path, not about the files that
   were in it. See [Trusted directories](trust.md#known-costs).
-- **A program the agent was allowed to run.** On Linux and macOS a program is confined to the
-  directories the session was opened on, its scratch directory, the system temporary directory and
-  the system files every program needs, plus what its own command brings: a `git push` is lent the
-  credentials a push needs, never a private key, and `cargo build` its toolchain's cache. On Windows programs are not confined and run
+- **A program the agent was allowed to run.** On Linux and macOS a program can read the machine
+  except the places that hold a credential (ssh private keys, cloud and container logins,
+  keychains, browser profiles and password stores) and can write only the directories the session
+  was opened on, its scratch directory, the system temporary directory and the toolchain caches. A
+  command that names `aws`, `kubectl` or `docker` is lent that tool's directory, and a `git push` the
+  agent socket, never a private key. The files a tool reads by name to do its job, such as the `gh`
+  login, `~/.npmrc` and `~/.netrc`, are readable. On Windows programs are not confined and run
   with the access your own shell would give them. Their own network requests do not go through the
   one way out described below, so an approved `curl`, `git push` or package install can read what its
   profile reaches and send it with nothing here routing or inspecting the traffic.
@@ -152,6 +155,16 @@ the session confines: the [MCP servers](../customize/mcp-servers.md) it started,
 Confinement bounds a process started to run code Brave Bot did not write, so a session that starts
 none of those is inside no such boundary, and the level is what your machine offers rather than
 something holding the session back.
+
+**Sandbox modes.** The programs the agent runs start under one of three modes. `standard` is the one
+above and is the default. `strict` reads nothing on the machine beyond what the program's binary
+needs, the session's directories and the credential scope its command names. `off` starts programs
+with no profile. Choose one with `--sandbox <mode>` or with `{"sandbox": {"mode": "strict"}}` in
+`~/.bravebot/settings.json`. A repository's `.bravebot/settings.json` can ask for `strict` and
+nothing looser, so a checkout cannot unconfine whoever opens it. A managed file that pins a mode is a
+floor: a flag or a setting looser than it stops the session from starting, and `bravebot doctor`
+says which files disagree. The desktop app reads `off` as `standard`. When the mode is not
+`standard`, the opening screen and `/status` say so.
 
 Where confinement is used, it **fails closed**: if it cannot be established the process does not run,
 rather than running unconfined. A profile starts denying everything and grants accumulate onto it, and

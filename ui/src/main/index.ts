@@ -242,6 +242,8 @@ async function sendBotTurn(
   }
 
   try {
+    // The bridge adds the files the prompt names with `@`, and none for a prompt `composed` says
+    // this process wrote.
     params.files = [...((params.files as string[] | undefined) ?? []), ...attachmentPaths(session, attachments)]
     return { ok: await bridge.request('turn.send', params) }
   } catch (error) {
@@ -470,6 +472,8 @@ const ALLOWED = new Set([
   'session.rewind',
   'turn.send',
   'turn.cancel',
+  'mentions.offer',
+  'mentions.named',
   'confirm.reply',
   'run.reply',
   'output.reply',

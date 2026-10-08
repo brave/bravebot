@@ -85,6 +85,8 @@
 //! Installing them globally would put every name in the block in front of every command `run`
 //! ever starts, which is a much larger claim than "this is how I reach the backend".
 
+use crate::sandbox::{SANDBOX_BLOCK, Stated};
+use bravebot_sandbox::SandboxMode;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -127,6 +129,7 @@ const PERMISSIONS_BLOCK: &str = "permissions";
 /// report is one mistake somebody has to work out is not two.
 const READ_KEYS: &[&str] = &[
     "advisorModel",
+    "agent",
     "attribution",
     "editorMode",
     "effort",
@@ -140,6 +143,7 @@ const READ_KEYS: &[&str] = &[
     "promptCacheTtl",
     PROVIDER_BLOCK,
     "run",
+    SANDBOX_BLOCK,
     "search",
     "terminalTitle",
     "tui",
@@ -212,6 +216,11 @@ pub struct Settings {
     ///
     /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
     fallback_model: Option<String>,
+    /// What the top-level `agent` key named, if it named anything.
+    ///
+    /// The name as the file spelled it. Matching it against the definitions a session resolved is
+    /// the front end's to do (ADDRESS-13).
+    agent: Option<String>,
     /// What the top-level `effort` key named, if it named anything.
     ///
     /// The word as the file spelled it, for the reason `editor_mode` below keeps one: which words
@@ -273,6 +282,21 @@ pub struct Settings {
     /// nothing is the one worth saying out loud, and somebody who quoted `"true"` has to be told it
     /// was read as absence rather than left to believe the tools are confined.
     narrowing_unreadable: Vec<(PathBuf, &'static str)>,
+    /// The mode `sandbox.mode` named in a layer entitled to choose one, and that layer's file
+    /// (SANDBOX-22).
+    ///
+    /// The home layer and a file the command line named from outside the workspace, the later of
+    /// the two winning. Settled per layer rather than off the merged root, for `vetting`'s reason:
+    /// the merge cannot say which file a value came from.
+    sandbox_chosen: Option<(SandboxMode, PathBuf)>,
+    /// The layers not entitled to choose that asked for `strict`, weakest first. They may only
+    /// tighten, so nothing a stronger layer chose lifts one.
+    sandbox_asked_strict: Vec<PathBuf>,
+    /// The layers not entitled to choose that named `standard` or `off`, with the mode, for
+    /// `doctor`: dropped rather than obeyed, and said so.
+    sandbox_ignored: Vec<(PathBuf, SandboxMode)>,
+    /// The layers that named `sandbox.mode` as something that is not a mode.
+    sandbox_unreadable: Vec<PathBuf>,
     /// The `allow` entries a layer not entitled to grant one wrote, with the file each came from.
     ///
     /// Kept for the reason `vetting_ignored` is kept, and it matters more: an `allow` entry is the
@@ -301,6 +325,11 @@ pub struct Settings {
     /// Kept for the same reason: the model it names is sent the whole conversation once the
     /// primary fails, which makes it a destination, and a checkout cannot choose one.
     fallback_ignored: Vec<PathBuf>,
+    /// The layers that named `agent` and were not obeyed, weakest first.
+    ///
+    /// Kept because a definition chosen for every turn is a prompt and a narrowing nobody vouched
+    /// for where a checkout wrote it, so only a file the person wrote or named can choose one.
+    agent_ignored: Vec<PathBuf>,
     /// The `permissions` blocks and rule lists a layer spelled as another shape, with the file each
     /// came from. The merge keeps the weaker block or list in their place, so the merged root no
     /// longer holds them and only the layer that wrote one can say it was ignored (PERM-11).
@@ -342,6 +371,33 @@ pub struct Settings {
     run_output: Option<usize>,
     /// What `run.defaultSeconds` and `run.maxSeconds` said, where they said anything.
     run_deadlines: RunDeadlines,
+    /// What `run.network` came to across the layers, if any of them said it.
+    ///
+    /// Settled by [`Settings::layered`] and not read off the merged root, because the layers are not
+    /// equal here: the person's own file and the one `--settings` names say `open` or `closed`, and
+    /// a checkout's file may say `closed` and never `open`, since the word it says removes reach
+    /// from whoever cloned it and the other would give reach back.
+    run_network: Option<bravebot_sandbox::network::Network>,
+    /// The file whose word is the answer above, for a report that has to name it.
+    run_network_by: Option<PathBuf>,
+    /// The checkout layers that said `open` and were not obeyed, weakest first, for `doctor`.
+    run_network_ignored: Vec<PathBuf>,
+    /// The layers that named `run.network` as something other than `open` or `closed`.
+    ///
+    /// Kept for the reason `narrowing_unreadable` is: a mistyped `"close"` leaves the network open,
+    /// and the person who wrote it believes it is not.
+    run_network_unreadable: Vec<PathBuf>,
+    /// The entries of `sandbox.filesystem`'s four lists the layers entitled to write them wrote, each
+    /// with the file it came from.
+    ///
+    /// Settled by [`Settings::layered`], because the layers are not equal here: a refusal may come
+    /// from any file, since it only takes reach away, and an `allowRead` or `allowWrite` only from
+    /// the person's own file, the one `--settings` names outside the workspace, and the managed layer.
+    sandbox_filesystem: bravebot_sandbox::rules::Lists,
+    /// The layers that wrote `allowRead` or `allowWrite` and were not obeyed, with the key.
+    sandbox_filesystem_ignored: Vec<(PathBuf, &'static str)>,
+    /// The layers that gave one of the four keys something that is not a list of strings.
+    sandbox_filesystem_misshapen: Vec<(PathBuf, &'static str)>,
     /// What `tui.wheelRows` said, if it said a whole positive count.
     ///
     /// `None` is the built-in count, which belongs to the interface that moves the view for the
@@ -563,6 +619,11 @@ impl Settings {
         // the person wrote in their own file. See [`Settings::allow_ignored`].
         let mut allow = Vec::new();
         let mut allow_ignored = Vec::new();
+        // Settled per layer for the same reason: which file chose a mode decides whether it binds.
+        let mut sandbox_chosen = None;
+        let mut sandbox_asked_strict = Vec::new();
+        let mut sandbox_ignored = Vec::new();
+        let mut sandbox_unreadable = Vec::new();
         // Settled per layer for the same reason as `vetting`: a provider block or a `model` key a
         // checkout wrote picks where a request is sent and which of the person's variables are read
         // as its credential, so the merge must never see it. `model` and `provider` are removed
@@ -571,6 +632,7 @@ impl Settings {
         let mut model_ignored = Vec::new();
         let mut advisor_ignored = Vec::new();
         let mut fallback_ignored = Vec::new();
+        let mut agent_ignored = Vec::new();
         let mut misshapen = Vec::new();
         let mut mcp_declared = Vec::new();
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
@@ -583,6 +645,18 @@ impl Settings {
         // still name `model` and `provider`: the flag naming it is the person's own act
         // (BACKEND-24), where the project and local layers arrive with the clone.
         let named_path = named.map(Path::to_path_buf);
+        // Settled per layer, because the layers are not equal about it: see [`Settings::run_network`].
+        // `stated` is what the layers entitled to say either word last said, and `closed_by` is a
+        // checkout's file that asked for `closed`, which nothing below it can lift.
+        let mut run_network_stated: Option<(bravebot_sandbox::network::Network, PathBuf)> = None;
+        let mut run_network_closed_by: Option<PathBuf> = None;
+        let mut run_network_ignored: Vec<PathBuf> = Vec::new();
+        let mut run_network_unreadable: Vec<PathBuf> = Vec::new();
+        // Settled per layer for the reason `run_network` is: a refusal is every layer's to write and
+        // an addition of reach is not a checkout's (see [`Settings::sandbox_filesystem`]).
+        let mut sandbox_filesystem = bravebot_sandbox::rules::Lists::default();
+        let mut sandbox_filesystem_ignored: Vec<(PathBuf, &'static str)> = Vec::new();
+        let mut sandbox_filesystem_misshapen: Vec<(PathBuf, &'static str)> = Vec::new();
         let mut model_above_home = false;
         let mut effort_above_home = false;
         for path in paths.into_iter().flatten() {
@@ -613,6 +687,9 @@ impl Settings {
                 }
                 if root.remove("fallbackModel") {
                     fallback_ignored.push(path.clone());
+                }
+                if root.remove("agent") {
+                    agent_ignored.push(path.clone());
                 }
             }
             if root.contains_key(VETTING_BLOCK) {
@@ -651,6 +728,45 @@ impl Settings {
                 }
             }
             let granting = grants(&path, home_layer.as_deref(), named, cwd, started);
+            match network_word(&root) {
+                NetworkStated::Absent => {}
+                NetworkStated::Unreadable => run_network_unreadable.push(path.clone()),
+                NetworkStated::Word(network) if granting => {
+                    run_network_stated = Some((network, path.clone()));
+                }
+                NetworkStated::Word(network) if network.is_closed() => {
+                    run_network_closed_by.get_or_insert_with(|| path.clone());
+                }
+                NetworkStated::Word(_) => run_network_ignored.push(path.clone()),
+            }
+            match crate::sandbox::stated(&root) {
+                Stated::Absent => {}
+                Stated::Unreadable => sandbox_unreadable.push(path.clone()),
+                Stated::Mode(mode) if granting => sandbox_chosen = Some((mode, path.clone())),
+                Stated::Mode(SandboxMode::Strict) => sandbox_asked_strict.push(path.clone()),
+                Stated::Mode(mode) => sandbox_ignored.push((path.clone(), mode)),
+            }
+            for list in FILESYSTEM_LISTS {
+                match filesystem_list(&root, list) {
+                    ListStated::Absent => {}
+                    ListStated::Unreadable => {
+                        sandbox_filesystem_misshapen.push((path.clone(), list.key()));
+                    }
+                    ListStated::Entries(_) if !list.is_a_denial() && !granting => {
+                        sandbox_filesystem_ignored.push((path.clone(), list.key()));
+                    }
+                    ListStated::Entries(entries) => {
+                        let target = filesystem_target(&mut sandbox_filesystem, list);
+                        target.extend(entries.into_iter().map(|entry| {
+                            bravebot_sandbox::rules::Entry {
+                                path: entry,
+                                by: Some(path.clone()),
+                                pinned: false,
+                            }
+                        }));
+                    }
+                }
+            }
             let directory = settings_directory(&path);
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
@@ -696,6 +812,22 @@ impl Settings {
         settings.narrowing = narrowing;
         settings.narrowed_by = narrowed_by;
         settings.narrowing_unreadable = narrowing_unreadable;
+        // Overwritten for the same reason: a checkout's `closed` stands over a person's `open`.
+        (settings.run_network, settings.run_network_by) =
+            match (run_network_closed_by, run_network_stated) {
+                (Some(by), _) => (Some(bravebot_sandbox::network::Network::Closed), Some(by)),
+                (None, Some((network, by))) => (Some(network), Some(by)),
+                (None, None) => (None, None),
+            };
+        settings.run_network_ignored = run_network_ignored;
+        settings.run_network_unreadable = run_network_unreadable;
+        settings.sandbox_chosen = sandbox_chosen;
+        settings.sandbox_asked_strict = sandbox_asked_strict;
+        settings.sandbox_ignored = sandbox_ignored;
+        settings.sandbox_unreadable = sandbox_unreadable;
+        settings.sandbox_filesystem = sandbox_filesystem;
+        settings.sandbox_filesystem_ignored = sandbox_filesystem_ignored;
+        settings.sandbox_filesystem_misshapen = sandbox_filesystem_misshapen;
         // Overwritten for the same reason, and the merged block is what it replaces: `deny` and
         // `ask` keep every layer's entries because both only ever narrow, and this one is put back
         // to the entries a layer entitled to grant wrote.
@@ -715,6 +847,7 @@ impl Settings {
         settings.model_ignored = model_ignored;
         settings.advisor_ignored = advisor_ignored;
         settings.fallback_ignored = fallback_ignored;
+        settings.agent_ignored = agent_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -765,6 +898,7 @@ impl Settings {
             model: word(root, "model"),
             advisor_model: word(root, "advisorModel"),
             fallback_model: word(root, "fallbackModel"),
+            agent: word(root, "agent"),
             effort: word(root, "effort"),
             prompt_cache_ttl: word(root, "promptCacheTtl")
                 .and_then(|word| crate::CacheTtl::parse(&word)),
@@ -792,6 +926,11 @@ impl Settings {
             narrowing: narrowing_stated(root).0,
             narrowed_by: Vec::new(),
             narrowing_unreadable: Vec::new(),
+            // Filled by [`Settings::layered`], which knows which file each was written in.
+            sandbox_chosen: None,
+            sandbox_asked_strict: Vec::new(),
+            sandbox_ignored: Vec::new(),
+            sandbox_unreadable: Vec::new(),
             // Empty here, and filled by [`Settings::layered`] for the same reason: one root does
             // not say which file it was read out of, and that is the whole of what decides whether
             // an `allow` entry in it grants anything.
@@ -807,6 +946,20 @@ impl Settings {
             run_output: run_output_cap(root),
             run_deadlines: run_deadlines(root),
             wheel_rows: wheel_rows(root),
+            // The word one root states, there being no file to name. [`Settings::layered`]
+            // overwrites it with what the layers come to.
+            run_network: match network_word(root) {
+                NetworkStated::Word(network) => Some(network),
+                NetworkStated::Absent | NetworkStated::Unreadable => None,
+            },
+            run_network_by: None,
+            run_network_ignored: Vec::new(),
+            run_network_unreadable: Vec::new(),
+            // The lists one root states, there being no file to name and no layer to refuse it.
+            // [`Settings::layered`] overwrites them with what the layers come to.
+            sandbox_filesystem: filesystem_lists(root, None),
+            sandbox_filesystem_ignored: Vec::new(),
+            sandbox_filesystem_misshapen: Vec::new(),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -814,6 +967,7 @@ impl Settings {
             model_ignored: Vec::new(),
             advisor_ignored: Vec::new(),
             fallback_ignored: Vec::new(),
+            agent_ignored: Vec::new(),
         }
     }
 
@@ -868,6 +1022,15 @@ impl Settings {
     /// [`Settings::model`] is.
     pub fn fallback_model(&self) -> Option<&str> {
         self.fallback_model.as_deref()
+    }
+
+    /// The definition the settings in force name for every turn of a session to be addressed to,
+    /// where `--agent` did not name one (ADDRESS-13).
+    ///
+    /// Read from the person's own file and the file `--settings` names only, for the reason
+    /// [`Settings::model`] is.
+    pub fn agent(&self) -> Option<&str> {
+        self.agent.as_deref()
     }
 
     /// How hard the settings in force asked the model to think, if they asked for anything.
@@ -972,6 +1135,37 @@ impl Settings {
             .map(|(path, key)| (path.as_path(), *key))
     }
 
+    /// The sandbox mode the settings files ask for and the file that asked, if any did
+    /// (SANDBOX-22).
+    ///
+    /// `strict` from any layer wins over what an entitled layer chose, because it only tightens: a
+    /// checkout asking for it is obeyed, and the person's own `off` does not lift it. Otherwise the
+    /// entitled layer's choice stands, the command-line file over the home one.
+    pub fn sandbox(&self) -> Option<(SandboxMode, &Path)> {
+        match &self.sandbox_chosen {
+            Some((SandboxMode::Strict, file)) => Some((SandboxMode::Strict, file.as_path())),
+            chosen => match self.sandbox_asked_strict.first() {
+                Some(file) => Some((SandboxMode::Strict, file.as_path())),
+                None => chosen.as_ref().map(|(mode, file)| (*mode, file.as_path())),
+            },
+        }
+    }
+
+    /// The layers that named `standard` or `off` without being entitled to, with the mode, weakest
+    /// first. Reported rather than obeyed, for the reason `vetting_ignored` is.
+    pub fn sandbox_ignored(&self) -> impl Iterator<Item = (&Path, SandboxMode)> {
+        self.sandbox_ignored
+            .iter()
+            .map(|(path, mode)| (path.as_path(), *mode))
+    }
+
+    /// The layers that named `sandbox.mode` as something other than one of the three words. Read as
+    /// absence and reported, since a mistyped `strict` is the failure worth interrupting somebody
+    /// over.
+    pub fn sandbox_unreadable(&self) -> impl Iterator<Item = &Path> {
+        self.sandbox_unreadable.iter().map(PathBuf::as_path)
+    }
+
     /// The `allow` entries that were dropped, and the file each was written in, weakest first.
     ///
     /// An `allow` entry answers a prompt, so reading one is granting a capability rather than
@@ -1068,6 +1262,54 @@ impl Settings {
         self.run_deadlines
     }
 
+    /// What the layers say `run.network` is, if any of them says: `closed` from a checkout's file or
+    /// from either word in the person's own, the file `--settings` names after them.
+    ///
+    /// `None` is every layer silent, which the caller reads as `open`. A checkout's `open` is not an
+    /// answer ([`Settings::run_network_ignored`]), and a checkout's `closed` is not lifted by a
+    /// person's `open`: only the flag does that, and only where no managed file has pinned it.
+    pub fn run_network(&self) -> Option<bravebot_sandbox::network::Network> {
+        self.run_network
+    }
+
+    /// The file whose word [`Settings::run_network`] is.
+    pub fn run_network_by(&self) -> Option<&Path> {
+        self.run_network_by.as_deref()
+    }
+
+    /// The checkout layers that said `run.network` is `open` and were not obeyed.
+    pub fn run_network_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.run_network_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The layers that spelled `run.network` as neither word.
+    pub fn run_network_unreadable(&self) -> impl Iterator<Item = &Path> {
+        self.run_network_unreadable.iter().map(PathBuf::as_path)
+    }
+
+    /// The four lists `sandbox.filesystem` holds across the layers: every layer's refusals and the
+    /// additions of reach the person's own file, the file `--settings` names outside the workspace
+    /// and the managed layer wrote. A project or local layer's addition is not here
+    /// ([`Settings::sandbox_filesystem_ignored`]), so a cloned repository cannot widen what the
+    /// programs it makes the session run may reach.
+    pub fn sandbox_filesystem(&self) -> &bravebot_sandbox::rules::Lists {
+        &self.sandbox_filesystem
+    }
+
+    /// The layers that wrote `allowRead` or `allowWrite` and were not obeyed, with the key.
+    pub fn sandbox_filesystem_ignored(&self) -> impl Iterator<Item = (&Path, &'static str)> {
+        self.sandbox_filesystem_ignored
+            .iter()
+            .map(|(path, key)| (path.as_path(), *key))
+    }
+
+    /// The layers that gave one of the four keys something other than a list of strings.
+    pub fn sandbox_filesystem_misshapen(&self) -> impl Iterator<Item = (&Path, &'static str)> {
+        self.sandbox_filesystem_misshapen
+            .iter()
+            .map(|(path, key)| (path.as_path(), *key))
+    }
+
     /// How many rows the settings in force move the view by for one wheel event.
     ///
     /// `None` where nobody named one, for the reason [`Settings::run_output_cap`] answers `None`:
@@ -1095,12 +1337,22 @@ impl Settings {
             // the file that holds it, so reading it as no settings at all would contradict the line
             // under it.
             && self.narrowing_unreadable.is_empty()
+            && self.sandbox_chosen.is_none()
+            && self.sandbox_asked_strict.is_empty()
+            && self.sandbox_ignored.is_empty()
+            && self.sandbox_unreadable.is_empty()
             && self.keybindings.is_empty()
             && self.attribution.is_empty()
             && self.search.is_empty()
             && self.run_output.is_none()
             && self.run_deadlines.is_empty()
             && self.wheel_rows.is_none()
+            && self.run_network.is_none()
+            && self.run_network_ignored.is_empty()
+            && self.run_network_unreadable.is_empty()
+            && self.sandbox_filesystem.is_empty()
+            && self.sandbox_filesystem_ignored.is_empty()
+            && self.sandbox_filesystem_misshapen.is_empty()
             && self.providers.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
@@ -1124,6 +1376,7 @@ impl Settings {
             && self.model_ignored.is_empty()
             && self.advisor_ignored.is_empty()
             && self.fallback_ignored.is_empty()
+            && self.agent_ignored.is_empty()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -1158,6 +1411,11 @@ impl Settings {
     /// The files that named `fallbackModel` from a layer not entitled to, weakest first.
     pub fn fallback_ignored(&self) -> impl Iterator<Item = &Path> {
         self.fallback_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The files that named `agent` from a layer not entitled to, weakest first.
+    pub fn agent_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.agent_ignored.iter().map(PathBuf::as_path)
     }
 
     /// The files that were read, weakest first, for `doctor` to report.
@@ -1200,6 +1458,7 @@ impl Settings {
             .into_iter()
             .chain(self.advisor_model.is_some().then_some("advisorModel"))
             .chain(self.fallback_model.is_some().then_some("fallbackModel"))
+            .chain(self.agent.is_some().then_some("agent"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
@@ -1207,6 +1466,10 @@ impl Settings {
             .chain(self.update_check.is_some().then_some("updateCheck"))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
+            .chain(
+                (self.sandbox_chosen.is_some() || !self.sandbox_asked_strict.is_empty())
+                    .then_some("sandbox.mode"),
+            )
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
             .chain(
                 self.attribution
@@ -1229,6 +1492,13 @@ impl Settings {
                     .ceiling
                     .is_some()
                     .then_some("run.maxSeconds"),
+            )
+            .chain(self.run_network.is_some().then_some("run.network"))
+            .chain(
+                FILESYSTEM_LISTS
+                    .into_iter()
+                    .filter(|list| !self.sandbox_filesystem.of(*list).is_empty())
+                    .map(|list| list.setting()),
             )
             .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
             .chain(self.env.keys().map(String::as_str))
@@ -1677,9 +1947,20 @@ fn env_names(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
 /// is reported for that by [`Settings::misshapen_rule_lists`] instead, so the shape of a value never
 /// reaches this.
 fn unread_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    // `sandbox` is a block other tools write more keys into, and a person who pasted one believes
+    // a sandbox is configured, so what sits beside `mode` is named.
+    let beside_the_mode = match root.get(SANDBOX_BLOCK) {
+        Some(serde_json::Value::Object(block)) => block
+            .keys()
+            .filter(|key| !matches!(key.as_str(), crate::sandbox::MODE_KEY | "filesystem"))
+            .map(|key| format!("{SANDBOX_BLOCK}.{key}"))
+            .collect(),
+        _ => Vec::new(),
+    };
     root.keys()
         .filter(|key| !READ_KEYS.contains(&key.as_str()))
         .cloned()
+        .chain(beside_the_mode)
         .collect()
 }
 
@@ -1950,6 +2231,120 @@ fn run_deadlines(root: &serde_json::Map<String, serde_json::Value>) -> RunDeadli
     RunDeadlines {
         default: seconds("defaultSeconds"),
         ceiling: seconds("maxSeconds"),
+    }
+}
+
+/// What one root says about `run.network`.
+pub(crate) enum NetworkStated {
+    /// The key is not there.
+    Absent,
+    /// It is, spelled `open` or `closed`.
+    Word(bravebot_sandbox::network::Network),
+    /// It is, as anything else: a misspelling, a boolean, a number.
+    Unreadable,
+}
+
+/// The `run.network` key: `open` or `closed`, and nothing else.
+///
+/// A word and not a boolean, so the file says which way it is turning the network rather than
+/// something a reader has to know the polarity of. Anything else is reported by `doctor` and is
+/// absence, which leaves the network as open as it was.
+pub(crate) fn network_word(root: &serde_json::Map<String, serde_json::Value>) -> NetworkStated {
+    let Some(serde_json::Value::Object(run)) = root.get("run") else {
+        return NetworkStated::Absent;
+    };
+    match run.get("network") {
+        None => NetworkStated::Absent,
+        Some(serde_json::Value::String(word)) => {
+            match bravebot_sandbox::network::Network::parse(word) {
+                Some(network) => NetworkStated::Word(network),
+                None => NetworkStated::Unreadable,
+            }
+        }
+        Some(_) => NetworkStated::Unreadable,
+    }
+}
+
+/// The four lists of `sandbox.filesystem`, in the order they are reported.
+pub(crate) const FILESYSTEM_LISTS: [bravebot_sandbox::rules::List; 4] = [
+    bravebot_sandbox::rules::List::AllowRead,
+    bravebot_sandbox::rules::List::DenyRead,
+    bravebot_sandbox::rules::List::AllowWrite,
+    bravebot_sandbox::rules::List::DenyWrite,
+];
+
+/// What one root says about one of those lists.
+pub(crate) enum ListStated {
+    /// The key is not there.
+    Absent,
+    /// It is a list; the entries are its strings, blank ones left out.
+    Entries(Vec<String>),
+    /// It is there as something else: a string, an object, a list holding anything but strings.
+    Unreadable,
+}
+
+/// The `sandbox.filesystem.<key>` list in `root`.
+///
+/// A list that holds anything but strings is read as no list at all and reported, and not as the
+/// strings it holds: an entry that is not text cannot be a path, and silently dropping it would
+/// leave a refusal the person wrote unapplied with nothing to say so.
+pub(crate) fn filesystem_list(
+    root: &serde_json::Map<String, serde_json::Value>,
+    list: bravebot_sandbox::rules::List,
+) -> ListStated {
+    let Some(serde_json::Value::Object(sandbox)) = root.get("sandbox") else {
+        return ListStated::Absent;
+    };
+    let Some(serde_json::Value::Object(filesystem)) = sandbox.get("filesystem") else {
+        return ListStated::Absent;
+    };
+    match filesystem.get(list.key()) {
+        None => ListStated::Absent,
+        Some(serde_json::Value::Array(entries)) => {
+            let mut out = Vec::new();
+            for entry in entries {
+                match entry.as_str() {
+                    Some(text) if text.trim().is_empty() => {}
+                    Some(text) => out.push(text.to_string()),
+                    None => return ListStated::Unreadable,
+                }
+            }
+            ListStated::Entries(out)
+        }
+        Some(_) => ListStated::Unreadable,
+    }
+}
+
+/// The lists one root writes, each entry marked as written by `by`.
+pub(crate) fn filesystem_lists(
+    root: &serde_json::Map<String, serde_json::Value>,
+    by: Option<&Path>,
+) -> bravebot_sandbox::rules::Lists {
+    let mut lists = bravebot_sandbox::rules::Lists::default();
+    for list in FILESYSTEM_LISTS {
+        if let ListStated::Entries(entries) = filesystem_list(root, list) {
+            filesystem_target(&mut lists, list).extend(entries.into_iter().map(|path| {
+                bravebot_sandbox::rules::Entry {
+                    path,
+                    by: by.map(Path::to_path_buf),
+                    pinned: false,
+                }
+            }));
+        }
+    }
+    lists
+}
+
+fn filesystem_target(
+    lists: &mut bravebot_sandbox::rules::Lists,
+    list: bravebot_sandbox::rules::List,
+) -> &mut Vec<bravebot_sandbox::rules::Entry> {
+    use bravebot_sandbox::rules::List;
+    match list {
+        List::AllowRead => &mut lists.allow_read,
+        List::DenyRead => &mut lists.deny_read,
+        List::AllowWrite => &mut lists.allow_write,
+        List::DenyWrite => &mut lists.deny_write,
     }
 }
 
@@ -3157,6 +3552,179 @@ mod tests {
         }
     }
 
+    const NETWORK_CLOSED: &str = r#"{"run": {"network": "closed"}}"#;
+    const NETWORK_OPEN: &str = r#"{"run": {"network": "open"}}"#;
+
+    /// The home layer may say either word, since it is the person's own file.
+    #[test]
+    fn the_home_layer_may_set_the_network_either_way() {
+        use bravebot_sandbox::network::Network;
+        let closed = Layers::new("network-home-closed")
+            .global(NETWORK_CLOSED)
+            .read();
+        assert_eq!(closed.run_network(), Some(Network::Closed));
+        assert_eq!(closed.run_network_ignored().count(), 0);
+        let open = Layers::new("network-home-open").global(NETWORK_OPEN).read();
+        assert_eq!(open.run_network(), Some(Network::Open));
+        assert_eq!(Layers::new("network-none").read().run_network(), None);
+    }
+
+    /// A checkout may close the network and never open it: closing takes reach away from the
+    /// programs it runs, and opening would hand a repository the reach the person withheld.
+    #[test]
+    fn a_project_layer_may_close_the_network_and_never_open_it() {
+        use bravebot_sandbox::network::Network;
+        let closes = Layers::new("network-project-closes")
+            .global(NETWORK_OPEN)
+            .project(NETWORK_CLOSED)
+            .read();
+        assert_eq!(closes.run_network(), Some(Network::Closed));
+        assert_eq!(closes.run_network_ignored().count(), 0);
+
+        let opens = Layers::new("network-project-opens")
+            .global(NETWORK_CLOSED)
+            .project(NETWORK_OPEN)
+            .read();
+        assert_eq!(
+            opens.run_network(),
+            Some(Network::Closed),
+            "a checkout opened a network the home layer closed"
+        );
+        assert_eq!(opens.run_network_ignored().count(), 1);
+
+        let alone = Layers::new("network-project-alone")
+            .project(NETWORK_OPEN)
+            .read();
+        assert_eq!(alone.run_network(), None);
+        assert_eq!(alone.run_network_ignored().count(), 1);
+    }
+
+    /// The machine-local layer is a checkout's file under another name.
+    #[test]
+    fn the_local_layer_cannot_open_the_network_either() {
+        use bravebot_sandbox::network::Network;
+        let settings = Layers::new("network-local")
+            .global(NETWORK_CLOSED)
+            .local(NETWORK_OPEN)
+            .read();
+        assert_eq!(settings.run_network(), Some(Network::Closed));
+        assert_eq!(settings.run_network_ignored().count(), 1);
+    }
+
+    /// A file the command line named outside the workspace is the person's act, so it speaks for
+    /// them; one inside the workspace is a checkout's file and speaks as one.
+    #[test]
+    fn a_named_file_speaks_for_the_person_only_outside_the_workspace() {
+        use bravebot_sandbox::network::Network;
+        let outside = Layers::new("network-named-outside")
+            .global(NETWORK_CLOSED)
+            .named(NETWORK_OPEN)
+            .read();
+        assert_eq!(outside.run_network(), Some(Network::Open));
+        assert_eq!(outside.run_network_ignored().count(), 0);
+
+        let inside = Layers::new("network-named-inside")
+            .global(NETWORK_CLOSED)
+            .named_inside_the_workspace(NETWORK_OPEN)
+            .read();
+        assert_eq!(inside.run_network(), Some(Network::Closed));
+        assert_eq!(inside.run_network_ignored().count(), 1);
+    }
+
+    const FILESYSTEM_WIDE: &str = r#"{"sandbox": {"filesystem": {
+        "allowRead": ["/wide/read"], "allowWrite": ["/wide/write"],
+        "denyRead": ["/deny/read"], "denyWrite": ["/deny/write"]}}}"#;
+
+    fn paths_of(entries: &[bravebot_sandbox::rules::Entry]) -> Vec<&str> {
+        entries.iter().map(|entry| entry.path.as_str()).collect()
+    }
+
+    /// The person's own file may write all four lists, and each entry names the file that wrote it.
+    #[test]
+    fn the_home_layer_may_write_every_filesystem_list() {
+        let settings = Layers::new("filesystem-home")
+            .global(FILESYSTEM_WIDE)
+            .read();
+        let lists = settings.sandbox_filesystem();
+        assert_eq!(paths_of(&lists.allow_read), ["/wide/read"]);
+        assert_eq!(paths_of(&lists.allow_write), ["/wide/write"]);
+        assert_eq!(paths_of(&lists.deny_read), ["/deny/read"]);
+        assert_eq!(paths_of(&lists.deny_write), ["/deny/write"]);
+        assert!(lists.allow_read[0].by.is_some());
+        assert_eq!(settings.sandbox_filesystem_ignored().count(), 0);
+    }
+
+    /// A checkout may refuse and never widen: a project or local layer's `allowRead` and
+    /// `allowWrite` are not in the lists and are named, while its refusals are, and the person's own
+    /// entries stand beside them. A repository that could widen its own sandbox would hold the
+    /// reach the person withheld.
+    #[test]
+    fn a_checkout_may_add_a_refusal_and_never_an_allowance() {
+        for layer in ["project", "local"] {
+            let layers = Layers::new(&format!("filesystem-{layer}"))
+                .global(r#"{"sandbox": {"filesystem": {"allowWrite": ["/mine"]}}}"#);
+            let layers = match layer {
+                "project" => layers.project(FILESYSTEM_WIDE),
+                _ => layers.local(FILESYSTEM_WIDE),
+            };
+            let settings = layers.read();
+            let lists = settings.sandbox_filesystem();
+            assert_eq!(paths_of(&lists.allow_write), ["/mine"], "{layer}");
+            assert!(lists.allow_read.is_empty(), "{layer}");
+            assert_eq!(paths_of(&lists.deny_read), ["/deny/read"], "{layer}");
+            assert_eq!(paths_of(&lists.deny_write), ["/deny/write"], "{layer}");
+            let ignored: Vec<&str> = settings
+                .sandbox_filesystem_ignored()
+                .map(|(_, key)| key)
+                .collect();
+            assert_eq!(ignored, ["allowRead", "allowWrite"], "{layer}");
+        }
+    }
+
+    /// A file the command line named outside the workspace is the person's act and may widen; one
+    /// inside the workspace is a checkout's file and may not.
+    #[test]
+    fn a_named_file_may_widen_only_outside_the_workspace() {
+        let outside = Layers::new("filesystem-named-outside")
+            .named(FILESYSTEM_WIDE)
+            .read();
+        assert_eq!(outside.sandbox_filesystem().allow_write.len(), 1);
+        assert_eq!(outside.sandbox_filesystem_ignored().count(), 0);
+        let inside = Layers::new("filesystem-named-inside")
+            .named_inside_the_workspace(FILESYSTEM_WIDE)
+            .read();
+        assert!(inside.sandbox_filesystem().allow_write.is_empty());
+        assert_eq!(inside.sandbox_filesystem_ignored().count(), 2);
+    }
+
+    /// A list that is not a list of strings is reported and not read, and a blank entry is left out
+    /// as it is in every other list, so a refusal the person wrote is never silently half of itself.
+    #[test]
+    fn a_misshapen_filesystem_list_is_reported_and_a_blank_entry_is_left_out() {
+        let settings = Layers::new("filesystem-misshapen")
+            .global(
+                r#"{"sandbox": {"filesystem": {"denyRead": "~/x", "denyWrite": ["a", 3], "allowRead": ["", "  ", "b"]}}}"#,
+            )
+            .read();
+        let keys: Vec<&str> = settings
+            .sandbox_filesystem_misshapen()
+            .map(|(_, key)| key)
+            .collect();
+        assert_eq!(keys, ["denyRead", "denyWrite"]);
+        assert_eq!(paths_of(&settings.sandbox_filesystem().allow_read), ["b"]);
+        assert!(settings.sandbox_filesystem().deny_read.is_empty());
+    }
+
+    /// A word that is neither is not read as either, and is named so the person finds it.
+    #[test]
+    fn an_unreadable_network_word_is_reported_and_not_obeyed() {
+        let settings = Layers::new("network-unreadable")
+            .global(r#"{"run": {"network": "off"}}"#)
+            .read();
+        assert_eq!(settings.run_network(), None);
+        assert_eq!(settings.run_network_unreadable().count(), 1);
+    }
+
     /// PERM-3: a `/x` rule starts at the directory of the file that wrote it, so the same text in
     /// two files names two places, and neither is the global state directory.
     #[test]
@@ -4116,16 +4684,16 @@ mod tests {
     /// that set it, weakest first, and every file that set one is named.
     ///
     /// Two layers write the same key, which is the case a report assembled off the merged root
-    /// cannot answer: that root holds one `sandbox`, so the home file would go unnamed and whoever
+    /// cannot answer: that root holds one `statusLine`, so the home file would go unnamed and whoever
     /// wrote it would read the report as being about the checkout's copy alone.
     ///
-    /// `hooks` and `sandbox` are the two keys a block pasted from the other tool's file carries that
-    /// read as a restriction in force, which is why they are the fixture rather than a made-up name.
+    /// `hooks` is a key a block pasted from the other tool's file carries that reads as a
+    /// restriction in force, which is why it is a fixture rather than a made-up name.
     #[test]
     fn a_key_beside_the_ones_this_build_reads_is_named_with_the_file_that_set_it() {
         let layers = Layers::new("unread-keys")
-            .global(r#"{"sandbox": {"enabled": true}, "env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"sandbox": {"enabled": true}, "hooks": {"PreToolUse": []}}"#);
+            .global(r#"{"statusLine": {"type": "command"}, "env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"statusLine": {"type": "command"}, "hooks": {"PreToolUse": []}}"#);
         let settings = layers.read();
         let unread: Vec<(PathBuf, &str)> = settings
             .unread_keys()
@@ -4134,9 +4702,12 @@ mod tests {
         assert_eq!(
             unread,
             [
-                (layers.home.join(SETTINGS_FILE), "sandbox"),
+                (layers.home.join(SETTINGS_FILE), "statusLine"),
                 (layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE), "hooks"),
-                (layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE), "sandbox"),
+                (
+                    layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE),
+                    "statusLine"
+                ),
             ]
         );
         // The key is reported and the file still applies, which is every other key reported this
@@ -4162,9 +4733,11 @@ mod tests {
                     "permissions": {"deny": ["Read(./.env)"]},
                     "provider": {"gw": {"options": {"baseURL": "https://example.invalid/v1"}}},
                     "run": {"maxOutput": 2048},
+                    "sandbox": {"filesystem": {"denyRead": ["~/.config/gh"]}},
                     "attribution": {"commit": ""},
                     "keybindings": {"submit": "ctrl+s"},
                     "search": {"maxFiles": 100},
+                    "sandbox": {"mode": "strict"},
                     "vetting": {"auto": true},
                     "mcp": {"request": ["docs"]},
                     "mcpServers": {"weather": {"command": "npx"}}
@@ -4172,6 +4745,30 @@ mod tests {
             )
             .read();
         assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// `sandbox` is read for `mode` and its `filesystem` lists and for nothing else, so a block that
+    /// holds only those is not reported, and one pasted from the other tool with `enabled` beside
+    /// them is, since `enabled` configures nothing here and a report that dropped the key would hide
+    /// it. A block that is not an object is reported as an unreadable mode and not as a key.
+    #[test]
+    fn the_sandbox_block_is_unread_unless_it_holds_only_the_filesystem_lists() {
+        let read = |text: &str| {
+            Layers::new("unread-sandbox")
+                .global(text)
+                .read()
+                .unread_keys()
+                .count()
+        };
+        assert_eq!(
+            read(r#"{"sandbox": {"filesystem": {"denyRead": ["a"]}}}"#),
+            0
+        );
+        assert_eq!(
+            read(r#"{"sandbox": {"enabled": true, "filesystem": {"denyRead": ["a"]}}}"#),
+            1
+        );
+        assert_eq!(read(r#"{"sandbox": "on"}"#), 0);
     }
 
     /// The half of BACKEND-36 that was already honoured stays where it was: a variable nothing
@@ -4188,6 +4785,23 @@ mod tests {
         assert_eq!(
             settings.names().collect::<Vec<_>>(),
             vec!["CLAUDE_CODE_SOMETHING"]
+        );
+    }
+
+    /// SANDBOX-22: only `mode` is read from the `sandbox` block, so a key beside it is reported as
+    /// unread. The regression it rejects is a pasted `sandbox.enabled` passing in silence now that
+    /// the block is a key this build reads.
+    #[test]
+    fn a_key_beside_the_sandbox_mode_is_reported_as_unread() {
+        let settings = Layers::new("unread-sandbox-sibling")
+            .global(r#"{"sandbox": {"mode": "strict", "enabled": true}}"#)
+            .read();
+        assert_eq!(
+            settings
+                .unread_keys()
+                .map(|(_, key)| key)
+                .collect::<Vec<_>>(),
+            vec!["sandbox.enabled"]
         );
     }
 
@@ -4795,6 +5409,32 @@ mod tests {
         assert_eq!(named.fallback_model(), Some("named-fallback"));
     }
 
+    /// ADDRESS-13: a definition chosen for every turn narrows and prompts them all, so a checkout's
+    /// layers cannot choose one, and the layers that can are reported for the ones that could not.
+    #[test]
+    fn a_project_layer_cannot_name_the_agent() {
+        let settings = Layers::new("agent-layers")
+            .global(r#"{"agent": "  my-reviewer "}"#)
+            .project(r#"{"agent": "this-checkout"}"#)
+            .local(r#"{"agent": "also-this-checkout"}"#)
+            .read();
+        assert_eq!(settings.agent(), Some("my-reviewer"));
+        assert_eq!(settings.agent_ignored().count(), 2);
+
+        let only_project = Layers::new("agent-only-project")
+            .project(r#"{"agent": "this-checkout"}"#)
+            .read();
+        assert_eq!(only_project.agent(), None);
+        assert_eq!(only_project.agent_ignored().count(), 1);
+
+        let named = Layers::new("agent-named")
+            .global(r#"{"agent": "my-reviewer"}"#)
+            .named(r#"{"agent": "named-reviewer"}"#)
+            .read();
+        assert_eq!(named.agent(), Some("named-reviewer"));
+        assert_eq!(named.agent_ignored().count(), 0);
+    }
+
     #[test]
     fn a_project_or_local_layer_cannot_name_an_advisor() {
         let settings = Layers::new("advisor-checkout")
@@ -4982,5 +5622,261 @@ mod tests {
             .read();
         assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::FiveMinutes));
         assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// A pin written to a scratch file, for the resolution tests below.
+    fn pinned(name: &str, text: &str) -> crate::Managed {
+        let dir = crate::testutil::scratch_dir(&format!("bravebot-sandbox-pin-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let file = dir.join("managed.json");
+        std::fs::write(&file, text).expect("managed file");
+        crate::Managed::at(&file)
+    }
+
+    /// SANDBOX-22: the person's own file chooses any of the three, and a file the command line
+    /// named from outside the workspace is the person's too, the later of the two winning. The
+    /// regression it rejects is a mode read only from one of them, or the earlier winning.
+    #[test]
+    fn the_home_layer_and_a_named_file_outside_the_workspace_choose_the_mode() {
+        for mode in [SandboxMode::Strict, SandboxMode::Standard, SandboxMode::Off] {
+            let layers = Layers::new(&format!("sandbox-home-{mode}"))
+                .global(&format!(r#"{{"sandbox": {{"mode": "{mode}"}}}}"#));
+            let settings = layers.read();
+            assert_eq!(
+                settings.sandbox(),
+                Some((mode, layers.home.join(SETTINGS_FILE).as_path())),
+                "{mode}"
+            );
+            assert_eq!(settings.sandbox_ignored().count(), 0);
+        }
+        let layers = Layers::new("sandbox-named")
+            .global(r#"{"sandbox": {"mode": "off"}}"#)
+            .named(r#"{"sandbox": {"mode": "standard"}}"#);
+        let settings = layers.read();
+        assert_eq!(
+            settings.sandbox().map(|(mode, _)| mode),
+            Some(SandboxMode::Standard)
+        );
+    }
+
+    /// SANDBOX-22: a checkout's two files, and a named file that resolves inside the workspace,
+    /// may ask for `strict` and are not obeyed when they name `standard` or `off`, whichever the
+    /// person's own file says. The regression it rejects is a repository loosening the sandbox of
+    /// whoever cloned it.
+    #[test]
+    fn a_checkout_may_only_tighten_the_sandbox() {
+        for (name, text) in [("project", "p"), ("local", "l"), ("inside", "i")] {
+            for loose in ["standard", "off"] {
+                let body = format!(r#"{{"sandbox": {{"mode": "{loose}"}}}}"#);
+                let layers = Layers::new(&format!("sandbox-loose-{name}-{loose}"));
+                let layers = match text {
+                    "p" => layers.project(&body),
+                    "l" => layers.local(&body),
+                    _ => layers.named_inside_the_workspace(&body),
+                };
+                let settings = layers.read();
+                assert_eq!(settings.sandbox(), None, "{name} {loose} was obeyed");
+                assert_eq!(settings.sandbox_ignored().count(), 1, "{name} {loose}");
+                assert!(!settings.is_empty());
+            }
+            let body = r#"{"sandbox": {"mode": "strict"}}"#;
+            let layers = Layers::new(&format!("sandbox-strict-{name}"));
+            let layers = match text {
+                "p" => layers.project(body),
+                "l" => layers.local(body),
+                _ => layers.named_inside_the_workspace(body),
+            };
+            let settings = layers.read();
+            assert_eq!(
+                settings.sandbox().map(|(mode, _)| mode),
+                Some(SandboxMode::Strict),
+                "{name} strict was not obeyed"
+            );
+        }
+        let layers = Layers::new("sandbox-checkout-over-home")
+            .global(r#"{"sandbox": {"mode": "off"}}"#)
+            .project(r#"{"sandbox": {"mode": "strict"}}"#);
+        let settings = layers.read();
+        assert_eq!(
+            settings.sandbox(),
+            Some((
+                SandboxMode::Strict,
+                layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE).as_path()
+            )),
+            "the person's own `off` lifted a checkout's `strict`"
+        );
+        let layers = Layers::new("sandbox-home-over-checkout")
+            .global(r#"{"sandbox": {"mode": "standard"}}"#)
+            .project(r#"{"sandbox": {"mode": "off"}}"#);
+        assert_eq!(
+            layers.read().sandbox().map(|(mode, _)| mode),
+            Some(SandboxMode::Standard)
+        );
+    }
+
+    /// SANDBOX-22: a value that is not one of the three words is absence and is reported with its
+    /// file, in every layer. The regression it rejects is a near miss read as a mode.
+    #[test]
+    fn a_word_that_is_not_a_mode_chooses_nothing_and_is_reported() {
+        let layers = Layers::new("sandbox-unreadable")
+            .global(r#"{"sandbox": {"mode": "Strict"}}"#)
+            .project(r#"{"sandbox": {"mode": 1}}"#);
+        let settings = layers.read();
+        assert_eq!(settings.sandbox(), None);
+        assert_eq!(settings.sandbox_unreadable().count(), 2);
+    }
+
+    /// SANDBOX-22: the flag, then the settings, then the pin, then the default.
+    #[test]
+    fn the_flag_beats_the_files_and_the_default_is_standard() {
+        use crate::sandbox::{Source, resolve};
+        let none = crate::Managed::default();
+        let layers = Layers::new("sandbox-resolve").global(r#"{"sandbox": {"mode": "strict"}}"#);
+        let settings = layers.read();
+        let flagged = resolve(Some(SandboxMode::Off), &settings, &none).expect("no pin");
+        assert_eq!(
+            (flagged.mode, flagged.source),
+            (SandboxMode::Off, Source::Flag)
+        );
+        let filed = resolve(None, &settings, &none).expect("no pin");
+        assert_eq!(filed.mode, SandboxMode::Strict);
+        assert_eq!(filed.source, Source::File(layers.home.join(SETTINGS_FILE)));
+        let default = resolve(None, &Settings::default(), &none).expect("no pin");
+        assert_eq!(default, crate::sandbox::Choice::default());
+        assert_eq!(default.mode, SandboxMode::Standard);
+    }
+
+    /// SANDBOX-22: a pin is a floor. A flag or the person's file looser than it is refused naming
+    /// both files, one as strict is kept, and with nothing asked the pin is the mode. The
+    /// regression it rejects is a flag overriding a pin, or a pin read as a default.
+    #[test]
+    fn a_managed_pin_refuses_a_looser_request_and_keeps_a_stricter_one() {
+        use crate::sandbox::{Refused, Source, resolve};
+        let pin = pinned("floor", r#"{"sandbox": {"mode": "strict"}}"#);
+        let pin_file = pin.path().expect("the pin's file").to_path_buf();
+        let layers = Layers::new("sandbox-pinned").global(r#"{"sandbox": {"mode": "off"}}"#);
+        let settings = layers.read();
+
+        assert_eq!(
+            resolve(Some(SandboxMode::Off), &Settings::default(), &pin),
+            Err(Refused {
+                asked: SandboxMode::Off,
+                asked_in: None,
+                pinned: SandboxMode::Strict,
+                pinned_in: pin_file.clone(),
+                because: crate::sandbox::Floor::Mode,
+            })
+        );
+        assert_eq!(
+            resolve(Some(SandboxMode::Standard), &Settings::default(), &pin)
+                .expect_err("looser than the pin")
+                .pinned,
+            SandboxMode::Strict
+        );
+        assert_eq!(
+            resolve(None, &settings, &pin),
+            Err(Refused {
+                asked: SandboxMode::Off,
+                asked_in: Some(layers.home.join(SETTINGS_FILE)),
+                pinned: SandboxMode::Strict,
+                pinned_in: pin_file.clone(),
+                because: crate::sandbox::Floor::Mode,
+            })
+        );
+        let kept = resolve(Some(SandboxMode::Strict), &Settings::default(), &pin).expect("equal");
+        assert_eq!(kept.mode, SandboxMode::Strict);
+        let unasked = resolve(None, &Settings::default(), &pin).expect("the pin");
+        assert_eq!(
+            (unasked.mode, unasked.source),
+            (SandboxMode::Strict, Source::Managed(pin_file))
+        );
+
+        let standard = pinned("standard", r#"{"sandbox": {"mode": "standard"}}"#);
+        let stricter = resolve(Some(SandboxMode::Strict), &Settings::default(), &standard)
+            .expect("stricter than the pin");
+        assert_eq!(stricter.mode, SandboxMode::Strict);
+    }
+
+    /// SANDBOX-22: a managed file that pins the network closed is a floor of `standard`, because
+    /// `off` starts a program with no profile and nothing would hold the network shut. The
+    /// regression it rejects is `--sandbox off` quietly opening a network an administrator closed.
+    #[test]
+    fn a_closed_network_pin_refuses_off_and_leaves_the_rest() {
+        use crate::sandbox::{Choice, Floor, resolve};
+        let pin = pinned("closed-network", r#"{"run": {"network": "closed"}}"#);
+        let refused = resolve(Some(SandboxMode::Off), &Settings::default(), &pin)
+            .expect_err("off would open the network");
+        assert_eq!(
+            (refused.pinned, refused.because),
+            (SandboxMode::Standard, Floor::Network)
+        );
+        for mode in [SandboxMode::Standard, SandboxMode::Strict] {
+            assert_eq!(
+                resolve(Some(mode), &Settings::default(), &pin).map(|choice| choice.mode),
+                Ok(mode)
+            );
+        }
+        assert_eq!(
+            resolve(None, &Settings::default(), &pin),
+            Ok(Choice::default()),
+            "the network pin chose a mode where it only sets a floor"
+        );
+        let open = pinned("open-network", r#"{"run": {"network": "open"}}"#);
+        assert!(resolve(Some(SandboxMode::Off), &Settings::default(), &open).is_ok());
+        let both = pinned(
+            "closed-network-and-strict",
+            r#"{"run": {"network": "closed"}, "sandbox": {"mode": "strict"}}"#,
+        );
+        assert_eq!(
+            resolve(Some(SandboxMode::Standard), &Settings::default(), &both)
+                .expect_err("the mode pin is the stricter floor")
+                .because,
+            Floor::Mode
+        );
+    }
+
+    /// SANDBOX-22: a pin that is not a mode pins nothing and says so, so a session is not refused
+    /// on the strength of a word nobody can read.
+    #[test]
+    fn a_pin_that_is_not_a_mode_pins_nothing() {
+        let pin = pinned("unreadable", r#"{"sandbox": {"mode": "Strict"}}"#);
+        assert_eq!(pin.sandbox(), None);
+        assert!(pin.sandbox_unreadable());
+        assert!(pin.is_empty());
+        let ok = crate::sandbox::resolve(Some(SandboxMode::Off), &Settings::default(), &pin);
+        assert!(ok.is_ok());
+    }
+
+    /// SANDBOX-22: a window reads `off` as `standard`, keeps `strict`, and takes the pin where the
+    /// settings went under it. The regression it rejects is a window running programs unconfined
+    /// on a setting it has no way to show, or a pin ignored there.
+    #[test]
+    fn a_window_never_runs_unconfined_and_keeps_the_pin() {
+        use crate::sandbox::for_a_window;
+        let none = crate::Managed::default();
+        for (mode, expected) in [
+            ("off", SandboxMode::Standard),
+            ("standard", SandboxMode::Standard),
+            ("strict", SandboxMode::Strict),
+        ] {
+            let settings = Layers::new(&format!("sandbox-window-{mode}"))
+                .global(&format!(r#"{{"sandbox": {{"mode": "{mode}"}}}}"#))
+                .read();
+            assert_eq!(for_a_window(&settings, &none), expected, "{mode}");
+        }
+        assert_eq!(
+            for_a_window(&Settings::default(), &none),
+            SandboxMode::Standard
+        );
+        let pin = pinned("window", r#"{"sandbox": {"mode": "strict"}}"#);
+        let off = Layers::new("sandbox-window-pinned")
+            .global(r#"{"sandbox": {"mode": "off"}}"#)
+            .read();
+        assert_eq!(for_a_window(&off, &pin), SandboxMode::Strict);
+        assert_eq!(
+            for_a_window(&Settings::default(), &pin),
+            SandboxMode::Strict
+        );
     }
 }

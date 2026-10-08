@@ -1,6 +1,6 @@
 {
   "name": "unsupported-operations",
-  "description": "An unknown bridge method is refused by the bridge, and a question of a kind this client does not answer stays visible as unsupported.",
+  "description": "An unknown bridge method is refused by the bridge, and an approval kind this client cannot answer is refused without sending.",
   "steps": [
     {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
     {"expectRequest": "info", "method": "agent.info", "params": {}},
@@ -15,6 +15,9 @@
     {"send": [{"id": "$t", "error": {"code": "bad_request", "message": "unknown method `session.teleport`"}}]},
     {"await": "teleport", "error": {"name": "RpcError", "code": "bad_request"}},
     {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 1, "turn": 1, "status": "running", "pending": null, "rows": [{"id": 1, "turn": 1, "kind": "prompt", "event": null, "data": {"text": "go"}, "resolved": false}]}}, {"event": "session.view.update", "session": "s1", "data": {"sequence": 2, "turn": 1, "status": "waiting", "pending": {"row": 2, "request": 9, "kind": "output", "supported": false, "data": {"request": 9, "command": "cat x"}}, "rows": [{"id": 2, "turn": 1, "kind": "approval", "event": "output.request", "data": {"request": 9, "command": "cat x"}, "resolved": false}]}}]},
+    {"start": "approve", "call": "decide", "session": "a", "args": {"request": 9, "decision": "approve"}},
+    {"await": "approve", "error": {"name": "UnsupportedError"}},
+    {"expectNoRequest": true},
     {"expectView": "a", "status": "waiting", "pending": {"kind": "output", "supported": false}}
   ]
 }

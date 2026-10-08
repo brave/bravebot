@@ -8,6 +8,8 @@ import { connectStdio } from '@brave/agent-client/node'
 const connection = connectStdio({ command: 'bravebot-rpc', env: {}, workspaces: [{ id: 'w', name: 'W', directory: '/w' }] })
 async function use(): Promise<ViewState> {
   const session: AgentSession = await connection.client.createSession({ workspace: 'w' })
+  await session.decide(1, 'approve')
+  await session.answer(2, [{ typed: 'text' }, { chosen: [0] }, null])
   await session.cancel()
   return session.view
 }

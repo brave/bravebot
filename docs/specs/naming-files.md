@@ -3,9 +3,10 @@ id: NAME
 title: Naming a file with `@`
 status: normative
 governs:
-  - crates/tui/src/entries.rs
+  - crates/mentions/src/lib.rs
   - crates/tui/src/state.rs
   - crates/cli/src/main.rs
+  - crates/ui-bridge/src/mentions.rs
 documented-by: docs/website/docs/using/context.md
 ---
 
@@ -74,10 +75,10 @@ among what is offered.
 `verified-by: bravebot_tui::references::a_directory_completes_so_typing_can_continue_into_it`
 `verified-by: bravebot_tui::references::the_arrows_and_enter_choose_among_the_offered_files`
 `verified-by: bravebot_tui::references::a_finished_reference_closes_the_list`
-`verified-by: bravebot_tui::entries::an_empty_reference_lists_the_root_with_directories_first`
-`verified-by: bravebot_tui::entries::a_prefix_narrows_the_list`
-`verified-by: bravebot_tui::entries::a_slash_lists_what_is_inside_that_directory`
-`verified-by: bravebot_tui::entries::noise_directories_are_not_offered`
+`verified-by: bravebot_mentions::lib::an_empty_reference_lists_the_root_with_directories_first`
+`verified-by: bravebot_mentions::lib::a_prefix_narrows_the_list`
+`verified-by: bravebot_mentions::lib::a_slash_lists_what_is_inside_that_directory`
+`verified-by: bravebot_mentions::lib::noise_directories_are_not_offered`
 `verified-by: bravebot_tui::references::a_paste_returns_the_cursor_to_the_top_of_the_narrowed_list`
 
 <a id="NAME-5"></a>
@@ -87,8 +88,8 @@ among what is offered.
 working directory or a directory opened for the session.
 
 `verified-by: bravebot_tui::references::a_reference_cannot_climb_out_of_the_workspace`
-`verified-by: bravebot_tui::entries::a_reference_cannot_climb_out_of_the_workspace`
-`verified-by: bravebot_tui::entries::dots_and_an_absolute_path_are_not_finished_names`
+`verified-by: bravebot_mentions::lib::a_reference_cannot_climb_out_of_the_workspace`
+`verified-by: bravebot_mentions::lib::dots_and_an_absolute_path_are_not_finished_names`
 
 <a id="NAME-6"></a>
 ### NAME-6: a directory names nothing, and neither does prose
@@ -101,10 +102,10 @@ content into the turn that no gesture chose.
 
 `verified-by: bravebot_tui::references::a_directory_reference_is_not_included_as_a_file`
 `verified-by: bravebot_tui::references::an_address_in_a_sentence_is_not_a_reference`
-`verified-by: bravebot_tui::entries::a_directory_is_not_collected_as_a_file`
-`verified-by: bravebot_tui::entries::a_bare_at_sign_names_nothing`
-`verified-by: bravebot_tui::entries::what_counts_as_a_reference_being_typed`
-`verified-by: bravebot_tui::entries::every_referenced_file_is_collected`
+`verified-by: bravebot_mentions::lib::a_directory_is_not_collected_as_a_file`
+`verified-by: bravebot_mentions::lib::a_bare_at_sign_names_nothing`
+`verified-by: bravebot_mentions::lib::what_counts_as_a_reference_being_typed`
+`verified-by: bravebot_mentions::lib::every_referenced_file_is_collected`
 
 <a id="NAME-7"></a>
 ### NAME-7: sending finishes a half-typed name
@@ -116,13 +117,57 @@ reference rather than sending the fragment.
 `verified-by: bravebot_tui::references::enter_completes_a_prompt_that_ends_in_a_half_typed_reference`
 `verified-by: bravebot_tui::references::enter_sends_a_finished_reference_a_directory_shares_a_prefix_with`
 `verified-by: bravebot_tui::references::enter_sends_a_finished_reference_the_offered_list_is_too_short_to_show`
-`verified-by: bravebot_tui::entries::what_counts_as_already_naming_a_file`
-`verified-by: bravebot_tui::entries::a_symlink_is_a_finished_name_because_the_list_offers_it_as_one`
+`verified-by: bravebot_mentions::lib::what_counts_as_already_naming_a_file`
+`verified-by: bravebot_mentions::lib::a_symlink_is_a_finished_name_because_the_list_offers_it_as_one`
+`verified-by: bravebot_mentions::lib::what_enter_does_with_a_half_typed_or_finished_name`
 `verified-by: bravebot_tui::references::the_arrows_still_choose_a_row_over_a_finished_reference`
 `verified-by: bravebot_tui::references::the_files_a_submitted_line_would_include`
 `verified-by: bravebot_tui::references::a_cursor_past_the_end_of_a_narrowed_list_still_names_a_file`
 `verified-by: bravebot_tui::references::a_paste_returns_the_cursor_to_the_top_so_enter_sends_a_finished_reference`
 `verified-by: bravebot_tui::state::a_recalled_prompt_returns_the_cursor_to_the_top`
+
+<a id="NAME-8"></a>
+### NAME-8: a backslash before a space keeps the space in the name
+
+`@My\ Documents/notes.md` names the file `My Documents/notes.md`: a space written after a backslash
+belongs to the reference, and any other whitespace ends it. A backslash anywhere else is an ordinary
+character, so prose containing one still names nothing. Completing an entry whose name holds a space
+writes the escaped form, so the line reads back as the path that was chosen. NAME-5 applies to the
+unescaped path.
+
+**Why.** Without the escaped form, a file whose name holds a space cannot be named, and the picker
+would offer an entry that completes to text naming a different path. Where a reference ends is
+decided from the line the user typed, not from file contents.
+
+`verified-by: bravebot_mentions::lib::a_backslash_before_a_space_continues_a_reference`
+`verified-by: bravebot_mentions::lib::an_escaped_path_reads_back_unchanged`
+`verified-by: bravebot_mentions::lib::a_name_with_a_space_is_listed_and_finished`
+`verified-by: bravebot_tui::references::a_name_with_a_space_completes_to_a_reference_that_names_it`
+`verified-by: bravebot_tui::references::enter_completes_a_half_typed_reference_past_an_escaped_space`
+
+<a id="NAME-9"></a>
+### NAME-9: the desktop message box names a file on the same terms
+
+The clauses above are worded for the terminal, and the desktop app's message box keeps each of
+them, because both front ends call the same `bravebot-mentions` code: the same list (NAME-4), `..`,
+an absolute path and a link leading out of the workspace refused (NAME-5), a name ending in `/`, a
+bare `@` and an address in a sentence naming nothing (NAME-6), and Enter completing a half-typed
+name and sending a finished one (NAME-7), and a backslash before a space keeping the space in a name
+(NAME-8). The bridge reads the names back out of the prompt at
+`turn.send` rather than taking a list from the window, so the files that go are the ones the sent
+line names. Each is surveyed by the read the turn will make, and a name that would fail it (outside
+the workspace, missing, a directory, or not text) refuses the send before a turn starts, where the
+terminal would end the turn. The project is the folder the conversation runs in, which for a bot's
+conversation is the bot's home folder or the project chosen for it. A prompt the app composes
+itself names no file.
+
+**Why.** One person names files in both front ends, and a name the window treated differently from
+the terminal would send a file nobody chose or drop one somebody did.
+
+`verified-by: bravebot_ui_bridge::mentions::the_window_is_offered_the_terminals_list_of_the_project`
+`verified-by: bravebot_ui_bridge::mentions::a_prompt_names_only_text_files_inside_the_project`
+`verified-by: bravebot_ui_bridge::mentions::a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn`
+`verified-by: by-construction (the window's half is not a crate this workspace compiles, so ui/scripts/drive-at-mentions.mjs drives the real app and bridge against a stub model and asserts the list, its keys, Tab into a directory, Enter completing a half-typed name, the file's contents in the model request, the Read row, the refusal of @../outside.txt at send, and that a bot's conversation with no project lists and reads the bot's home folder and refuses a project file)`
 
 ## Known costs
 

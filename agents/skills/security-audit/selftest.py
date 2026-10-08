@@ -2410,14 +2410,14 @@ def test_an_assignee_reaches_the_create():
     Nothing else in this file calls `post`, so an `--assignee` that is parsed and never threaded
     through files every issue unassigned and still passes every other check here.
     """
-    original = posting.gh
+    original = posting.helper.gh
     calls = []
 
     def fake_gh(args, repo=None):
         calls.append(list(args))
         return "https://github.com/brave/bravebot/issues/1"
 
-    posting.gh = fake_gh
+    posting.helper.gh = fake_gh
     draft = {"title": "t", "body_file": "b", "labels": ["security"]}
 
     posting.post("brave/bravebot", draft, "netzenbot")
@@ -2438,13 +2438,13 @@ def test_an_assignee_reaches_the_create():
     def refusing_gh(args, repo=None):
         raise RuntimeError("Not Found")
 
-    posting.gh = refusing_gh
+    posting.helper.gh = refusing_gh
     check(
         "a login the repository would refuse is caught before anything is posted",
         not posting.assignable("brave/bravebot", "nobody"),
     )
 
-    posting.gh = original
+    posting.helper.gh = original
 
 
 def test_a_run_writes_a_manifest_and_posts_nothing():

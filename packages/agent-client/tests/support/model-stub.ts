@@ -8,6 +8,8 @@ export interface PlannerStep {
   say?: string
   /** The reply is withheld until `release(hold)` is called. */
   hold?: string
+  /** Runs when this step's request arrives, before the reply, so a test can change the world between steps. */
+  before?: () => void
 }
 
 /**
@@ -90,6 +92,7 @@ export class ModelStub {
     if (key === undefined) this.unmatched.push(body)
     const results = conversation.messages.slice(lastPrompt + 1).filter((message) => message.role === 'tool').length
     const step = (key === undefined ? undefined : this.plans[key]?.[results]) ?? { say: 'done' }
+    step.before?.()
     if (step.hold) {
       const gate = this.gate(step.hold)
       gate.arrive()
@@ -118,5 +121,23 @@ export class ModelStub {
     response
       .writeHead(200, { 'Content-Type': 'text/event-stream' })
       .end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)
+  }
+}
+
+/** A website that answers every request with one page and records the request lines it saw. */
+export async function startWebsite(page: string): Promise<{ origin: string; requests: string[]; stop(): Promise<void> }> {
+  const requests: string[] = []
+  const server = createServer((request, response) => {
+    requests.push(`${request.method} ${request.url}`)
+    response.writeHead(200, { 'Content-Type': 'text/plain' }).end(page)
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return {
+    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    requests,
+    async stop() {
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
   }
 }

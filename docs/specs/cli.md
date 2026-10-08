@@ -175,7 +175,11 @@ machine-level file pinned and where that file is, how to configure a service whe
 configured will serve a turn, the model in force
 and whether it was chosen or defaulted, where the state directory is or that there is none, what a
 TLS handshake is validated against and what a request is routed through, the
-confinement available on this platform, and the state of any imported subscription. Each AWS
+confinement available on this platform, whether the network is closed for confined programs and
+which layer closed it ([SANDBOX-20](sandboxing.md#SANDBOX-20)), the sandbox mode in force and the file
+or flag that chose it ([SANDBOX-22](sandboxing.md#SANDBOX-22)), each entry of the four filesystem lists
+with the file or flag that wrote it and each that is not in force with why
+([SANDBOX-25](sandboxing.md#SANDBOX-25)), and the state of any imported subscription. Each AWS
 account gets its profile and a line saying whether the AWS CLI gives it a credential a request can
 be signed with. Where it does not, the line says why: a session that is signed out names `bravebot
 auth login bedrock`, and a profile the CLI does not have, a CLI that is not installed and an answer
@@ -204,6 +208,12 @@ by its root and CLI Cargo manifests, `agents/setup.py`, `agents/AGENTS.md`, and
 resolve first; on Windows a matching copy is healthy and a stale copy recommends setup again. No
 path is changed. Missing direnv points to https://direnv.net/ and `brew install direnv`; shell
 hooks and `.envrc` approval are outside this check.
+
+`bravebot doctor --sandbox-check` runs the everyday workflows under the sandbox default instead of
+reporting configuration ([SANDBOX-21](sandboxing.md#SANDBOX-21)). It takes no other argument, and
+`--agent` and `--system-prompt` are refused with it as with `doctor`. It ends on the failed status
+when a workflow failed, and on success when each worked or was skipped for a program that is not
+installed.
 
 `verified-by: bravebot_cli::main::doctor_development_checks_only_apply_to_the_source_tree`
 `verified-by: bravebot_cli::main::doctor_reports_agent_discovery_conflicts_without_changing_them`
@@ -334,6 +344,7 @@ the case a directory listing calls healthy, and it is the one the reader cannot 
 `verified-by: bravebot_cli::main::doctor_names_what_the_managed_layer_pinned_and_the_file_it_came_from`
 `verified-by: bravebot_cli::main::doctor_says_nothing_about_a_managed_layer_that_is_not_there`
 `verified-by: bravebot_cli::main::doctor_names_a_managed_file_that_pinned_nothing`
+`verified-by: bravebot_cli::main::doctor_names_the_sandbox_mode_and_where_it_came_from`
 
 <a id="CLI-8"></a>
 ### CLI-8: `--mode` chooses how a one-shot is run; the default is the turn loop
@@ -817,9 +828,15 @@ A name opening with `-` is refused because it is the next flag. Taken as the nam
 be removed from the arguments and the run would answer in the other format. No definition's name
 may open with `-`, so no name is lost.
 
+**The `agent` setting.** Where no `--agent` is given, the `agent` key in the person's own settings
+file or in the file `--settings` names stands in for it, and the flag outranks it
+([ADDRESS-13](addressing-a-definition.md#ADDRESS-13)). A recorded name outranks it too. A name it
+gives that matches nothing is said and the run goes on without one, where the flag's is refused.
+
 **Known costs.** A self-paced `/loop` under a definition stops after one tick, because an addressed
-turn cannot schedule the next one. A `/loop` with an interval keeps running. There is no settings
-key for the definition, so a checkout that always wants one has to pass `--agent` each time.
+turn cannot schedule the next one. A `/loop` with an interval keeps running. A checkout's settings
+cannot choose the definition, so a checkout that always wants one has to be given it by each
+person's own file or by `--agent`.
 
 `verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`
 `verified-by: bravebot_cli::main::the_last_definition_named_is_the_one_worked_under`
@@ -1048,7 +1065,7 @@ words are blank, and when they open with `-` and hold no whitespace, since that 
 taken as the words, `--json` would be removed and the run would answer in the other format. A
 sentence that opens with `-` holds a space and is words. If a flag is given twice, the last is used.
 They are refused with `--mode manifest`, and with `doctor`, `auth`, `mcp`, `import-leo-creds`,
-`import-providers` and `completion`, which start neither a session nor a task. A refusal writes the
+`import-providers`, `completion` and `shell-init`, which start neither a session nor a task. A refusal writes the
 result object of CLI-12 if one was asked for, sends nothing, and says why through the catalogue
 ([LOCALE-2](localization.md#LOCALE-2)).
 

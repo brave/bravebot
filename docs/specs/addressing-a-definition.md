@@ -51,7 +51,9 @@ a call to any other by name, and the interface draws the reply under the name th
 
 `--agent <name>` on the command line selects a definition for every turn of an interactive session,
 a session in lines or a one-shot run ([CLI-17](cli.md#CLI-17)). The name is matched against the same
-set before the first turn, and each turn then carries it as a `/agent` line's turn does.
+set before the first turn, and each turn then carries it as a `/agent` line's turn does. The
+`agent` key in the person's own settings does the same where the flag is absent
+([ADDRESS-13](#ADDRESS-13)).
 
 The desktop front end addresses a definition only in a bot's conversation.
 [MEMORY-10](definition-memory.md#MEMORY-10) specifies that every turn in a desktop bot's
@@ -150,7 +152,10 @@ The command line that started a session or a run is the other source. `--agent <
 it is read before any turn exists, so no turn's output can set it. It names the definition for every
 turn of the session, while a `/agent` line names one for a single turn.
 
-The session record is a third source, and only for a name that source got from the second. The
+The person's own settings file is a third source for the same reason, and only for the file the
+person wrote or named ([ADDRESS-13](#ADDRESS-13)).
+
+The session record is a fourth source, and only for a name that source got from the second. The
 driver writes the name `--agent` gave into the record of the session it started, and a session
 resumed, continued or forked from that record works under the same name. What stands in for the
 keystroke on a resume is the person's own earlier `--agent` and their choice to resume that session.
@@ -431,6 +436,60 @@ everywhere else. Which definition was addressed is a fact the driver already hol
 the one that matched the name.
 
 `verified-by: bravebot_tui::render::a_reply_from_an_addressed_turn_is_drawn_under_the_name_the_driver_matched`
+
+<a id="ADDRESS-13"></a>
+### ADDRESS-13: the `agent` setting names the definition a session starts under, from the person's own file only
+
+An `agent` key whose value is a definition name addresses every turn of a session, a session in
+lines or a one-shot run that was given no `--agent`, as the flag would
+([CLI-17](cli.md#CLI-17)). It is read from `~/.bravebot/settings.json` and from the file `--settings`
+names, and from no other layer: a project or local file that names it is dropped, `doctor` names the
+file, and the desktop settings list it as ignored. A value that is blank or not a string names
+nothing.
+
+The order is the flag, then the name a resumed session's record carries, then the setting. The flag
+outranks the setting, and a record's name does too, because a session resumed under the definition
+it began with must not change definition when a setting is edited. The setting is not applied to a
+`--mode manifest` run, which no definition addresses and which the flag is refused with. It is
+matched against the set a turn starting now would resolve ([ADDRESS-5](#ADDRESS-5)) before any turn
+is sent, by the same match as the flag's name.
+
+A setting is a default and a flag is an instruction, so they differ where the name matches nothing.
+A name the set does not hold is said, in the transcript of a session or on stderr of a run, and the
+session or run goes on as the planner's without recording a name. A definition that exists and
+whose model is refused or needs a sign-in ends the session or run as the flag's does
+([ADDRESS-11](#ADDRESS-11)), since going on would substitute the planner's model for the one the
+definition asked for. A name that is matched is written into the session's record as the flag's is,
+so a resume follows the session. The startup note, the session in lines' opening line, a one-shot
+run's stderr and `/status` say that the setting chose the definition. The result object names it in
+`agent`. A session in lines resumed from a record that names a definition does not take the
+setting's.
+
+**Why.** [ADDRESS-3](#ADDRESS-3) allows only what a person typed, and a person's own settings file
+is the person's own writing: it is read before any turn exists, from under the state directory, and
+no turn's output sets it, so it stands in for the keystroke as the flag does. A person who always
+wants a session under one definition would otherwise type the flag at every start. A checkout's file
+is not the person's. It would choose the prompt and the narrowing of every turn from a file nobody
+vouched for, which is what the flag's restriction to definitions a person vouched for exists to
+prevent, so it is dropped as `model` is. A setting that failed a session whenever its definition was
+renamed would lock the person out of every session, including the ones that wanted no definition,
+so a name that matches nothing is said and survived. A refused model is not survivable for the
+reason in [ADDRESS-11](#ADDRESS-11).
+
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_agent`
+`verified-by: bravebot_cli::running::a_run_with_no_agent_flag_works_under_the_agent_setting`
+`verified-by: bravebot_cli::running::the_agent_flag_outranks_the_agent_setting`
+`verified-by: bravebot_cli::running::a_checkouts_agent_setting_does_not_address_a_run`
+`verified-by: bravebot_cli::running::an_agent_setting_naming_nothing_is_said_and_the_run_goes_on`
+`verified-by: bravebot_cli::running::doctor_says_a_checkouts_agent_is_not_obeyed`
+`verified-by: bravebot_cli::running::a_manifest_run_is_not_addressed_to_the_agent_setting`
+`verified-by: bravebot_cli::running::a_session_in_lines_works_under_the_agent_setting`
+`verified-by: bravebot_cli::running::the_agent_flag_outranks_the_agent_setting_in_a_session_in_lines`
+`verified-by: bravebot_cli::running::an_agent_setting_naming_nothing_is_said_and_a_session_in_lines_goes_on`
+`verified-by: bravebot_tui::app::a_session_with_no_other_name_works_under_the_agent_setting`
+`verified-by: bravebot_tui::app::the_agent_setting_does_not_replace_a_typed_or_recorded_name`
+`verified-by: bravebot_tui::app::an_agent_setting_naming_nothing_is_said_and_the_session_opens`
+`verified-by: bravebot_tui::app::the_agent_setting_is_survivable_where_a_typed_name_is_not`
 
 ## Open questions
 

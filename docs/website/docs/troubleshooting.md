@@ -155,6 +155,11 @@ shell, type `!` yourself. See [`run`](reference/tools.md#run) and
 your model advertises. Override it with `BRAVEBOT_CONTEXT_BUDGET`, which outranks the advertised
 figure. A model that advertises nothing, and the automatic entry, fall back to 24,000 prompt tokens.
 
+**A request the service refused as too large was sent again.** When a request comes back refused
+(status 400 or 422) and there is older conversation to give up, the turn summarises it once and sends
+the request again. A second refusal in the same turn is reported as it was. Run `/compact` yourself,
+or lower `BRAVEBOT_CONTEXT_BUDGET`, if the window your model advertises is larger than it can take.
+
 **It stopped calling tools and just answered.** A bounded turn reached its round limit: the planner
 is told it has no tools left, so it answers with what it has. Ask again with a narrower task. An
 interactive turn carries no such limit, so this is a one-shot or manifest run, where the default is

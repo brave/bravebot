@@ -29,6 +29,16 @@ export function readProjectText(root: string, path: string, limit = 128 * 1024):
 }
 
 /**
+ * Whether a project file may go to the agent as a named file, by the agent's own binary test on
+ * its first 8 KiB and nothing else: no size cap, as the terminal has none. No contents come back.
+ */
+export function isAttachableProjectFile(root: string, path: string): boolean {
+  try {
+    return request(root, path, { operation: 'attachment' }).attachable === true
+  } catch { return false }
+}
+
+/**
  * Make a bot's memory file exist, and say whether this call is what created it.
  *
  * The grounding walk, through the same pinned-descriptor helper the memory's editor uses. It used

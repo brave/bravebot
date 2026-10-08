@@ -287,8 +287,9 @@ pub(crate) fn checkout_candidates(candidates: &crate::workspace::Candidates) -> 
         ));
     }
     note.push_str(
-        " The checkout's status could not be read, so a file a program wrote there other than by a \
-         redirection is not named.",
+        " It does not name a file a program wrote there other than by a redirection: \
+         apply_checkout asks the checkout's status for those, and gets an answer only where the \
+         session trusts the whole checkout.",
     );
     note
 }
@@ -525,6 +526,9 @@ pub fn run(
     // The spawning turn's too: a delegate's programs are held to what the person's are, or the
     // confinement is a thing to avoid by delegating.
     confine_runs: bool,
+    // And its mode, for the same reason: a delegate no looser than the turn that spawned it
+    // (SANDBOX-22).
+    sandbox: bravebot_sandbox::SandboxMode,
     // The servers the spawning turn reached. A delegate is offered the tools of the ones its spec
     // holds a grant for, on the lists that turn already settled (SERVERS-9).
     mcp: Option<&crate::mcp::Session>,
@@ -616,6 +620,7 @@ pub fn run(
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(confine_runs)
+        .with_sandbox_mode(sandbox)
         .with_mcp(mcp.cloned())
         .stoppable_by(seeded.stop.clone());
 
@@ -1053,6 +1058,9 @@ mod tests {
             ),
             "{note}"
         );
-        assert!(note.ends_with("is not named."), "{note}");
+        assert!(
+            note.contains("apply_checkout asks the checkout's status"),
+            "{note}"
+        );
     }
 }

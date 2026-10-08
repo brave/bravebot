@@ -860,11 +860,13 @@ fn draw_aside(
     }
 
     // Counted back from the end, the way the transcript is, so the same keys walk back through a
-    // long answer.
-    let total = lines.len() as u16;
+    // long answer. Counted in drawn rows, because the paragraph wraps: an answer that is one long
+    // line would otherwise be clipped at the edge of the screen.
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let total = paragraph.line_count(areas[1].width) as u16;
     let max_offset = total.saturating_sub(areas[1].height);
     let offset = max_offset.saturating_sub(session.scroll.min(max_offset));
-    frame.render_widget(Paragraph::new(lines).scroll((offset, 0)), areas[1]);
+    frame.render_widget(paragraph.scroll((offset, 0)), areas[1]);
 
     draw_watching_footer(frame, areas[2], session);
     if let Some(selection) = &session.selection {
@@ -1895,12 +1897,59 @@ fn transcript_lines(session: &Session, width: u16, height: u16) -> Vec<Line<'sta
     with_prompts(session, width, height).0
 }
 
+/// The request a turn sent the planner, one header per span saying whose words follow.
+///
+/// Every span's text goes through [`printable`] like any other content, and the lines it comes to
+/// are the request's own: nothing is added between a header and the words under it. A header is
+/// the row `{` and `}` reach, so a long request is crossed span by span.
+fn request_lines(
+    view: &bravebot_agent::request_view::RequestView,
+) -> (Vec<Line<'static>>, Vec<usize>) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            printable(&t!(request_title, model = view.model.clone())),
+            Style::default()
+                .fg(theme::brand_primary())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            printable(&if view.tools.is_empty() {
+                t!(request_no_tools).to_string()
+            } else {
+                t!(request_tools, names = view.tools.join(", "))
+            }),
+            dim(),
+        )),
+    ];
+    let mut headers = Vec::new();
+    for span in &view.spans {
+        lines.push(Line::raw(""));
+        headers.push(lines.len());
+        lines.push(Line::from(Span::styled(
+            printable(&format!("-- {} · {}", span.role, span.provenance.label())),
+            Style::default()
+                .fg(theme::brand_primary())
+                .add_modifier(Modifier::BOLD),
+        )));
+        for text in span.text.lines() {
+            lines.push(Line::from(printable(text)));
+        }
+    }
+    (lines, headers)
+}
+
 /// The transcript, and the index of the line each prompt the person typed begins at.
 ///
 /// Two answers from one pass, because working the second out afterwards would mean deciding which
 /// drawn lines were prompts by looking at them, and the thing that knows is the pass that drew
 /// them.
 fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, Vec<usize>) {
+    if let Some(view) = session
+        .scroller()
+        .and_then(|scroller| scroller.request.as_deref())
+    {
+        return request_lines(view);
+    }
     let mut prompts: Vec<usize> = Vec::new();
     let mut lines: Vec<Line> = Vec::new();
 
@@ -3219,6 +3268,21 @@ fn slash_lines(
         .max()
         .unwrap_or(0);
 
+    // While work runs a column between the word and its description says when Enter carries the
+    // command out (CMD-8). Sized for the longest of the three so the descriptions stay in line.
+    let working = session.status == Status::Working;
+    let when = working.then(|| {
+        [
+            t!(command_when_now),
+            t!(command_when_queued),
+            t!(command_when_either),
+        ]
+        .iter()
+        .map(|label| label.chars().count())
+        .max()
+        .unwrap_or(0)
+    });
+
     let highlighted = session.highlighted_completion();
     let mut lines: Vec<Line<'static>> = commands
         .iter()
@@ -3228,6 +3292,13 @@ fn slash_lines(
             let padding = column.saturating_sub(word.chars().count()) + 2;
             let mut row = slash_row(chosen, word);
             row.push(Span::raw(" ".repeat(padding)));
+            if let Some(room) = when {
+                let label = command_when(session, command);
+                row.push(Span::styled(label, dim()));
+                row.push(Span::raw(
+                    " ".repeat(room.saturating_sub(label.chars().count()) + 2),
+                ));
+            }
             row.push(Span::styled(command.description, dim()));
             Line::from(row)
         })
@@ -3259,6 +3330,27 @@ fn slash_lines(
         Line::from(row)
     }));
     lines
+}
+
+/// When Enter on a command carries it out, as the session stands (CMD-8).
+///
+/// Work that is not a turn, a compaction or an aside, holds every command back, whatever the table
+/// says of one typed during a turn.
+fn command_when(session: &Session, command: &crate::app::Command) -> &'static str {
+    use crate::app::MidTurn;
+    if !session.a_turn_is_running() {
+        return t!(command_when_queued);
+    }
+    match command.mid_turn {
+        MidTurn::Runs if crate::app::waits_behind_the_queue(session, command.name) => {
+            t!(command_when_queued)
+        }
+        MidTurn::Runs => t!(command_when_now),
+        MidTurn::Waits => t!(command_when_queued),
+        MidTurn::Changes | MidTurn::RunsWhenNamed | MidTurn::RunsUnlessItStarts => {
+            t!(command_when_either)
+        }
+    }
 }
 
 /// How wide the margin before a slash row's word is, the marker for the chosen row included.
@@ -3436,7 +3528,7 @@ fn shortcut_lines(
 /// A directory is dimmer than a file and keeps its trailing slash, because the two are chosen for
 /// different reasons: a file is what a reference ends at, and a directory is somewhere to keep
 /// typing. Nothing here says what a file contains, only that it exists.
-fn entry_lines(session: &Session, offered: &[crate::entries::Entry]) -> Vec<Line<'static>> {
+fn entry_lines(session: &Session, offered: &[bravebot_mentions::Entry]) -> Vec<Line<'static>> {
     let highlighted = session.highlighted_entry();
     offered
         .iter()
@@ -3585,6 +3677,14 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         count => t!(jobs_hint, count = count),
     };
 
+    // The view is held where it was scrolled to, so what arrives goes below it and nothing else on
+    // the screen says so. A count of rows from the layout and the key that returns, never any of
+    // what those rows hold (VIEW-27).
+    let held = match session.rows_below() {
+        0 => String::new(),
+        count => t!(held_hint, chord = "ctrl-end", count = count),
+    };
+
     // Only while the command the turn is waiting on can be moved, for the reason the trail is only
     // named once there is one: offered at any other moment, the press does nothing.
     let movable = if session.can_move_to_background() {
@@ -3632,8 +3732,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
             looping,
             jobs,
             watchable,
+            held,
         ];
-        let kept = fitted(&parts, &[2, 1, 6, 3, 5, 4], area.width);
+        let kept = fitted(&parts, &[2, 1, 6, 3, 7, 5, 4], area.width);
         let mut spans = Vec::new();
         for (position, index) in kept.iter().enumerate() {
             let part = parts[*index].clone();
@@ -3723,6 +3824,7 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         movable,
         SHORTCUTS_HINT.to_string(),
         info,
+        held,
     ];
     // Indices into `parts`, in the order they are given up: the way to the panel before anything,
     // since the panel is a press away whether or not the line names it (PANEL-7), then the way to
@@ -3745,9 +3847,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // reading this line for a way out of the wait; a job is spending something unwatched, as the
     // loop is.
     let expendable: &[usize] = if context_is_unmeasured {
-        &[10, 3, 9, 2, 4, 7, 8, 6, 5]
+        &[10, 3, 9, 2, 4, 7, 8, 11, 6, 5]
     } else {
-        &[10, 9, 2, 3, 4, 7, 8, 6, 5]
+        &[10, 9, 2, 3, 4, 7, 8, 11, 6, 5]
     };
     // A note is drawn over the right of this same row, so what the parts may occupy is the width
     // less that note. Fitted against the whole width instead, the last part that fits is one the
@@ -4175,6 +4277,49 @@ mod tests {
             );
         }
 
+        /// A server told to serve a page never exits, so the limit ends it. A cross beside it would
+        /// say the program failed, and a tick would say it finished.
+        #[test]
+        fn a_command_stopped_at_the_limit_is_marked_as_work_still_going() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "find the parser");
+            printed(
+                &mut session,
+                "serve the page",
+                true,
+                &["listening"],
+                1,
+                bravebot_agent::report::Outcome::Stopped(std::time::Duration::from_secs(60)),
+            );
+            session.watch();
+
+            let panel = listed(&session, 90, 24);
+            let row = row_naming(&panel, "serve the page");
+            assert!(
+                row.contains('●'),
+                "a run stopped at the limit was not marked as work still going: {row}"
+            );
+            assert!(
+                !row.contains('✗') && !row.contains('✓'),
+                "a run stopped at the limit was marked as ended: {row}"
+            );
+
+            let mut session = Session::new("kernel-enforced");
+            printed(
+                &mut session,
+                "serve the page",
+                true,
+                &["listening"],
+                1,
+                bravebot_agent::report::Outcome::Stopped(std::time::Duration::from_secs(60)),
+            );
+            session.watch();
+            assert!(
+                rendered(&session).contains("so it was stopped"),
+                "the view did not say the run was stopped"
+            );
+        }
+
         /// A view opened on a long log draws its last lines, and the verdict of a build is not
         /// always in them.
         #[test]
@@ -4396,6 +4541,21 @@ mod tests {
             let screen = rendered(&session);
             assert!(screen.contains("why is the parser recursive?"), "{screen}");
             assert!(screen.contains("because the grammar nests"), "{screen}");
+        }
+
+        /// An answer is usually one paragraph with no line break in it, and a row of the screen
+        /// holds fewer characters than that. The end of it has to be drawn on the rows below.
+        #[test]
+        fn an_asides_view_wraps_an_answer_that_is_one_long_line() {
+            let mut session = Session::new("kernel-enforced");
+            let answer = format!("{} and finally the last word", "word ".repeat(40));
+            asked(&mut session, "/recap", &answer, true);
+
+            let screen = rendered(&session);
+            assert!(
+                screen.contains("the last word"),
+                "the end of a long answer was clipped at the edge of the screen: {screen}"
+            );
         }
 
         /// The answer lands out of a loop that answers keys, so the person may have opened the
@@ -5054,6 +5214,43 @@ mod tests {
                         .collect()
                 })
                 .collect()
+        }
+
+        /// A reference is drawn as its token under a header naming it, and each header says whose
+        /// words follow.
+        #[test]
+        fn the_request_view_draws_each_span_under_its_provenance() {
+            let mut session = Session::new("kernel-enforced");
+            session.note_layout(Laid {
+                width: 90,
+                height: 24,
+                rows: 24,
+                ..Laid::default()
+            });
+            session.set_last_request(bravebot_agent::request_view::RequestView {
+                model: "m".to_string(),
+                spans: vec![
+                    bravebot_agent::request_view::Span {
+                        role: "user",
+                        provenance: bravebot_agent::request_view::Provenance::Typed,
+                        text: "read it".to_string(),
+                    },
+                    bravebot_agent::request_view::Span {
+                        role: "tool",
+                        provenance: bravebot_agent::request_view::Provenance::Reference(
+                            "ref:1".to_string(),
+                        ),
+                        text: "ref:1 stands for a file".to_string(),
+                    },
+                ],
+                tools: vec!["read_file".to_string()],
+            });
+            session.show_request();
+            let (drawn, _) = screen(&session);
+            assert!(drawn.contains("-- user · typed"), "{drawn}");
+            assert!(drawn.contains("-- tool · ref:1"), "{drawn}");
+            assert!(drawn.contains("ref:1 stands for a file"), "{drawn}");
+            assert!(drawn.contains("read_file"), "{drawn}");
         }
 
         /// A session reading back over a quarantined block whose one preview line is `preview`,
@@ -6858,6 +7055,34 @@ mod tests {
         );
     }
 
+    /// The caret is drawn on the invitation's first character, the cell the first typed character
+    /// will take. Drawn on the prompt character or nowhere, the empty box would show no caret on
+    /// the place a person is about to type.
+    #[test]
+    fn the_caret_sits_on_the_first_character_of_the_invitation() {
+        const WIDTH: u16 = 90;
+
+        let session = Session::new("none");
+        let screen = rendered_at(&session, WIDTH, 24);
+        let invited = screen[..screen
+            .find("Ask Brave Bot")
+            .expect("the invitation was not drawn")]
+            .chars()
+            .count();
+
+        let (column, row, under) = caret_cell(&session, WIDTH, 24).expect("no caret was drawn");
+
+        assert_eq!(
+            under, "A",
+            "the caret is not on the invitation's first character"
+        );
+        assert_eq!(
+            (usize::from(row) * usize::from(WIDTH)) + usize::from(column),
+            invited,
+            "the caret is not where the invitation begins"
+        );
+    }
+
     /// It stands in for the line rather than being part of it, so the first character typed takes
     /// its place. Left drawn, it would read as text the person now has to delete.
     #[test]
@@ -7933,6 +8158,87 @@ mod tests {
             assert!(output.contains(&key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
+    }
+
+    /// The row of the list that names `word`, the last one drawn since a waiting line is drawn above
+    /// it, so a label is read from the row it is drawn on.
+    fn row_for(output: &str, width: usize, word: &str) -> String {
+        let cells: Vec<char> = output.chars().collect();
+        cells
+            .chunks(width)
+            .map(|row| row.iter().collect::<String>())
+            .rfind(|row| row.contains(word))
+            .unwrap_or_else(|| panic!("{word} has no row"))
+    }
+
+    fn labelled(row: &str, label: &str) -> bool {
+        row.contains(&format!("  {label}  "))
+    }
+
+    /// Rejects: a label taken from somewhere other than the command's own column of the table, or
+    /// one shared by every row, either of which tells a person `/model` runs now when it waits.
+    #[test]
+    fn each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs() {
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit().expect("the prompt is sent");
+        session.type_char('/');
+
+        let output = rendered_at(&session, 120, 40);
+
+        assert!(labelled(&row_for(&output, 120, "/cost"), "now"));
+        assert!(labelled(&row_for(&output, 120, "/model"), "queued"));
+        assert!(labelled(
+            &row_for(&output, 120, "/theme [name]"),
+            "now/queued"
+        ));
+    }
+
+    /// Rejects: a `now` label on a command that Enter would queue, because a line of the same
+    /// command already waits ahead of it.
+    #[test]
+    fn a_row_reads_queued_while_a_line_of_its_command_waits() {
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit().expect("the prompt is sent");
+        for c in "/cost".chars() {
+            session.type_char(c);
+        }
+        assert!(session.queue_command(), "the command did not wait");
+        session.type_char('/');
+
+        let output = rendered_at(&session, 120, 40);
+
+        assert!(labelled(&row_for(&output, 120, "/cost"), "queued"));
+        assert!(labelled(&row_for(&output, 120, "/status"), "now"));
+    }
+
+    /// Rejects: a label that is drawn at rest, where there is no turn to wait for and nothing to
+    /// tell apart.
+    #[test]
+    fn the_rows_carry_no_label_when_nothing_is_running() {
+        let mut session = Session::new("none");
+        session.type_char('/');
+
+        let row = row_for(&rendered_at(&session, 120, 40), 120, "/cost");
+
+        for label in ["now", "queued", "now/queued"] {
+            assert!(!labelled(&row, label), "{label} drawn at rest");
+        }
+    }
+
+    /// Rejects: marking `/cost` as running now during a compaction or an aside, where every
+    /// command waits whatever the table says of one typed during a turn.
+    #[test]
+    fn every_row_is_queued_during_an_aside() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        session.type_char('/');
+
+        let output = rendered_at(&session, 120, 40);
+
+        assert!(labelled(&row_for(&output, 120, "/cost"), "queued"));
+        assert!(!labelled(&row_for(&output, 120, "/cost"), "now"));
     }
 
     /// A command carried out mid-turn answers into a list the transcript does not hold until the
@@ -9516,13 +9822,122 @@ mod tests {
         );
     }
 
+    /// The view is held where it was scrolled to, so the one place that can say so, and how much
+    /// has arrived below, is the hint line. It goes when the view reaches the tail.
+    #[test]
+    fn a_held_view_says_how_many_rows_arrived_below_and_the_key_back() {
+        let mut session = Session::new("none");
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+        let hint = |session: &mut Session| rows_of_a_frame(session).pop().expect("a last row");
+
+        let tail = hint(&mut session);
+        assert!(
+            !tail.contains("below"),
+            "a view at the tail was said to be held: {tail}"
+        );
+
+        session.scroll_up(60);
+        let held = hint(&mut session);
+        assert!(held.contains("held"), "{held}");
+        assert!(held.contains("ctrl-end to return"), "{held}");
+        let before = session.rows_below();
+        assert!(
+            before > 0 && held.contains(&format!("{before} rows below")),
+            "{held}"
+        );
+
+        session.streaming("a long chunk\n\n\n\nof the next reply");
+        // The first frame lays the new rows out and the second draws against what it measured.
+        hint(&mut session);
+        let arrived = hint(&mut session);
+        let after = session.rows_below();
+        assert!(after > before, "{before} -> {after}");
+        assert!(
+            arrived.contains(&format!("{after} rows below")),
+            "{arrived}"
+        );
+
+        session.scroll_down(u16::MAX);
+        let back = hint(&mut session);
+        assert!(!back.contains("below") && !back.contains("held"), "{back}");
+    }
+
+    /// The cue is the first of the things the hint line keeps for its own sake to go, so a terminal
+    /// with no room for it loses the cue and keeps the mode, in the ordinary line and the shell
+    /// line. Left out of either order, the line would be cleared whole and the mode with it.
+    #[test]
+    fn a_held_view_on_a_narrow_terminal_drops_the_cue_and_keeps_the_mode() {
+        let mut session = Session::new("none").starting_in_bypass();
+        while session.permission_mode() != bravebot_agent::PermissionMode::AcceptEdits {
+            session.cycle_permission_mode();
+        }
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+        let hint_at = |session: &mut Session, width: u16| {
+            // The first frame lays the transcript out at this width and the second draws against it.
+            rows_of_a_frame_at(session, width, 24);
+            rows_of_a_frame_at(session, width, 24)
+                .pop()
+                .expect("a last row")
+        };
+        let mode =
+            crate::status::named_mode(session.permission_mode(), true).expect("a named mode");
+
+        session.scroll_up(60);
+        let roomy = hint_at(&mut session, 90);
+        assert!(
+            roomy.contains("rows below") && roomy.contains(mode),
+            "the cue was not drawn where it fits, so its absence below proves nothing: {roomy}"
+        );
+
+        let narrow = hint_at(&mut session, 40);
+        assert!(session.rows_below() > 0, "the view left the held position");
+        assert!(
+            narrow.contains(mode),
+            "the mode went with the cue: {narrow:?}"
+        );
+        assert!(
+            !narrow.contains("held") && !narrow.contains("below"),
+            "a cue with no room was drawn: {narrow:?}"
+        );
+
+        session.shell = true;
+        let roomy = hint_at(&mut session, 120);
+        assert!(
+            roomy.contains("rows below"),
+            "the shell line did not draw the cue where it fits: {roomy}"
+        );
+        let narrow = hint_at(&mut session, 40);
+        assert!(session.rows_below() > 0, "the view left the held position");
+        assert!(
+            narrow.trim_start().starts_with("! "),
+            "the shell went with the cue: {narrow:?}"
+        );
+        assert!(
+            !narrow.contains("held") && !narrow.contains("below"),
+            "a cue with no room was drawn in shell mode: {narrow:?}"
+        );
+    }
+
     /// Draw one frame the way the loop draws it, tell the session what the frame laid out, and give
     /// back the rows of the screen.
     ///
     /// [`rendered`] cannot answer a question about a held view: it never reports the layout, so the
     /// offset stays measured against a screen the session has not seen.
     fn rows_of_a_frame(session: &mut Session) -> Vec<String> {
-        let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+        rows_of_a_frame_at(session, 90, 24)
+    }
+
+    /// [`rows_of_a_frame`] at a chosen size.
+    fn rows_of_a_frame_at(session: &mut Session, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         let mut laid = crate::state::Laid::default();
         terminal
             .draw(|frame| laid = draw(frame, session))

@@ -33,6 +33,7 @@ cli-usage-resume-task = Send a one-shot task as the next turn of a session
 cli-usage-continue-task = Send a one-shot task as the next turn of the most recent session
 cli-usage-fork = Fork a session and start exploring a different path
 cli-usage-doctor = Check configuration and confinement
+cli-usage-doctor-sandbox = Run everyday workflows under the sandbox and report which work
 cli-usage-import = Import a Leo Premium subscription
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
 cli-usage-auth-login = Sign in to a model service, listing every way when none is named
@@ -40,6 +41,7 @@ cli-usage-auth-logout = Forget an imported Leo Premium subscription or a stored 
 cli-usage-auth-status = Say whether a sign-in is usable, exiting 0 only if it is
 cli-usage-mcp = Declare, list and approve MCP servers
 cli-usage-completion = Print a shell completion script
+cli-usage-shell-init = Print the shell hook that gives @bravebot the commands you ran
 cli-usage-sessions = List the sessions that keep running after the terminal closes
 cli-usage-sessions-stop = Stop one of them
 cli-usage-sessions-import = Copy sessions another agent kept for this directory
@@ -103,6 +105,17 @@ cli-options-heading = Options:
 cli-option-file = Include a workspace file as context (repeatable)
 cli-option-add-dir = Reach into a directory outside the working one (repeatable)
 cli-option-settings = Read this settings file for this run, above the ones found on disk
+cli-option-run-network =
+    Whether programs `run` starts may reach the network. closed denies it to every one except a package
+    manager's fetch, git or gh with a remote operation, curl, ssh and a stage with a remote scope
+cli-option-sandbox-allow-read =
+    Let programs `run` starts read this path or glob, lifting a refusal of it. Settings: sandbox.filesystem.allowRead (repeatable)
+cli-option-sandbox-deny-read =
+    Refuse programs `run` starts reading this path or glob. Settings: sandbox.filesystem.denyRead (repeatable)
+cli-option-sandbox-allow-write =
+    Let programs `run` starts write this path, which they may read too. Settings: sandbox.filesystem.allowWrite (repeatable)
+cli-option-sandbox-deny-write =
+    Refuse programs `run` starts writing this path, a session directory included. Settings: sandbox.filesystem.denyWrite (repeatable)
 cli-option-agent = Address every turn to this definition, as /agent does for one
 cli-option-system-prompt =
     Replace the opening sentence of the planner's system prompt for every turn. The rest of it stays
@@ -122,6 +135,9 @@ cli-option-safe =
 cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
+cli-option-sandbox =
+    How far the programs `run` starts may reach: strict, standard or off. A managed file may set a
+    floor this cannot go below
 cli-option-dangerously-skip-permissions =
     Bypass all permission checks. Recommended only for sandboxes with no internet access
 cli-option-help = Show this message
@@ -132,6 +148,7 @@ cli-option-version = Show the version
 
 cli-unknown-option = unknown option: { $flag }
 cli-completion-needs-a-shell = completion takes one of bash, zsh or fish
+cli-shell-init-needs-a-shell = shell-init takes one of bash, zsh or fish
 cli-file-needs-a-path = --file requires a path
 cli-resume-needs-an-id = --resume requires the id of a session when it goes with a task
 # The flag is --resume or --continue, as typed.
@@ -141,6 +158,10 @@ cli-add-dir-needs-a-path = --add-dir requires an absolute path to a directory
 cli-directory-ends-checkouts = { $directory } holds the working directory, so no delegate is given a checkout while it is open; start again without --add-dir { $directory } to have one
 cli-settings-needs-a-path = --settings requires a path to a settings file
 cli-settings-not-a-file = --settings names no file: { $path }
+cli-run-network-needs-a-word = --run-network requires open or closed
+cli-run-network-unknown = --run-network takes open or closed, not { $word }
+# The flag is one of the four --sandbox-* flags, as typed.
+cli-sandbox-flag-needs-a-path = { $flag } requires a path
 cli-agent-needs-a-name = --agent requires the name of a definition
 # The command is the first argument, one of this program's own subcommands.
 cli-agent-not-for-a-command =
@@ -165,6 +186,10 @@ cli-agent-no-such-definition-unread =
         [one] there is no definition called { $name }; this run resolved { $names }. 1 definition in .bravebot/agents was not read: -p asks no trust question, so it reads only ~/.bravebot/agents
        *[other] there is no definition called { $name }; this run resolved { $names }. { $count } definitions in .bravebot/agents were not read: -p asks no trust question, so it reads only ~/.bravebot/agents
     }
+# Said where the agent setting names a definition this run or session in lines did not resolve. It
+# goes on without one, so the reason follows (ADDRESS-13).
+cli-agent-setting-gone =
+    the agent setting names { $definition }, which was not resolved: going on without a definition
 # Said when a session in lines started with --agent opens (CLI-17). It has no slash commands, so it
 # names no way to address another definition. The model is the one the definition names.
 cli-plain-working-under = every prompt is addressed to { $definition }
@@ -175,6 +200,21 @@ cli-plain-working-under-model = every prompt is addressed to { $definition }, wh
 cli-bypass-unreachable =
     --dangerously-skip-permissions is refused: permissions.bypassUnreachable in { $path } makes
     that mode unreachable here. Remove it there, or run without the flag.
+cli-sandbox-needs-a-mode = --sandbox requires one of { $names }
+# The file that holds the floor is named, and the file that asked when there was one, because a
+# refusal that names neither sends somebody looking for a fault in the program.
+cli-sandbox-refused-flag =
+    --sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a run may
+    be stricter than that but not looser. Run with --sandbox { $pinned } or stricter, or without the flag.
+cli-sandbox-refused-file =
+    sandbox.mode { $asked } in { $asked_in } is refused: { $pinned_in } sets sandbox.mode to { $pinned },
+    and a run may be stricter than that but not looser. Change it there, or remove it.
+cli-sandbox-refused-network-flag =
+    --sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started
+    with no sandbox is not held to that. Run with --sandbox standard or stricter, or without the flag.
+cli-sandbox-refused-network-file =
+    sandbox.mode { $asked } in { $asked_in } is refused: { $pinned_in } pins run.network to closed, and
+    a program started with no sandbox is not held to that. Change it there, or remove it.
 cli-mode-needs-a-name = --mode requires one of { $names }
 cli-model-needs-a-name = --model requires the name of a model
 cli-advisor-needs-a-name = --advisor requires the name of a model
@@ -439,10 +479,41 @@ doctor-settings-advisor-ignored =
     advisorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-fallback-ignored =
     fallbackModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-agent-ignored =
+    agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 # A key that only ever refuses, spelled as something other than a boolean. It is read as absence, so
 # the session is as permissive as one that named nothing, and nothing else would say so.
 doctor-settings-narrowing-ignored =
     { $key } in { $path } is not a boolean, so it is read as absent and refuses nothing
+doctor-run-network = run network
+doctor-run-network-closed = closed, except for steps that fetch or reach a remote ({ $source })
+doctor-settings-network-ignored =
+    run.network "open" in { $path } is not obeyed: a checkout can close the network and never open it
+doctor-settings-network-unreadable =
+    run.network in { $path } is neither open nor closed, so it is read as absent
+doctor-managed-network-unreadable =
+    run.network in { $path } is neither open nor closed, so the network is closed
+doctor-sandbox-filesystem = sandbox filesystem
+# The key is allowRead, denyRead, allowWrite or denyWrite, the path is as written, and the source is
+# the file that wrote it or the command line.
+doctor-sandbox-filesystem-entry = { $key } { $path } ({ $source })
+doctor-sandbox-filesystem-refused = { $key } { $path } is not in force: { $reason } ({ $source })
+doctor-sandbox-filesystem-source-flag = a command-line flag
+doctor-settings-sandbox-filesystem-ignored =
+    sandbox.filesystem.{ $key } in { $path } is not obeyed: a checkout can refuse reach and never add it, so it is read from ~/.bravebot/settings.json, the file --settings names and the managed file only
+doctor-settings-sandbox-misshapen =
+    sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it is read as absent
+doctor-managed-sandbox-misshapen =
+    sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it pins nothing
+doctor-managed-sandbox-unread =
+    sandbox.filesystem.{ $key } { $path } is not read: { $managed } pins that list
+sandbox-rule-no-home = it starts with ~ and this session names no home directory
+sandbox-rule-climbs = it climbs out of the directory it is read from, or holds .. where it cannot be judged
+sandbox-rule-glob-on-a-write = a wildcard applies to reads and not to writes
+sandbox-rule-confines-nothing = a write row over the home directory or the whole filesystem confines nothing
+sandbox-rule-private-key = no list adds reach to ~/.ssh, where a private key is
+sandbox-rule-too-broad = its wildcard looked at more of the disk than a pattern may, so what it names is not known
+sandbox-rule-overridden = another entry decides that path: a refusal at the same path, or one the managed file wrote
 # An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
 # the reason the vetting line gives: a rule that looks like configuration and does nothing is the
 # one worth saying out loud.
@@ -465,6 +536,17 @@ doctor-settings-unread-key =
 doctor-settings-mcp-declared =
     { $key } in { $path } declares an MCP server, which only ~/.bravebot/mcp.json may: nothing in it
     is started
+# A sandbox.mode a layer that may not loosen the sandbox wrote. Only `strict` is obeyed from a
+# project's files, because a mode is a bundle of what a program may reach and a checkout that could
+# pick a looser one would loosen it for whoever cloned it.
+doctor-settings-sandbox-ignored =
+    sandbox.mode { $mode } in { $path } is not obeyed: a project's file may ask for strict only, and the
+    other modes are read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-sandbox-unreadable =
+    sandbox.mode in { $path } is not strict, standard or off, so it is read as absent and the default applies
+doctor-sandbox-mode = sandbox mode
+doctor-sandbox-default = { $mode } (the default)
+doctor-sandbox-from = { $mode } from { $path }
 # The machine-level layer, above everything a person can set. The names rather than the values, for
 # the reason the settings lines give, and the path because a pin somebody wants lifted is lifted by
 # whoever can write that file.
@@ -511,6 +593,10 @@ doctor-confinement = confinement { $level }
 confinement-kernel = kernel-enforced
 confinement-partial = partial
 confinement-none = none
+# The platform level, then the sandbox mode a person chose. `off` says what it means because nothing
+# else on the screen shows that a program `run` starts is not confined.
+confinement-with-mode = { $level }, sandbox { $mode }
+confinement-with-mode-off = { $level }, sandbox off: programs run unconfined
 doctor-mechanisms = mechanisms
 doctor-network-denial = network denial
 doctor-kernel-enforced = kernel-enforced
@@ -867,6 +953,7 @@ mcp-problem-url = the url is not http or https with a host
 mcp-problem-credentials =
     the url carries a user or a password, which would keep a credential in plain text
 mcp-problem-remote = a remote server takes no { $key }
+mcp-problem-timeout = { $key } is not a whole number of seconds from 1 to { $most }
 mcp-unreadable = { $path } cannot be read: { $reason }
 mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
 mcp-unreadable-not-read = it could not be read as text
@@ -887,6 +974,8 @@ mcp-variable-stored = { $name } (stored)
 # A file a stored value or an argument names, which the server is let read.
 mcp-may-read = may read: { $path }
 mcp-directory = directory, which it may write: { $path }
+# The seconds a server has for its handshake and for each call, where a declaration gives either.
+mcp-timeouts = time allowed: { $startup } seconds to start, { $tool } seconds for each call
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
 mcp-changed = changed: { $fields }
@@ -1377,11 +1466,40 @@ run-not-sandboxed = this is not sandboxed: it runs with the access your own shel
 # Said instead of the line above where the turn confines what a run starts, and followed by the
 # directories it is held to and by one sentence for each toolchain and credential a stage brings.
 run-confined = its files are confined to these directories, the system temporary directory and the system files every program needs:
+run-confined-machine = it can read this machine except the places that hold a credential, and write only these directories, the system temporary directory and the toolchain caches:
+run-carries-known-hosts = { $program } also adds to your ssh known hosts and can reach your ssh agent
 run-carries-toolchain = { $program } also reaches the install and the cache of the { $toolchain } toolchain
 run-carries-remote = { $program } also reads your git and gh logins, your ssh configuration and public keys, never a private key, and adds to your ssh known hosts
 run-carries-aws = { $program } also reads your aws credentials in ~/.aws
 run-carries-kubernetes = { $program } also reads your kubernetes credentials in ~/.kube
 run-carries-docker = { $program } also reads your docker credentials in ~/.docker
+run-carries-reach = { $program } also reads { $path }, where your { $variable } points
+run-network-closed = the network is closed for programs this session starts, except for those below
+run-keeps-network = { $program } also reaches the network
+# Said for reach a person attached to a command with /reach. The date is the day they allowed it,
+# so the row is never a surprise: the reach is on the screen every time the command is asked about.
+run-carries-remembered = { $sentence } (remembered for this command, allowed { $date })
+run-carries-remembered-read = { $program } also reads { $path } (remembered for this command, allowed { $date })
+run-carries-remembered-write = { $program } also reads and writes { $path } (remembered for this command, allowed { $date })
+# The /reach command: what it lists, what it says it did, and why it did nothing.
+reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one.
+reach-none = no reach is remembered for any command
+reach-listed = { $number }. { $command } also { $access } { $entry }, allowed { $date }, { $lifetime }
+reach-access-reads = reads
+reach-access-writes = reads and writes
+reach-lifetime-session = for this session
+reach-lifetime-always = always
+reach-added = remembered: { $command } also { $access } { $entry }, { $lifetime }. The next plan for it shows this row.
+reach-removed = forgotten: { $command } no longer also { $access } { $entry }
+reach-refused-entry = { $entry } is not a credential scope (remote, aws, kubernetes, docker) or a directory that can be reached. It must be an absolute path or start with ~/, exist, and not be your home directory, ~/.ssh, or a directory above them.
+reach-refused-write = a credential scope is read only. Only a directory can be written.
+reach-refused-line = that command line cannot be run as written, so there is nothing to remember the reach for
+reach-refused-assignment = a command with NAME=value in front of it carries no remembered reach
+reach-refused-option = a command that starts with an option, such as `sh -c ...` or `git -C dir push`, cannot carry a remembered reach. Name the operation first, as in `git push`.
+reach-refused-incognito = this session adds nothing to ~/.bravebot, so nothing was remembered
+reach-refused-no-home = this session has no home directory to judge a reach against
+reach-refused-number = no reach is numbered { $number }
+run-filesystem-rules = your own filesystem rules apply to these programs: { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 # Said above the list of what a line reaches that nothing here holds: no credential is handed
 # over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
 # only where a line reaches one, so the list is never empty and never noise. The line above is
@@ -1652,6 +1770,7 @@ status-model-default = the configured default
 status-model-definitions = the one { $definition } asks for
 status-agent = Agent
 status-agent-every-turn = every turn is addressed to it, named with --agent
+status-agent-by-setting = every turn is addressed to it, chosen by the agent setting
 status-effort = Effort
 status-effort-chosen = chosen with /effort
 status-effort-default = whatever the service does on its own
@@ -1692,6 +1811,7 @@ status-loop-running = running now
 status-loop-unpaced = waiting for the turn to say when
 status-goal = Goal
 status-goal-paused = paused, /goal resume arms it
+status-goal-usage = { $note } · { $elapsed } · { $tokens }
 status-watch = Watch { $number }
 status-watch-armed-by = armed by turn { $turn } · { $left } left
 # One line per background job of the last turn. The name is the driver's.
@@ -1714,6 +1834,21 @@ status-permissions-cycle = shift-tab to change
 status-vetting = Vetting
 status-vetting-auto = a check that finds nothing reads content to the model without asking
 status-vetting-where = kept in ~/.bravebot/vetting
+# Said only where the network for the programs a command starts is closed. The note says who closed
+# it, since that decides how it is opened again.
+status-network = Programs' network
+status-network-closed = closed, except for steps that fetch or reach a remote
+status-network-by-default = closed by default
+status-network-by-flag = closed by --run-network
+status-network-by-settings = closed by run.network in { $path }
+status-network-by-a-setting = closed by run.network in a settings file
+status-network-pinned = pinned closed by { $path } and not changeable by a flag or a settings file
+status-network-pinned-by-policy = pinned closed by the managed settings and not changeable by a flag or a settings file
+# Said only where one of the four sandbox.filesystem lists has an entry. The note names the files.
+status-sandbox-filesystem = Filesystem rules
+status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
+status-sandbox-filesystem-files = from { $files }
+status-sandbox-filesystem-flags = the command line
 status-this-session = This session
 # Where a session's wall clock went. Four figures, because the whole is unactionable: a session
 # that took an hour on the model, an hour on subprocesses, and an hour waiting for its user to
@@ -1781,6 +1916,23 @@ cost-turn = Turn { $number }
 # number.
 cost-before-the-first-turn = Before turn 1
 cost-nothing-spent = nothing spent yet
+request-none-yet = No request has been sent to the model in this session yet.
+# The first row of the view /request opens. The words below it are the request as it went.
+request-title = The last request sent to { $model }, read from the request itself
+request-tools = Tools offered: { $names }
+request-no-tools = Tools offered: none
+request-trusted = { $what } (trusted)
+request-bytes-mark = [a picture or file, sent as bytes]
+request-label-typed = typed
+request-label-typed-with-files = typed, with dropped files
+request-label-driver = driver
+request-label-planner = planner
+request-label-trusted-file = trusted file { $path }
+request-label-setting = setting
+request-label-released = released: { $from }
+request-label-vetted = vetted { $token }
+request-label-summary = summary
+request-label-unrecorded = unrecorded
 # What the total holds that no turn's figure accounts for. A record written before turns were
 # charged separately keeps the whole of it here, and a session resumed from one keeps the part it
 # spent before the resume. Reported as a figure rather than left out, because the rows are read
@@ -1807,6 +1959,9 @@ indicator-checking = { $lines ->
     [one] Checking { $lines } line
    *[other] Checking { $lines } lines
     }
+# Said while a hook holds the turn open. The moment is the word the hooks file spells it with and
+# the program is the first word of the command the person wrote there: nothing the hook printed.
+indicator-hook = Running hook: { $program } ({ $moment })
 # The same, over a picture or a PDF, which has no lines to count.
 indicator-checking-picture = Checking a picture
 indicator-checking-pdf = Checking a PDF
@@ -1987,6 +2142,7 @@ caffeinate-unavailable = /caffeinate is unavailable: `{ $program }` could not be
 caffeinate-ended = /caffeinate is off: `{ $program }` stopped holding the computer awake
 # The info panel's section headings.
 panel-session = Session
+panel-model = Model
 panel-goal = Goal
 panel-goal-paused = paused
 panel-context = Context
@@ -1997,6 +2153,9 @@ panel-links = Links
 # The rows of the info panel's Links section, each followed by the link.
 panel-pull-request = Pull request
 panel-issue = Issue
+# The reasoning effort and the session's token total in the info panel, one to a row.
+panel-effort = effort { $level }
+panel-spent = { $tokens } this session
 # The last turn's cache figures in the info panel, one to a row and never added together.
 panel-cache-read = cache read { $tokens }
 panel-cache-written = cache written { $tokens }
@@ -2006,6 +2165,11 @@ panel-more = +{ $count } more
 panel-earlier = +{ $count } earlier
 # The same, with rows left out below as well.
 panel-earlier-and-more = +{ $earlier } earlier, +{ $later } more
+# Said on the bottom line while the view is scrolled back off the tail, and gone once it reaches it.
+held-hint = { $count ->
+    [one] held, { $count } row below  ·  { $chord } to return
+   *[other] held, { $count } rows below  ·  { $chord } to return
+    }
 # Said on the bottom line while a background job runs, and gone once the last one ends.
 jobs-hint = { $count ->
     [one] 1 in the background
@@ -2041,12 +2205,14 @@ jobs-command-takes =
 
 command-status = Report this session, what it may touch, and what it has spent
 command-cost = Show what each turn of this session has spent
+command-request = Show the last request sent to the model, and where each part of it came from
 command-model = Choose which model to think with
 command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering
 command-advisor = Name the model the planner may consult, say which it may, or drop the choice
 command-config = Choose how the input box edits text
 command-add-dir = Open another directory and trust it for this session, or close one
+command-reach = Remember a directory or credential for a command, or list and remove them
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
 command-branch = Copy this session and carry on in the copy, keeping the original to return to
@@ -2055,6 +2221,7 @@ command-issue = Say which issue this session is for, show it, or clear it
 command-pr = Say which pull request this session is for, show it, or clear it
 command-compact = Summarise the conversation so far, keeping the recent part
 command-btw = Ask something beside the work, without putting it in the conversation
+command-recap = Recap where this session stands, without putting it in the conversation
 command-clear = Start a new session here, keeping this one resumable
 command-forget-trust = Stop remembering that this directory is trusted, so later sessions here ask
 command-loop = Send a prompt again and again, say what is repeating, or stop it
@@ -2064,6 +2231,7 @@ command-jobs = List this turn's background jobs, and stop one by its name
 command-panel = Show or hide the info panel beside the transcript
 command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-checkouts = List kept checkouts, bring their files back, or remove one
+command-plan = Enter plan mode, and start on a task if you give one
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name
 command-memory = List each definition's memory, where it is kept and whether it is withheld
@@ -2073,6 +2241,16 @@ command-copy = Put the last reply on the clipboard, or the one that many replies
 command-undo = Rewind one turn and put back the files it wrote
 command-rewind = List the turns a rewind could go back to, or go back that many
 command-exit = Leave
+
+
+## When Enter carries out a command listed while work runs
+
+# Carried out as soon as Enter is pressed.
+command-when-now = now
+# Waits for the work to end, in the order typed.
+command-when-queued = queued
+# Carried out at once or queued, by what the line says and what is already waiting.
+command-when-either = now/queued
 
 
 ## Where a skill offered after a slash was found
@@ -2387,6 +2565,7 @@ goal-none =
     takes it off again
 goal-active = working towards: { $condition }
 goal-last-check = the last check said: { $reason }
+goal-usage = it has run for { $elapsed } and the session has spent { $tokens } since it was set
 goal-never-checked = nothing has been judged against it yet
 goal-not-met = the goal is not met yet: { $reason }
 goal-not-met-unsaid = the goal is not met yet, and the check did not say what is missing
@@ -2488,6 +2667,9 @@ checkouts-unread =
     { $id }: its status was not read, so a file changed other than by a write is not named here
 checkouts-none =
     this session keeps no checkout. A delegate given one keeps it when something was done in it
+# The path is where the directory is, and is left as it is.
+checkouts-unlisted =
+    { $id } at { $path }: no session record lists it, and another session may be using it. If none is, delete the directory and run git worktree prune to remove it
 checkouts-no-such = this session keeps no checkout { $id }. /checkouts lists the ones it keeps
 checkouts-command-takes =
     /checkouts lists the checkouts this session keeps, /checkouts apply <n> [path ...] brings back
@@ -2613,6 +2795,14 @@ agent-answered = { $name } answered
 # Said when a session started with --agent opens, after the directory's trust is settled (CLI-17).
 session-working-under =
     every turn is addressed to { $definition }; /agent <name> <task> addresses another for one turn
+# Said after the line above where the agent setting, not --agent, chose the definition (ADDRESS-13).
+session-working-under-by-setting =
+    the agent setting chose this definition; --agent <name> chooses another for the session
+# Said when the agent setting names a definition this session did not resolve. The reason follows in
+# the next line, and the session goes on without one.
+session-agent-setting-gone =
+    the agent setting names { $definition }, which this session did not resolve: every turn is the
+    session's own, with the tools and model it would have without --agent
 # Said when a resumed session was started under a definition that cannot be used now. The reason
 # follows in the next line. The name is the one the driver recorded from the person's --agent.
 session-recorded-definition-gone =
@@ -2641,6 +2831,8 @@ agent-checkout-not-applied =
 # session is running inside: the agent's own work and the programs a person asks for are outside any
 # such boundary. /status carries the second half of that, which there is no room for here.
 opening-confinement = confinement available: { $level }
+opening-network-closed = network closed
+opening-filesystem-rules = filesystem rules in force
 opening-invitation = Ask a question about this workspace.
 
 
@@ -2849,12 +3041,42 @@ reply-usage = reply takes a session's id and the prompt to send
 attach-not-running = { $name } is not running.
 attach-unreachable = Could not reach { $name }: { $problem }
 attach-taken = A terminal is attached to { $name } already.
-attach-joined = Attached to { $name }. Ctrl-C leaves it running.
+attach-joined = Attached to { $name }. /detach or Ctrl-C leaves it running.
 attach-line-not-sent = Not sent: the session is not waiting for a line.
 attach-left = The session ended.
+attach-detached = Detached from { $name }. It keeps running.
+attach-stopping = { $name } is stopping after an hour idle. Attach again to start it.
 reply-sent = Sent to { $name }.
 reply-working = { $name } is working and takes no prompt now. Reply when it is idle.
 reply-needs-input = { $name } is waiting on a question. Answer it with: bravebot attach { $id }
 reply-not-sent = { $name } did not take the prompt.
+reply-stopping = { $name } is stopping after an hour idle. Reply again to start it.
 bg-restart-needs-a-terminal = { $name } is stopped, and only a terminal can start it again.
 resume-held-by-background = { $name } is held by a running background session. Join it with: bravebot attach { $id }
+
+# `bravebot doctor --sandbox-check`: git, gh, make, cargo and the other everyday programs, run the way a
+# session runs them. A row is a workflow; a row that failed says where, what to do, and where the
+# program's output went. The output itself is never printed.
+cli-doctor-sandbox-takes-nothing-else = doctor --sandbox-check takes no other arguments.
+doctor-sandbox-not-here = doctor --sandbox-check runs programs under the sandbox on Linux and macOS. This platform confines programs another way, and the workflows are not run here.
+doctor-sandbox-cannot-confine = This machine cannot confine a program, so there is nothing to check. bravebot doctor reports the confinement it can apply.
+doctor-sandbox-no-place = There is no state directory to run the workflows in. bravebot doctor says which variables name one.
+doctor-sandbox-temporary = The state directory { $path } is under the temporary directory, which the sandbox lets every program write, so a refused write could not be told from a permitted one. Move the state directory.
+doctor-sandbox-io = Could not prepare { $path }: { $detail }
+doctor-sandbox-passed = passed
+doctor-sandbox-failed = FAILED
+doctor-sandbox-skipped = skipped
+doctor-sandbox-because = because
+doctor-sandbox-not-installed = { $programs } is not installed
+doctor-sandbox-at = at
+doctor-sandbox-exited = stage { $stage }, { $program }, exited with { $code }
+doctor-sandbox-did-not-exit = stage { $stage }, { $program }, did not exit
+doctor-sandbox-fix = fix
+doctor-sandbox-fix-refused = The sandbox refused something this program needs. Read the log for the path, then add the directory with --add-dir or /add-dir, or run the command yourself outside a session.
+doctor-sandbox-fix-allowed = The sandbox let a program reach something it exists to keep from one. Do not rely on it until this is fixed, and report it.
+doctor-sandbox-fix-without = The workflow fails without the sandbox too, so the sandbox is not the cause. Check that the program works on this machine.
+doctor-sandbox-fix-setup = Setting the workflow up failed outside the sandbox. Check that the program works on this machine.
+doctor-sandbox-fix-not-confined = The platform would not confine the program: { $detail }
+doctor-sandbox-log = log
+doctor-sandbox-total = total
+doctor-sandbox-counts = { $passed } passed, { $failed } failed, { $skipped } skipped

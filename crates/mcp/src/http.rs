@@ -17,13 +17,14 @@
 use crate::protocol::{
     Listing, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params, paged,
 };
-use crate::{McpError, McpResult, malformed};
+use crate::{McpError, McpResult, malformed, named};
 use bravebot_core::capability::{Capability, ServerAlias};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
-use bravebot_net::{Egress, Request};
+use bravebot_net::{Egress, EgressError, Request};
 use serde_json::Value;
+use std::time::Duration;
 
 /// A server reached over HTTP.
 #[derive(Debug)]
@@ -34,6 +35,11 @@ pub struct HttpServer {
     /// Set from the initialize response, and echoed on later requests. Servers that keep
     /// state across calls require it.
     session: Option<String>,
+    /// How long a reply may take.
+    bound: Duration,
+    /// How long a reply to the handshake may take, which a server reached again after it moved is
+    /// given as it was when it was first reached.
+    startup: Duration,
 }
 
 impl HttpServer {
@@ -44,7 +50,38 @@ impl HttpServer {
             name: name.into(),
             next_id: 1,
             session: None,
+            bound: Duration::from_secs(bravebot_config::mcp::TOOL_SECS),
+            startup: Duration::from_secs(bravebot_config::mcp::STARTUP_SECS),
         }
+    }
+
+    /// Give the handshake's replies `bound`, which [`HttpServer::startup`] says again, and no
+    /// longer.
+    pub fn starting_within(mut self, bound: Duration) -> Self {
+        self.startup = bound;
+        self.bound = bound;
+        self
+    }
+
+    /// How long a reply to the handshake may take.
+    pub fn startup(&self) -> Duration {
+        self.startup
+    }
+
+    /// Give each reply `bound` and no longer.
+    pub fn within(mut self, bound: Duration) -> Self {
+        self.bound = bound;
+        self
+    }
+
+    /// Give each later reply `bound` and no longer.
+    pub fn set_bound(&mut self, bound: Duration) {
+        self.bound = bound;
+    }
+
+    /// How long a reply may take.
+    pub fn bound(&self) -> Duration {
+        self.bound
     }
 
     pub fn name(&self) -> &str {
@@ -77,7 +114,8 @@ impl HttpServer {
             .header("content-type", "application/json")
             // Servers may reply with either, and the streaming form is accepted so a
             // server that prefers it is not rejected outright.
-            .header("accept", "application/json, text/event-stream");
+            .header("accept", "application/json, text/event-stream")
+            .reply_within(self.bound);
 
         if let Some(session) = &self.session {
             request = request.header("mcp-session-id", session);
@@ -98,7 +136,11 @@ impl HttpServer {
         policy.server_request_finished();
 
         let response = sent.map_err(|e| match e {
-            bravebot_net::EgressError::Denied(d) => McpError::Denied(d),
+            EgressError::Denied(d) => McpError::Denied(d),
+            EgressError::OutOfTime { .. } => McpError::TimedOut {
+                what: method.to_string(),
+                after: self.bound,
+            },
             other => McpError::Transport(other.to_string()),
         })?;
 
@@ -174,12 +216,14 @@ impl HttpServer {
             .before_capability(self.capability())
             .map_err(McpError::Denied)?;
 
-        let result = self.send(
-            policy,
-            egress,
-            "tools/call",
-            Some(call_params(tool, arguments)),
-        )?;
+        let result = self
+            .send(
+                policy,
+                egress,
+                "tools/call",
+                Some(call_params(tool, arguments)),
+            )
+            .map_err(|error| named(error, tool))?;
 
         let parsed: ToolResult =
             serde_json::from_value(result).map_err(|e| malformed("tool result", &e))?;
@@ -252,6 +296,20 @@ mod tests {
         assert!(extract_json("event: ping\n\n").is_none());
         assert!(extract_json("").is_none());
         assert!(extract_json("not json at all").is_none());
+    }
+
+    /// A server given its call bound after the handshake still says what its handshake was given,
+    /// which is what reaching it again after a move starts from.
+    #[test]
+    fn a_servers_startup_bound_is_kept_apart_from_its_call_bound() {
+        let mut server = HttpServer::new("remote", "https://mcp.example/api")
+            .starting_within(Duration::from_secs(5));
+        assert_eq!(server.bound(), Duration::from_secs(5));
+
+        server.set_bound(Duration::from_secs(300));
+
+        assert_eq!(server.startup(), Duration::from_secs(5));
+        assert_eq!(server.bound(), Duration::from_secs(300));
     }
 
     #[test]

@@ -19,10 +19,10 @@
     {"start": "send", "call": "send", "session": "a", "args": {"text": "go"}},
     {"expectRequest": "s", "method": "turn.send", "params": {"session": "s1", "prompt": "go"}},
     {"closeTransport": "bravebot-rpc exited with code 1"},
-    {"await": "send", "error": {"name": "ConnectionLostError", "code": "agent_gone"}},
+    {"await": "send", "error": {"name": "ConnectionLostError", "code": "agent_gone", "outcome": "unknown"}},
     {"expectView": "a", "status": "idle", "ended": {"reason": "connection_lost"}},
     {"expectView": "b", "status": "idle", "ended": {"reason": "connection_lost"}},
     {"start": "after", "call": "raw", "args": {"method": "agent.info"}},
-    {"await": "after", "error": {"name": "ConnectionLostError"}}
+    {"await": "after", "error": {"name": "ConnectionLostError", "outcome": "unknown"}}
   ]
 }

@@ -323,6 +323,7 @@ and an index this reader does not parse in full lists entries it cannot see.
 `verified-by: bravebot_agent::git::an_intent_to_add_entry_whose_file_is_gone_is_a_deletion`
 `verified-by: bravebot_agent::git::a_replaced_submodule_a_smudged_entry_and_a_socket_read_as_git_reads_them`
 `verified-by: bravebot_agent::git::status_show_untracked_files_is_read_from_the_config`
+`verified-by: bravebot_agent::git::a_git_file_makes_a_nested_repository_and_a_quote_or_backslash_is_escaped`
 `verified-by: bravebot_agent::git::a_withheld_attributes_or_ignore_file_is_not_guessed_at`
 `verified-by: bravebot_agent::git::a_withheld_rule_counts_only_where_a_file_it_withholds_is_read`
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`

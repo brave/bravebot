@@ -79,6 +79,11 @@ diff before the work is called done.
 before a commit and before a push, what one commit contains, the specs the code is developed
 against, the security scan, configuration, releasing, and how an issue is titled and labelled.
 
+To file an issue, use the [issue-poster](agents/agents/issue-poster.md) definition: a person runs
+`/agent issue-poster`, and a session hands it the draft as a delegate. It searches open and closed
+issues, applies the labels `docs/development/labelling-issues.md` describes, and reads the issue
+back, none of which a bare `gh issue create` does.
+
 [docs/best_practices.md](docs/best_practices.md) is what a pull request is reviewed against,
 and holds only rules a person has to read a diff to decide. A rule a tool enforces or could enforce
 is a check, not an entry there.

@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ GITHUB_URL = re.compile(r"(?:^|[@/])github\.com[:/]+([\w.-]+)/([\w.-]+?)(?:\.git
 PULL_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
 OURS = re.compile(r"^<{7}(?: |$)")
 THEIRS = re.compile(r"^>{7}(?: |$)")
+PUSH_DENIED = re.compile(r"Permission to \S+ denied to ")
 MAKE_FAILED = re.compile(r"^make(?:\[\d+\])?: \*\*\*")
 SPEC_RECORDS = {"agents/unverified-clauses.txt", "agents/renumbered-clauses.txt"}
 LOCK_RESOLVES = ["cargo", "metadata", "--locked", "--format-version", "1"]
@@ -398,15 +400,44 @@ def push(pr):
         print(f"{pr.url} is already at {now[:8]}; nothing to push")
         return 0
     # The lease is the head `start` fetched, so a push made since is refused rather than lost.
-    git(
+    args = [
         "push",
         f"--force-with-lease=refs/heads/{pr.head}:{tip}",
         pr.head_remote,
         f"HEAD:refs/heads/{pr.head}",
-        cwd=tree,
-    )
+    ]
+    done = run("git", *args, cwd=tree, check=False)
+    key = None
+    if done.returncode and PUSH_DENIED.search(done.stderr):
+        done, key = push_as_another_key(args, tree, done)
+    if done.returncode:
+        die(f"git {' '.join(args)} failed:\n{(done.stderr or done.stdout).strip()}")
+    if key:
+        print(f"pushed as the ssh-agent key {key}")
     print(f"pushed {tip[:8]} -> {now[:8]} to {pr.tip}\n{pr.url}")
     return 0
+
+
+def agent_keys():
+    listed = run("ssh-add", "-L", check=False)
+    if listed.returncode:
+        return []
+    return [line for line in listed.stdout.splitlines() if line.startswith(("ssh-", "ecdsa-", "sk-"))]
+
+
+def push_as_another_key(args, tree, denied):
+    """GitHub refused the key ssh offered first; try each other key the agent holds, once."""
+    with tempfile.TemporaryDirectory() as tmp:
+        for number, line in enumerate(agent_keys()):
+            file = Path(tmp) / f"key{number}.pub"
+            file.write_text(line + "\n")
+            env = {**os.environ, "GIT_SSH_COMMAND": f"ssh -i {file} -o IdentitiesOnly=yes"}
+            done = run("git", *args, cwd=tree, check=False, env=env)
+            if not done.returncode:
+                return done, line.split(maxsplit=2)[-1]
+            if not PUSH_DENIED.search(done.stderr):
+                return done, None
+    return denied, None
 
 
 def main():

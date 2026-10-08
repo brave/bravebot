@@ -19,7 +19,9 @@
 use crate::SessionScratch;
 use crate::confirm::MoveRequest;
 use crate::mcp::{Connection, Session, Unmoved, managed_refusal, shown, unreadable};
-use bravebot_config::mcp::{self, Approvals, Declaration, Declarations, Digest, Problem, Projects};
+use bravebot_config::mcp::{
+    self, Approvals, Declaration, Declarations, Digest, Problem, Projects, Timeouts,
+};
 use bravebot_config::{Managed, Server};
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::RecordingSink;
@@ -36,12 +38,12 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-/// How long the servers have, together, to answer their handshakes.
+/// How much longer than its two handshake requests' startup bounds a server's thread is waited for.
 ///
-/// Long enough for a runner fetching a package on its first launch. A server that has not
-/// answered by then is left out of the session, and its thread is left waiting: it holds the
-/// server, which is stopped when it answers late or when this process exits and its stdin closes.
-const HANDSHAKE: Duration = Duration::from_secs(60);
+/// A server's requests end at that bound and say so, which is a reason worth giving a person. The
+/// wait for its thread ends later, so a handshake that was stuck somewhere no request bound
+/// reaches, a name that will not resolve for one, is still given up on.
+const HANDSHAKE_SLACK: Duration = Duration::from_secs(5);
 
 /// Who answers for a server no answer of the person's covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,6 +215,7 @@ pub fn reach<A: Asker + ?Sized>(
                 let plan = Plan::Http {
                     url: moving.url.clone(),
                     declared: moving.declaration.digest(),
+                    timeouts: moving.declaration.timeouts(),
                 };
                 (moving.alias.clone(), plan)
             })
@@ -253,6 +256,7 @@ struct Hop {
     url: String,
     /// The digest of that declaration.
     declared: Digest,
+    timeouts: Timeouts,
     /// Where the reply pointed: the server's own bytes, until a person says it moved there.
     destination: Labelled<String>,
 }
@@ -326,7 +330,7 @@ fn moves<A: Asker + ?Sized>(
             continue;
         };
         let declaration = match Declaration::http(url.clone()) {
-            Ok(declaration) => declaration,
+            Ok(declaration) => declaration.timing(hop.timeouts),
             Err(problem) => {
                 notes.push(
                     t!(
@@ -392,10 +396,12 @@ enum Plan {
         directory: Option<PathBuf>,
         /// The digest of the declaration, which a vouch for the server's list is recorded beside.
         declared: Digest,
+        timeouts: Timeouts,
     },
     Http {
         url: String,
         declared: Digest,
+        timeouts: Timeouts,
     },
 }
 
@@ -734,10 +740,11 @@ fn planned(
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Plan, String> {
     let (argv, names, env, reads, directory) = match declaration {
-        Declaration::Http { url } => {
+        Declaration::Http { url, timeouts } => {
             return Ok(Plan::Http {
                 url: url.clone(),
                 declared: declaration.digest(),
+                timeouts: *timeouts,
             });
         }
         Declaration::Stdio {
@@ -746,6 +753,7 @@ fn planned(
             env,
             reads,
             directory,
+            ..
         } => (argv, variables, env, reads, directory),
     };
     // A stored name is never in `variables`, so the environment is not read for it.
@@ -782,6 +790,7 @@ fn planned(
         reads: reads.iter().map(PathBuf::from).collect(),
         directory: directory.as_ref().map(PathBuf::from),
         declared: declaration.digest(),
+        timeouts: declaration.timeouts(),
     })
 }
 
@@ -894,7 +903,7 @@ pub fn refused_declaration(
     match (planned(declaration, environment), declaration) {
         (Ok(plan), _) => refused(managed, &plan),
         (Err(_), Declaration::Stdio { argv, .. }) => managed_refusal(managed, Server::Local(argv)),
-        (Err(_), Declaration::Http { url }) => managed_refusal(managed, Server::Remote(url)),
+        (Err(_), Declaration::Http { url, .. }) => managed_refusal(managed, Server::Remote(url)),
     }
 }
 
@@ -1118,7 +1127,7 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
             .map(|word| shown(word))
             .collect::<Vec<_>>()
             .join(" "),
-        Declaration::Http { url } => shown(url),
+        Declaration::Http { url, .. } => shown(url),
     };
     let indent = indent(alias);
     let mut lines = vec![format!(
@@ -1150,6 +1159,17 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
             t!(mcp_directory, path = shown(directory))
         ));
     }
+    let timeouts = declaration.timeouts();
+    if !timeouts.is_default() {
+        lines.push(format!(
+            "{indent}{}",
+            t!(
+                mcp_timeouts,
+                startup = timeouts.startup().as_secs(),
+                tool = timeouts.tool().as_secs()
+            )
+        ));
+    }
     lines.push(format!("{indent}{}", t!(mcp_digest, digest = digest)));
     lines
 }
@@ -1176,6 +1196,12 @@ pub fn problem(found: &Problem) -> String {
         Problem::Url => t!(mcp_problem_url).to_string(),
         Problem::Credentials => t!(mcp_problem_credentials).to_string(),
         Problem::Remote(key) => t!(mcp_problem_remote, key = *key).to_string(),
+        Problem::Timeout(key) => t!(
+            mcp_problem_timeout,
+            key = *key,
+            most = mcp::MAX_TIMEOUT_SECS
+        )
+        .to_string(),
     }
 }
 
@@ -1433,7 +1459,8 @@ fn package(arguments: &[String], ecosystem: Ecosystem) -> Result<Option<String>,
     Ok(None)
 }
 
-/// Start every planned server, and wait for their handshakes until [`HANDSHAKE`] has passed.
+/// Start every planned server, and wait for each handshake for the startup bound its declaration
+/// gives it.
 ///
 /// A remote server whose handshake was redirected off its declaration is not started, and is in
 /// `hops` for the person to be asked about.
@@ -1472,7 +1499,7 @@ fn start_under(
     }
     let (sender, received) =
         mpsc::channel::<(String, McpResult<crate::mcp::Reached>, Option<Hop>)>();
-    let mut waiting: Vec<String> = Vec::new();
+    let mut waiting: Vec<(String, Instant, u64)> = Vec::new();
     let sandbox = plans
         .iter()
         .any(|(_, plan)| matches!(plan, Plan::Stdio { .. }))
@@ -1494,6 +1521,7 @@ fn start_under(
                 mut reads,
                 directory,
                 declared,
+                timeouts,
             } => {
                 reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
                 let sandbox = match &sandbox {
@@ -1558,26 +1586,33 @@ fn start_under(
                         continue;
                     }
                 };
-                waiting.push(alias.clone());
+                waiting.push(wait_for(&alias, timeouts));
                 std::thread::spawn(move || {
                     // Held apart from the handshake, so a server that fails one has been stopped
                     // by the time its home is removed.
                     let outcome =
-                        handshake_local(server, declared).map(|reached| match throwaway {
-                            Some(throwaway) => reached.holding(throwaway),
-                            None => reached,
-                        });
+                        handshake_local(server, declared, timeouts).map(
+                            |reached| match throwaway {
+                                Some(throwaway) => reached.holding(throwaway),
+                                None => reached,
+                            },
+                        );
                     let _ = sender.send((alias, outcome, None));
                 });
             }
-            Plan::Http { url, declared } => {
-                waiting.push(alias.clone());
+            Plan::Http {
+                url,
+                declared,
+                timeouts,
+            } => {
+                waiting.push(wait_for(&alias, timeouts));
                 std::thread::spawn(move || {
-                    let (outcome, hop) = handshake_remote(&alias, url.clone(), declared);
+                    let (outcome, hop) = handshake_remote(&alias, url.clone(), declared, timeouts);
                     let hop = hop.map(|destination| Hop {
                         alias: alias.clone(),
                         url,
                         declared,
+                        timeouts,
                         destination,
                     });
                     let _ = sender.send((alias, outcome, hop));
@@ -1587,15 +1622,31 @@ fn start_under(
     }
     drop(sender);
 
-    let deadline = Instant::now() + HANDSHAKE;
     let mut started = Vec::new();
+    let mut slow: Vec<(String, u64)> = Vec::new();
     while !waiting.is_empty() {
+        // Each server is waited for until its own deadline, so one given longer than another
+        // does not hold the rest of them to its figure.
+        let next = waiting
+            .iter()
+            .map(|(_, deadline, _)| *deadline)
+            .min()
+            .unwrap_or_else(Instant::now);
         let Ok((alias, outcome, hop)) =
-            received.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            received.recv_timeout(next.saturating_duration_since(Instant::now()))
         else {
-            break;
+            let now = Instant::now();
+            for (alias, _, seconds) in waiting.iter().filter(|(_, deadline, _)| *deadline <= now) {
+                slow.push((alias.clone(), *seconds));
+            }
+            waiting.retain(|(_, deadline, _)| *deadline > now);
+            continue;
         };
-        waiting.retain(|waited| *waited != alias);
+        if !waiting.iter().any(|(waited, _, _)| *waited == alias) {
+            // Answered after it was given up on.
+            continue;
+        }
+        waiting.retain(|(waited, _, _)| *waited != alias);
         match (outcome, hop) {
             (Ok(server), _) => started.push(server),
             (Err(_), Some(hop)) => hops.push(hop),
@@ -1609,25 +1660,38 @@ fn start_under(
             ),
         }
     }
-    for alias in waiting {
-        notes.push(
-            t!(
-                servers_too_slow,
-                alias = alias,
-                seconds = HANDSHAKE.as_secs()
-            )
-            .to_string(),
-        );
+    for (alias, seconds) in slow {
+        notes.push(t!(servers_too_slow, alias = alias, seconds = seconds).to_string());
     }
     started.sort_by(|one, other| one.alias().cmp(other.alias()));
     started
 }
 
-/// A local server's handshake, and then its list.
-fn handshake_local(mut server: StdioServer, declared: Digest) -> McpResult<crate::mcp::Reached> {
+/// The server `alias`, the time its handshake is given up on, and the seconds each of its two
+/// requests was given. A `tools/list` of several pages gives each page the bound and is still
+/// given up on at this time.
+fn wait_for(alias: &str, timeouts: Timeouts) -> (String, Instant, u64) {
+    (
+        alias.to_string(),
+        Instant::now() + 2 * timeouts.startup() + HANDSHAKE_SLACK,
+        timeouts.startup().as_secs(),
+    )
+}
+
+/// A local server's handshake, and then its list, each within the startup bound it was given.
+///
+/// A request that is not answered in time stops the process. Once the handshake is done the server
+/// is held to its call bound instead.
+fn handshake_local(
+    mut server: StdioServer,
+    declared: Digest,
+    timeouts: Timeouts,
+) -> McpResult<crate::mcp::Reached> {
+    server.set_bound(timeouts.startup());
     server.initialize("bravebot", env!("CARGO_PKG_VERSION"))?;
     let alias = server.name().to_string();
     let listing = bravebot_mcp::listed_or_none(&alias, server.list_tools())?;
+    server.set_bound(timeouts.tool());
     Ok(crate::mcp::Reached::new(
         Connection::Stdio(server),
         listing,
@@ -1644,6 +1708,7 @@ fn handshake_remote(
     alias: &str,
     url: String,
     declared: Digest,
+    timeouts: Timeouts,
 ) -> (McpResult<crate::mcp::Reached>, Option<Labelled<String>>) {
     let mut sink = RecordingSink::new();
     let mut routing = Routing::new();
@@ -1661,7 +1726,7 @@ fn handshake_remote(
         Err(denial) => return (Err(McpError::Denied(denial)), None),
     };
     let egress = bravebot_net::Egress::new();
-    let reached = handshake_at(&mut policy, &egress, alias, url, declared);
+    let reached = handshake_at(&mut policy, &egress, alias, url, declared, timeouts);
     let hop = match &reached {
         Err(McpError::Denied(_)) => policy.take_server_hop(),
         _ => None,
@@ -1675,10 +1740,12 @@ fn handshake_at(
     alias: &str,
     url: String,
     declared: Digest,
+    timeouts: Timeouts,
 ) -> McpResult<crate::mcp::Reached> {
-    let mut server = HttpServer::new(alias, url);
+    let mut server = HttpServer::new(alias, url).starting_within(timeouts.startup());
     server.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
     let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(policy, egress))?;
+    server.set_bound(timeouts.tool());
     Ok(crate::mcp::Reached::new(
         Connection::Http(server),
         listing,
@@ -3074,6 +3141,28 @@ mod tests {
             .digest()
     }
 
+    /// The bounds a declaration gives are shown where the person is asked about it, and a
+    /// declaration that gives none shows none, so no line is added to what is drawn today.
+    #[test]
+    fn a_declarations_own_timeouts_are_drawn_and_the_defaults_are_not() {
+        let plain = Declaration::http("https://a.example.com".into()).expect("declaration");
+        let timed = plain
+            .clone()
+            .timing(Timeouts::new(Some(5), None).expect("timeouts"));
+
+        let drawn_plain = drawn("remote", &plain, "abcd1234");
+        let drawn_timed = drawn("remote", &timed, "abcd1234");
+
+        assert!(!drawn_plain.iter().any(|line| line.contains("seconds")));
+        let [.., line, _digest] = drawn_timed.as_slice() else {
+            panic!("{drawn_timed:?}");
+        };
+        assert!(
+            line.contains("5 seconds to start") && line.contains("120 seconds for each call"),
+            "{line}"
+        );
+    }
+
     /// One per declaration, so what a runner fetched is there on its next launch and a declaration
     /// edited to run something else starts with nothing the one before it wrote.
     #[test]
@@ -3188,6 +3277,7 @@ done
             reads: Vec::new(),
             directory: Some(work.to_path_buf()),
             declared: digested(&["weather-mcp"]),
+            timeouts: Timeouts::default(),
         };
         Some(start(
             vec![("weather".to_string(), plan)],
@@ -3282,6 +3372,17 @@ done
     /// A server at a port of its own answering each request with `answer`, and every body it was
     /// sent.
     fn serving(answer: fn(&str, &str) -> String, to: String) -> (String, mpsc::Receiver<String>) {
+        serving_holding(answer, to, "", Duration::ZERO)
+    }
+
+    /// As [`serving`], holding each request whose body names `method` for `hold` before answering
+    /// it.
+    fn serving_holding(
+        answer: fn(&str, &str) -> String,
+        to: String,
+        method: &'static str,
+        hold: Duration,
+    ) -> (String, mpsc::Receiver<String>) {
         use std::io::Read;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
@@ -3305,6 +3406,9 @@ done
                 let _ = reader.read_exact(&mut body);
                 let body = String::from_utf8_lossy(&body).into_owned();
                 let _ = sender.send(body.clone());
+                if !method.is_empty() && body.contains(method) {
+                    std::thread::sleep(hold);
+                }
                 let _ = stream.write_all(answer(&body, &to).as_bytes());
                 let _ = stream.flush();
             }
@@ -3609,6 +3713,7 @@ done
             reads: Vec::new(),
             directory: Some(work.clone()),
             declared: digested(&["weather-mcp"]),
+            timeouts: Timeouts::default(),
         };
         let mut notes = Vec::new();
 
@@ -3696,6 +3801,7 @@ done
             reads: reads.clone(),
             directory: Some(work.clone()),
             declared: digested(&["weather-mcp"]),
+            timeouts: Timeouts::default(),
         };
         let mut notes = Vec::new();
 
@@ -3721,5 +3827,248 @@ done
             !work.join("state-read").exists(),
             "the server read a file in the state directory"
         );
+    }
+
+    /// Answers its handshake after `handshake` seconds and a call after `call`, so a bound on
+    /// either decides whether the answer is read.
+    #[cfg(unix)]
+    fn slow_server(handshake: u32, call: u32) -> String {
+        format!(
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      sleep {handshake}
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocolVersion":"2025-06-18","capabilities":{{}},"serverInfo":{{"name":"fake","version":"1"}}}}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":[]}}}}\n' "$id"
+      ;;
+    *'"tools/call"'*)
+      sleep {call}
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"content":[{{"type":"text","text":"done"}}]}}}}\n' "$id"
+      ;;
+  esac
+done
+"#
+        )
+    }
+
+    /// Start the server `script` is from `root` under this machine's confinement, given
+    /// `timeouts`, or `None` where there is none to start it under.
+    #[cfg(unix)]
+    fn started_slow(
+        root: &Path,
+        script: &str,
+        timeouts: Timeouts,
+        notes: &mut Vec<String>,
+    ) -> Option<Vec<crate::mcp::Reached>> {
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return None;
+        }
+        let state = root.join("state");
+        let work = root.join("work");
+        std::fs::create_dir_all(&state).expect("state");
+        std::fs::create_dir_all(&work).expect("work");
+        let program = installed(&root.join("bin"), "weather-mcp");
+        std::fs::write(&program, script).expect("write the server");
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: Some(work),
+            declared: digested(&["weather-mcp"]),
+            timeouts,
+        };
+        let home = Home {
+            directory: Some(state),
+            writable: true,
+        };
+        Some(start(
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            notes,
+            &mut Vec::new(),
+        ))
+    }
+
+    /// A server that does not answer within the startup bound its declaration gives is left out
+    /// with a note saying so, when that bound passes and not when the default does.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_not_answering_its_handshake_within_its_startup_bound_is_left_out_at_that_bound() {
+        let root = scratch("cli-servers-startup-bound");
+        let mut notes = Vec::new();
+        let timeouts = Timeouts::new(Some(1), None).expect("timeouts");
+
+        let started = std::time::Instant::now();
+        let Some(reached) = started_slow(&root, &slow_server(30, 0), timeouts, &mut notes) else {
+            return;
+        };
+
+        assert!(reached.is_empty(), "a server that never answered was kept");
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "the handshake was waited on past its bound: {:?}",
+            started.elapsed()
+        );
+        let about_handshake: Vec<&String> = notes
+            .iter()
+            .filter(|note| note.contains("handshake"))
+            .collect();
+        let [note] = about_handshake.as_slice() else {
+            panic!("notes were {notes:?}");
+        };
+        assert!(
+            note.contains("weather") && note.contains("initialize timed out after 1 seconds"),
+            "{note}"
+        );
+    }
+
+    /// A handshake given longer than the server takes completes, so the bound is the declaration's
+    /// and a slow but working server is not left out.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_answering_its_handshake_within_a_longer_startup_bound_is_kept() {
+        let root = scratch("cli-servers-startup-longer");
+        let mut notes = Vec::new();
+        let timeouts = Timeouts::new(Some(30), None).expect("timeouts");
+
+        let Some(reached) = started_slow(&root, &slow_server(2, 0), timeouts, &mut notes) else {
+            return;
+        };
+
+        assert_eq!(reached.len(), 1, "{notes:?}");
+        assert!(
+            !notes.iter().any(|note| note.contains("handshake")),
+            "{notes:?}"
+        );
+    }
+
+    /// Once the handshake is done a server is held to the call bound its declaration gives, which
+    /// is not the startup bound: this one answers its handshake at once, takes three seconds to
+    /// answer a call, and is given one.
+    #[cfg(unix)]
+    #[test]
+    fn a_started_server_is_held_to_the_call_bound_its_declaration_gives() {
+        let root = scratch("cli-servers-call-bound");
+        let mut notes = Vec::new();
+        let timeouts = Timeouts::new(Some(30), Some(1)).expect("timeouts");
+        let Some(reached) = started_slow(&root, &slow_server(0, 3), timeouts, &mut notes) else {
+            return;
+        };
+        assert_eq!(reached.len(), 1, "{notes:?}");
+        let session = Session::new(
+            reached,
+            root.join("work"),
+            Some(root.join("state")),
+            true,
+            Managed::default(),
+        );
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "call a tool");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("weather"))]),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let called = std::time::Instant::now();
+        let error = session
+            .call(
+                &mut policy,
+                &bravebot_net::Egress::new(),
+                "weather",
+                "lookup",
+                serde_json::json!({}),
+            )
+            .expect_err("the answer came after the bound");
+
+        assert_eq!(error.to_string(), "tool 'lookup' timed out after 1 seconds");
+        assert!(called.elapsed() < Duration::from_millis(2900));
+    }
+
+    /// Reach a remote weather server that holds the requests naming `method` for `hold`, under
+    /// `timeouts`.
+    fn reached_remote(
+        method: &'static str,
+        hold: Duration,
+        timeouts: Timeouts,
+    ) -> McpResult<crate::mcp::Reached> {
+        let (url, _bodies) = serving_holding(weather, String::new(), method, hold);
+        let declared = Declaration::http(url.clone()).expect("declaration");
+        handshake_remote("weather", url, declared.digest(), timeouts).0
+    }
+
+    /// A remote server that does not answer its handshake within the startup bound its declaration
+    /// gives fails at that bound, which is not the call bound or the default.
+    #[test]
+    fn a_remote_server_not_answering_its_handshake_within_its_startup_bound_is_given_up_on() {
+        let timeouts = Timeouts::new(Some(1), Some(30)).expect("timeouts");
+
+        let started = std::time::Instant::now();
+        let error = reached_remote("initialize", Duration::from_secs(4), timeouts)
+            .err()
+            .expect("the handshake was answered after its bound");
+
+        assert_eq!(error.to_string(), "initialize timed out after 1 seconds");
+        assert!(
+            started.elapsed() < Duration::from_millis(3500),
+            "the handshake was waited on past its bound: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Once its handshake is done a remote server is held to the call bound its declaration gives,
+    /// which is not the startup bound: this one answers its handshake at once, takes three seconds
+    /// to answer a call, and is given one.
+    #[test]
+    fn a_reached_remote_server_is_held_to_the_call_bound_its_declaration_gives() {
+        let root = scratch("cli-servers-remote-call-bound");
+        let timeouts = Timeouts::new(Some(30), Some(1)).expect("timeouts");
+        let reached = reached_remote("tools/call", Duration::from_secs(3), timeouts)
+            .expect("the handshake is answered at once");
+        let session = Session::new(
+            vec![reached],
+            root.clone(),
+            Some(root),
+            true,
+            Managed::default(),
+        );
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "call a tool");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([
+                Capability::WebFetch,
+                Capability::McpCall(ServerAlias::new("weather")),
+            ]),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let called = std::time::Instant::now();
+        let error = session
+            .call(
+                &mut policy,
+                &bravebot_net::Egress::new(),
+                "weather",
+                "lookup",
+                serde_json::json!({}),
+            )
+            .expect_err("the answer came after the bound");
+
+        assert_eq!(error.to_string(), "tool 'lookup' timed out after 1 seconds");
+        assert!(called.elapsed() < Duration::from_millis(2900));
     }
 }
