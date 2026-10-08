@@ -23,6 +23,7 @@ use bravebot_core::policy::{Denial, Policy};
 use bravebot_core::spelling::to_key;
 use bravebot_core::trust::is_absolute_key;
 use bravebot_core::value::Labelled;
+use bravebot_filetype::{SNIFF_BYTES, looks_binary};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -2095,10 +2096,20 @@ impl Workspace {
 
         let mut lines = Vec::new();
         let mut long_lines = 0usize;
+        let mut spent = 0usize;
         for line in contents.lines().skip(start).take(limit) {
             let mut text = line.to_string();
-            if truncate_to_chars(&mut text, MAX_LINE) {
+            let shortened = truncate_to_chars(&mut text, MAX_LINE);
+            if shortened {
                 text.push_str(" … (line truncated)");
+            }
+            // The newline after the line counts, so a page of empty lines is bounded too.
+            let cost = text.chars().count() + 1;
+            if spent + cost > MAX_PAGE_CHARS {
+                break;
+            }
+            spent += cost;
+            if shortened {
                 long_lines += 1;
             }
             lines.push(text);
@@ -2733,34 +2744,11 @@ const MAX_SEARCH_TIME: Duration = Duration::from_secs(10);
 /// bytes a page of ASCII does.
 const MAX_PAGE_LINES: usize = 500;
 const MAX_LINE: usize = 2_000;
-
-/// Bytes inspected when deciding whether a file is text.
-const SNIFF_BYTES: usize = 8_192;
-
-/// Directories skipped when walking a tree.
-///
-/// Version control, build output and vendored dependencies would dominate a listing without
-/// adding anything a task needs. This is size hygiene applied to *directory names*, not to
-/// content: nothing is read to decide, so it cannot be steered by what a file contains.
-///
-/// A fixed list rather than the project's own ignore file, and deliberately. Reading
-/// `.gitignore` would generalise better, being how a search tool learns each repository's
-/// own idea of noise, but it would decide what to walk from the contents of a file in the
-/// tree being walked, and a tree that can hide its own files from search is a tree that can
-/// hide them from review. The names below are ones no project uses for its own sources, so
-/// skipping them needs nobody's word for it.
-///
-/// Vendored code is the entry that earns its place by experience: a search for a common word
-/// spent its entire budget inside a Rust crate mirror and reported documentation comments
-/// about the wrong meaning of the word, having never reached the project.
-/// Whether a directory of this name is one a walk steps over.
-///
-/// Shared so that everything walking the tree skips the same names. A pattern expanded for a
-/// command line and a listing shown to a person that disagreed about `node_modules` would be two
-/// different ideas of what the tree contains.
-pub fn is_ignored_directory(name: &str) -> bool {
-    IGNORED_DIRECTORIES.contains(&name)
-}
+/// Characters in a whole page, counting a newline after each line. Without it the worst page is
+/// `MAX_PAGE_LINES` x `MAX_LINE`, a million characters, which a minified bundle reaches in one read.
+const MAX_PAGE_CHARS: usize = 100_000;
+// A shortened line and its notice always fit, so a page is never empty because of the budget.
+const _: () = assert!(MAX_LINE + 64 < MAX_PAGE_CHARS);
 
 /// Whether the directory `name`, found inside `parent`, is one a walk from above steps over.
 ///
@@ -2769,51 +2757,9 @@ pub fn is_ignored_directory(name: &str) -> bool {
 /// the two names alone, as the single names are. A search that names a directory inside it still
 /// reaches it, because the walk then starts below the skipped name.
 fn is_ignored_in(parent: &Path, name: &str) -> bool {
-    is_ignored_directory(name)
+    bravebot_filetype::is_ignored_directory(name)
         || (name == "worktrees" && parent.file_name().is_some_and(|p| p == ".claude"))
 }
-
-const IGNORED_DIRECTORIES: &[&str] = &[
-    // Version control.
-    ".git",
-    ".hg",
-    ".svn",
-    // Build output and caches.
-    "target",
-    "dist",
-    "build",
-    ".next",
-    ".nuxt",
-    ".parcel-cache",
-    ".turbo",
-    ".gradle",
-    ".cache",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    "__pycache__",
-    "coverage",
-    ".nyc_output",
-    ".terraform",
-    ".stack-work",
-    // Linked worktrees, each a full copy of the tree. `.claude/worktrees` is the two-segment
-    // case, in `is_ignored_in`.
-    ".worktrees",
-    // Dependencies, fetched or vendored. `out` and `bin` are deliberately absent: plenty of
-    // projects keep real sources under those names.
-    "node_modules",
-    "bower_components",
-    "vendor",
-    "third_party",
-    "thirdparty",
-    "Pods",
-    "Carthage",
-    "site-packages",
-    ".venv",
-    "venv",
-    ".bundle",
-];
 
 /// A path inside the repository the planner called `named`, spelled the way it spelled the
 /// repository, so the trust map is asked about the name it would be asked about for a read.
@@ -2855,11 +2801,6 @@ fn truncate_to_chars(text: &mut String, limit: usize) -> bool {
     }
 }
 
-/// Whether a byte run looks like binary rather than text.
-///
-/// A null byte is decisive, since no text file contains one. Beyond that, a high proportion of
-/// control characters means the same thing without needing a file-type list to be kept up
-/// to date. Only the head is inspected, since the answer does not improve by reading more.
 /// Fill as much of `buffer` as the file has, since one read is not obliged to return it all.
 fn read_up_to(file: &mut std::fs::File, buffer: &mut [u8]) -> std::io::Result<usize> {
     use std::io::Read;
@@ -2871,23 +2812,6 @@ fn read_up_to(file: &mut std::fs::File, buffer: &mut [u8]) -> std::io::Result<us
         }
     }
     Ok(filled)
-}
-
-fn looks_binary(bytes: &[u8]) -> bool {
-    let head = &bytes[..bytes.len().min(SNIFF_BYTES)];
-    if head.is_empty() {
-        return false;
-    }
-    if head.contains(&0) {
-        return true;
-    }
-    // Tab, newline, carriage return and form feed are expected in text; other low bytes
-    // are not.
-    let control = head
-        .iter()
-        .filter(|b| **b < 32 && !matches!(**b, 9 | 10 | 12 | 13))
-        .count();
-    control * 100 / head.len() > 30
 }
 
 /// A token that differs after a file is written, for comparing one look at it with the next.
@@ -2950,7 +2874,8 @@ pub(crate) fn window_of(offset: usize, limit: usize) -> (usize, usize) {
 /// A bounded window of a file's lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
-    /// The lines in this window, each capped at [`MAX_LINE`] characters.
+    /// The lines in this window, each capped at [`MAX_LINE`] characters and all together at
+    /// [`MAX_PAGE_CHARS`], so a page can end before the line limit does.
     pub lines: Vec<String>,
     /// Whether the file ends with a newline.
     ///
@@ -3410,32 +3335,44 @@ impl Workspace {
             let root = self.resolve(&relative)?;
 
             let mut paths = Vec::new();
-            // Whether every file was reached, which the count cannot answer: a tree of exactly the
-            // cap fills `paths` without a single file being left out.
-            let mut ignored = Vec::new();
-            // Expanded once for the whole walk, not once per path.
-            let expanded = glob.as_deref().map(crate::glob::expand);
-            let under = self.relative_display(&root);
-            let wanted = expanded.as_deref().map(|patterns| Wanted {
-                patterns,
-                under: &under,
-            });
-            let denied = |path: &str| policy.read_is_denied(path);
-            let mut collected = Collected {
-                files: &mut paths,
-                stopped_at: &mut ignored,
-                withheld: false,
-                unreadable: false,
+            let (unvisited, withheld) = if root.is_file() {
+                // A file named as the target is the whole walk. `resolve` has already confined it
+                // to the workspace, and `include` selects among files a walk reaches, so it is not
+                // consulted for the one file the call named. A rule covers it as it covers a read
+                // of it by name.
+                let denied = self.rule_denies_reading(policy, &relative);
+                if !denied {
+                    paths.push(self.relative_display(&root));
+                }
+                (false, denied)
+            } else {
+                // Whether every file was reached, which the count cannot answer: a tree of exactly
+                // the cap fills `paths` without a single file being left out.
+                let mut ignored = Vec::new();
+                // Expanded once for the whole walk, not once per path.
+                let expanded = glob.as_deref().map(crate::glob::expand);
+                let under = self.relative_display(&root);
+                let wanted = expanded.as_deref().map(|patterns| Wanted {
+                    patterns,
+                    under: &under,
+                });
+                let denied = |path: &str| policy.read_is_denied(path);
+                let mut collected = Collected {
+                    files: &mut paths,
+                    stopped_at: &mut ignored,
+                    withheld: false,
+                    unreadable: false,
+                };
+                let unvisited = self.walk_filtered(
+                    &root,
+                    wanted,
+                    None,
+                    self.search_files,
+                    &denied,
+                    &mut collected,
+                )?;
+                (unvisited, collected.withheld)
             };
-            let unvisited = self.walk_filtered(
-                &root,
-                wanted,
-                None,
-                self.search_files,
-                &denied,
-                &mut collected,
-            )?;
-            let withheld = collected.withheld;
             paths.sort();
             let considered = paths.len();
 
@@ -3695,6 +3632,7 @@ impl Workspace {
                 pattern: pattern.as_ref(),
                 since,
                 until,
+                every_untracked: false,
                 deadline,
             };
             let withheld = |inside: &str| self.denies_in_repository(policy, &named, inside);
@@ -3939,11 +3877,83 @@ impl Workspace {
             .is_some_and(|last| *last > after)
     }
 
+    /// The paths a status over the session's checkout `id` lists (CHECKOUT-13).
+    ///
+    /// The same terms as `read_git`'s status in a checkout (GIT-11, CHECKOUT-12): the map has to
+    /// trust the whole checkout and all of `.git`, no deny rule may cover a file the status reads,
+    /// and nothing is read at `<checkout>/.git`. What comes back is a list of names the status
+    /// printed, which a planner could be shown on the same terms, and nothing compares any file's
+    /// bytes here.
+    pub fn checkout_status<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        id: &str,
+    ) -> Result<crate::git::Listing, crate::git::Declined> {
+        use crate::git::Declined;
+        let made = self
+            .session_checkouts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|made| made.id == id && made.path.exists())
+            .cloned()
+            .ok_or(Declined::NoRepository)?;
+        let root = made.path.to_string_lossy().into_owned();
+        let tree_key = self.trust_key(&root);
+        policy.capture_files(|policy, _capture| {
+            let git_key = self.trusted_git_dir(policy, ".")?;
+            if !policy.trusts_beneath(&tree_key) {
+                return Err(Declined::UntrustedTree);
+            }
+            let deadline = Instant::now() + self.search_time;
+            let entry = made.git_dir.join("worktrees").join(&made.id);
+            let query = crate::git::Query::Status;
+            self.surveyed_linked(policy, &made.git_dir, &entry, query, deadline)?;
+            let opened = crate::git::Repository::open_linked(&made.git_dir, &entry, &made.path)?;
+            let request = crate::git::Request {
+                query,
+                revision: None,
+                path: None,
+                count: crate::git::DEFAULT_COUNT,
+                skip: 0,
+                messages: false,
+                pattern: None,
+                since: None,
+                until: None,
+                every_untracked: true,
+                deadline,
+            };
+            let withheld = |inside: &str| {
+                let spelled = format!("{root}/{inside}");
+                policy.read_is_denied(&self.trust_key(&spelled))
+                    || self.rule_denies_reading(policy, &spelled)
+            };
+            let answer = opened.answer(&request, &withheld)?;
+            let shown: Vec<String> = answer
+                .shown
+                .iter()
+                .map(|inside| self.trust_key(&format!("{root}/{inside}")))
+                .collect();
+            let label = policy
+                .observe_repository(
+                    Capability::FileRead,
+                    &git_key,
+                    shown.iter().map(String::as_str),
+                )
+                .map_err(|_| Declined::Untrusted)?;
+            if label.integrity != bravebot_core::Integrity::Trusted {
+                return Err(Declined::UntrustedTree);
+            }
+            Ok(answer.listing.unwrap_or_default())
+        })
+    }
+
     /// The text of a file the driver recorded a write to in the session's checkout `id`, labelled
     /// as the same path is in the working directory (CHECKOUT-8, CHECKOUT-14).
     ///
     /// `relative` has to be one of the checkout's candidates, so what is read is a name a planner
-    /// holding nothing untrusted typed. It is read only as a plain file, with no link followed
+    /// holding nothing untrusted typed, or one `listed` holds, which is what
+    /// [`Workspace::checkout_status`] listed. It is read only as a plain file, with no link followed
     /// anywhere between the checkout's root and the file: a program that ran in the checkout could
     /// have left a link in its place that reaches a file outside it. Nothing in the answer is
     /// compared with anything. The label comes from the map's rule for the checkout's path, which
@@ -3954,6 +3964,7 @@ impl Workspace {
         policy: &Policy<'_, S>,
         id: &str,
         relative: &str,
+        listed: &std::collections::BTreeSet<String>,
     ) -> Result<Labelled<String>, CheckoutRead> {
         let made = self
             .session_checkouts
@@ -3969,7 +3980,8 @@ impl Workspace {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .named
-            .contains(relative);
+            .contains(relative)
+            || listed.contains(relative);
         if !candidate {
             return Err(CheckoutRead::NotACandidate);
         }
@@ -4094,6 +4106,24 @@ impl Workspace {
             .join("checkouts")
             .join(crate::home::key_for(&self.root));
         crate::git::checkout::sweep(&self.root.join(".git"), &directory, listed)
+    }
+
+    /// The checkouts under this working directory's key in `state`'s `checkouts/` that `listed`
+    /// does not name and this session does not keep, with their paths, by number (CHECKOUT-16).
+    /// Removes nothing: it is what `/checkouts` names where the opening sweep removes none.
+    pub fn unlisted_checkouts(
+        &self,
+        state: &Path,
+        listed: &dyn Fn(&str) -> bool,
+    ) -> Vec<(String, PathBuf)> {
+        let Ok(state) = state.canonicalize() else {
+            return Vec::new();
+        };
+        let directory = state
+            .join("checkouts")
+            .join(crate::home::key_for(&self.root));
+        let kept: Vec<String> = self.session_checkouts().into_iter().map(|c| c.id).collect();
+        crate::git::checkout::unlisted(&directory, &|id| listed(id) || kept.iter().any(|k| k == id))
     }
 
     /// For starting over inside one process: the session beginning here has made no checkout, so

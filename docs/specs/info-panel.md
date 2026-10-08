@@ -12,8 +12,8 @@ documented-by: docs/website/docs/using/sessions.md
 
 What lets somebody running many sessions at once tell which terminal holds which: the terminal's
 title, and the info panel beside the transcript, which holds the session's name, its goal, the
-issue and pull request it is for, its context and cache, the language servers and MCP servers it
-has started, and its plan. Giving a session its links with `--issue` and `--pr`, from a URL in a
+issue and pull request it is for, the model and effort it runs on, its context and cache, its token
+total, the language servers and MCP servers it has started, and its plan. Giving a session its links with `--issue` and `--pr`, from a URL in a
 prompt, and from what `gh pr create` prints are proposed in
 [brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267) and not built. How a session
 gets its name is [sessions.md](sessions.md), and the keys a settings file can move are
@@ -151,12 +151,20 @@ narrow for it.
    directory, so a checkout made during a turn shows from the next of those. Each is one row, cut
    from the left with an ellipsis where it is longer, since the end is what tells two apart. A new
    name reaches an open panel on the next frame, not at the next key.
-2. **Goal.** The condition, while a goal stands ([GOAL-1](goal.md#GOAL-1)).
-3. **Links.** PANEL-12.
-4. **Context.** PANEL-8. It always has a reading, so it is always there.
-5. **Language servers.** PANEL-13.
-6. **MCP servers.** PANEL-14.
-7. **Plan.** PANEL-10.
+2. **Model.** The model the person chose, one row cut from the left with an ellipsis where it is
+   longer, and the effort level in force below it, as `effort high`. The model is the person's
+   choice, never the name an endpoint replied with, so a reply
+   that names another model changes nothing here. The effort row is left out where the model reads
+   none. Both come from the session's settings, so the section is left out while the person has
+   chosen no model and no effort level is in force.
+3. **Goal.** The condition, while a goal stands ([GOAL-1](goal.md#GOAL-1)).
+4. **Links.** PANEL-12.
+5. **Context.** PANEL-8. It always has a reading, so it is always there. Under the reading it
+   has the session's token total, as `/cost` opens with it, in tokens and not money, counting what
+   the turn in flight has spent so far, and left out until a token has been spent.
+6. **Language servers.** PANEL-13.
+7. **MCP servers.** PANEL-14.
+8. **Plan.** PANEL-10.
 
 A section with nothing to show has no heading. Control characters in any row are drawn as visible
 characters, as they are wherever the interface draws text, since a directory or a branch is called
@@ -166,6 +174,8 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::a_long_name_takes_three_rows_and_ends_in_an_ellipsis`
 `verified-by: bravebot_tui::panel::control_characters_in_the_session_section_are_drawn_as_pictures`
 `verified-by: bravebot_tui::panel::a_long_directory_and_branch_keep_their_ends`
+`verified-by: bravebot_tui::panel::the_model_section_shows_the_choice_and_the_effort_in_force_and_ignores_a_reply`
+`verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
 
 <a id="PANEL-10"></a>
@@ -190,9 +200,10 @@ last row counts the rows left out above the ones shown apart from those below th
 Every row the panel draws comes from text the person typed (the session's name, which comes from a
 prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, and the links given
 with `/issue` and `/pr`), the planner's own `todo_write` rows, the driver's own counters (the context
-reading and the cache figures), the chord in force, the directory and branch the session runs in, the
-programs of the language servers it started (PANEL-13), or the aliases of its MCP servers (PANEL-14).
-No row comes from a reply, a tool result, a file's contents, a language server's reply, an issue or
+reading, the cache figures and the token total), the chord in force, the directory and branch the
+session runs in, the programs of the language servers it started (PANEL-13), the aliases of its MCP
+servers (PANEL-14), or the model the person chose and the effort level in force. No row comes from a
+reply, a tool result, a file's contents, a language server's reply, an issue or
 pull request body, or anything a job printed.
 
 **Why.** The panel is the interface speaking in its own voice, like the scroller's footer

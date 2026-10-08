@@ -36,6 +36,24 @@ bravebot -c                # the same
 
 The list is sorted on what each record says it was last written, not by id.
 
+Typing narrows the list by title, branch and linked issue or pull request, and by what was said in
+the session: the prompts you typed, the model's replies, and the paths and commands its calls
+named. A session found that way shows the first matching line under its title. Add `since:7d`
+(`h` for hours, `d` for days, `w` for weeks) to keep only sessions written within that long. Tool
+results, files you attached and [imported sessions](#importing-sessions-from-claude-code) are not
+searched. The records are read when you type the first character, so a long list pauses once.
+
+From a script, `bravebot sessions search` does the same and prints a session's id and title on a
+line each, newest first:
+
+```sh
+bravebot sessions search ledger rounding
+bravebot sessions search since:2w workspace:../app flaky test
+```
+
+`workspace:` names the directory whose sessions are searched, and defaults to the current one. It
+exits 1 and prints nothing when no session matches.
+
 `--continue` takes the session the picker would offer first and picks it up exactly as naming its id
 would. It passes over a [manifest run](#a-manifest-run-is-recorded-but-cannot-be-continued) rather
 than refusing it. Where this directory holds nothing continuable it says so and fails rather than
@@ -227,10 +245,12 @@ The title says which session a terminal holds. The info panel says the rest: pre
 `/panel`, and a column 36 wide opens on the right of the screen with
 
 - the session's name, its directory and its branch,
+- the model you chose and the effort level in force,
 - the goal, while one stands,
 - the pull request and the issue the session is for, once you give them with `/pr` and `/issue`,
   each cut from the left where it is long so the number at the end stays in view,
-- how full the context is, the cache hit rate, and what the last turn read from the cache and wrote
+- how full the context is, the tokens the session has spent (the figure `/cost` opens with), the
+  cache hit rate, and what the last turn read from the cache and wrote
   into it, as two figures,
 - the language servers the session has started, by program name, and the MCP servers, by alias,
 - the plan, which stays after the turn ends. Where it runs past the bottom it keeps the task in

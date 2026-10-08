@@ -71,7 +71,9 @@ Reads a UTF-8 text file from the workspace and returns its lines.
 | `offset` | 1-based line to start at |
 | `limit` | maximum lines to return, capped so one read cannot fill the conversation |
 
-Long files come back one page at a time. The result says so and gives the offset to continue from. A
+Long files come back one page at a time, at most 500 lines and 100,000 characters, with each line
+shortened to 2,000 characters. A page of long lines ends at the last whole line that fits under the
+character cap. The result says so and gives the offset to continue from. A
 file that is not text is reported as binary, a picture being the exception.
 
 **A picture is quarantined whatever the trust map says, and leaves quarantine only through
@@ -152,7 +154,7 @@ Finds lines matching a **regular expression** in workspace files.
 | Parameter | |
 |---|---|
 | `pattern` | a regular expression. May be a list, in which case a line matches if it matches any of them |
-| `directory` | workspace-relative, defaults to `.` |
+| `directory` | workspace-relative, defaults to `.`. May name one file, which is then the only file searched and `include` is not consulted |
 | `include` | optional glob limiting which files are searched: `*`, `?`, `**` and brace groups like `**/*.{cc,h,mm}`. One with a `/` may be written from `directory` or from the workspace root |
 | `offset` | which match to resume from, to read past the match cap ([below](#a-capped-search-can-be-asked-past-its-cap)) |
 | `case_sensitive` | defaults to true. `(?i)` in the pattern asks for the same thing |

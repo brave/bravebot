@@ -1026,7 +1026,10 @@ pub(super) fn answer(
         attributes: Attributes::default(),
         case,
         filter,
-        mode: settings.untracked,
+        mode: match out.every_untracked {
+            true => Untracked::All,
+            false => settings.untracked,
+        },
         untracked: Vec::new(),
     };
     for path in tracked.keys() {
@@ -1080,6 +1083,7 @@ pub(super) fn answer(
         index_time,
         real_dirs: HashSet::new(),
     };
+    out.listing = Some(super::Listing::default());
     let mut rows: Vec<(String, String)> = Vec::new();
     let mut not_compared: Vec<String> = Vec::new();
     let mut paths: Vec<&Vec<u8>> = head.keys().chain(tracked.keys()).collect();
@@ -1158,6 +1162,14 @@ pub(super) fn answer(
         }
         out.text
             .line(&format!("{code} {}", quoted(&path, settings.quote_path)));
+        if let Some(listing) = out.listing.as_mut() {
+            match code.as_str() {
+                // A conflict is left for the person.
+                "DD" | "AU" | "UD" | "UA" | "DU" | "AA" | "UU" => out.listing_partial = true,
+                _ if code.contains('D') => listing.removed.push(path.clone()),
+                _ => listing.changed.push(path.clone()),
+            }
+        }
         out.shown.push(path);
     }
     for path in untracked {
@@ -1166,7 +1178,16 @@ pub(super) fn answer(
         }
         out.text
             .line(&format!("?? {}", quoted(&path, settings.quote_path)));
+        match (path.ends_with('/'), out.listing.as_mut()) {
+            // A directory git did not open lists no file in it.
+            (true, _) => out.listing_partial = true,
+            (false, Some(listing)) => listing.changed.push(path.clone()),
+            (false, None) => {}
+        }
         out.shown.push(path.trim_end_matches('/').to_owned());
+    }
+    if !not_compared.is_empty() {
+        out.listing_partial = true;
     }
     if !not_compared.is_empty() && out.room() {
         out.text.line(

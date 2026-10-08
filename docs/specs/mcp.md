@@ -75,8 +75,9 @@ The handshake offers nothing, so a server cannot ask this process to do anything
 <a id="MCP-5"></a>
 ### MCP-5: a failure is reported, never treated as an empty result
 
-A server error, a tool-level error, and a server that exits early are all reported as failures. A
-reply carrying no JSON is nothing rather than an empty success.
+A server error, a tool-level error, a server that exits early, and a request not answered within
+its bound ([SERVERS-15](mcp-servers.md#SERVERS-15)) are all reported as failures. A reply carrying no
+JSON is nothing rather than an empty success.
 
 **Why.** An error read as "no results" would have the planner conclude a thing does not exist when
 the truth is that nobody asked successfully.
@@ -88,6 +89,7 @@ the truth is that nobody asked successfully.
 `verified-by: bravebot_mcp::protocol::a_tool_level_error_is_visible`
 `verified-by: bravebot_mcp::protocol::an_error_response_parses`
 `verified-by: bravebot_mcp::http::a_reply_with_no_json_is_none`
+`verified-by: bravebot_mcp::stdio::a_call_not_answered_within_its_bound_is_a_timeout_naming_the_tool_and_the_bound`
 
 <a id="MCP-6"></a>
 ### MCP-6: only text content is taken from a result

@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The agent's own test for whether a file is text, so a file this helper passes is one a turn reads.
+bravebot-filetype = { path = "../filetype" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

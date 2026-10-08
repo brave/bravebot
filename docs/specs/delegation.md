@@ -252,6 +252,45 @@ Zero goes with it: the bound is checked after a round, so zero would run as one.
 `verified-by: bravebot_agent::agents::a_definition_asking_past_its_kinds_ceiling_says_what_it_is_given`
 `verified-by: bravebot_agent::turn::no_kind_lets_a_definition_run_longer_than_an_unwatched_turn`
 
+<a id="DELEGATE-26"></a>
+### DELEGATE-26: a delegate that reached its bound says so beside its report
+
+A delegate held to [DELEGATE-6](#DELEGATE-6)'s bound answers with what it has, which reads like a
+finished answer. So the driver adds one sentence of its own, naming the bound and saying the work
+may not be finished: to the planner's message, and to the person's note beside it.
+
+The sentence sits beside the report rather than inside it, so the planner is told the same thing
+whether it is shown the words or handed a reference to them
+([AGENT-4](tools/spawn-agent.md#AGENT-4), [DELEGATE-8](#DELEGATE-8)). Nothing is derived from the
+report.
+
+A delegate that spent its whole budget and then did not answer at all is told of in the same terms.
+There is no report to sit beside, so the sentence says the limit was spent and that the same task
+will not get further; the person's note gains the bound the same way. What the failure was stays the
+fixed category and nothing more ([BACKEND-37](backends.md#BACKEND-37)): the bound is two counts this
+driver holds, not a reason read off a service's answer.
+
+**Why this case and not only the answering one.** It is the common way the bound is reached rather
+than a corner of it. A delegate held to a tight bound loses its tools and is asked to answer; where
+it asks for a tool instead, there is no answer to carry and the run ends as a failure. The planner
+is then told only that the delegate did not finish, which reads as bad luck, so it spawns the same
+delegate on the same task and the budget goes on repeats of a run that cannot end differently.
+
+**Why the driver says it rather than the delegate.** DELEGATE-6 has the delegate told on its
+limiting round to say what stopped it, and that is model text: a delegate may spend its last round
+on something else, and a quarantined report reaches the planner as a reference holding no words at
+all. What the driver says arrives either way.
+
+**What the comparison reads.** Two counts the driver already holds, the rounds the run made and the
+bound its spec fixed before it started. Neither comes from a report, so this takes no decision from
+untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
+
+`verified-by: bravebot_agent::turn::a_delegate_held_to_its_bound_says_so_to_the_planner_and_the_person`
+`verified-by: bravebot_agent::turn::a_delegate_that_answered_early_says_nothing_about_a_limit`
+`verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
+`verified-by: bravebot_agent::turn::a_delegate_that_spent_its_bound_and_failed_says_the_bound_was_spent`
+`verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
+
 <a id="DELEGATE-7"></a>
 ### DELEGATE-7: a delegate may delegate, to a fixed depth and under one ceiling for the turn
 
@@ -905,6 +944,45 @@ futility as the round limit and takes the same way out, which keeps what the del
 `verified-by: bravebot_agent::turn::a_stop_the_delegate_never_acted_on_is_not_reported_as_one`
 `verified-by: bravebot_agent::shared::a_stopped_delegates_question_is_declined_and_a_siblings_is_asked`
 `verified-by: bravebot_agent::shared::a_question_waiting_for_the_person_is_declined_when_its_delegate_is_stopped_meanwhile`
+
+<a id="DELEGATE-27"></a>
+### DELEGATE-27: a definition may name the effort its delegate asks for
+
+`effort:` is optional and holds one of the five words `/effort` takes, read case-insensitively. A
+definition naming one has its delegate's requests carry that level. A definition naming none, or
+writing an empty line, has its delegate ask for the level the turn that spawned it runs at, so a
+level chosen for a session reaches the delegates started in it.
+
+A word naming none of the five levels is reported, naming the file and the word, and the definition
+still loads with no level of its own. An unrecognised word is never sent as a level.
+
+The level is configuration, not content, on the same footing as the model beside it
+([DELEGATE-22](#DELEGATE-22)): a definition loads only from a source somebody vouched for
+([DELEGATE-20](#DELEGATE-20)), so the file is the endorsement for the request field the word lands
+in. It grants no capability, and a delegate holds what its kind holds whatever level it asks for.
+
+A later definition of the same name takes the key over, as it takes over the model, the skills and
+the rounds ([DELEGATE-20](#DELEGATE-20)), because how hard a model is asked to think changes what a
+run costs and never what it may do.
+
+A model that answers a level it does not read is the backend's to handle, as it is for the level a
+turn asks for: a service that refuses the field has that refusal learned and the request made again
+without it. A front end does more before asking: it drops the level where the gateway's own listing says the
+session's model reads none. That is keyed on the session's model and is not applied here, so a
+definition on a model that reads no level still carries one into the request. Naming the level is this clause;
+what a service does with one is not.
+
+**Why report rather than refuse.** A definition with no usable level is still selectable, and
+dropping it would cost the delegate over a word that decides nothing about what it may reach. The
+model is the other way round ([DELEGATE-22](#DELEGATE-22)) because a model names a cost boundary and
+a service to send the conversation to.
+
+`verified-by: bravebot_agent::agents::a_definition_reads_the_effort_level_it_names`
+`verified-by: bravebot_agent::agents::an_effort_word_naming_no_level_leaves_the_definition_loading_without_one`
+`verified-by: bravebot_agent::agents::an_effort_word_naming_no_level_is_reported_and_the_definition_still_loads`
+`verified-by: bravebot_agent::agents::an_effort_of_inherit_names_the_spawning_turns_level_and_is_not_reported`
+`verified-by: bravebot_core::delegate::a_definition_may_name_an_effort_and_the_spec_carries_it`
+`verified-by: bravebot_agent::turn::a_delegate_asks_for_the_effort_its_definition_named`
 
 ## Known costs
 

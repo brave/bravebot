@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Modal } from './Modal'
-import type { KeptTrust, SettingsRules } from '../../shared/protocol'
+import type { FilesystemKey, KeptTrust, SettingsRules } from '../../shared/protocol'
 import { Alert, Button, Icon } from '../nala'
 import { IconButton } from './IconButton'
 import { ago } from './Sessions'
@@ -102,7 +102,7 @@ export function RulesInForce({ rules }: { rules: SettingsRules | null }): React.
     ['Always asked', 'You are asked, whatever else would have answered.', rules?.ask ?? []],
     ['Not asked', 'The question is answered for you. What a command prints is not trusted because of it.', rules?.allow ?? []],
   ]
-  const none = lists.every(([, , held]) => held.length === 0)
+  const none = lists.every(([, , held]) => held.length === 0) && !(rules?.filesystem?.length || rules?.filesystemIgnored?.length)
   return <section className="grant-section settings-rules">
     <h3>Rules from settings files</h3>
     <p className="grant-note">Read when this conversation opened. Edit the settings file to change them; the change applies to the next conversation. Refused comes first, then always asked, then not asked. These rules are not applied to a plan run.</p>
@@ -112,5 +112,42 @@ export function RulesInForce({ rules }: { rules: SettingsRules | null }): React.
       <p className="grant-note">{meaning}</p>
       <ul className="grant-list">{held.map((rule, index) => <li className="grant-row" key={index}><code>{rule}</code></li>)}</ul>
     </div>)}
+    <FilesystemRules rules={rules} />
   </section>
+}
+
+const FILESYSTEM_LISTS: [FilesystemKey, string, string][] = [
+  ['denyRead', 'Never read', 'No program the agent runs reads these, whatever else would let it.'],
+  ['denyWrite', 'Never written', 'No program the agent runs writes these, a directory the conversation was opened on included.'],
+  ['allowRead', 'Also readable', 'Read even where the built-in list of credential locations would refuse. A private key under ~/.ssh is never lifted.'],
+  ['allowWrite', 'Also writable', 'Written, and read, by the programs the agent runs.'],
+]
+
+/**
+ * The four `sandbox.filesystem` lists, read only: which paths a program the agent runs is held
+ * back from or given beyond the defaults, the file that wrote each, and why an entry is not in force.
+ */
+export function FilesystemRules({ rules }: { rules: SettingsRules | null }): React.JSX.Element | null {
+  const entries = rules?.filesystem ?? []
+  const ignored = rules?.filesystemIgnored ?? []
+  if (entries.length === 0 && ignored.length === 0) return null
+  return <div className="settings-rules-filesystem" data-test="filesystem-rules">
+    <h3>Paths for programs the agent runs</h3>
+    <p className="grant-note">Edit the settings file to change them; the change applies to the next conversation. A narrower path wins over a wider one.</p>
+    {FILESYSTEM_LISTS.map(([key, name, meaning]) => {
+      const held = entries.filter((entry) => entry.key === key)
+      if (held.length === 0) return null
+      return <div key={key}>
+        <h4>{name}</h4>
+        <p className="grant-note">{meaning}</p>
+        <ul className="grant-list">{held.map((entry, index) => <li className="grant-row" key={index}>
+          <code>{entry.path}</code>
+          <span className="grant-state">{entry.refused ? `Not in force: ${entry.refused}` : entry.pinned ? 'Set by your administrator' : entry.file ?? 'Command line'}</span>
+        </li>)}</ul>
+      </div>
+    })}
+    {ignored.map((entry, index) => <Alert type="warning" key={index} data-test="filesystem-ignored">
+      {`${entry.key} in ${entry.file} is not obeyed: a project file can refuse reach and never add it.`}
+    </Alert>)}
+  </div>
 }

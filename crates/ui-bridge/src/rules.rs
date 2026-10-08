@@ -15,6 +15,10 @@
 //!   reported, so the person knows the rule is not in force.
 //! - A directory named in `additionalDirectories` is not opened (PERM-10), for the same reason.
 //!   Each is reported.
+//! - The four lists of `sandbox.filesystem` (SANDBOX-25) are what the process settled when it
+//!   started, or what the settings and the managed file say where it settled none. Each entry is
+//!   reported with the file that wrote it and, where it is not in force, why. The window shows
+//!   them and edits nothing.
 
 use bravebot_config::Settings;
 use bravebot_core::permissions::Permissions;
@@ -37,6 +41,25 @@ pub struct SettingsRules {
     pub proposed: Vec<Proposed>,
     /// Directories a file asked to have opened, which are not open.
     pub directories: Vec<String>,
+    /// Every entry of the four filesystem lists, with what became of it (SANDBOX-25).
+    pub filesystem: Vec<FilesystemEntry>,
+    /// `allowRead` and `allowWrite` a checkout wrote, which are not in force, as `(key, file)`.
+    pub filesystem_ignored: Vec<(String, PathBuf)>,
+}
+
+/// One entry of `sandbox.filesystem.<key>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesystemEntry {
+    /// The key it was written under: `allowRead`, `denyRead`, `allowWrite` or `denyWrite`.
+    pub key: &'static str,
+    /// The spelling the person wrote.
+    pub path: String,
+    /// The file that wrote it, or `None` for the command line.
+    pub file: Option<PathBuf>,
+    /// Whether the managed file pinned it.
+    pub pinned: bool,
+    /// Why it is not in force, or `None` where it is.
+    pub refused: Option<String>,
 }
 
 /// An entry that is not a rule, and why.
@@ -98,6 +121,11 @@ impl SettingsRules {
                 })
                 .collect(),
             directories: bravebot_agent::permissions::additional_directories(settings).to_vec(),
+            filesystem: filesystem(settings, profile.as_deref(), workspace),
+            filesystem_ignored: settings
+                .sandbox_filesystem_ignored()
+                .map(|(file, key)| (key.to_string(), file.to_path_buf()))
+                .collect(),
         }
     }
 
@@ -116,8 +144,58 @@ impl SettingsRules {
                 .map(|entry| json!({ "rule": entry.rule, "file": entry.file.display().to_string() }))
                 .collect::<Vec<_>>(),
             "directories": self.directories,
+            "filesystem": self.filesystem.iter()
+                .map(|entry| json!({
+                    "key": entry.key,
+                    "path": entry.path,
+                    "file": entry.file.as_ref().map(|file| file.display().to_string()),
+                    "pinned": entry.pinned,
+                    "refused": entry.refused,
+                }))
+                .collect::<Vec<_>>(),
+            "filesystemIgnored": self.filesystem_ignored.iter()
+                .map(|(key, file)| json!({ "key": key, "file": file.display().to_string() }))
+                .collect::<Vec<_>>(),
         })
     }
+}
+
+/// The four lists as this process settled them, each entry judged against `workspace` the way a
+/// stage judges it.
+///
+/// A process that settled none (a test, which does not start from the entry point) reads the
+/// layers it was given, so the answer is the one a stage would get.
+fn filesystem(
+    settings: &Settings,
+    profile: Option<&Path>,
+    workspace: &Path,
+) -> Vec<FilesystemEntry> {
+    use bravebot_sandbox::rules::{State, resolve};
+    let settled = bravebot_config::settled_sandbox_filesystem()
+        .cloned()
+        .unwrap_or_else(|| {
+            bravebot_config::resolve_sandbox_filesystem(
+                &bravebot_sandbox::rules::Lists::default(),
+                settings,
+                &bravebot_config::Managed::load(),
+            )
+        });
+    resolve(&settled.lists, profile, workspace)
+        .items()
+        .iter()
+        .map(|item| FilesystemEntry {
+            key: item.list.key(),
+            path: item.entry.path.clone(),
+            file: item.entry.by.clone(),
+            pinned: item.entry.pinned,
+            refused: match item.state {
+                State::InForce(_) => None,
+                State::Refused(reason) => {
+                    Some(bravebot_agent::permissions::filesystem_reason(reason).to_string())
+                }
+            },
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -171,7 +249,7 @@ mod tests {
         assert!(rules.permissions.is_empty());
         assert_eq!(
             rules.json(),
-            json!({ "deny": [], "ask": [], "allow": [], "unreadable": [], "proposed": [], "directories": [] })
+            json!({ "deny": [], "ask": [], "allow": [], "unreadable": [], "proposed": [], "directories": [], "filesystem": [], "filesystemIgnored": [] })
         );
     }
 
@@ -338,5 +416,56 @@ mod tests {
         let rules = SettingsRules::read(&settings, dir.path());
         assert_eq!(rules.directories, ["../other"]);
         assert_eq!(rules.json()["directories"], json!(["../other"]));
+    }
+
+    /// SANDBOX-25: every entry of the four lists is reported with the file that wrote it, an entry
+    /// that is not in force with why, and an allowance a checkout wrote as ignored, with the file.
+    #[test]
+    fn the_filesystem_lists_are_reported_with_the_file_and_what_became_of_each() {
+        let (dir, settings) = layers(
+            Some(
+                r#"{"sandbox": {"filesystem": {"denyRead": ["secrets", "../outside"],
+                    "allowWrite": ["notes"]}}}"#,
+            ),
+            Some(
+                r#"{"sandbox": {"filesystem": {"denyWrite": [".env"],
+                    "allowWrite": ["elsewhere"]}}}"#,
+            ),
+        );
+        let workspace = dir.path().join("project");
+        let rules = SettingsRules::read(&settings, &workspace);
+        let home_file = dir.path().join("home/settings.json");
+        let project_file = workspace.join(".bravebot/settings.json");
+        let held = |key: &str, path: &str| {
+            rules
+                .filesystem
+                .iter()
+                .find(|entry| entry.key == key && entry.path == path)
+                .unwrap_or_else(|| panic!("{key} {path} not reported: {:?}", rules.filesystem))
+        };
+        let secrets = held("denyRead", "secrets");
+        assert_eq!(secrets.file.as_ref(), Some(&home_file));
+        assert_eq!(secrets.refused, None);
+        assert_eq!(held("allowWrite", "notes").file.as_ref(), Some(&home_file));
+        assert_eq!(held("denyWrite", ".env").file.as_ref(), Some(&project_file));
+        assert!(
+            held("denyRead", "../outside").refused.is_some(),
+            "an entry that climbs out is reported with why it is not in force"
+        );
+        assert!(
+            rules
+                .filesystem
+                .iter()
+                .all(|entry| entry.path != "elsewhere"),
+            "a checkout's allowance is not listed as in force: {:?}",
+            rules.filesystem
+        );
+        assert_eq!(
+            rules.filesystem_ignored,
+            [("allowWrite".to_string(), project_file)]
+        );
+        let json = rules.json();
+        assert_eq!(json["filesystem"].as_array().map(Vec::len), Some(4));
+        assert_eq!(json["filesystemIgnored"][0]["key"], "allowWrite");
     }
 }

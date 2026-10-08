@@ -16,6 +16,8 @@ bravebot-agent = { path = "../agent" }
 # hands us is not a widening of what this depends on.
 bravebot-aichat = { path = "../aichat" }
 bravebot-config = { path = "../config" }
+# The rules for an `@` name, the ones the terminal uses, so the window reads a line as it does.
+bravebot-mentions = { path = "../mentions" }
 bravebot-net = { path = "../net" }
 # For `Stream`: where a confined MCP server's stderr goes when a session starts one, which is
 # nowhere, since this process has no screen of its own for it.

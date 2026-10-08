@@ -6,7 +6,7 @@ import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
-import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
@@ -45,6 +45,7 @@ interface Live {
   quarantine: Shown[]
   phase: Waiting | null
   checking: Checking | null
+  hook: Hook | null
   composing: string | null
   contextTokens?: number
   archived?: number
@@ -59,6 +60,7 @@ interface Live {
   rules?: SettingsRules | null
   /** The points this session can be put back to, newest first. */
   rewind?: RewindPoint[]
+  sendRefused?: string | null
 }
 
 /**
@@ -94,6 +96,7 @@ interface Props {
   queuePaused: boolean
   onResumeQueued: () => void
   onRemoveQueued: (index: number) => void
+  onDismissRefusal: () => void
   live: Live | null
   /** A saved manifest run being read. Drawn in place of a session, which it is not. */
   reading?: SavedRun | null
@@ -268,7 +271,7 @@ export function Transcript({
   storageKey,
   onNew,
   onQueue,
-  queued, queuePaused, onResumeQueued,
+  queued, queuePaused, onResumeQueued, onDismissRefusal,
   onRemoveQueued,
   live,
   bot,
@@ -435,6 +438,7 @@ export function Transcript({
   const preview = useEvent((path: string) => setPreviewPath(path))
   const resumeQueued = useEvent(onResumeQueued)
   const removeQueued = useEvent(onRemoveQueued)
+  const dismissRefusal = useEvent(onDismissRefusal)
   const setup = useEvent(onSetup)
   const checkBackend = useEvent(onCheckBackend)
   const diagnostics = useEvent(onDiagnostics)
@@ -703,7 +707,7 @@ export function Transcript({
           <WorkingRow
             key={live.handle}
             bot={bot}
-            word={workingWord(live.phase, live.checking, live.composing)}
+            word={workingWord(live.phase, live.checking, live.composing, live.hook)}
             tokens={live.tokens}
             turn={Object.values(live.turns).filter((turn) => turn.status === 'running').at(-1)?.turn ?? null}
             onAudit={onAudit}
@@ -760,6 +764,8 @@ export function Transcript({
           queued={queued}
           queuePaused={queuePaused}
           onResumeQueued={resumeQueued}
+          refusal={live.sendRefused ?? null}
+          onDismissRefusal={dismissRefusal}
           onRemoveQueued={removeQueued}
           backendReady={backendReady}
           onSetup={setup}
@@ -857,11 +863,13 @@ function waitedWord(waited: number | null): string {
 }
 
 /**
- * What the session is waiting on. A running check wins over the phase, which a check does not
+ * What the session is waiting on. A running hook wins over everything, since it holds the turn and
+ * says what it is; a running check wins over the phase, which a check does not
  * change, and one function serves both places the word is drawn so they cannot disagree. A call
  * being written follows the check: the phase is the same for the whole wait, which can be minutes.
  */
-export function workingWord(phase: Waiting | null, checking: Checking | null, composing: string | null = null): string {
+export function workingWord(phase: Waiting | null, checking: Checking | null, composing: string | null = null, hook: Hook | null = null): string {
+  if (hook !== null) return `Running hook: ${hook.program} (${hook.moment})`
   if (checking !== null && 'file' in checking) return checking.file === 'pdf' ? 'Checking a PDF' : 'Checking a picture'
   if (checking !== null) return `Checking ${checking.lines} ${checking.lines === 1 ? 'line' : 'lines'}`
   if (composing !== null) return `Preparing a call: ${composing}`
@@ -1288,7 +1296,9 @@ function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onMana
  * it was written to stop.
  */
 export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Element {
-  const count = rules.unreadable.length + rules.proposed.length + rules.directories.length
+  const refused = t.refusedPaths(rules)
+  const ignored = rules.filesystemIgnored ?? []
+  const count = rules.unreadable.length + rules.proposed.length + rules.directories.length + refused.length + ignored.length
   return (
     <details className="rules-banner" role="note">
       <summary className="session-notice">
@@ -1333,6 +1343,33 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
             {rules.directories.map((directory, index) => (
               <li key={index}>
                 <code>{directory}</code>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {refused.length > 0 && (
+        <>
+          <p>
+            These paths for the programs the agent runs are not in force. A program that
+            would have been held back by a refused one is not started:
+          </p>
+          <ul>
+            {refused.map((entry, index) => (
+              <li key={index}>
+                <code>{entry.key}</code> <code>{entry.path}</code>: {entry.refused}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {ignored.length > 0 && (
+        <>
+          <p>A project’s settings file can refuse a path to a program and never add one, so these are not obeyed:</p>
+          <ul>
+            {ignored.map((entry, index) => (
+              <li key={index}>
+                <code>{entry.key}</code> in <code>{entry.file}</code>
               </li>
             ))}
           </ul>

@@ -413,6 +413,49 @@ fn a_window_cannot_choose_to_bypass_every_check() {
     assert_eq!(front.ask(&session), "acceptEdits");
 }
 
+/// SANDBOX-22: a window has no way to show that a program is unconfined, so a settings file naming
+/// `off` is read as `standard` there and the program a person approved is still held to its profile.
+/// The failure this rejects is the setting honoured: the approved `touch` lands outside the session
+/// from a window that said nothing about it. The planner being told how the step failed is what
+/// shows the program ran and was refused, rather than never having run.
+#[test]
+fn a_window_reads_off_as_standard() {
+    if bravebot_sandbox::base::Prelude::current().is_none()
+        || !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    let scratch = Scratch::new("bridge-sandbox-off");
+    std::fs::write(
+        scratch.home().join(".bravebot/settings.json"),
+        r#"{"sandbox": {"mode": "off"}}"#,
+    )
+    .expect("a home layer");
+    let planted = scratch.path.join("planted.txt");
+    let command = format!("/usr/bin/touch {}", planted.display());
+    let (endpoint, rounds) = a_planner(move |_, this_turn| {
+        (this_turn == 0).then(|| ("run", json!({ "command": command })))
+    });
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, true);
+    front.ask(&session);
+
+    let question = front.question_or_the_end();
+    assert_eq!(question["event"], "run.request", "{question}");
+    front.reply("run.reply", &session, &question, "approve");
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+
+    assert!(
+        !planted.exists(),
+        "the window ran the program with no profile"
+    );
+    let told: Vec<String> = rounds.try_iter().collect();
+    assert!(
+        told.iter().any(|request| request.contains("Confinement:")),
+        "the program was not run under a profile, so nothing was refused: {told:?}"
+    );
+}
+
 /// MODE-2: accepting edits writes without asking, and still puts a command to the window. Asking,
 /// the same planner's write is put to the window first.
 #[test]

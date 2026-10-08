@@ -141,6 +141,7 @@ dependencies = [
  "bravebot-bedrock",
  "bravebot-config",
  "bravebot-core",
+ "bravebot-filetype",
  "bravebot-i18n",
  "bravebot-lsp",
  "bravebot-mcp",
@@ -164,10 +165,12 @@ version = "0.14.0"
 dependencies = [
  "bravebot-config",
  "bravebot-core",
+ "bravebot-diag",
  "bravebot-net",
  "bravebot-signing",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -177,10 +180,12 @@ dependencies = [
  "bravebot-aichat",
  "bravebot-config",
  "bravebot-core",
+ "bravebot-diag",
  "bravebot-net",
  "bravebot-signing",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -202,6 +207,7 @@ dependencies = [
  "bravebot-agent",
  "bravebot-config",
  "bravebot-core",
+ "bravebot-diag",
  "bravebot-i18n",
  "bravebot-mcp",
  "bravebot-net",
@@ -227,6 +233,17 @@ name = "bravebot-core"
 version = "0.14.0"
 
 [[package]]
+name = "bravebot-diag"
+version = "0.14.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
+name = "bravebot-filetype"
+version = "0.14.0"
+
+[[package]]
 name = "bravebot-i18n"
 version = "0.14.0"
 
@@ -235,8 +252,10 @@ name = "bravebot-lsp"
 version = "0.14.0"
 dependencies = [
  "bravebot-core",
+ "bravebot-diag",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -245,10 +264,20 @@ version = "0.14.0"
 dependencies = [
  "bravebot-config",
  "bravebot-core",
+ "bravebot-diag",
  "bravebot-net",
  "bravebot-sandbox",
  "serde",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "bravebot-mentions"
+version = "0.14.0"
+dependencies = [
+ "bravebot-filetype",
+ "tempfile",
 ]
 
 [[package]]
@@ -256,6 +285,8 @@ name = "bravebot-net"
 version = "0.14.0"
 dependencies = [
  "bravebot-core",
+ "bravebot-diag",
+ "tempfile",
  "ureq",
 ]
 
@@ -321,6 +352,7 @@ dependencies = [
  "bravebot-config",
  "bravebot-core",
  "bravebot-i18n",
+ "bravebot-mentions",
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-session",
@@ -345,6 +377,7 @@ dependencies = [
  "bravebot-aichat",
  "bravebot-config",
  "bravebot-core",
+ "bravebot-mentions",
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-session",
@@ -358,6 +391,7 @@ dependencies = [
 name = "bravebot-ui-files"
 version = "0.14.0"
 dependencies = [
+ "bravebot-filetype",
  "rustix 1.1.4",
  "serde",
  "serde_json",

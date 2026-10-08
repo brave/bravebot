@@ -435,7 +435,7 @@ fn an_answer_is_kept_only_where_the_question_offered_it() {
             "trust.reply",
             json!({"session": session, "trusted": true, "remember": true})
         ),
-        "remembering this answer was not offered for this session",
+        "the trust question is not waiting for an answer",
         "a question already answered still offered to keep an answer"
     );
 
@@ -615,4 +615,45 @@ fn forgetting_a_remembered_answer_makes_the_next_session_there_ask() {
         "a forgotten answer still settled a session"
     );
     assert_eq!(opened["remembered"], Value::Null, "{opened}");
+}
+
+/// The trust question is answered once. A repeat is refused and the answer already given stands, so
+/// a later reply cannot widen what a session may write (RPCVIEW-6).
+#[test]
+fn a_repeated_trust_answer_is_refused_and_the_first_stands() {
+    let scratch = Scratch::new("bridge-trust-answered-once");
+    let mut front = FrontEnd::start(&scratch.home());
+    let (opened, _) = front.begin(&scratch.project());
+    let session = handle(&opened);
+
+    front.call("trust.reply", json!({"session": session, "trusted": false}));
+    assert_eq!(
+        front.refused("trust.reply", json!({"session": session, "trusted": true})),
+        "the trust question is not waiting for an answer"
+    );
+    let listed = front.call("permissions.list", json!({"session": session}));
+    assert_ne!(
+        listed["paths"],
+        the_yes_rule(),
+        "a repeat replaced the first answer: {listed}"
+    );
+}
+
+/// Nor can an answer be taken back once the session has used it.
+#[test]
+fn a_trust_answer_cannot_be_changed_after_a_turn_has_used_it() {
+    let scratch = Scratch::new("bridge-trust-used");
+    let mut front = FrontEnd::start(&scratch.home());
+    let (opened, _) = front.begin(&scratch.project());
+    let session = handle(&opened);
+    front.call("trust.reply", json!({"session": session, "trusted": true}));
+    let done = front.turn(&session);
+    assert_eq!(done["event"], "turn.done", "{done}");
+
+    assert_eq!(
+        front.refused("trust.reply", json!({"session": session, "trusted": false})),
+        "the trust question is not waiting for an answer"
+    );
+    let listed = front.call("permissions.list", json!({"session": session}));
+    assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
 }

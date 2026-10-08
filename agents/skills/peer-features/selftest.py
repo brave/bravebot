@@ -722,6 +722,7 @@ class Work(unittest.TestCase):
 
         return calls, types.SimpleNamespace(
             gh=gh,
+            helper=pf.pa.load_poster().helper,
             post=post,
             existing_labels=lambda repo: set(labels or ["parity", "enhancement", "beyond-parity", "area/turns", "area/interface"]),
             assignable=lambda repo, login: True,

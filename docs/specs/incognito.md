@@ -6,6 +6,7 @@ governs:
   - crates/core/src/incognito.rs
   - crates/agent/src/home.rs
   - crates/agent/src/remembered.rs
+  - crates/agent/src/reach.rs
   - crates/agent/src/trusted.rs
   - crates/agent/src/subscription.rs
   - crates/session/src/store.rs
@@ -25,6 +26,9 @@ Two files in that directory are still written, and [INCOG-8](#INCOG-8) states th
 credentials, which a session spends and records as spent, and the record
 [MEMORY-5](definition-memory.md#MEMORY-5) keeps of a definition's memory the session left
 untrusted.
+
+Neither does it write the diagnostic log ([diagnostic-log.md](diagnostic-log.md)): there is no
+directory to write one into.
 
 The boundary here is the directory this process owns. It is not confinement:
 [sandboxing.md](sandboxing.md) is the operating-system boundary, it applies to subprocesses running
@@ -99,7 +103,9 @@ command lines somebody asked to be remembered past a session, which [tools/run.m
 governs, is read here on the same terms: a line already in it stops the asking as it does anywhere,
 and the key that would add one is not offered. The files in that record a write may create a
 credential in ([CRED-13](credential-protection.md#CRED-13)) are read the same way, and the key that
-would add one is not offered either. So is the record of answers to the startup question
+would add one is not offered either. So is the record of reach a person remembered for a command,
+which [sandboxing.md](sandboxing.md#SANDBOX-23) governs: a grant already in it is attached as it is
+anywhere, and `/reach` adds none and says so. So is the record of answers to the startup question
 somebody asked to be kept, which [trust-map.md](trust-map.md#TRUST-23) governs: a kept answer settles
 the question here as anywhere, the session says so as it opens, the key that would keep one is not
 offered, and `/forget-trust` writes nothing and names the file.
@@ -132,6 +138,8 @@ to remember.
 `verified-by: bravebot_agent::incognito::no_remembered_line_is_written_down`
 `verified-by: bravebot_agent::incognito::no_file_a_credential_may_be_created_in_is_written_down`
 `verified-by: bravebot_agent::incognito::a_line_an_earlier_session_recorded_is_still_honoured`
+`verified-by: bravebot_agent::incognito::no_remembered_reach_is_written_down`
+`verified-by: bravebot_agent::incognito::a_reach_an_earlier_session_remembered_is_still_honoured`
 
 <a id="INCOG-6"></a>
 ### INCOG-6: asking is one way, and composes with every other way of starting

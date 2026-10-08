@@ -206,6 +206,13 @@ impl View {
     }
 }
 
+/// What a bridge promises about the targets of the actions that answer it (RPCVIEW-6). A bridge
+/// that does not advertise it numbers questions per turn, takes a cancel for whatever is running,
+/// and accepts a repeated trust answer.
+pub fn action_targets() -> Value {
+    json!({"version": 1, "questionIds": "session", "cancel": "expected_turn", "trust": "once"})
+}
+
 pub fn capability() -> Value {
     json!({"version": 1, "start": "session.view.start", "scope": "fresh_session",
         "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false})
@@ -329,6 +336,7 @@ mod tests {
         };
         json!({
             "capability": capability(),
+            "actionTargets": action_targets(),
             "statuses": statuses.map(status_name),
             "rowKinds": kinds.map(row_kind_name),
             "update": update,

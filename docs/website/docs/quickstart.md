@@ -35,6 +35,16 @@ curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh \
   | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
+To install a release other than the newest, give the script a version after `-s`. It takes three
+numbers, with or without a leading `v`, and checks that release exactly as it checks the newest:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | sh -s 1.2.3
+```
+
+A version with no release fails at the download and says which one. Running the line without a
+version installs the newest again.
+
 Running the line again is how an install made this way is updated. The script records where it put
 the binary, so a second run with no directory named replaces that one rather than leaving two on
 your `PATH`.

@@ -60,6 +60,8 @@ argument, and a flag of bravebot's own among them, such as `--settings`, is the 
 | `-e`, `--env <name>=<value>...` | store this value for the server under this name; repeatable, and one flag takes every word up to the next flag |
 | `-e`, `--env <name>` | pass this variable to the server from your environment, by name; one name to each flag |
 | `--dir <path>` | the directory the server runs in and may write, kept as the absolute path it resolves to; one inside a git repository is refused |
+| `--startup-timeout <seconds>` | how long each of the server's two handshake requests may take, from 1 to 3600; 60 where it is not given |
+| `--tool-timeout <seconds>` | how long a call may take, from 1 to 3600; 120 where it is not given. A call that takes longer fails and the planner is told it timed out; a local server is then stopped |
 | `-- <program> [args...]` | a program on this machine; `--stdio --` means the same |
 | `--http <url>` | a service at this url; takes neither `-e` nor `--dir` |
 | `-s <scope>` | which settings file [asks for the server](#asking-for-one-from-a-checkout) once you approve it: `local`, the default, `project` or `user`; it may come before the alias |

@@ -15,7 +15,8 @@ documented-by: docs/website/docs/reference/tools.md
 Finding lines in the workspace that match a pattern. `pattern`, `directory`, `include`, `offset`,
 `case_sensitive` and `context` are routing: the first three name where to look and what to look for,
 the offset names which page of the matches to return, the flag decides which of the lines there
-match, and the context is a count of how many neighbouring lines to show with each.
+match, and the context is a count of how many neighbouring lines to show with each. `directory` may
+name one file instead of a directory ([SEARCH-11](#SEARCH-11)).
 The only content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is
 the matching lines, or a reference.
 
@@ -337,3 +338,27 @@ though nothing lay near them.
 `verified-by: bravebot_agent::workspace::a_context_past_the_maximum_is_held_to_it`
 `verified-by: bravebot_agent::turn::a_search_with_context_shows_the_lines_around_each_hit`
 `verified-by: bravebot_agent::turn::a_quarantined_search_cut_short_of_its_context_still_says_it_is_incomplete`
+
+<a id="SEARCH-11"></a>
+### SEARCH-11: `directory` may name one file
+
+When `directory` resolves to a regular file inside the workspace, the search reads that file and
+nothing else, and `include` is not consulted. The routing and permission checks that apply to a
+walked file apply to it: the path must resolve inside the workspace, a `deny` rule covering it, under
+the name given or the one it lands on, leaves nothing to search and is reported as in
+[SEARCH-5](#SEARCH-5), and the result carries the label of that one file
+([SEARCH-2](#SEARCH-2)). A file that holds no match reports no matches, since it was read. A
+directory is searched as before.
+
+**Why.** Searching a file already known by name otherwise takes its parent as `directory` and its
+name as `include`, and a call that gives the file as `directory` fails. The argument stays routing:
+it says where to look, and what it names is decided from the metadata of a path the routing gate has
+already vouched for, never from the file's contents. A file named outright is searched even where a
+walk from above would skip its directory ([SEARCH-7](#SEARCH-7)), as a directory named outright is.
+
+`verified-by: bravebot_agent::workspace::a_search_may_name_one_file_as_its_target`
+`verified-by: bravebot_agent::workspace::a_search_of_a_named_file_without_the_pattern_reports_that_it_was_read`
+`verified-by: bravebot_agent::workspace::a_search_of_a_named_file_a_deny_rule_covers_reads_nothing`
+`verified-by: bravebot_agent::workspace::a_search_of_a_link_to_a_denied_file_reads_nothing`
+`verified-by: bravebot_agent::workspace::a_search_cannot_name_a_file_outside_the_workspace`
+`verified-by: bravebot_agent::turn::a_search_may_name_one_file_as_its_target_through_the_tool`

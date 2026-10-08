@@ -19,6 +19,7 @@ use bravebot_session::jobs::{Held, Job, Mode, Roster, State};
 use std::collections::VecDeque;
 use std::io::{BufRead, Read, Write};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use crate::plain::{Waiting, Watcher};
 
@@ -27,6 +28,9 @@ const BACKLOG: usize = 256 * 1024;
 
 /// The longest line taken off the socket.
 const LONGEST_LINE: u64 = 64 * 1024;
+
+/// How long a session waits for a prompt with no terminal attached before it ends (BG-13).
+const IDLE_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// What the session is doing, as far as taking a line goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +46,8 @@ pub(crate) enum Replied {
     Sent,
     Working,
     NeedsInput,
+    /// The session has run out its idle time and is ending, so nothing it was given would be read.
+    Stopping,
 }
 
 struct Inner {
@@ -56,6 +62,11 @@ struct Inner {
     attached: Option<(u64, Box<dyn Write + Send>)>,
     connections: u64,
     job: Job,
+    /// When the session last began waiting for a prompt with nobody attached: the start of the idle
+    /// time (BG-13).
+    quiet_since: Instant,
+    /// Set once the idle time has run out, after which no line is taken and none is read.
+    ending: bool,
 }
 
 /// What the session, the sockets and the roster share.
@@ -63,10 +74,20 @@ pub(crate) struct Shared {
     inner: Mutex<Inner>,
     woken: Condvar,
     roster: Roster,
+    idle_after: Duration,
 }
 
 impl Shared {
     pub(crate) fn new(roster: Roster, job: Job, first: Option<String>) -> Arc<Self> {
+        Self::ending_when_idle_for(roster, job, first, IDLE_AFTER)
+    }
+
+    pub(crate) fn ending_when_idle_for(
+        roster: Roster,
+        job: Job,
+        first: Option<String>,
+        idle_after: Duration,
+    ) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Inner {
                 phase: Phase::Working,
@@ -77,9 +98,12 @@ impl Shared {
                 attached: None,
                 connections: 0,
                 job,
+                quiet_since: Instant::now(),
+                ending: false,
             }),
             woken: Condvar::new(),
             roster,
+            idle_after,
         })
     }
 
@@ -129,8 +153,15 @@ impl Shared {
             None => false,
         };
         if dropped {
-            inner.attached = None;
+            self.terminal_left(&mut inner);
         }
+    }
+
+    /// Note that no terminal is attached any more, which is when the idle time starts counting.
+    fn terminal_left(&self, inner: &mut Inner) {
+        inner.attached = None;
+        inner.quiet_since = Instant::now();
+        self.woken.notify_all();
     }
 
     /// Take a line a person typed, if the session is waiting for one.
@@ -148,6 +179,9 @@ impl Shared {
     /// Take a reply, if the session is waiting for a prompt and for nothing else (BG-10).
     pub(crate) fn reply(&self, text: &str) -> Replied {
         let mut inner = self.locked();
+        if inner.ending {
+            return Replied::Stopping;
+        }
         match inner.phase {
             Phase::Held(_) => Replied::NeedsInput,
             Phase::Working => Replied::Working,
@@ -162,9 +196,13 @@ impl Shared {
     }
 
     /// Attach a terminal: say `ok` and replay what the session wrote, or say `attached` where a
-    /// terminal is attached already and return `None`.
+    /// terminal is attached already, or `stopping` where the session is ending, and return `None`.
     pub(crate) fn attach(&self, mut stream: Box<dyn Write + Send>) -> Option<u64> {
         let mut inner = self.locked();
+        if inner.ending {
+            let _ = writeln!(stream, "stopping");
+            return None;
+        }
         if inner.attached.is_some() {
             let _ = writeln!(stream, "attached");
             return None;
@@ -183,7 +221,7 @@ impl Shared {
     pub(crate) fn detach(&self, id: u64) {
         let mut inner = self.locked();
         if inner.attached.as_ref().is_some_and(|(held, _)| *held == id) {
-            inner.attached = None;
+            self.terminal_left(&mut inner);
         }
     }
 
@@ -194,21 +232,45 @@ impl Shared {
             && *held == id
             && stream.write_all(format!("{line}\n").as_bytes()).is_err()
         {
-            inner.attached = None;
+            self.terminal_left(&mut inner);
         }
     }
 
-    /// Block until a line is given.
-    fn next_line(&self) -> String {
+    /// Block until a line is given, or until the session has waited for a prompt with no terminal
+    /// attached for as long as it is allowed to, which is `None` (BG-13).
+    ///
+    /// Only waiting for a prompt counts. A question that is held is waited on for as long as it
+    /// takes (BG-7), and a terminal that is attached is somebody who may be about to type.
+    fn next_line(&self) -> Option<String> {
         let mut inner = self.locked();
         loop {
             if let Some(line) = inner.queue.pop_front() {
-                return line;
+                return Some(line);
             }
-            inner = self
-                .woken
-                .wait(inner)
-                .unwrap_or_else(PoisonError::into_inner);
+            let left = match (inner.phase, inner.attached.is_some()) {
+                (Phase::Idle, false) => {
+                    let left = self.idle_after.saturating_sub(inner.quiet_since.elapsed());
+                    if left.is_zero() {
+                        inner.ending = true;
+                        inner.reading = false;
+                        return None;
+                    }
+                    Some(left)
+                }
+                _ => None,
+            };
+            inner = match left {
+                Some(left) => {
+                    self.woken
+                        .wait_timeout(inner, left)
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0
+                }
+                None => self
+                    .woken
+                    .wait(inner)
+                    .unwrap_or_else(PoisonError::into_inner),
+            };
         }
     }
 }
@@ -255,7 +317,11 @@ impl Read for Intake {
 impl BufRead for Intake {
     fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
         if self.at >= self.current.len() {
-            self.current = format!("{}\n", self.shared.next_line()).into_bytes();
+            // The end of the input, which is how a session in lines is left.
+            let Some(line) = self.shared.next_line() else {
+                return Ok(&[]);
+            };
+            self.current = format!("{line}\n").into_bytes();
             self.at = 0;
         }
         Ok(&self.current[self.at..])
@@ -278,6 +344,7 @@ impl Watcher for Watching {
             Waiting::Answer(held) => Phase::Held(held),
         };
         inner.reading = true;
+        inner.quiet_since = Instant::now();
         if on == Waiting::Prompt
             && let Some(first) = inner.first.take()
         {
@@ -306,6 +373,8 @@ pub(crate) struct Hosting {
     pub(crate) input: Intake,
     pub(crate) output: Broadcast,
     pub(crate) watch: Box<dyn Watcher>,
+    /// The process that ran this session before ended in the middle of a turn (BG-12).
+    pub(crate) after_an_interruption: bool,
 }
 
 impl Hosting {
@@ -319,6 +388,14 @@ impl Hosting {
             },
             output: Broadcast(Arc::clone(shared)),
             watch: Box::new(Watching(Arc::clone(shared))),
+            after_an_interruption: false,
+        }
+    }
+
+    pub(crate) fn after_an_interruption(self, interrupted: bool) -> Self {
+        Self {
+            after_an_interruption: interrupted,
+            ..self
         }
     }
 }
@@ -365,7 +442,6 @@ mod socket {
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::Path;
     use std::process::ExitCode;
-    use std::time::Duration;
 
     /// How long a client may take to say what it wants, and how long the session waits to write to
     /// a terminal that has stopped reading.
@@ -391,6 +467,10 @@ mod socket {
         // Nothing to start with is what an attach leaves for a session it starts again: the
         // session opens idle, waiting for the person who attached.
         let first = Some(first).filter(|line| !line.trim().is_empty());
+        // Read before the lease is taken: with it the entry reads as live, and as what it says.
+        let interrupted = roster
+            .get(id)
+            .is_some_and(|seen| seen.state() == State::Interrupted);
         let Ok(Some(_lease)) = roster.claim(id) else {
             return ExitCode::FAILURE;
         };
@@ -415,7 +495,7 @@ mod socket {
                 std::thread::spawn(move || serve(stream, &shared));
             }
         });
-        let code = crate::plain::hosted(Hosting::of(&shared));
+        let code = crate::plain::hosted(Hosting::of(&shared).after_an_interruption(interrupted));
         shared.finish();
         code
     }
@@ -438,6 +518,7 @@ mod socket {
                     Replied::Sent => "ok",
                     Replied::Working => "working",
                     Replied::NeedsInput => "needs-input",
+                    Replied::Stopping => "stopping",
                 };
                 let _ = writeln!(to, "{word}");
             }
@@ -480,6 +561,10 @@ mod tests {
     }
 
     fn a_shared() -> Arc<Shared> {
+        a_shared_ending_after(IDLE_AFTER)
+    }
+
+    fn a_shared_ending_after(idle_after: Duration) -> Arc<Shared> {
         let root = a_root();
         let job = Job::starting(
             ID.to_string(),
@@ -487,7 +572,184 @@ mod tests {
             "fix the build",
             Mode::Ask,
         );
-        Shared::new(Roster::at(root), job, Some("fix the build".to_string()))
+        Shared::ending_when_idle_for(
+            Roster::at(root),
+            job,
+            Some("fix the build".to_string()),
+            idle_after,
+        )
+    }
+
+    /// A session that has run its first prompt and is waiting for the next one.
+    fn an_idle_session(idle_after: Duration) -> Arc<Shared> {
+        let shared = a_shared_ending_after(idle_after);
+        let mut watching = Watching(Arc::clone(&shared));
+        watching.waiting(Waiting::Prompt);
+        assert_eq!(shared.next_line().as_deref(), Some("fix the build"));
+        watching.received(Waiting::Prompt, Some("fix the build"));
+        watching.waiting(Waiting::Prompt);
+        shared
+    }
+
+    /// Run `next_line` on another thread, so a test can look at it while it waits.
+    fn reading(shared: &Arc<Shared>) -> std::sync::mpsc::Receiver<Option<String>> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let shared = Arc::clone(shared);
+        std::thread::spawn(move || {
+            let _ = sender.send(shared.next_line());
+        });
+        receiver
+    }
+
+    /// What `next_line` gives, failing the test where a fault would have it wait for ever.
+    fn ended_within_a_bound(shared: &Arc<Shared>) -> Option<String> {
+        reading(shared)
+            .recv_timeout(LONG_ENOUGH)
+            .expect("the session never ended")
+    }
+
+    const SHORT: Duration = Duration::from_millis(200);
+    const WELL_PAST: Duration = Duration::from_millis(600);
+    const LONG_ENOUGH: Duration = Duration::from_secs(20);
+
+    /// BG-13: a session waiting for a prompt with nobody attached ends once the time is up, and
+    /// from then nothing is taken that it would not read: a reply and an attach are each told so.
+    #[test]
+    fn an_idle_session_ends_and_refuses_what_it_would_not_read() {
+        let shared = an_idle_session(SHORT);
+        let started = Instant::now();
+        assert_eq!(ended_within_a_bound(&shared), None);
+        assert!(started.elapsed() >= SHORT / 2, "{:?}", started.elapsed());
+
+        assert_eq!(shared.reply("too late"), Replied::Stopping);
+        assert!(!shared.offer("too late".to_string()));
+        assert!(queued(&shared).is_empty());
+        let late = Kept::default();
+        assert!(shared.attach(Box::new(late.clone())).is_none());
+        assert_eq!(
+            String::from_utf8(late.0.lock().unwrap().clone()).unwrap(),
+            "stopping\n"
+        );
+        // The end is not taken back by being asked again.
+        assert_eq!(ended_within_a_bound(&shared), None);
+    }
+
+    /// BG-13: the session in lines is left by the end of its input, and a session that has ended
+    /// reads that end every time it is asked, not once.
+    #[test]
+    fn the_end_of_an_idle_session_is_the_end_of_its_input() {
+        use std::io::BufRead;
+        let shared = an_idle_session(SHORT);
+        let (read, reads) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut hosting = Hosting::of(&shared);
+            let mut line = String::new();
+            let first = hosting.input.read_line(&mut line).unwrap();
+            let again = hosting.input.read_line(&mut line).unwrap();
+            let _ = read.send((first, again, line));
+        });
+        let (first, again, line) = reads
+            .recv_timeout(LONG_ENOUGH)
+            .expect("the input never ended");
+        assert_eq!((first, again), (0, 0));
+        assert!(line.is_empty());
+    }
+
+    /// BG-13: a question that is held is waited on for as long as it takes (BG-7), not for the idle
+    /// time, so an approval asked of nobody is never answered by the session giving up.
+    #[test]
+    fn a_held_question_does_not_run_out_the_idle_time() {
+        let shared = an_idle_session(SHORT);
+        let mut watching = Watching(Arc::clone(&shared));
+        watching.waiting(Waiting::Answer(Held::Run));
+        let taken = reading(&shared);
+        std::thread::sleep(WELL_PAST);
+        assert!(taken.try_recv().is_err(), "the held question was given up");
+        assert!(shared.offer("y".to_string()));
+        assert_eq!(
+            taken.recv_timeout(LONG_ENOUGH).unwrap(),
+            Some("y".to_string())
+        );
+    }
+
+    /// BG-13: a session with a terminal attached does not end, and the time starts when the
+    /// terminal leaves rather than from the last prompt, so a person who was there for an hour
+    /// does not leave behind a session that ends at once.
+    #[test]
+    fn the_idle_time_starts_when_the_terminal_leaves() {
+        let shared = an_idle_session(SHORT);
+        let connection = shared.attach(Box::new(Kept::default())).expect("attached");
+        let taken = reading(&shared);
+        std::thread::sleep(WELL_PAST);
+        assert!(taken.try_recv().is_err(), "ended with a terminal attached");
+
+        let left = Instant::now();
+        shared.detach(connection);
+        assert_eq!(taken.recv_timeout(LONG_ENOUGH).unwrap(), None);
+        assert!(left.elapsed() >= SHORT / 2, "{:?}", left.elapsed());
+    }
+
+    /// BG-13: a terminal that stops reading is dropped and counts as having left, so a session
+    /// whose person closed the terminal without detaching still ends.
+    #[test]
+    fn a_terminal_that_went_away_does_not_hold_the_session_open() {
+        struct Gone;
+        impl Write for Gone {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let shared = an_idle_session(SHORT);
+        let taken = reading(&shared);
+        // The `ok` of the attach is written, and the first line after it fails.
+        struct Once(bool);
+        impl Write for Once {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if std::mem::replace(&mut self.0, true) {
+                    return Gone.write(bytes);
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        shared.attach(Box::new(Once(false))).expect("attached");
+        std::thread::sleep(WELL_PAST);
+        assert!(taken.try_recv().is_err(), "ended with a terminal attached");
+        Broadcast(Arc::clone(&shared))
+            .write_all(b"a line\n")
+            .unwrap();
+        assert_eq!(taken.recv_timeout(LONG_ENOUGH).unwrap(), None);
+    }
+
+    /// BG-13: a reply the session took is never lost to the time running out. The line is read
+    /// even when the clock has passed the bound by the time the session looks.
+    #[test]
+    fn a_reply_that_was_taken_is_read_even_after_the_time_is_up() {
+        let shared = an_idle_session(SHORT);
+        assert_eq!(shared.reply("one more thing"), Replied::Sent);
+        std::thread::sleep(WELL_PAST);
+        assert_eq!(shared.next_line(), Some("one more thing".to_string()));
+    }
+
+    /// BG-13: a prompt that was asked for restarts the time, so a session that has just finished a
+    /// long turn is not ended for the time the turn took.
+    #[test]
+    fn the_idle_time_is_counted_from_the_prompt_being_asked_for() {
+        let shared = a_shared_ending_after(SHORT);
+        let mut watching = Watching(Arc::clone(&shared));
+        watching.waiting(Waiting::Prompt);
+        assert_eq!(shared.next_line().as_deref(), Some("fix the build"));
+        watching.received(Waiting::Prompt, Some("fix the build"));
+        std::thread::sleep(WELL_PAST);
+        watching.waiting(Waiting::Prompt);
+        let asked = Instant::now();
+        assert_eq!(ended_within_a_bound(&shared), None);
+        assert!(asked.elapsed() >= SHORT / 2, "{:?}", asked.elapsed());
     }
 
     fn queued(shared: &Shared) -> Vec<String> {

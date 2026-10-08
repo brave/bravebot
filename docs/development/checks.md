@@ -108,6 +108,11 @@ anything but an explicit `false`.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
 absolute path when running the target. Without it, that integration test is reported as skipped.
 
+The sandbox usability suite (`crates/agent/tests/usability.rs`, spec SANDBOX-21) runs everyday
+workflows under the sandbox default, so a default change cannot break `git`, `gh`, `cargo`, `npm` or
+`make` unnoticed. It runs with `cargo test --all` on Linux and macOS, skips what is not installed, and
+`bravebot doctor --sandbox-check` runs it on any machine.
+
 These are local checks, not a promise that every CI environment passes. Windows Clippy
 cross-compiles without running Windows tests. Docker Desktop cannot exercise Landlock;
 CI's native Linux tests cover that gap. Release cross-builds remain separate.
@@ -119,7 +124,14 @@ takes a minute and one that takes twenty, and the reviewer is the person waiting
 
 `make check-spec` checks the mechanical half of the specs: clause numbering, the tests each clause
 names, the paths it governs, the call sites a guarded symbol pins, and the table in
-[../specs/README.md](../specs/README.md). CI runs it too, so a new use of a guarded symbol fails a
+[../specs/README.md](../specs/README.md). It also runs
+[../../contrib/check-issue-posters.py](../../contrib/check-issue-posters.py), which fails when
+[the issue-poster definition](../../agents/agents/issue-poster.md) would not load, writes a label
+[labelling-issues.md](labelling-issues.md) does not describe, or when a skill that files an issue
+does not name it. Its helper's selftest,
+[../../agents/issue_helper_selftest.py](../../agents/issue_helper_selftest.py), runs beside it: the
+label and assignee checks every poster shares are in
+[../../agents/issue_helper.py](../../agents/issue_helper.py). CI runs it too, so a new use of a guarded symbol fails a
 pull request rather than waiting for somebody to notice it. It also holds
 [../../agents/unverified-clauses.txt](../../agents/unverified-clauses.txt) to the clauses that are
 `verified-by: none`, so giving a clause a test, or setting one to `none`, is a line in a diff

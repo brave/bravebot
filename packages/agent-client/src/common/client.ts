@@ -1,17 +1,27 @@
 import { describeThrown, isolate } from './isolate.js'
 import { CapabilityError, ProtocolError, RpcError, UnsupportedError } from './errors.js'
 import { RpcConnection, type Deadlines, type LineSink, type Outcome } from './connection.js'
-import type { AgentClient, AgentSession, CloseOutcome, SendResult, TargetInfo, ViewListener } from './interface.js'
+import type { AgentClient, AgentSession, AskAnswer, CloseOutcome, SendResult, TargetInfo, ViewListener } from './interface.js'
 import { applyUpdate, endView, startView, type ViewState } from './view.js'
 import {
   SESSION_VIEW_START,
   SESSION_VIEW_VERSION,
+  SUPPORTED_APPROVALS,
   decodeUpdate,
+  readActionTargets,
   readSessionViewCapability,
   type BridgeEvent,
   type JsonValue,
   type SessionViewCapability,
 } from './wire.js'
+
+/** A refusal made here, without sending, because the displayed question no longer matches. */
+export class StaleActionError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'StaleActionError'
+  }
+}
 
 /** A workspace a client may open: the id and name are shown, the directory stays inside the client. */
 export interface Workspace {
@@ -27,10 +37,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/** The question kinds answered with a decision: every supported kind except the one that takes answers. */
+const DECISION_KINDS: readonly string[] = SUPPORTED_APPROVALS.filter((kind) => kind !== 'ask')
+
+function isAskAnswer(value: unknown): value is AskAnswer {
+  if (value === null) return true
+  if (!isRecord(value)) return false
+  if (typeof value.typed === 'string') return true
+  return Array.isArray(value.chosen) && value.chosen.every((index) => Number.isSafeInteger(index) && index >= 0)
+}
+
 class Session implements AgentSession {
   private current: ViewState | null = null
   private trust: JsonValue | null = null
   private readonly listeners = new Set<ViewListener>()
+  private readonly replying = new Set<number>()
+  /** The latest turn this session sent, which the view may not show yet. */
+  private sent = 0
+  /** Sends whose answer has not arrived, so the turn they will be numbered is not yet known. */
+  private sending = 0
   /** Why the view could not start, when a malformed event arrived before it existed. */
   refused: string | null = null
 
@@ -39,6 +64,8 @@ class Session implements AgentSession {
     private readonly connection: RpcConnection,
     private readonly forget: (id: string) => void,
     private readonly report: (message: string) => void,
+    /** Whether the runtime names the turn a cancel is for. */
+    private readonly namesTurns: boolean,
   ) {}
 
   get view(): ViewState {
@@ -113,18 +140,72 @@ class Session implements AgentSession {
 
   async send(text: string): Promise<SendResult> {
     this.live('send')
-    const result = await this.connection.request('turn.send', this.params({ prompt: text }))
+    this.sending++
+    let result: unknown
+    try {
+      result = await this.connection.request('turn.send', this.params({ prompt: text }))
+    } finally {
+      this.sending--
+    }
     if (!isRecord(result) || typeof result.turn !== 'number') throw new ProtocolError('turn.send did not report a turn')
+    // The latest send, not the largest: turn numbers go back after a rewind.
+    this.sent = result.turn
     return { turn: result.turn }
   }
 
+  /** The question on screen, if it is the one being answered and this client can answer it. */
+  private target(request: number): NonNullable<ViewState['pending']> {
+    const pending = this.live('reply').pending
+    if (pending === null || pending.request !== request) {
+      throw new StaleActionError(`request ${request} is not the question on screen`)
+    }
+    if (!pending.supported) throw new UnsupportedError(`a ${pending.kind} question cannot be answered here`)
+    return pending
+  }
+
+  async decide(request: number, decision: 'approve' | 'reject'): Promise<void> {
+    const pending = this.target(request)
+    if (!DECISION_KINDS.includes(pending.kind)) {
+      throw new UnsupportedError(`a ${pending.kind} question is not an approval to approve or reject`)
+    }
+    if (decision !== 'approve' && decision !== 'reject') {
+      throw new UnsupportedError("a decision is 'approve' or 'reject'")
+    }
+    await this.reply(request, `${pending.kind}.reply`, { decision })
+  }
+
+  async answer(request: number, answers: AskAnswer[]): Promise<void> {
+    const pending = this.target(request)
+    if (pending.kind !== 'ask') throw new UnsupportedError(`a ${pending.kind} question takes a decision, not answers`)
+    if (!Array.isArray(answers) || !answers.every(isAskAnswer)) {
+      throw new UnsupportedError('answers are a list of { typed }, { chosen } or null')
+    }
+    await this.reply(request, 'ask.reply', { answers })
+  }
+
+  /** One reply per request at a time; the bridge would refuse the second, but the caller learns it here. */
+  private async reply(request: number, method: string, body: Record<string, unknown>): Promise<void> {
+    if (this.replying.has(request)) throw new StaleActionError(`a reply to request ${request} is already being sent`)
+    this.replying.add(request)
+    try {
+      await this.connection.request(method, this.params({ request, ...body }))
+    } finally {
+      this.replying.delete(request)
+    }
+  }
+
   async cancel(): Promise<void> {
-    await this.connection.request('turn.cancel', this.params())
+    // Name the turn to stop when the runtime can use it, so a cancel that arrives late cannot reach a
+    // turn that began after the one meant. While a send is unanswered the number of the turn it
+    // starts is not known, so the cancel names none and stops whatever is running, as Stop always has.
+    const turn = Math.max(this.sent, this.current?.turn ?? 0)
+    const named = this.namesTurns && this.sending === 0
+    await this.connection.request('turn.cancel', this.params(named ? { turn } : {}), undefined, { control: true })
   }
 
   async close(): Promise<CloseOutcome> {
     try {
-      await this.connection.request('session.close', this.params())
+      await this.connection.request('session.close', this.params(), undefined, { control: true })
     } catch (error) {
       // The bridge says the session is already gone, so there is nothing left to keep registered.
       if (error instanceof RpcError && error.code === 'no_such_session') this.forget(this.id)
@@ -253,6 +334,7 @@ export class RpcAgentClient implements AgentClient {
       configured: record.configured === true,
       defaultModel: typeof record.defaultModel === 'string' ? record.defaultModel : null,
       sessionView: view,
+      actionTargets: readActionTargets(info),
     }
   }
 
@@ -266,12 +348,12 @@ export class RpcAgentClient implements AgentClient {
 
   async createSession(options: { workspace: string }): Promise<AgentSession> {
     const workspace = this.configured.find((candidate) => candidate.id === options.workspace)
-    if (!workspace) throw new RpcError('unknown_workspace', 'that workspace is not configured')
-    await this.describe()
+    if (!workspace) throw new RpcError('unknown_workspace', 'that workspace is not configured', 'rejected')
+    const described = await this.describe()
     let created: Session | null = null
     const opened = (outcome: Outcome): void => {
       if (!('ok' in outcome) || !isRecord(outcome.ok) || typeof outcome.ok.session !== 'string') return
-      const session = new Session(outcome.ok.session, this.#connection, (id) => this.sessions.delete(id), (message) => this.report(message))
+      const session = new Session(outcome.ok.session, this.#connection, (id) => this.sessions.delete(id), (message) => this.report(message), described.actionTargets)
       created = session
       this.sessions.set(session.id, session)
       const held = this.early.get(session.id) ?? []
@@ -295,7 +377,7 @@ export class RpcAgentClient implements AgentClient {
       this.sessions.delete(session.id)
       // Best effort and unawaited: the caller gets the startup failure now. The request has no deadline,
       // so a silent bridge leaves it pending until the connection ends rather than ending the connection.
-      this.#connection.request('session.close', { session: session.id }, undefined, { untimed: true }).catch(() => undefined)
+      this.#connection.request('session.close', { session: session.id }, undefined, { untimed: true, control: true }).catch(() => undefined)
       throw error
     }
     return session

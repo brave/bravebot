@@ -172,13 +172,11 @@ gh api repos/brave/bravebot/assignees/<login>   # 204 means assignable
 
 ### The issue
 
-Title and labels follow [labelling-issues.md](../../../docs/development/labelling-issues.md): the
-finding first, the cost after it, a clause id leading where there is one, no prefix a label
-already says. Labels: `security`, `needs-security-review`, a kind (`bug`, `spec-bug`, or
-`spec-coverage`), a `severity/*`, and an `area/*` where the area is clear. No `importance`,
+Title and labels follow [labelling-issues.md](../../../docs/development/labelling-issues.md), and
+the [issue-poster](../../agents/issue-poster.md) definition applies them. What is particular to a
+report is the security set: `security`, `needs-security-review`, a kind (`bug`, `spec-bug`, or
+`spec-coverage`) and a `severity/*`, with the severity and kind chosen as above. No `importance`,
 `urgency`, or `size`: those are the [triage-issues skill](../triage-issues/SKILL.md)'s to judge.
-Check every label exists (`gh label list --repo brave/bravebot --limit 200`); where one does not,
-stop and tell the user rather than creating it.
 
 The body, written in the repository's own words rather than the reporter's:
 
@@ -209,11 +207,8 @@ File only after they agree. Apply any change they ask for to the draft first, an
 they want more than the change they named. If they decide against filing, or to document the
 behaviour as a known cost instead, do that and post nothing.
 
-```bash
-gh issue create --repo brave/bravebot --title '<title>' \
-  --label security,needs-security-review,<kind>,severity/<level>[,area/<area>] \
-  --assignee <login> --body-file <file>
-```
+Hand the filing to the [issue-poster](../../agents/issue-poster.md) definition with the title, the
+body file, the labels shown to the user, and the assignee.
 
 Post one issue per distinct defect. Nothing else on GitHub changes: no comments on other issues,
 no closes, no pull request, and no fix. Fixing is a separate task the user asks for afterwards.

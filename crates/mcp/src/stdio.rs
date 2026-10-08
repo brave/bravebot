@@ -13,7 +13,7 @@ use crate::protocol::{
     Listing, RpcNotification, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params,
     paged,
 };
-use crate::{McpError, McpResult, malformed};
+use crate::{McpError, McpResult, malformed, named};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
@@ -24,15 +24,54 @@ use bravebot_sandbox::{
 };
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 /// A server reached over stdin/stdout.
 pub struct StdioServer {
     /// Kept so the child is killed when this is dropped.
     child: ConfinedChild,
     stdin: ConfinedStdin,
-    stdout: BufReader<ConfinedStdout>,
+    /// The lines the server writes, read on a thread of their own so that waiting for one can
+    /// have a deadline. The sender is dropped when the output closes.
+    lines: Receiver<std::io::Result<String>>,
     next_id: u64,
     name: String,
+    /// How long a reply may take.
+    bound: Duration,
+    /// Set when a request ran out of time and the process was stopped.
+    stopped: bool,
+}
+
+/// How many lines the reader holds ahead of a request that is waiting for one.
+///
+/// A server writing faster than its replies are read waits on a full pipe, as it did when the lines
+/// were read by the request itself, and what it has written is not kept without limit.
+const LINES_AHEAD: usize = 16;
+
+/// Read `stdout` a line at a time and send each on, until it closes or nobody is listening.
+///
+/// The thread ends when the child does, since stopping the process closes the pipe.
+fn read_lines(stdout: ConfinedStdout) -> Receiver<std::io::Result<String>> {
+    let (sender, lines) = mpsc::sync_channel(LINES_AHEAD);
+    std::thread::spawn(move || {
+        let mut stdout = BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            let sent = match stdout.read_line(&mut line) {
+                Ok(0) => return,
+                Ok(_) => sender.send(Ok(line)),
+                Err(error) => {
+                    let _ = sender.send(Err(error));
+                    return;
+                }
+            };
+            if sent.is_err() {
+                return;
+            }
+        }
+    });
+    lines
 }
 
 /// Shows the server's identity but nothing it has sent, so a log line cannot leak tool
@@ -54,6 +93,25 @@ impl Drop for StdioServer {
     }
 }
 
+/// Writes how a handshake step ended to the diagnostic log: that it did, or which kind of failure.
+/// Never the server's name or anything it sent, since both are text someone else chose.
+fn log_step<T>(step: &'static str, outcome: &McpResult<T>) {
+    match outcome {
+        Ok(_) => bravebot_diag::info(step, &[("outcome", bravebot_diag::Field::word("ok"))]),
+        Err(error) => {
+            let kind = match error {
+                McpError::Confinement(_) => "confinement",
+                McpError::Denied(_) => "denied",
+                McpError::Transport(_) => "transport",
+                McpError::Server { .. } => "server",
+                McpError::ToolFailed { .. } => "tool_failed",
+                McpError::TimedOut { .. } => "timed_out",
+            };
+            bravebot_diag::error(step, &[("kind", bravebot_diag::Field::word(kind))]);
+        }
+    }
+}
+
 impl StdioServer {
     /// Launch a server under confinement, holding `variables` and nothing else of an
     /// environment, with its stderr sent to `diagnostics`.
@@ -62,6 +120,20 @@ impl StdioServer {
     /// not started: running unconfined third-party code would silently remove the
     /// guarantee the caller believes it has.
     pub fn launch(
+        name: impl Into<String>,
+        program: &str,
+        args: &[String],
+        variables: Variables,
+        sandbox: &dyn Sandbox,
+        policy: &SandboxPolicy,
+        diagnostics: Stream,
+    ) -> McpResult<Self> {
+        let launched = Self::spawn(name, program, args, variables, sandbox, policy, diagnostics);
+        log_step("mcp.launch", &launched);
+        launched
+    }
+
+    fn spawn(
         name: impl Into<String>,
         program: &str,
         args: &[String],
@@ -110,10 +182,20 @@ impl StdioServer {
         Ok(Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            lines: read_lines(stdout),
             next_id: 1,
             name: name.into(),
+            bound: Duration::from_secs(bravebot_config::mcp::TOOL_SECS),
+            stopped: false,
         })
+    }
+
+    /// Give each later reply `bound` and no longer.
+    ///
+    /// A request that is not answered in time stops the process, so that a late reply is never
+    /// read as the answer to the next one, and every request after it fails.
+    pub fn set_bound(&mut self, bound: Duration) {
+        self.bound = bound;
     }
 
     pub fn name(&self) -> &str {
@@ -128,6 +210,11 @@ impl StdioServer {
     }
 
     fn send_request(&mut self, method: &str, params: Option<Value>) -> McpResult<Value> {
+        if self.stopped {
+            return Err(McpError::Transport(
+                "the server was stopped after a request ran out of time".into(),
+            ));
+        }
         let id = self.next_id;
         self.next_id += 1;
 
@@ -139,19 +226,35 @@ impl StdioServer {
             .and_then(|()| self.stdin.flush())
             .map_err(|e| McpError::Transport(format!("could not send {method}: {e}")))?;
 
+        // One deadline for the whole request, so a server writing lines that are not its reply
+        // cannot hold it past the bound.
+        let deadline = Instant::now() + self.bound;
         // Skip anything that is not the reply to this request: servers may interleave
         // notifications, and a stray line must not be mistaken for a result.
         loop {
-            let mut line = String::new();
-            let read = self
-                .stdout
-                .read_line(&mut line)
-                .map_err(|e| McpError::Transport(format!("could not read a reply: {e}")))?;
-            if read == 0 {
-                return Err(McpError::Transport(
-                    "the server closed its output before replying".into(),
-                ));
-            }
+            let line = match self
+                .lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
+                Ok(Ok(line)) => line,
+                Ok(Err(e)) => {
+                    return Err(McpError::Transport(format!("could not read a reply: {e}")));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(McpError::Transport(
+                        "the server closed its output before replying".into(),
+                    ));
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    self.stopped = true;
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    return Err(McpError::TimedOut {
+                        what: method.to_string(),
+                        after: self.bound,
+                    });
+                }
+            };
             if line.trim().is_empty() {
                 continue;
             }
@@ -194,18 +297,22 @@ impl StdioServer {
 
     /// Complete the handshake.
     pub fn initialize(&mut self, client_name: &str, client_version: &str) -> McpResult<()> {
-        self.send_request(
-            "initialize",
-            Some(initialize_params(client_name, client_version)),
-        )?;
-        self.notify("notifications/initialized")
+        let done = self
+            .send_request(
+                "initialize",
+                Some(initialize_params(client_name, client_version)),
+            )
+            .and_then(|_| self.notify("notifications/initialized"));
+        log_step("mcp.initialize", &done);
+        done
     }
 
     /// List the tools this server offers, as the one labelled text a person vouches for before any
     /// of them is offered. SERVERS-8.
     pub fn list_tools(&mut self) -> McpResult<Listing> {
-        let list = paged(|params| self.send_request("tools/list", params))?;
-        Ok(list.listing(&self.name))
+        let listed = paged(|params| self.send_request("tools/list", params));
+        log_step("mcp.list_tools", &listed);
+        Ok(listed?.listing(&self.name))
     }
 
     /// Call a tool.
@@ -226,7 +333,9 @@ impl StdioServer {
             .before_capability(self.capability())
             .map_err(McpError::Denied)?;
 
-        let result = self.send_request("tools/call", Some(call_params(tool, arguments)))?;
+        let result = self
+            .send_request("tools/call", Some(call_params(tool, arguments)))
+            .map_err(|error| named(error, tool))?;
 
         let parsed: ToolResult =
             serde_json::from_value(result).map_err(|e| malformed("tool result", &e))?;

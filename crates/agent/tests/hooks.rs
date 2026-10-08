@@ -443,3 +443,166 @@ fn a_hook_is_not_handed_a_gateways_environment_token() {
         "a gateway's token reached a hook"
     );
 }
+
+/// What a watcher saw, in order: the edge and whether the hook's own marker file existed then.
+#[derive(Debug, PartialEq, Eq)]
+enum Seen {
+    Starting(String, bool),
+    Over(bool),
+}
+
+/// Fire watched, recording each edge beside whether `marker` was there at that moment.
+fn watching(
+    hooks: &Hooks,
+    moment: Moment,
+    at: &Path,
+    marker: &Path,
+    limit: Duration,
+) -> (Vec<Fired>, Vec<Seen>, Vec<Instant>) {
+    let mut seen = Vec::new();
+    let mut when = Vec::new();
+    let held = starting();
+    let fired = hooks::fire_watched(hooks, moment, None, at, limit, &mut |edge| {
+        when.push(Instant::now());
+        seen.push(match edge {
+            hooks::Watch::Starting { moment, program } => {
+                Seen::Starting(format!("{moment} {program}"), marker.exists())
+            }
+            hooks::Watch::Over => Seen::Over(marker.exists()),
+        })
+    });
+    drop(held);
+    (fired, seen, when)
+}
+
+use std::time::Instant;
+
+/// HOOK-8: the person is told a hook is running before the process exists and that it is over
+/// after it has ended, so what is drawn spans exactly the time the turn is held.
+#[test]
+fn a_hook_is_announced_before_it_starts_and_over_after_it_exits() {
+    let scratch = Scratch::new("watched");
+    let marker = scratch.path.join("ran");
+    let program = script(
+        &scratch.path,
+        "touch",
+        &format!("#!/bin/sh\nsleep 0.2\ntouch {marker:?}\n"),
+    );
+    let hooks = declaring("tool-finished", &[program.to_str().expect("a path")]);
+
+    let (fired, seen, _) = watching(
+        &hooks,
+        Moment::ToolFinished,
+        &scratch.path,
+        &marker,
+        Duration::from_secs(30),
+    );
+
+    assert_eq!(fired[0].trouble, None);
+    assert_eq!(
+        seen,
+        vec![
+            Seen::Starting(format!("tool-finished {}", program.display()), false),
+            Seen::Over(true),
+        ],
+        "begin must precede the process and end must follow its exit"
+    );
+}
+
+/// HOOK-8: a hook stopped at its bound is over once it has been stopped, not before.
+#[test]
+fn a_stopped_hook_is_over_only_after_it_was_stopped() {
+    let scratch = Scratch::new("watched-stopped");
+    let marker = scratch.path.join("ran");
+    let program = script(&scratch.path, "linger", "#!/bin/sh\nsleep 30\n");
+    let hooks = declaring("turn-finished", &[program.to_str().expect("a path")]);
+
+    let (fired, seen, when) = watching(
+        &hooks,
+        Moment::TurnFinished,
+        &scratch.path,
+        &marker,
+        Duration::from_millis(300),
+    );
+
+    assert!(matches!(fired[0].trouble, Some(Trouble::Stopped(_))));
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert!(
+        when[1] - when[0] >= Duration::from_millis(300),
+        "over was said before the bound ran out"
+    );
+}
+
+/// HOOK-8: a program that could not be started still closes the pair, or a display would say a
+/// hook was running that never was.
+#[test]
+fn a_hook_that_never_started_is_still_closed() {
+    let scratch = Scratch::new("watched-missing");
+    let marker = scratch.path.join("ran");
+    let hooks = declaring("turn-started", &["/no/such/program"]);
+
+    let (_, seen, _) = watching(
+        &hooks,
+        Moment::TurnStarted,
+        &scratch.path,
+        &marker,
+        Duration::from_secs(30),
+    );
+
+    assert_eq!(
+        seen,
+        vec![
+            Seen::Starting("turn-started /no/such/program".into(), false),
+            Seen::Over(false)
+        ]
+    );
+}
+
+/// HOOK-8: two hooks on one moment are two pairs, one after the other, never nested or merged.
+#[test]
+fn two_hooks_are_two_pairs_in_order() {
+    let scratch = Scratch::new("watched-two");
+    let marker = scratch.path.join("ran");
+    let hooks = Hooks::parse(
+        r#"{"hooks": [
+            {"on": "turn-started", "run": ["/no/such/first"]},
+            {"on": "turn-started", "run": ["/no/such/second"]}
+        ]}"#,
+    );
+
+    let (_, seen, _) = watching(
+        &hooks,
+        Moment::TurnStarted,
+        &scratch.path,
+        &marker,
+        Duration::from_secs(30),
+    );
+
+    assert_eq!(
+        seen,
+        vec![
+            Seen::Starting("turn-started /no/such/first".into(), false),
+            Seen::Over(false),
+            Seen::Starting("turn-started /no/such/second".into(), false),
+            Seen::Over(false),
+        ]
+    );
+}
+
+/// HOOK-8: nothing is announced for a moment that fires no hook.
+#[test]
+fn a_moment_with_no_hook_announces_nothing() {
+    let scratch = Scratch::new("watched-none");
+    let marker = scratch.path.join("ran");
+    let hooks = declaring("turn-finished", &["/no/such/program"]);
+
+    let (_, seen, _) = watching(
+        &hooks,
+        Moment::TurnStarted,
+        &scratch.path,
+        &marker,
+        Duration::from_secs(30),
+    );
+
+    assert!(seen.is_empty());
+}

@@ -655,6 +655,33 @@ pub fn sweep(_git_dir: &Path, _directory: &Path, _listed: &dyn Fn(&str) -> bool)
     Vec::new()
 }
 
+/// The checkouts under `directory`, a workspace's `checkouts/<key>`, that `listed` does not name,
+/// by number (CHECKOUT-16). Answers each with its id and path, and removes nothing.
+///
+/// Takes a plain `c<number>` name that is a directory and not a link, as [`sweep`] does. Where no
+/// lock can say whether another session holds one, as on Windows, naming it is all that is safe.
+pub fn unlisted(directory: &Path, listed: &dyn Fn(&str) -> bool) -> Vec<(String, PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(u64, String, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let id = entry.file_name().to_str()?.to_owned();
+            let number: u64 = id
+                .strip_prefix('c')
+                .filter(|n| n.bytes().all(|b| b.is_ascii_digit()))?
+                .parse()
+                .ok()?;
+            let path = entry.path();
+            let plain = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_dir());
+            (plain && !listed(&id)).then_some((number, id, path))
+        })
+        .collect();
+    found.sort();
+    found.into_iter().map(|(_, id, path)| (id, path)).collect()
+}
+
 /// Remove a checkout [`make`] made: its directory and its `worktrees/<id>` entry, and nothing else.
 ///
 /// A link is never followed. A `worktrees` directory that is one is left alone, as [`make`] would

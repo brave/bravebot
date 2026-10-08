@@ -35,7 +35,7 @@
 //! it is, which they read at the write prompt, and never by what was written to it.
 
 use bravebot_core::command::{Route, Spelling};
-use bravebot_core::remembered::{Remembered, RememberedLine, RememberedStep, Shape};
+use bravebot_core::remembered::{Remembered, RememberedArg, RememberedLine, RememberedStep, Shape};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -284,9 +284,56 @@ struct WrittenStep {
     /// have written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     started_as: Option<WrittenPath>,
-    args: Vec<String>,
+    args: Vec<WrittenArg>,
     environment: Vec<(String, String)>,
     routes: Vec<WrittenRoute>,
+}
+
+/// One argument as it is spelled on disk.
+///
+/// A string for a literal, which is every argument any entry written before slots existed holds.
+/// An object for a slot, so a build that knows no slots cannot read an entry holding one as a list
+/// of strings, skips it, and covers nothing for it. A slot kind this build does not know fails to
+/// read for the same reason.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum WrittenArg {
+    Text(String),
+    Slot(WrittenSlot),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WrittenSlot {
+    slot: WrittenSlotKind,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum WrittenSlotKind {
+    Integer,
+}
+
+impl From<&RememberedArg> for WrittenArg {
+    fn from(arg: &RememberedArg) -> Self {
+        match arg {
+            RememberedArg::Literal(text) => Self::Text(text.clone()),
+            RememberedArg::Number => Self::Slot(WrittenSlot {
+                slot: WrittenSlotKind::Integer,
+            }),
+        }
+    }
+}
+
+impl From<WrittenArg> for RememberedArg {
+    fn from(arg: WrittenArg) -> Self {
+        match arg {
+            WrittenArg::Text(text) => Self::Literal(text),
+            WrittenArg::Slot(WrittenSlot {
+                slot: WrittenSlotKind::Integer,
+            }) => Self::Number,
+        }
+    }
 }
 
 /// A path as this record spells it.
@@ -395,7 +442,7 @@ impl From<&RememberedStep> for WrittenStep {
             program: program.clone(),
             resolved: WrittenPath::of(resolved),
             started_as: (started_as != resolved).then(|| WrittenPath::of(started_as)),
-            args: args.clone(),
+            args: args.iter().map(WrittenArg::from).collect(),
             environment: environment.clone(),
             routes: routes.iter().map(WrittenRoute::from).collect(),
         }
@@ -470,7 +517,7 @@ impl WrittenStep {
                 None => resolved.clone(),
             },
             resolved,
-            args: self.args,
+            args: self.args.into_iter().map(RememberedArg::from).collect(),
             environment: self.environment,
             routes: self
                 .routes
@@ -988,5 +1035,67 @@ mod tests {
             "an entry with a line was read as a file"
         );
         assert!(read.is_empty(), "an entry with a file was read as a line");
+    }
+
+    fn plain_view(number: &str) -> Plan {
+        Plan {
+            steps: Steps::Pipeline(vec![Step {
+                program: "gh".to_string(),
+                resolved: PathBuf::from("/usr/bin/gh"),
+                started_as: PathBuf::from("/usr/bin/gh"),
+                args: ["pr", "view", number, "--repo", "brave/bravebot"]
+                    .map(String::from)
+                    .to_vec(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            }]),
+            ..plan("gh", &[])
+        }
+    }
+
+    /// RUN-20: a family survives the round trip with its slot, and covers another number after.
+    #[test]
+    fn a_family_is_read_back_with_its_number_free() {
+        let scratch = Scratch::new("remembered-family-round-trip");
+        let store = scratch.store("/work");
+        let family = RememberedLine::family_of(&plain_view("1081")).expect("a listed line");
+        store.remember(&family, "a-session");
+
+        let read = store.read();
+        assert!(read.covers(&plain_view("1081")));
+        assert!(read.covers(&plain_view("1082")));
+        assert!(!read.covers(&plain_view("abc")));
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        assert!(
+            written.contains(r#"{"slot":"integer"}"#),
+            "the slot was not written as an object: {written}"
+        );
+    }
+
+    /// RUN-20: an entry whose slot this build cannot read covers nothing, and so does one whose
+    /// slot is a plain string, which is how a build that knew no slots would have to read it.
+    #[test]
+    fn an_entry_whose_slot_cannot_be_read_covers_nothing() {
+        let scratch = Scratch::new("remembered-family-unreadable");
+        let store = scratch.store("/work");
+        store.remember(
+            &RememberedLine::family_of(&plain_view("1081")).expect("a listed line"),
+            "a-session",
+        );
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        for unreadable in [
+            r#"{"slot":"hex"}"#,
+            r#"{"slot":"integer","min":9}"#,
+            r#"{}"#,
+            r#"null"#,
+        ] {
+            let rewritten = written.replacen(r#"{"slot":"integer"}"#, unreadable, 1);
+            assert_ne!(rewritten, written, "the entry was not rewritten");
+            std::fs::write(store.path(), rewritten).expect("rewritten");
+            assert!(
+                store.read().is_empty(),
+                "{unreadable} was read as an entry that covers"
+            );
+        }
     }
 }

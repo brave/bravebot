@@ -22,6 +22,7 @@ use posix as sys;
 #[cfg(windows)]
 use windows as sys;
 
+use bravebot_filetype::{SNIFF_BYTES, looks_binary};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fs::File;
@@ -99,6 +100,24 @@ fn read_at(parent: &File, leaf: &str, limit: usize) -> io::Result<(String, bool)
     bytes.truncate(limit);
     Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))
 }
+
+/// Whether a file may go to the agent as a named file: a regular file that does not look binary.
+///
+/// Only the first [`SNIFF_BYTES`] are read, and nothing caps the size, because the terminal caps
+/// neither a file named with `@` nor `--file`. No byte of it is returned.
+fn attachable_at(parent: &File, leaf: &str) -> io::Result<()> {
+    let file = sys::open_at(parent, leaf)?;
+    if !file.metadata()?.is_file() {
+        return Err(invalid("Not a regular file"));
+    }
+    let mut head = Vec::with_capacity(SNIFF_BYTES);
+    file.take(SNIFF_BYTES as u64).read_to_end(&mut head)?;
+    if looks_binary(&head) {
+        return Err(invalid("Not a text file"));
+    }
+    Ok(())
+}
+
 /// The largest file this helper will compare, replace, or judge the contents of.
 const TEXT_MAX: usize = 65536;
 
@@ -209,6 +228,13 @@ fn handle(request: Request) -> io::Result<Value> {
             let (parent, leaf) = parent_directory(&request.root, &request.path, false)?;
             let (text, truncated) = read_at(&parent, &leaf, limit)?;
             Ok(json!({"text": text, "truncated": truncated}))
+        }
+        // Whether a file may be named to the agent. It answers yes or an error, and returns no
+        // contents: the agent reads the file itself once the turn is sent.
+        "attachment" => {
+            let (parent, leaf) = parent_directory(&request.root, &request.path, false)?;
+            attachable_at(&parent, &leaf)?;
+            Ok(json!({"attachable": true}))
         }
         // Make a bot's memory file exist, without reading a byte of it back to the caller.
         //
@@ -842,6 +868,57 @@ mod tests {
         fs::create_dir(f.path.join("directory")).unwrap();
         assert!(read_at(&parent, "directory", 100).is_err());
         assert!(read_at(&parent, "bad\0name", 100).is_err());
+    }
+
+    /// An attachment is judged by the agent's binary test on its first 8 KiB and by nothing else,
+    /// so a large text file goes and a file with a NUL or mostly control bytes near the top does
+    /// not.
+    #[test]
+    fn an_attachment_is_judged_by_its_first_bytes_and_not_its_size() {
+        let f = Fixture::new();
+        let attachment = |path: &str| call(f.root(), "attachment", path);
+
+        fs::write(f.path.join("large.txt"), "line of text\n".repeat(100_000)).unwrap();
+        assert!(fs::metadata(f.path.join("large.txt")).unwrap().len() > 1024 * 1024);
+        assert_eq!(
+            attachment("large.txt").unwrap(),
+            json!({"attachable": true})
+        );
+        fs::write(f.path.join("empty.txt"), "").unwrap();
+        assert!(attachment("empty.txt").is_ok());
+
+        let mut nul = vec![b'a'; SNIFF_BYTES - 1];
+        nul.push(0);
+        fs::write(f.path.join("nul-near-top"), &nul).unwrap();
+        assert!(attachment("nul-near-top").is_err());
+        // Past the sniff, as the agent reads it too: only the head is judged.
+        let mut late = vec![b'a'; SNIFF_BYTES];
+        late.push(0);
+        fs::write(f.path.join("nul-past-sniff"), &late).unwrap();
+        assert!(attachment("nul-past-sniff").is_ok());
+
+        // Thirty percent control characters is still text, thirty-one is not.
+        let mixed = |control: usize| [vec![1u8; control], vec![b'a'; 100 - control]].concat();
+        fs::write(f.path.join("thirty"), mixed(30)).unwrap();
+        fs::write(f.path.join("thirty-one"), mixed(31)).unwrap();
+        assert!(attachment("thirty").is_ok());
+        assert!(attachment("thirty-one").is_err());
+        // Tabs, newlines, form feeds and carriage returns are text.
+        fs::write(f.path.join("whitespace"), b"\t\n\x0c\r".repeat(50)).unwrap();
+        assert!(attachment("whitespace").is_ok());
+
+        fs::create_dir(f.path.join("directory")).unwrap();
+        assert!(attachment("directory").is_err());
+        for path in ["../secret", "/etc/passwd", "", "missing.txt"] {
+            assert!(attachment(path).is_err(), "{path}");
+        }
+        // One name per kind and nothing removed: a junction is a directory to Windows, and
+        // `remove_file` cannot delete it. The fixture takes them all away.
+        for kind in LINKS {
+            let name = format!("link-{kind:?}.txt");
+            link(&f.path.join("large.txt"), &f.path.join(&name), kind);
+            assert!(attachment(&name).is_err(), "{kind:?}");
+        }
     }
 
     /// A root that is not absolute is refused rather than resolved against anything.

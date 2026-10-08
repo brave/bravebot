@@ -565,6 +565,104 @@ fn doctor_names_a_pick_it_sets_aside() {
     );
 }
 
+/// SANDBOX: the lists a person writes reach the report through the process: one from the settings
+/// file, one from a flag, and one a checkout wrote and may not, each said with where it came from.
+///
+/// A property of the process: the flag is read in `main` and settled once, the settings are read by
+/// the layers, and `doctor` is the only place that joins them to the file that wrote each. A link
+/// that dropped either would leave every in-crate test passing while a person's refusal was
+/// silently not in force. The checkout's `allowWrite` is the control that the report distinguishes
+/// the two kinds of file.
+#[test]
+fn doctor_names_each_filesystem_rule_with_where_it_came_from() {
+    let scratch = Scratch::new("cli-running-doctor-filesystem-rules")
+        .with_settings(r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-settings"]}}}"#);
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"sandbox": {"filesystem": {"allowWrite": ["/from-a-checkout"], "denyWrite": [".env"]}}}"#,
+    )
+    .expect("the checkout's settings");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["doctor", "--sandbox-deny-write", "from-a-flag"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("the report did not name {needle}: {stdout}{stderr}"))
+            .to_string()
+    };
+    assert!(
+        line("denyRead ~/from-settings").contains("settings.json"),
+        "{stdout}"
+    );
+    assert!(
+        line("denyWrite from-a-flag").contains("command-line flag"),
+        "{stdout}"
+    );
+    assert!(
+        line("denyWrite .env").contains("checkout"),
+        "a checkout's refusal was not in force: {stdout}"
+    );
+    assert!(
+        !stdout.contains("allowWrite /from-a-checkout (")
+            && line("sandbox.filesystem.allowWrite").contains("not obeyed"),
+        "a checkout's allowance was read or went unreported: {stdout}"
+    );
+}
+
+/// `doctor` says a checkout's `sandbox.network.allowedHosts` is not obeyed and that a misshapen
+/// `deniedHosts` is read as absent, each naming the file, rather than leaving both unreported.
+///
+/// The settings tests check the accessors. `doctor` is the only place that turns them into lines
+/// for a person, so a missing call would leave those tests passing while a checkout's host
+/// allowance went without a word.
+#[test]
+fn doctor_names_a_checkouts_host_allowance_and_a_misshapen_host_list() {
+    let scratch = Scratch::new("cli-running-doctor-network-hosts");
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"sandbox": {"network": {"allowedHosts": ["example.com"], "deniedHosts": "evil.test"}}}"#,
+    )
+    .expect("the checkout's settings");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("the report did not name {needle}: {stdout}{stderr}"))
+            .to_string()
+    };
+    let allowed = line("sandbox.network.allowedHosts");
+    assert!(
+        allowed.contains("not obeyed") && allowed.contains("settings.json"),
+        "a checkout's host allowance went unreported: {stdout}"
+    );
+    let denied = line("sandbox.network.deniedHosts");
+    assert!(
+        denied.contains("not a list of strings") && denied.contains("settings.json"),
+        "a misshapen host list went unreported: {stdout}"
+    );
+}
+
 /// A machine with nowhere to keep credentials has none imported, rather than a batch that could
 /// not be read.
 ///
@@ -996,6 +1094,51 @@ fn doctor_ends_on_the_configuration_status_and_says_its_identifier() {
         stderr.contains("ai-chat.example.invalid"),
         "the report failed over something other than the endpoint it was given: {stderr}"
     );
+}
+
+/// SANDBOX-21 over the argument list. `doctor --sandbox-check` runs programs, so a second argument that
+/// might have changed which ones is refused rather than ignored, with the status an argument error
+/// has.
+#[test]
+fn doctor_sandbox_refuses_a_further_argument() {
+    let scratch = Scratch::new("cli-running-doctor-sandbox-argument");
+
+    let output = bravebot(
+        &scratch.path,
+        &[],
+        &["doctor", "--sandbox-check", "--extra"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains("BB1002"), "{stderr}");
+    assert!(!scratch.path.join(".bravebot/doctor-sandbox").exists());
+}
+
+/// SANDBOX-21 over the process: the command runs the suite, prints a row for each workflow, and
+/// counts a workflow whose programs are not installed as skipped without failing on it. A `PATH`
+/// naming nothing is how every program is made absent, and the suite's own directory is removed
+/// once nothing failed.
+#[cfg(unix)]
+#[test]
+fn doctor_sandbox_skips_what_is_not_installed_and_cleans_up_after_a_clean_run() {
+    if !bravebot_agent::usability::available() {
+        return;
+    }
+    let scratch = Scratch::new("cli-running-doctor-sandbox-skipped");
+
+    let output = bravebot(
+        &scratch.path,
+        &[("PATH", "/bravebot-no-such-directory")],
+        &["doctor", "--sandbox-check"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("git: init, add and commit"), "{stdout}");
+    assert!(stdout.contains("0 passed, 0 failed"), "{stdout}");
+    assert!(!stdout.contains("FAILED"), "{stdout}");
+    assert!(!scratch.path.join(".bravebot/doctor-sandbox").exists());
 }
 
 /// NET-8 over the status rather than the line: a proxy variable naming no route ends `doctor` on the
@@ -1710,7 +1853,7 @@ fn doctor_names_an_allow_rule_a_checkout_wrote() {
 ///
 /// Running the binary because the report is the whole of the behaviour. The key is collected in
 /// `bravebot-config`, worded in `bravebot-i18n` and printed here, and a fix that stops short of the
-/// command leaves somebody believing the `sandbox` block they pasted confines this agent.
+/// command leaves somebody believing the `hooks` block they pasted runs.
 ///
 /// The hooks value is a string nothing else in the report could print, which is what makes the
 /// second assertion say the line carries names and not values: a report that printed the block back
@@ -1721,7 +1864,7 @@ fn doctor_names_an_allow_rule_a_checkout_wrote() {
 #[test]
 fn doctor_names_a_top_level_key_it_does_not_read() {
     let scratch = Scratch::new("cli-running-unread-key").with_settings(
-        r#"{"sandbox": {"enabled": true},
+        r#"{"statusLine": {"type": "command"},
             "hooks": {"PreToolUse": "a-command-nothing-here-runs"},
             "env": {"AWS_REGION": "us-west-2"}}"#,
     );
@@ -1741,7 +1884,7 @@ fn doctor_names_a_top_level_key_it_does_not_read() {
     let (stdout, stderr) = said(&output);
     assert!(output.status.success(), "doctor did not run: {stderr}");
     let file = scratch.path.join(".bravebot").join("settings.json");
-    for key in ["sandbox", "hooks"] {
+    for key in ["statusLine", "hooks"] {
         assert!(
             stdout.contains(&format!("{key} in {}", file.display())),
             "{key} was read and discarded with nothing said: {stdout}"
@@ -2536,6 +2679,171 @@ const AT_A_GATEWAY: &[(&str, &str)] = &[
     ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
     ("OPENROUTER_API_KEY", "a-token"),
 ];
+
+/// A gateway whose model asks to run `echo hello` and, once that call has an answer in the
+/// conversation, says it is done.
+#[cfg(unix)]
+fn a_gateway_asking_for_a_run() -> Gateway {
+    a_gateway(r#"["tools"]"#, |body| {
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"run",
+                        "arguments":"{\"command\":\"echo hello\",\"why\":\"say hello\"}"}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// A gateway whose model asks to run `command` and, once that call has an answer in the
+/// conversation, says it is done.
+#[cfg(unix)]
+fn a_gateway_asking_to_run(command: &'static str) -> Gateway {
+    a_gateway(r#"["tools"]"#, move |body| {
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"run",
+                        "arguments":serde_json::json!({"command": command, "why": "make a file"})
+                            .to_string()}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// SANDBOX: `--sandbox-deny-write` and a settings file's `sandbox.filesystem.denyWrite` reach the
+/// programs `run` starts, and a run with neither reaches none.
+///
+/// A property of the process: the flag is read in `main`, joined to the settings and settled once,
+/// and read again by the confinement each `run` call builds. Every in-crate test hands the lists to
+/// the confinement itself, so a link that dropped them would leave all of them passing while a
+/// refusal was in no stage's profile. The program is `touch` making a file in a directory the
+/// refusal names, so the effect is a file on disk and not words the model was handed; the run with
+/// no list is the control that this machine lets the file be made.
+#[cfg(unix)]
+#[test]
+fn a_denied_write_reaches_the_programs_a_run_starts() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return;
+    }
+    let run_in = |name: &str, flags: &[&str], settings: Option<&str>| {
+        let gateway = a_gateway_asking_to_run("touch blocked/made.txt");
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(project.join("blocked")).expect("a project");
+        if let Some(settings) = settings {
+            std::fs::create_dir_all(project.join(".bravebot")).expect("a checkout");
+            std::fs::write(project.join(".bravebot").join("settings.json"), settings)
+                .expect("the checkout's settings");
+        }
+        let mut arguments = flags.to_vec();
+        arguments.extend(["--dangerously-skip-permissions", "-p", "make a file"]);
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(&scratch.path, &project, &environment, &arguments);
+        let _ = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        project.join("blocked").join("made.txt").exists()
+    };
+
+    assert!(
+        run_in("cli-running-write-control", &[], None),
+        "the control did not make the file, so the refusals below say nothing"
+    );
+    assert!(
+        !run_in(
+            "cli-running-write-flag",
+            &["--sandbox-deny-write", "blocked/made.txt"],
+            None
+        ),
+        "the flag did not reach the stage"
+    );
+    assert!(
+        !run_in(
+            "cli-running-write-checkout",
+            &[],
+            Some(r#"{"sandbox": {"filesystem": {"denyWrite": ["blocked/made.txt"]}}}"#)
+        ),
+        "a checkout's refusal did not reach the stage"
+    );
+}
+
+/// SANDBOX: `--run-network closed` reaches the programs `run` starts, the planner's description of
+/// them and the trail, and a run without it reaches none of the three. Permissions are skipped so
+/// the call reaches the point where a line starts, which is where the trail entry is made.
+///
+/// A property of the process: the flag is read in `main`, settled once, and read again by the
+/// confinement a call builds, by the description the planner is offered and by the trail, and
+/// only a run that goes through all of them says whether they are joined up. Every in-crate test
+/// sets the network on the confinement itself, so a link that dropped the setting would leave them
+/// passing while a closed network ran open. `echo` earns no egress, so the entry names the whole
+/// run, and the open run is the control that fails if the entry or the sentence is written for
+/// every run.
+#[cfg(unix)]
+#[test]
+fn a_closed_network_reaches_the_description_and_the_trail_of_a_run() {
+    let run_in = |name: &str, flags: &[&str]| {
+        let gateway = a_gateway_asking_for_a_run();
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let mut arguments = flags.to_vec();
+        arguments.extend([
+            "--dangerously-skip-permissions",
+            "--trace",
+            "-p",
+            "say hello",
+        ]);
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(&scratch.path, &scratch.path, &environment, &arguments);
+        let (_, stderr) = said(&output);
+        let asked = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        (asked, stderr)
+    };
+
+    let (asked, stderr) = run_in("cli-running-network-closed", &["--run-network", "closed"]);
+    assert!(
+        asked.contains("The network is closed"),
+        "the planner was not told the network is closed: {asked}"
+    );
+    assert!(
+        stderr.contains("ok      run_network: the network was closed for every stage of this run"),
+        "the trail did not record the closed network: {stderr}"
+    );
+
+    let (asked, stderr) = run_in("cli-running-network-open", &[]);
+    assert!(
+        !asked.contains("The network is closed"),
+        "a run nobody closed the network for told the planner it was closed: {asked}"
+    );
+    assert!(
+        !stderr.contains("run_network"),
+        "a run nobody closed the network for recorded it: {stderr}"
+    );
+}
 
 /// A level recorded in the store does not reach a request to a model whose listing states which
 /// parameters it takes and does not name the field (BACKEND-22).
@@ -5832,6 +6140,270 @@ fn a_run_under_a_definition_names_it_in_the_result_object() {
     );
 }
 
+/// `settings_for`, with the `agent` key naming `name` beside the rest.
+fn settings_naming_an_agent(gateway: &Gateway, name: &str) -> String {
+    settings_for(gateway).replacen('{', &format!(r#"{{"agent": "{name}","#), 1)
+}
+
+/// ADDRESS-13: the `agent` key in the person's own settings addresses a run that named no
+/// `--agent`, and the result object names the definition as it does for the flag. The setting is
+/// the only thing naming it, so a run that ignored the key would say `null`.
+#[test]
+fn a_run_with_no_agent_flag_works_under_the_agent_setting() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("reviewed"));
+    let scratch = Scratch::new("cli-running-agent-setting")
+        .with_settings(&settings_naming_an_agent(&gateway, "rule-reviewer"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains(r#""agent":"rule-reviewer""#), "{stdout}");
+}
+
+/// ADDRESS-13: `--agent` outranks the setting, so a person whose setting names one definition can
+/// still start a run under another. A setting that won would name `rule-reviewer` here.
+#[test]
+fn the_agent_flag_outranks_the_agent_setting() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("reviewed"));
+    let scratch = Scratch::new("cli-running-agent-setting-flag")
+        .with_settings(&settings_naming_an_agent(&gateway, "rule-reviewer"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        )
+        .with_state(
+            "agents/scribe.md",
+            &a_definition("scribe", "kind: reader\n"),
+        );
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--agent", "scribe", "--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains(r#""agent":"scribe""#), "{stdout}");
+}
+
+/// ADDRESS-13: a checkout's `agent` key chooses nothing, because nobody vouched for the file that
+/// would choose the prompt and the narrowing of every turn. The person's own definition exists, so
+/// only the layer it came from can be why the run was not addressed to it.
+#[test]
+fn a_checkouts_agent_setting_does_not_address_a_run() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("reviewed"));
+    let scratch = Scratch::new("cli-running-agent-setting-checkout")
+        .with_settings(&settings_for(&gateway))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+    let cwd = a_checkout_saying(&scratch, r#"{"agent": "rule-reviewer"}"#);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(!stdout.contains("rule-reviewer"), "{stdout}");
+}
+
+/// ADDRESS-13: a setting naming a definition that does not exist is said on stderr and the run goes
+/// on as the planner's, where the same name on the command line would refuse it (CLI-17). A person
+/// who set it once and later deleted the definition is not locked out of every run.
+#[test]
+fn an_agent_setting_naming_nothing_is_said_and_the_run_goes_on() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("reviewed"));
+    let scratch = Scratch::new("cli-running-agent-setting-missing")
+        .with_settings(&settings_naming_an_agent(&gateway, "nobody"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stderr.contains("the agent setting names nobody")
+            && stderr.contains("there is no definition called nobody"),
+        "{stderr}"
+    );
+    assert!(stdout.contains(r#""reply":"reviewed""#), "{stdout}");
+    assert!(!stdout.contains(r#""agent":"nobody""#), "{stdout}");
+}
+
+/// ADDRESS-13 in a session in lines, which resolves the setting by its own code. The setting is the
+/// only thing naming the definition, so the opening lines name it only if the session took it, and
+/// they say the setting chose it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_works_under_the_agent_setting() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = Scratch::new("cli-running-plain-agent-setting")
+        .with_settings(&settings_naming_an_agent(&gateway, "rule-reviewer"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+
+    let output = in_a_terminal_answering(&scratch.path, AT_A_GATEWAY, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains("every prompt is addressed to rule-reviewer"),
+        "the session did not take the setting's definition: {transcript}"
+    );
+    assert!(
+        transcript.contains("the agent setting chose this definition"),
+        "the session did not say the setting chose it: {transcript}"
+    );
+}
+
+/// ADDRESS-13 in a session in lines: `--agent` outranks the setting, and a session that took the
+/// flag's definition does not say the setting chose it.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_agent_flag_outranks_the_agent_setting_in_a_session_in_lines() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = Scratch::new("cli-running-plain-agent-setting-flag")
+        .with_settings(&settings_naming_an_agent(&gateway, "rule-reviewer"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        )
+        .with_state(
+            "agents/scribe.md",
+            &a_definition("scribe", "kind: reader\n"),
+        );
+
+    let output = in_a_terminal_answering(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--plain", "--agent", "scribe"],
+        "y\n",
+    );
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains("every prompt is addressed to scribe"),
+        "{transcript}"
+    );
+    assert!(
+        !transcript.contains("rule-reviewer")
+            && !transcript.contains("the agent setting chose this definition"),
+        "the setting won over the flag: {transcript}"
+    );
+}
+
+/// ADDRESS-13 in a session in lines: a setting naming a definition that does not exist is said and
+/// the session opens without one, where the same name on the command line would refuse it. The
+/// startup question being put and the end of the input ending the session with success is what says
+/// it opened.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_agent_setting_naming_nothing_is_said_and_a_session_in_lines_goes_on() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = Scratch::new("cli-running-plain-agent-setting-missing")
+        .with_settings(&settings_naming_an_agent(&gateway, "nobody"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+
+    let output = in_a_terminal_answering(&scratch.path, AT_A_GATEWAY, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains("the agent setting names nobody")
+            && transcript.contains("there is no definition called nobody"),
+        "the missing name was not said: {transcript}"
+    );
+    assert!(
+        !transcript.contains("every prompt is addressed to"),
+        "the session worked under a definition that was not found: {transcript}"
+    );
+}
+
+/// ADDRESS-13: a manifest run is addressed to no definition, so the setting is not applied to it.
+/// The definition exists and the setting names it, so a run that applied the setting would say the
+/// setting chose it and name it in the result object.
+#[test]
+fn a_manifest_run_is_not_addressed_to_the_agent_setting() {
+    let gateway = a_gateway("[]", |_| http(401, r#"{"error":{"message":"denied"}}"#));
+    let scratch = Scratch::new("cli-running-agent-setting-manifest")
+        .with_settings(&settings_naming_an_agent(&gateway, "rule-reviewer"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "--mode",
+            "manifest",
+            "--dangerously-skip-permissions",
+            "--json",
+            "-p",
+            "say something",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !stderr.contains("the agent setting chose this definition")
+            && !stdout.contains("rule-reviewer")
+            && !stderr.contains("rule-reviewer"),
+        "the manifest run was addressed to the setting's definition: {stdout}\n{stderr}"
+    );
+    // The run reached the planner, which is what makes the absence above about the setting rather
+    // than about a run that stopped before it was read.
+    assert!(
+        gateway.asked.recv_timeout(Duration::from_secs(5)).is_ok(),
+        "the manifest run sent no request: {stdout}\n{stderr}"
+    );
+}
+
+/// A checkout's `agent` is dropped and `doctor` says so, for the reason its `fallbackModel` is
+/// (ADDRESS-13).
+#[test]
+fn doctor_says_a_checkouts_agent_is_not_obeyed() {
+    let scratch = Scratch::new("cli-running-doctor-agent-checkout");
+    let cwd = a_checkout_saying(&scratch, r#"{"agent": "attacker-written"}"#);
+
+    let output = bravebot_started_in(&scratch.path, &cwd, CONFIGURED, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("agent in") && stdout.contains("is not obeyed"),
+        "{stdout}{stderr}"
+    );
+}
+
 /// CLI-17 with the check for a configured service. A run under a definition asks for the
 /// definition's model, so that is the model the check is made for. Brave's own endpoint with
 /// nothing imported serves nothing, and the definition names a gateway's model, so the run goes to
@@ -5962,6 +6534,89 @@ fn the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable() 
     assert!(
         !stderr.contains("permissions.bypassUnreachable"),
         "the flag was refused where nothing asked for it: {stdout}{stderr}"
+    );
+}
+
+/// SANDBOX-22 through the process: `--sandbox` is read before anything dispatches, so a word that is
+/// not a mode stops the run with the three named, and `--bg`, whose session starts in another
+/// process that would not carry it, refuses it by name.
+///
+/// Running the binary because the flag is taken off the command line in `main`. The failures this
+/// rejects are a word taken as a mode whatever it says, and `--bg` starting a session that has
+/// quietly lost the flag. That a word which is a mode reaches the session is
+/// `the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run`'s.
+#[test]
+fn the_sandbox_flag_is_read_before_the_run_starts() {
+    let scratch = Scratch::new("cli-running-sandbox-flag");
+    for word in ["", "lenient", "Strict"] {
+        let output = bravebot(
+            &scratch.path,
+            CONFIGURED,
+            &["--sandbox", word, "-p", "say something"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{word:?}: {stdout}{stderr}");
+        assert!(
+            stderr.contains("strict, standard, off"),
+            "{word:?} was refused without naming the modes: {stderr}"
+        );
+    }
+
+    let output = bravebot(
+        &scratch.path,
+        CONFIGURED,
+        &["--sandbox", "strict", "--bg", "say something"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("--sandbox"),
+        "--bg did not name the flag: {stderr}"
+    );
+}
+
+/// SANDBOX-22: the mode `--sandbox` names reaches the description of the programs `run` starts. The
+/// three runs differ only in the flag, so a flag that is read and dropped, leaving every run under
+/// the default, gives `strict` and `off` the sentence `standard` gets and fails here.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run() {
+    let asked_under = |word: &str| {
+        let gateway = a_gateway_asking_for_a_run();
+        let scratch = Scratch::new(&format!("cli-running-sandbox-{word}"))
+            .with_settings(&settings_for(&gateway));
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            &environment,
+            &[
+                "--sandbox",
+                word,
+                "--dangerously-skip-permissions",
+                "-p",
+                "say hello",
+            ],
+        );
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway")
+    };
+
+    let strict = asked_under("strict");
+    assert!(
+        strict.contains("may reach only the directories"),
+        "{strict}"
+    );
+    let standard = asked_under("standard");
+    assert!(standard.contains("may read this machine"), "{standard}");
+    let off = asked_under("off");
+    assert!(!off.contains("Programs this tool starts"), "{off}");
+    assert!(
+        off.contains("\"name\":\"run\""),
+        "off dropped the run tool: {off}"
     );
 }
 
@@ -6676,6 +7331,105 @@ fn a_claude_code_session_is_copied_once_and_only_when_asked() {
     assert!(said(&output).1.contains("No Claude Code session"));
 }
 
+/// SESSION-33: a script finds past sessions by what was said in them and gets ids and titles back.
+/// A tool result and an imported session are not searched, `since:` limits by age, `workspace:`
+/// names the directory, and no match exits 1 with nothing on stdout.
+#[test]
+fn sessions_search_prints_the_ids_and_titles_of_the_sessions_that_said_it() {
+    let home = Scratch::new("sessions-search");
+    let work = home.path.join("work");
+    std::fs::create_dir_all(&work).expect("create the workspace");
+    let work = work.canonicalize().expect("canonical workspace");
+    let project = work.to_str().expect("utf-8");
+    let key: String = project
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' => c,
+            _ => '-',
+        })
+        .collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock")
+        .as_secs();
+    let record = |id: &str, title: &str, updated: u64, front: &str, messages: serde_json::Value| {
+        serde_json::json!({
+            "id": id, "directory": project, "title": title, "updated": updated,
+            "front": front,
+            "conversation": {"messages": messages, "context": "trusted"},
+        })
+        .to_string()
+    };
+    let typed = |text: &str| serde_json::json!([{"role": "user", "content": text}]);
+    let read_a_file = serde_json::json!([
+        {"role": "user", "content": "read it"},
+        {"role": "tool", "tool_call_id": "c1", "content": "PASSWORD-IN-A-FILE"},
+    ]);
+    let day = 86_400;
+    let mut home = home;
+    for (id, body) in [
+        (
+            "recent",
+            record(
+                "recent",
+                "Tidy the docs",
+                now - day,
+                "terminal",
+                typed("move the ledger rounding"),
+            ),
+        ),
+        (
+            "older",
+            record(
+                "older",
+                "Fix the build",
+                now - 9 * day,
+                "desktop",
+                typed("the Ledger Rounding flakes"),
+            ),
+        ),
+        (
+            "result",
+            record("result", "Read a file", now - day, "terminal", read_a_file),
+        ),
+        (
+            "copied",
+            record(
+                "copied",
+                "Copied one",
+                now - day,
+                "claude-code",
+                typed("ledger rounding too"),
+            ),
+        ),
+    ] {
+        home = home.with_file(&format!(".bravebot/sessions/{key}/{id}.json"), &body);
+    }
+    let search = |words: &[&str]| {
+        let mut arguments = vec!["sessions", "search"];
+        arguments.extend_from_slice(words);
+        bravebot(&home.path, &[], &arguments)
+    };
+    let workspace = format!("workspace:{project}");
+
+    let output = search(&[&workspace, "LEDGER", "rounding"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    assert_eq!(out, "recent  Tidy the docs\nolder  Fix the build\n");
+
+    let (out, _) = said(&search(&[&workspace, "since:7d", "ledger"]));
+    assert_eq!(out, "recent  Tidy the docs\n");
+
+    let output = search(&[&workspace, "PASSWORD-IN-A-FILE"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(said(&output).0, "");
+    assert!(said(&output).1.contains("No session matches"));
+
+    let output = search(&[&workspace, "since:3m", "ledger"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(said(&output).1.contains("sessions search takes"));
+}
+
 /// BG-2: `--bg` cannot start with a flag that would not reach the session it starts, with bypass,
 /// or from anything but a terminal, and each refusal leaves nothing in the roster.
 #[test]
@@ -6735,7 +7489,8 @@ fn a_host_run_by_hand_has_nothing_to_start_with() {
     assert!(!job.join("state.json").exists());
 }
 
-/// BG-9, BG-10: `attach` and `reply` name a session that is not running as not running.
+/// BG-2, BG-9, BG-10: `attach` and `reply` from a pipe do not start a session that was interrupted,
+/// and say that only a terminal can.
 #[test]
 fn attach_and_reply_refuse_a_session_that_is_not_running() {
     let home = Scratch::new("bg-attach-dead").with_file(
@@ -6748,7 +7503,13 @@ fn attach_and_reply_refuse_a_session_that_is_not_running() {
     ] {
         let output = bravebot(&home.path, &[], arguments);
         assert!(!output.status.success(), "{arguments:?}");
-        assert!(said(&output).1.contains("is not running"), "{arguments:?}");
+        assert!(
+            said(&output)
+                .1
+                .contains("was interrupted, and only a terminal can start it again"),
+            "{arguments:?}: {}",
+            said(&output).1
+        );
     }
     for arguments in [
         &["attach", "ffffffff"][..],
@@ -6790,6 +7551,76 @@ impl Drop for ShortHome {
         let _ = bravebot(&self.0, &[], &["sessions", "stop", "3f2a9c1e"]);
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// BG-9: `/detach` typed in an attached terminal leaves the session running and is not sent to it as
+/// a prompt. The line is typed ahead of the end of the input, which would detach as well, so what
+/// shows `/detach` was understood is that the session, idle and reading, was never given it.
+#[cfg(target_os = "linux")]
+#[test]
+fn typing_detach_leaves_a_session_running_without_sending_it() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let (mut host, socket) = a_started_host(&home, &gateway, "{}");
+    {
+        use std::os::unix::net::UnixStream;
+        let mut terminal = UnixStream::connect(&socket).expect("attach");
+        terminal
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .expect("timeout");
+        writeln!(terminal, "attach").expect("attach");
+        let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+        shown_until(&mut seen, "trust this directory?");
+        loop {
+            writeln!(terminal, "n").expect("answer the question");
+            if shown_until_any(&mut seen, &["all done", "Not sent"]).contains("all done") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let first = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the first prompt reached the gateway");
+    assert!(first.contains("fix the build"), "{first}");
+
+    // Idle and reading, which is when a line sent to it is taken as a prompt. The earlier terminal
+    // has to have been seen to leave too, or the attach below is refused.
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    let output = loop {
+        let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+        if listed.contains("idle") {
+            let output = in_a_terminal_answering(
+                &home.0,
+                AT_A_GATEWAY,
+                &["attach", "3f2a9c1e"],
+                "/detach\n",
+            );
+            if output.status.success() {
+                break output;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "never attached to an idle session"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let (out, err) = said(&output);
+    let shown = format!("{out}{err}");
+    assert!(shown.contains("Attached to"), "{shown}");
+    assert!(shown.contains("Detached from"), "{shown}");
+    assert!(!shown.contains("The session ended."), "{shown}");
+    assert!(
+        gateway.asked.recv_timeout(Duration::from_secs(3)).is_err(),
+        "the session was given the line /detach as a prompt"
+    );
+    let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+    assert!(listed.contains("idle"), "{listed}");
+
+    let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+    let _ = host.wait();
 }
 
 /// BG-1, BG-2, BG-7, BG-9, BG-10, end to end: a host started with a first prompt asks the trust
@@ -7063,6 +7894,89 @@ fn a_session_started_again_continues_the_conversation_it_stopped_with() {
     let _ = host.wait();
 }
 
+/// BG-12: the process that starts an interrupted session again tells the planner the last turn
+/// never finished, and a session that was stopped is told nothing of the kind.
+///
+/// Started here by hand with nothing to start with, which is what `attach` leaves for it.
+#[cfg(unix)]
+#[test]
+fn a_session_started_after_an_interruption_tells_the_planner_and_one_after_a_stop_does_not() {
+    use std::os::unix::net::UnixStream;
+
+    for interrupted in [true, false] {
+        let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+        let home = ShortHome::new();
+        let work = a_stopped_session_with_one_turn(&home, &gateway);
+        let job = home.0.join(format!(".bravebot/jobs/{SESSION_ID}"));
+        if interrupted {
+            let state = job.join("state.json");
+            let written = std::fs::read_to_string(&state).expect("the entry");
+            assert!(written.contains(r#""state": "stopped""#), "{written}");
+            std::fs::write(
+                &state,
+                written.replace(r#""state": "stopped""#, r#""state": "working""#),
+            )
+            .expect("the entry as a dead process left it");
+            let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+            assert!(listed.contains("interrupted"), "{listed}");
+        }
+        std::fs::write(job.join("first-prompt"), "").expect("nothing to start with");
+        let _ = std::fs::remove_file(job.join("attach.sock"));
+        let mut host = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+            .env_clear()
+            .env("HOME", &home.0)
+            .env("BRAVEBOT_LOCALE", "en-US")
+            .env("OLLAMA_HOST", NO_OLLAMA)
+            .envs(AT_A_GATEWAY.iter().copied())
+            .args(["__bg-host", SESSION_ID])
+            .current_dir(&work)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the host starts");
+        let socket = job.join("attach.sock");
+        let until = std::time::Instant::now() + Duration::from_secs(60);
+        while !socket.exists() {
+            assert!(std::time::Instant::now() < until, "the host never listened");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        loop {
+            let mut stream = UnixStream::connect(&socket).expect("connect");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(30)))
+                .expect("timeout");
+            write!(stream, "reply\nand the tests\n").expect("write");
+            let mut answer = String::new();
+            BufReader::new(stream)
+                .read_line(&mut answer)
+                .expect("an answer");
+            if answer.trim() == "ok" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "the reply was never taken: {answer}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let second = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the reply reached the gateway");
+        assert!(second.contains("and the tests"), "{second}");
+        assert!(second.contains("fix the build"), "{second}");
+        assert_eq!(
+            second.contains("ended before it finished"),
+            interrupted,
+            "interrupted: {interrupted}: {second}"
+        );
+
+        let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
+        let _ = host.wait();
+    }
+}
+
 /// BG-2: starting a stopped session again is a thing a terminal does. A `reply` or an `attach` whose
 /// input is a pipe says so, and starts nothing.
 #[cfg(unix)]
@@ -7120,6 +8034,88 @@ fn a_reply_from_a_terminal_starts_a_stopped_session_with_it() {
     assert!(second.contains("fix the build"), "{second}");
     let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
     assert!(!listed.contains("stopped"), "{listed}");
+}
+
+/// BG-10, BG-12: `reply` from a terminal starts an interrupted session, after saying that the turn it
+/// was in is not repeated. The earlier conversation and the reply are in the request, with the
+/// driver's note that the last turn never finished, and that note is not written to the record.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_reply_from_a_terminal_starts_an_interrupted_session_and_the_planner_is_told() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+    let state = home
+        .0
+        .join(format!(".bravebot/jobs/{SESSION_ID}/state.json"));
+    let written = std::fs::read_to_string(&state).expect("the entry");
+    assert!(written.contains(r#""state": "stopped""#), "{written}");
+    std::fs::write(
+        &state,
+        written.replace(r#""state": "stopped""#, r#""state": "working""#),
+    )
+    .expect("the entry as a dead process left it");
+    let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+    assert!(listed.contains("interrupted"), "{listed}");
+
+    let output = in_a_terminal(
+        &home.0,
+        AT_A_GATEWAY,
+        &["reply", "3f2a9c1e", "and the tests"],
+    );
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{out}{err}");
+    let shown = format!("{out}{err}");
+    let told = shown
+        .find("Starting it again does not repeat that turn")
+        .expect("the terminal said the turn is not repeated");
+    let sent = shown.find("Sent to").expect("the reply was sent");
+    assert!(told < sent, "{shown}");
+    let second = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(second.contains("and the tests"), "{second}");
+    assert!(second.contains("fix the build"), "{second}");
+    assert!(second.contains("ended before it finished"), "{second}");
+
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+        if listed.contains("idle") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "never idle again: {listed}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let sessions = home.0.join(".bravebot/sessions");
+    let mut kept = String::new();
+    for entry in walk(&sessions) {
+        kept.push_str(&std::fs::read_to_string(entry).unwrap_or_default());
+    }
+    assert!(kept.contains("and the tests"), "the turn was not recorded");
+    assert!(
+        !kept.contains("ended before it finished"),
+        "the note was written to the record"
+    );
+}
+
+/// All the files under `directory`.
+#[cfg(target_os = "linux")]
+fn walk(directory: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(walk(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
 }
 
 /// BG-9: `attach` from a terminal starts a stopped session idle, from the record it stopped with.
@@ -8166,5 +9162,362 @@ fn a_task_naming_a_manifest_record_is_refused_before_anything_is_sent() {
     assert!(
         requests(&gateway).is_empty(),
         "a refused run sent a request"
+    );
+}
+
+/// `bravebot shell-init <shell>`'s script.
+fn a_shell_init_script(home: &Path, shell: &str) -> String {
+    let output = bravebot(home, &[], &["shell-init", shell]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{shell}: {stderr}");
+    assert_eq!(stderr, "", "{shell} wrote to stderr");
+    stdout
+}
+
+/// SHELLINT-1. A script that depended on the home would be a command reading private files, and one
+/// that wrote there would leave a record by being asked for.
+#[test]
+fn a_shell_init_script_reads_and_writes_nothing_under_the_home() {
+    let bare = Scratch::new("cli-running-shell-init-bare");
+    let busy = Scratch::new("cli-running-shell-init-busy")
+        .with_state("sessions/unique-session-id.json", "{}\n")
+        .with_state("shell/4242", "unique-recorded-line\n")
+        .with_settings(r#"{"model": "unique-model-name"}"#);
+
+    for shell in ["bash", "zsh", "fish"] {
+        let from_bare = a_shell_init_script(&bare.path, shell);
+        let from_busy = a_shell_init_script(&busy.path, shell);
+        assert!(
+            from_bare.contains("@bravebot"),
+            "{shell} defines no @bravebot"
+        );
+        assert_eq!(from_bare, from_busy, "{shell} depends on the home");
+        for name in [
+            "unique-session-id",
+            "unique-recorded-line",
+            "unique-model-name",
+        ] {
+            assert!(!from_busy.contains(name), "{shell} carries {name}");
+        }
+    }
+    assert_eq!(
+        std::fs::read_dir(&bare.path).expect("read home").count(),
+        0,
+        "asking for a script left something in the home"
+    );
+}
+
+/// SHELLINT-1. Naming no shell, one there is no script for, or two is refused with the argument
+/// status and nothing on stdout, so `eval "$(bravebot shell-init ...)"` evaluates nothing.
+#[test]
+fn a_shell_init_with_no_script_to_print_is_refused_with_the_argument_status() {
+    let scratch = Scratch::new("cli-running-shell-init-refused");
+    for arguments in [
+        &["shell-init"][..],
+        &["shell-init", "nu"][..],
+        &["shell-init", "bash", "zsh"][..],
+        &["shell-init", "BASH"][..],
+    ] {
+        let output = bravebot(&scratch.path, &[], arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert_eq!(stdout, "", "{arguments:?} printed on stdout");
+        assert!(stderr.contains("BB1002"), "{arguments:?}: {stderr}");
+    }
+}
+
+/// What an interactive bash made of `commands` printed, with `bravebot` on its path replaced by a
+/// program that prints its arguments and then its standard input between markers.
+///
+/// The hook is sourced first, from the script this build prints, under a umask that would leave a
+/// file readable by others if the hook did not ask for better.
+#[cfg(unix)]
+fn a_bash_session(scratch: &Scratch, commands: &[&str]) -> String {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = scratch.path.join("bin");
+    std::fs::create_dir_all(&bin).expect("create bin");
+    let fake = bin.join("bravebot");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\necho \"ARGS:$*\"\necho STDIN-BEGIN\ncat\necho STDIN-END\n",
+    )
+    .expect("write the stand-in");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let init = scratch.path.join("init.sh");
+    std::fs::write(&init, a_shell_init_script(&scratch.path, "bash")).expect("write the hook");
+
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let mut session = Command::new("bash")
+        .args(["--norc", "--noprofile", "-i"])
+        .env_clear()
+        .env("HOME", &scratch.path)
+        .env("PATH", path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("bash starts");
+    let mut script = format!("umask 022\nsource {}\n", init.display());
+    for command in commands {
+        script.push_str(command);
+        script.push('\n');
+    }
+    script.push_str("exit\n");
+    session
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(script.as_bytes())
+        .expect("send the commands");
+    let output = session.wait_with_output().expect("bash finishes");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// What stood between the `n`th pair of markers in a session's output.
+#[cfg(unix)]
+fn what_a_question_was_given(output: &str, n: usize) -> (String, Vec<String>) {
+    let mut found = Vec::new();
+    let mut lines = output.lines();
+    while let Some(line) = lines.next() {
+        if let Some(arguments) = line.strip_prefix("ARGS:") {
+            assert_eq!(lines.next(), Some("STDIN-BEGIN"), "{output}");
+            let given: Vec<String> = lines
+                .by_ref()
+                .take_while(|line| *line != "STDIN-END")
+                .map(str::to_string)
+                .collect();
+            found.push((arguments.to_string(), given));
+        }
+    }
+    found
+        .into_iter()
+        .nth(n)
+        .unwrap_or_else(|| panic!("no question {n} in {output}"))
+}
+
+/// SHELLINT-2 and SHELLINT-4. A question carries the lines run since the last one and no others, on
+/// standard input and never in an argument, and the question's own line is not among them.
+#[cfg(unix)]
+#[test]
+fn a_question_carries_the_commands_since_the_last_one_on_stdin() {
+    let scratch = Scratch::new("cli-running-shell-init-question");
+    let output = a_bash_session(
+        &scratch,
+        &[
+            "echo first-command",
+            "echo 'a;b' | cat >/dev/null",
+            "echo \"two\nlines\" >/dev/null",
+            "@bravebot-notes true",
+            "@bravebot \"what did I run?\"",
+            "echo second-command",
+            "@bravebot \"and now?\"",
+            "@bravebot \"nothing new?\"",
+        ],
+    );
+
+    let (arguments, given) = what_a_question_was_given(&output, 0);
+    assert_eq!(arguments, "-p what did I run?", "{output}");
+    assert_eq!(
+        given,
+        [
+            "source ".to_string() + &scratch.path.join("init.sh").display().to_string(),
+            "echo first-command".to_string(),
+            "echo 'a;b' | cat >/dev/null".to_string(),
+            "echo \"two lines\" >/dev/null".to_string(),
+            "@bravebot-notes true".to_string(),
+        ],
+        "{output}"
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 1);
+    assert_eq!(arguments, "-p and now?", "{output}");
+    assert_eq!(given, ["echo second-command"], "{output}");
+    let (_, given) = what_a_question_was_given(&output, 2);
+    assert!(given.is_empty(), "a repeated question was given {given:?}");
+}
+
+/// SHELLINT-2, SHELLINT-4. The directory and the file are the person's alone however the shell's
+/// umask is set, and closing the terminal removes the file.
+#[cfg(unix)]
+#[test]
+fn the_recorded_lines_are_private_and_end_with_the_terminal() {
+    let scratch = Scratch::new("cli-running-shell-init-private").with_state("history", "kept\n");
+    let output = a_bash_session(
+        &scratch,
+        &[
+            "echo recorded",
+            "ls -ld \"$HOME/.bravebot\" \"$HOME/.bravebot/shell\" \"$__bravebot_file\"",
+        ],
+    );
+    let modes: Vec<&str> = output
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|mode| mode.len() == 10 && (mode.starts_with('d') || mode.starts_with('-')))
+        .collect();
+    assert_eq!(
+        modes,
+        ["drwx------", "drwx------", "-rw-------"],
+        "the state directory, the shell directory and the file: {output}"
+    );
+    let left: Vec<_> = std::fs::read_dir(scratch.path.join(".bravebot/shell"))
+        .expect("the directory outlives the shell")
+        .collect();
+    assert!(left.is_empty(), "the terminal closed and left {left:?}");
+}
+
+/// SHELLINT-3. With the variable set, the shell records nothing, the run is started incognito, and
+/// the variable is read at each command so setting it after the hook was sourced still stops it.
+#[cfg(unix)]
+#[test]
+fn an_incognito_shell_records_nothing_and_asks_incognito() {
+    let scratch = Scratch::new("cli-running-shell-init-incognito");
+    let output = a_bash_session(
+        &scratch,
+        &[
+            "echo before-incognito",
+            "export BRAVEBOT_INCOGNITO=1",
+            "echo secret-command",
+            "@bravebot \"question\"",
+        ],
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 0);
+    assert_eq!(arguments, "--incognito -p question", "{output}");
+    assert!(
+        !given.iter().any(|line| line.contains("secret-command")),
+        "an incognito shell recorded {given:?}"
+    );
+    assert!(
+        !given
+            .iter()
+            .any(|line| line.contains("export BRAVEBOT_INCOGNITO")),
+        "the line that turned it on was recorded: {given:?}"
+    );
+}
+
+/// A gateway on loopback that lists one model and refuses every chat request with a body naming a
+/// secret, so a log that kept what the server said would keep it.
+fn a_gateway_refusing_with_a_secret() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            let reply = if request.starts_with("GET") {
+                http(
+                    200,
+                    r#"{"data": [{"id": "reasons-only", "context_length": 262144}]}"#,
+                )
+            } else {
+                http(401, r#"{"error": "SERVER-SECRET-BODY"}"#)
+            };
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    port
+}
+
+/// A run against the refusing gateway, with the flags a test adds, and the home it ran in.
+fn a_run_the_gateway_refuses(name: &str, flags: &[&str]) -> (Scratch, u16) {
+    let port = a_gateway_refusing_with_a_secret();
+    let scratch = Scratch::new(name).with_settings(&format!(
+        r#"{{"provider": {{"openrouter": {{"env": ["OPENROUTER_API_KEY"],
+            "options": {{"baseURL": "http://127.0.0.1:{port}/api/v1"}}}}}},
+            "model": "openrouter/reasons-only"}}"#
+    ));
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("OPENROUTER_API_KEY", "placeholder-variable-key"));
+    let mut arguments = flags.to_vec();
+    arguments.extend(["-p", "say something"]);
+    let _ = bravebot(&scratch.path, &environment, &arguments);
+    (scratch, port)
+}
+
+fn logs_of(scratch: &Scratch) -> Vec<PathBuf> {
+    std::fs::read_dir(scratch.path.join(".bravebot").join("logs"))
+        .map(|entries| entries.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default()
+}
+
+/// DIAG-1, DIAG-2: a failed request leaves its host and status in a private file under the state
+/// directory, and nothing the server said or the run sent.
+#[test]
+fn a_failed_request_leaves_its_host_and_status_and_no_content_in_the_log() {
+    let (scratch, port) = a_run_the_gateway_refuses("cli-running-log-written", &[]);
+
+    let logs = logs_of(&scratch);
+    assert_eq!(logs.len(), 1, "expected one log: {logs:?}");
+    let text = std::fs::read_to_string(&logs[0]).expect("read the log");
+    assert!(text.contains(&format!("host=127.0.0.1:{port}")), "{text}");
+    assert!(text.contains("status=401"), "{text}");
+    for kept in [
+        "SERVER-SECRET-BODY",
+        "placeholder-variable-key",
+        "say something",
+        "/api/v1",
+    ] {
+        assert!(!text.contains(kept), "{kept} reached the log: {text}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode(&logs[0]), 0o600);
+        assert_eq!(mode(logs[0].parent().expect("directory")), 0o700);
+    }
+}
+
+/// DIAG-4: the same failure in an incognito session leaves no log, and no directory for one.
+#[test]
+fn an_incognito_session_writes_no_log() {
+    let (scratch, _) = a_run_the_gateway_refuses("cli-running-log-incognito", &["--incognito"]);
+    assert!(
+        !scratch.path.join(".bravebot").join("logs").exists(),
+        "an incognito session left a log behind"
+    );
+}
+
+/// DIAG-3: a word that is not a level is refused as an argument, not read as the default.
+#[test]
+fn a_log_level_that_is_not_one_is_refused() {
+    let scratch = Scratch::new("cli-running-log-level-refused");
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--log-level", "trace", "-p", "x"],
+    );
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("--log-level"), "{stderr}");
+    assert!(!scratch.path.join(".bravebot").join("logs").exists());
+}
+
+/// DIAG-5: `doctor` names the directory the logs are in.
+#[test]
+fn doctor_names_the_log_directory() {
+    let scratch = Scratch::new("cli-running-log-doctor");
+    let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["doctor"]);
+    let (stdout, _) = said(&output);
+    let expected = scratch.path.join(".bravebot").join("logs");
+    assert!(
+        stdout.contains(&expected.display().to_string()),
+        "doctor does not name {}: {stdout}",
+        expected.display()
     );
 }

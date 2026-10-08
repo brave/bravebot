@@ -13,8 +13,8 @@ use bravebot_agent::{
     Confirmer, Decision, IgnoreReports, PermissionMode, SessionScratch, Unattended, Workspace,
 };
 use bravebot_config::mcp::{
-    Approvals, Declaration, Declarations, Digest, Standing, approvals_file, declarations_file,
-    tools_file,
+    Approvals, Declaration, Declarations, Digest, Standing, Timeouts, approvals_file,
+    declarations_file, tools_file,
 };
 use bravebot_config::{Config, Managed};
 use bravebot_core::cancel::Cancel;
@@ -301,6 +301,12 @@ fn reach_as(alias: &str, url: &str) -> Reached {
 
 /// A server reached under `alias`, started from the declaration `declared` is the digest of.
 fn reach_under(alias: &str, url: &str, declared: Digest) -> Reached {
+    reach_server(HttpServer::new(alias, url), declared)
+}
+
+/// `server`, configured as the caller likes, after its handshake and its list.
+fn reach_server(mut server: HttpServer, declared: Digest) -> Reached {
+    let alias = server.name().to_string();
     let egress = Egress::new();
     let mut sink = RecordingSink::new();
     let mut routing = Routing::new();
@@ -310,12 +316,11 @@ fn reach_under(alias: &str, url: &str, declared: Digest) -> Reached {
         ReleasePlan::new(),
         CapabilitySet::from_iter([
             Capability::WebFetch,
-            Capability::McpCall(ServerAlias::new(alias)),
+            Capability::McpCall(ServerAlias::new(alias.as_str())),
         ]),
         &mut sink,
     )
     .expect("policy");
-    let mut server = HttpServer::new(alias, url);
     server
         .initialize(&mut policy, &egress, "bravebot", "0.1.0")
         .expect("handshake");
@@ -623,6 +628,101 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
     assert_eq!(
         session.offering(),
         [("weather".to_string(), Offering::Tools(1))]
+    );
+}
+
+/// The weather server, answering every request at once but those for `method`, which it holds for
+/// `hold` before answering. Every body is reported.
+fn serve_holding(
+    method: &'static str,
+    hold: std::time::Duration,
+) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            if body.contains(&format!(r#""method":"{method}""#)) {
+                thread::sleep(hold);
+            }
+            let _ = stream.write_all(answered(&body, "get_forecast").as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// A call that outlasts the bound its server was given comes back to the planner as a failure
+/// that says it timed out and nothing else, and the turn goes on to the next round. What the
+/// server would have answered a moment later never reaches it. MCP-5, MCP-8.
+#[test]
+fn a_call_that_outlasts_its_bound_is_a_failure_the_planner_is_told_timed_out() {
+    let scratch = Scratch::new("call-timeout");
+    let (url, _bodies) = serve_holding("tools/call", std::time::Duration::from_secs(4));
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "reach an MCP server");
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("weather")),
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut server = HttpServer::new("weather", url.as_str());
+    server
+        .initialize(&mut policy, &egress, "bravebot", "0.1.0")
+        .expect("handshake");
+    let listing = server.list_tools(&mut policy, &egress).expect("listed");
+    server.set_bound(std::time::Duration::from_secs(1));
+    let session = Session::new(
+        vec![Reached::new(
+            Connection::Http(server),
+            listing,
+            declaration(),
+        )],
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    );
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    let started = std::time::Instant::now();
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast for Paris").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let sent = rounds(&chat);
+    let [_, second, ..] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    assert!(
+        second.contains("timed out after 1 seconds"),
+        "the planner was not told the call timed out: {second}"
+    );
+    assert!(
+        second.contains("get_forecast"),
+        "the failure does not name the tool: {second}"
+    );
+    assert!(!second.contains(PAYLOAD), "{second}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "the turn waited for the server: {:?}",
+        started.elapsed()
     );
 }
 
@@ -2211,7 +2311,18 @@ struct Moving {
 }
 
 fn moving(scratch: &Scratch, writable: bool, managed: Managed) -> Moving {
-    let (second_url, second) = serve_weather();
+    moving_with(scratch, writable, managed, serve_weather(), |server| server)
+}
+
+/// As [`moving`], where the second server is `second` and `reached` configures how the first is
+/// reached.
+fn moving_with(
+    scratch: &Scratch,
+    writable: bool,
+    managed: Managed,
+    (second_url, second): (String, mpsc::Receiver<String>),
+    reached: impl FnOnce(HttpServer) -> HttpServer,
+) -> Moving {
     let moved_to = format!("{second_url}/mcp");
     let (first_url, first) = serve_moving(moved_to.clone());
     let declared = Declaration::http(first_url.clone()).expect("a declaration");
@@ -2222,7 +2333,10 @@ fn moving(scratch: &Scratch, writable: bool, managed: Managed) -> Moving {
     approvals.approve("weather", declared.digest());
     std::fs::write(approvals_file(&scratch.state()), approvals.to_text()).expect("mcp-approved");
     let session = Session::new(
-        vec![reach_under("weather", &first_url, declared.digest())],
+        vec![reach_server(
+            reached(HttpServer::new("weather", first_url.as_str())),
+            declared.digest(),
+        )],
         scratch.project(),
         Some(scratch.state()),
         writable,
@@ -2317,7 +2431,10 @@ fn a_hop_the_person_says_is_a_move_is_declared_and_the_call_reaches_it() {
             .any(|notice| notice == "weather was moved where its reply pointed"),
         "the person was not told it moved: {notices:?}"
     );
-    let Declaration::Http { url: declared_url } = &moving.declared else {
+    let Declaration::Http {
+        url: declared_url, ..
+    } = &moving.declared
+    else {
         panic!("declared as {:?}", moving.declared);
     };
     assert_eq!(asked.alias, "weather");
@@ -2416,7 +2533,10 @@ fn a_hop_the_person_refuses_sends_nothing_and_the_refusal_names_the_declaration(
         !approvals.approves(&refused.digest()),
         "a no approved where the reply pointed"
     );
-    let Declaration::Http { url: declared_url } = &moving.declared else {
+    let Declaration::Http {
+        url: declared_url, ..
+    } = &moving.declared
+    else {
         panic!("declared as {:?}", moving.declared);
     };
     let rounds = rounds(&chat);
@@ -2578,5 +2698,114 @@ fn a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else() {
         declared_now(&scratch),
         now,
         "a declaration edited since was written over"
+    );
+}
+
+/// A server that moved keeps the bounds its declaration gave: where it is reached is what changed,
+/// and the person who set a longer call bound for it did not ask for the default back. SERVERS-15.
+#[test]
+fn a_move_keeps_the_bounds_the_declaration_it_replaces_gave() {
+    let scratch = Scratch::new("move-keeps-bounds");
+    let state = scratch.state();
+    let bounds = Timeouts::new(Some(7), Some(300)).expect("bounds");
+    let was = Declaration::http("http://127.0.0.1:1/mcp".to_string())
+        .expect("was")
+        .timing(bounds);
+    let now = Declaration::http("http://127.0.0.1:2/mcp".to_string()).expect("now");
+    let mut declarations = Declarations::default();
+    declarations.insert("weather", &was);
+    std::fs::write(declarations_file(&state), declarations.to_text()).expect("mcp.json");
+
+    bravebot_agent::mcp::record_a_move(&state, "weather", &was.digest(), &now).expect("recorded");
+
+    let moved = declared_now(&scratch);
+    assert_eq!(moved, now.timing(bounds));
+    assert_eq!(moved.timeouts(), bounds);
+}
+
+/// A server that moved is reached again within the startup bound it was first reached with: a
+/// destination that answers its handshake later than that is not moved to, and the declaration is
+/// left as it was. SERVERS-15.
+#[test]
+fn a_move_to_a_server_slower_than_the_startup_bound_is_not_made() {
+    let scratch = Scratch::new("move-startup-bound");
+    let second = serve_holding("initialize", std::time::Duration::from_secs(3));
+    let moving = moving_with(&scratch, true, Managed::default(), second, |server| {
+        server
+            .starting_within(std::time::Duration::from_secs(1))
+            .within(std::time::Duration::from_secs(10))
+    });
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    let started = std::time::Instant::now();
+    let notices = noticed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("initialize timed out after 1 seconds")),
+        "the move was not given up on at the startup bound: {notices:?}"
+    );
+    assert!(
+        !notices
+            .iter()
+            .any(|notice| notice == "weather was moved where its reply pointed"),
+        "{notices:?}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "the handshake was waited on past its bound: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(declared_now(&scratch), moving.declared);
+}
+
+/// A server that moved is held to the call bound it had before, once its handshake is done and
+/// not to the startup bound its handshake was given. SERVERS-15.
+#[test]
+fn a_moved_server_is_held_to_the_call_bound_it_had() {
+    let scratch = Scratch::new("move-call-bound");
+    let second = serve_holding("tools/call", std::time::Duration::from_secs(3));
+    let moving = moving_with(&scratch, true, Managed::default(), second, |server| {
+        server
+            .starting_within(std::time::Duration::from_secs(1))
+            .within(std::time::Duration::from_secs(20))
+    });
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    let reached: Vec<String> = moving.second.try_iter().collect();
+    assert!(
+        reached.iter().any(|body| body.contains(r#""tools/call""#)),
+        "the call did not reach where the server moved: {reached:?}"
+    );
+    let sent = rounds(&chat);
+    let [_, second, ..] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    assert!(
+        !second.contains("timed out"),
+        "the call was held to the startup bound: {second}"
     );
 }

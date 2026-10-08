@@ -10,6 +10,7 @@ import type {
   AskAnswer,
   BridgeEvent,
   Checking,
+  Hook,
   ForkedSession,
   KeptTrust,
   OpenedSession,
@@ -78,6 +79,7 @@ interface Live {
   phase: Waiting | null
   /** What a running confined check was given. Beside the phase, which a check does not change. */
   checking: Checking | null
+  hook: Hook | null
   /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
   composing: string | null
   tokens: number
@@ -148,6 +150,8 @@ interface Live {
   queuePaused?: boolean
   queued?: { prompt: string; attachments: FileAttachment[] }[]
   attachments?: FileAttachment[]
+  /** Why the last message did not go: a name written with `@` that is not a text file in the project. */
+  sendRefused?: string | null
 }
 
 /**
@@ -500,6 +504,7 @@ export function App(): React.JSX.Element {
         quarantine: [],
         phase: null,
         checking: null,
+        hook: null,
         tokens: 0,
         composing: null,
         running: false,
@@ -574,6 +579,7 @@ export function App(): React.JSX.Element {
         quarantine: [],
         phase: null,
         checking: null,
+        hook: null,
         tokens: 0,
         composing: null,
         running: false,
@@ -632,6 +638,27 @@ export function App(): React.JSX.Element {
     const bot = sending?.bot ?? null
     const model = sending?.model ?? null
     const attachments = selectedFiles ?? sending?.attachments ?? []
+    // The files the prompt names with `@`, asked of the bridge before anything is drawn: a name
+    // that cannot go stops the send here, with the message still where it was written. The bridge
+    // reads the prompt again at `turn.send`, and that check is the one that decides what goes.
+    const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt })
+    if (!mentioned.ok) {
+      const refused = mentioned.error?.message ?? 'The files this message names could not be checked.'
+      const queued = selectedFiles !== undefined
+      updateSession(handle, (old) => old ? {
+        ...old,
+        sendRefused: refused,
+        queued: queued ? [{ prompt, attachments }, ...(old.queued ?? [])] : old.queued,
+        queuePaused: queued ? true : old.queuePaused,
+      } : old)
+      if (!queued && sending) {
+        const key = conversationKey(sending.summary.directory, sending.summary.id ?? sending.draftId ?? sending.handle)
+        if (!conversationPreferences(key).draft.trim()) setConversation(key, { draft: prompt })
+      }
+      return
+    }
+    const named = Array.isArray(mentioned.ok.files) ? mentioned.ok.files : []
+    const reads = [...new Set([...attachments.map((file) => file.path), ...named])]
     // Made here rather than inside the update so its id can be remembered: the agent says where
     // this prompt landed when the turn ends, and that answer has to find the row it belongs to.
     const said = t.userSaid(prompt)
@@ -641,7 +668,8 @@ export function App(): React.JSX.Element {
             ...old,
             summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
             attachments: selectedFiles ? old.attachments : [],
-            entries: [...old.entries, ...attachments.map((file): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path: file.path })), said],
+            sendRefused: null,
+            entries: [...old.entries, ...reads.map((path): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path })), said],
             awaitingOrdinal: said.id,
             running: true,
             queuePaused: old.queued?.length ? old.queuePaused : false,
@@ -686,12 +714,23 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
+  // Chats whose queued message is between leaving the queue and `send` returning. `send` awaits the
+  // bridge's check of the message's `@` names before it marks the chat running, and without this the
+  // queue would take the next message in that gap and send both.
+  const dequeuing = useRef(new Set<string>())
   useEffect(() => {
     for (const item of openedLives.current.values()) {
       if (item.running || !item.queued?.length || item.queuePaused || item.askingTrust) continue
+      if (dequeuing.current.has(item.handle)) continue
       const [message, ...remaining] = item.queued
       updateSession(item.handle, (old) => old ? { ...old, queued: remaining } : old)
-      if (message) void send(message.prompt, item.handle, message.attachments)
+      if (!message) continue
+      const handle = item.handle
+      dequeuing.current.add(handle)
+      void send(message.prompt, handle, message.attachments).finally(() => {
+        dequeuing.current.delete(handle)
+        refreshLives((revision) => revision + 1)
+      })
     }
   }, [live, livesRevision, send, updateSession])
 
@@ -1199,6 +1238,7 @@ export function App(): React.JSX.Element {
           quarantine: [],
           phase: null,
           checking: null,
+          hook: null,
           tokens: 0,
           composing: null,
           running: false,
@@ -1562,7 +1602,7 @@ export function App(): React.JSX.Element {
           const handle = handleRef.current
           if (!handle) return
           void window.bravebot.chooseAttachments(handle).then((files) => {
-            updateSession(handle, (old) => old ? { ...old, attachments: [...(old.attachments ?? []), ...files].slice(0, 5) } : old)
+            updateSession(handle, (old) => old ? { ...old, attachments: [...(old.attachments ?? []), ...files] } : old)
           }).catch((error) => setProblem(String(error)))
         }}
         onRemoveAttachment={(id) => setLive((old) => old ? { ...old, attachments: old.attachments?.filter((file) => file.id !== id) } : old)}
@@ -1575,6 +1615,7 @@ export function App(): React.JSX.Element {
           setDraft('')
         }}
         onRemoveQueued={(index) => setLive((old) => old ? { ...old, queued: old.queued?.filter((_, at) => at !== index) } : old)}
+        onDismissRefusal={() => setLive((old) => old ? { ...old, sendRefused: null } : old)}
         onNew={create}
         bot={openBotRecord}
         doing={openDoing}
@@ -1678,7 +1719,7 @@ export function apply(
       case 'watch.ended':
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':
-        return { ...old, running: true, phase: null, checking: null, composing: null, tokens: 0,
+        return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, tokens: 0,
           entries: t.beginTurn(old.entries, message.data.turn) }
       case 'audit':
         return old
@@ -1692,6 +1733,11 @@ export function apply(
         return { ...old, checking: message.data }
       case 'check.finished':
         return { ...old, checking: null }
+      // Likewise left to the phase: a hook runs in the middle of a round.
+      case 'hook.started':
+        return { ...old, hook: message.data }
+      case 'hook.finished':
+        return { ...old, hook: null }
       case 'tokens':
         return { ...old, tokens: message.data.written }
       case 'narration':
@@ -1742,14 +1788,14 @@ export function apply(
         return { ...old, phase: null, entries: [...old.entries, t.mcpStarted(message.data)] }
       // A run is not a turn, so it adds no turn marker and no reply to the conversation.
       case 'manifest.started':
-        return { ...old, running: true, phase: null, checking: null, tokens: 0 }
+        return { ...old, running: true, phase: null, checking: null, hook: null, tokens: 0 }
       case 'manifest.done':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, outcome: 'complete',
+        return { ...old, running: false, phase: null, checking: null, hook: null, outcome: 'complete',
           entries: [...old.entries, t.planReplied(message.data.reply, message.data.record)] }
       case 'manifest.error':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, queuePaused: true,
+        return { ...old, running: false, phase: null, checking: null, hook: null, queuePaused: true,
           entries: [...t.interruptPending(old.entries), t.planEnded(message.data)] }
       case 'vouch.request':
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
@@ -1770,6 +1816,7 @@ export function apply(
           phase: null,
           // A consolidating turn stays running, so a check whose end was never heard would stay drawn.
           checking: null,
+          hook: null,
           composing: null,
           entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
           awaitingOrdinal: null,
@@ -1788,6 +1835,7 @@ export function apply(
           running: false,
           phase: null,
           checking: null,
+          hook: null,
           composing: null,
           entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
           awaitingOrdinal: null,

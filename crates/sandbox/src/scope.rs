@@ -40,6 +40,13 @@ impl Scope {
         }
     }
 
+    /// The scope a person names by the word the prompt and the planner know it by.
+    pub fn named(word: &str) -> Option<Self> {
+        [Self::Remote, Self::Aws, Self::Kubernetes, Self::Docker]
+            .into_iter()
+            .find(|scope| scope.name() == word)
+    }
+
     /// The scope a stage carries, from the file its program resolved to, its argument vector, and
     /// the `NAME=value` assignments written in front of it.
     ///
@@ -80,22 +87,109 @@ impl Scope {
                 }
                 policy.allow_write_file(under(home, KNOWN_HOSTS))
             }
-            Self::Aws => policy.allow_read(under(home, ".aws")),
-            Self::Kubernetes => policy.allow_read(under(home, ".kube")),
-            Self::Docker => policy.allow_read(under(home, ".docker")),
+            Self::Aws | Self::Kubernetes | Self::Docker => {
+                let mut policy = policy;
+                for row in rows(self) {
+                    policy = policy.allow_read(under(home, row));
+                }
+                policy
+            }
         }
     }
 }
 
-/// The directory `gh` reads its configuration from where the stage's environment moves it off
-/// `~/.config/gh`, which is the row [`REMOTE`] already holds.
+/// A location a stage reads because the environment it starts with moves a tool's configuration
+/// there, beyond the fixed row the scope already holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reach {
+    /// The variable the person set, for the prompt to name.
+    pub variable: &'static str,
+    /// Where it leads, as the sandbox will be told it: the directory or the file itself, after a
+    /// link has been followed.
+    pub path: PathBuf,
+}
+
+/// What a variable names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Names {
+    /// A directory, read whole.
+    Directory,
+    /// A file, read as that file and nothing around it.
+    File,
+    /// A list of files, separated as the platform separates `PATH`, each judged on its own.
+    Files,
+}
+
+/// How one variable moves one row: `NAME`, what it names, and what is appended to the value to get
+/// the file or directory the tool opens (`gh` reads `$XDG_CONFIG_HOME/gh`).
+struct Moves {
+    variable: &'static str,
+    names: Names,
+    beneath: &'static str,
+}
+
+macro_rules! moves {
+    ($variable:literal, $names:expr, $beneath:literal) => {
+        Moves {
+            variable: $variable,
+            names: $names,
+            beneath: $beneath,
+        }
+    };
+}
+
+/// The variables each program of a scope reads, in the order the program prefers them: the first
+/// one set is the one used, for a program that takes one location, and every one set is used where
+/// each moves a different file.
 ///
-/// `GH_CONFIG_DIR` if the environment sets it, else `$XDG_CONFIG_HOME/gh`, as `gh` does. It is the
-/// location of a file the person's own tool is going to open, which a toolchain cache is not, so
-/// it is read where the person set it. It is refused, and the stage keeps the default row only,
-/// where it is relative or holds `..`, is the home or above it, is `~/.ssh` or inside it, or is
-/// `~/.config`, `~/.cache` or `~/Library`: places no row of a scope reaches whole.
-pub fn gh_configuration(home: &Path, environment: &[(String, String)]) -> Option<PathBuf> {
+/// The table of [SANDBOX-16](../../../docs/specs/sandboxing.md#SANDBOX-16). A program absent from it
+/// has no variable that moves what its scope reads.
+fn variables_of(scope: Scope, program: &str) -> &'static [Moves] {
+    match (scope, program) {
+        (Scope::Remote, "gh") => &[
+            moves!("GH_CONFIG_DIR", Names::Directory, ""),
+            moves!("XDG_CONFIG_HOME", Names::Directory, "gh"),
+        ],
+        (Scope::Remote, "git") => &[
+            moves!("GIT_CONFIG_GLOBAL", Names::File, ""),
+            moves!("XDG_CONFIG_HOME", Names::File, "git/credentials"),
+        ],
+        (Scope::Aws, _) => &[
+            moves!("AWS_CONFIG_FILE", Names::File, ""),
+            moves!("AWS_SHARED_CREDENTIALS_FILE", Names::File, ""),
+        ],
+        (Scope::Kubernetes, _) => &[moves!("KUBECONFIG", Names::Files, "")],
+        (Scope::Docker, _) => &[moves!("DOCKER_CONFIG", Names::Directory, "")],
+        _ => &[],
+    }
+}
+
+/// Where the environment moves what `program` reads of `scope`, for the account whose home is
+/// `home`.
+///
+/// `GH_CONFIG_DIR` and `XDG_CONFIG_HOME` for `gh`, `GIT_CONFIG_GLOBAL` and `XDG_CONFIG_HOME` for
+/// `git`, `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` for `aws`, `KUBECONFIG` for `kubectl`
+/// and `DOCKER_CONFIG` for `docker`. Each is the location of a file the person's own tool is going
+/// to open, which a toolchain cache is not, so it is read where the person set it. `gh` takes
+/// `GH_CONFIG_DIR` over `XDG_CONFIG_HOME`, as `gh` does.
+///
+/// A value is refused, and the stage keeps the fixed rows only, where it is empty, relative or
+/// holds `..`. A directory is refused where it is the home or above it, is `~/.ssh` or inside it,
+/// or is `~/.config`, `~/.cache` or `~/Library`: places no row of a scope reaches whole. A file is
+/// refused where it is inside `~/.ssh`, since that is where a private key is, where it is the home
+/// or above it, or where it is a directory, and is otherwise read as that file alone. A link is
+/// judged by where it leads. A value that lands inside a row the scope already holds is no new
+/// reach and is not returned, and one named twice is returned once. Where `KUBECONFIG` lists
+/// several files, one refused entry takes none of the others with it.
+///
+/// Only what the caller passes counts: the environment the stage starts with, in which an
+/// assignment written in front of the line has already removed the scope.
+pub fn environment_reach(
+    scope: Scope,
+    program: &str,
+    home: &Path,
+    environment: &[(String, String)],
+) -> Vec<Reach> {
     let set = |name: &str| {
         environment
             .iter()
@@ -103,31 +197,97 @@ pub fn gh_configuration(home: &Path, environment: &[(String, String)]) -> Option
             .map(|(_, value)| value.as_str())
             .filter(|value| !value.is_empty())
     };
-    let directory = match set("GH_CONFIG_DIR") {
-        Some(directory) => PathBuf::from(directory),
-        None => Path::new(set("XDG_CONFIG_HOME")?).join("gh"),
-    };
-    if !directory.is_absolute()
-        || directory
-            .components()
-            .any(|part| part == Component::ParentDir)
-    {
+    let mut reached = Vec::new();
+    let mut directory_taken = false;
+    for how in variables_of(scope, program) {
+        let Some(value) = set(how.variable) else {
+            continue;
+        };
+        // One location, so the first variable set is the one the program opens.
+        if how.names == Names::Directory {
+            if directory_taken {
+                continue;
+            }
+            directory_taken = true;
+        }
+        let values: Vec<PathBuf> = match how.names {
+            Names::Files => std::env::split_paths(value).collect(),
+            _ => vec![PathBuf::from(value)],
+        };
+        for named in values {
+            let named = match how.beneath {
+                "" => named,
+                beneath => named.join(beneath),
+            };
+            if let Some(path) = judged(&named, how.names == Names::Directory, home)
+                && !already_read(scope, &path, home)
+                && !reached.iter().any(|held: &Reach| held.path == path)
+            {
+                reached.push(Reach {
+                    variable: how.variable,
+                    path,
+                });
+            }
+        }
+    }
+    reached
+}
+
+/// A directory a person named, as the sandbox will be told it, or `None` where it is refused.
+///
+/// The same judgement a variable's value gets: absolute, no `..`, not the home or above it, not
+/// `~/.ssh` or inside it, not `~/.config`, `~/.cache` or `~/Library` whole, and a link judged by
+/// where it leads. It must also be a directory that exists, since a grant of a path nothing is at
+/// reads as a grant of whatever is created there later.
+pub fn judged_directory(named: &Path, home: &Path) -> Option<PathBuf> {
+    judged(named, true, home).filter(|path| path.is_dir())
+}
+
+/// `named` as the sandbox will be told it, or `None` where it is refused.
+fn judged(named: &Path, directory: bool, home: &Path) -> Option<PathBuf> {
+    if !named.is_absolute() || named.components().any(|part| part == Component::ParentDir) {
         return None;
     }
     // Where it is a link, what it leads to is what a program opens, and both spellings are judged,
     // against both spellings of the home: a prefix of either may be a link (`/home` on macOS).
-    let resolved = std::fs::canonicalize(&directory).unwrap_or_else(|_| directory.clone());
+    let resolved = std::fs::canonicalize(named).unwrap_or_else(|_| named.to_path_buf());
     let real_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
-    let refused = [&directory, &resolved].iter().any(|directory| {
-        [home, real_home.as_path()].iter().any(|home| {
-            home.starts_with(directory)
-                || directory.starts_with(under(home, ".ssh"))
-                || [".config", ".cache", "Library"]
-                    .iter()
-                    .any(|whole| **directory == under(home, whole))
-        })
-    });
+    // A grant of a path is a grant of everything under it, so a file is refused where it is the
+    // home or above it, or a directory, as a directory is: what a variable names as a file is no
+    // reason to read the tree it turns out to be.
+    let refused = (!directory && resolved.is_dir())
+        || [named, resolved.as_path()].iter().any(|named| {
+            [home, real_home.as_path()].iter().any(|home| {
+                named.starts_with(under(home, ".ssh"))
+                    || home.starts_with(named)
+                    || (directory
+                        && [".config", ".cache", "Library"]
+                            .iter()
+                            .any(|whole| *named == under(home, whole)))
+            })
+        });
     (!refused).then_some(resolved)
+}
+
+/// Whether `scope` already reads `path` through a fixed row, so that naming it adds nothing for a
+/// person to be told.
+fn already_read(scope: Scope, path: &Path, home: &Path) -> bool {
+    let real_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    [home, real_home.as_path()].iter().any(|home| {
+        rows(scope)
+            .iter()
+            .any(|row| path.starts_with(under(home, row)))
+    })
+}
+
+/// The fixed rows of a scope's directory, read and not written beyond what `grant` adds.
+fn rows(scope: Scope) -> &'static [&'static str] {
+    match scope {
+        Scope::Remote => REMOTE,
+        Scope::Aws => &[".aws"],
+        Scope::Kubernetes => &[".kube"],
+        Scope::Docker => &[".docker"],
+    }
 }
 
 /// The hosts ssh has verified, the one row of the remote scope that is also written.
@@ -314,7 +474,15 @@ mod tests {
     }
 
     fn gh_reads(pairs: &[(&str, &str)]) -> Option<PathBuf> {
-        gh_configuration(Path::new(A_HOME), &the_environment(pairs))
+        reached(Scope::Remote, "gh", pairs).into_iter().next()
+    }
+
+    /// The paths the environment `pairs` moves `program`'s `scope` to, under `A_HOME`.
+    fn reached(scope: Scope, program: &str, pairs: &[(&str, &str)]) -> Vec<PathBuf> {
+        environment_reach(scope, program, Path::new(A_HOME), &the_environment(pairs))
+            .into_iter()
+            .map(|reach| reach.path)
+            .collect()
     }
 
     fn argv(line: &str) -> Vec<String> {
@@ -836,10 +1004,15 @@ mod tests {
         symlink(&home, home.join("to-home")).unwrap();
         symlink(home.join("second"), home.join("to-second")).unwrap();
         let reads = |directory: &Path| {
-            gh_configuration(
+            environment_reach(
+                Scope::Remote,
+                "gh",
                 &home,
                 &the_environment(&[("GH_CONFIG_DIR", directory.to_str().unwrap())]),
             )
+            .into_iter()
+            .next()
+            .map(|reach| reach.path)
         };
         assert_eq!(reads(&home.join("to-ssh")), None);
         assert_eq!(reads(&home.join("to-home")), None);
@@ -848,5 +1021,279 @@ mod tests {
             Some(std::fs::canonicalize(home.join("second")).unwrap())
         );
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A tool whose configuration a variable moves reads it where the variable says, and the
+    /// scope of the tool beside it does not follow. The grant is the file a variable names, never
+    /// the directory around it.
+    #[test]
+    fn a_variable_that_moves_a_tools_configuration_moves_its_row() {
+        assert_eq!(
+            reached(
+                Scope::Docker,
+                "docker",
+                &[("DOCKER_CONFIG", "/home/a-person/docker-work")]
+            ),
+            [PathBuf::from("/home/a-person/docker-work")]
+        );
+        assert_eq!(
+            reached(
+                Scope::Aws,
+                "aws",
+                &[
+                    ("AWS_CONFIG_FILE", "/home/a-person/work/aws-config"),
+                    (
+                        "AWS_SHARED_CREDENTIALS_FILE",
+                        "/home/a-person/work/aws-keys"
+                    ),
+                ]
+            ),
+            [
+                PathBuf::from("/home/a-person/work/aws-config"),
+                PathBuf::from("/home/a-person/work/aws-keys")
+            ]
+        );
+        assert_eq!(
+            reached(
+                Scope::Remote,
+                "git",
+                &[
+                    ("GIT_CONFIG_GLOBAL", "/home/a-person/work/gitconfig"),
+                    ("XDG_CONFIG_HOME", "/home/a-person/xdg"),
+                ]
+            ),
+            [
+                PathBuf::from("/home/a-person/work/gitconfig"),
+                PathBuf::from("/home/a-person/xdg/git/credentials")
+            ]
+        );
+        for (scope, program, variable) in [
+            (Scope::Docker, "docker", "DOCKER_CONFIG"),
+            (Scope::Aws, "aws", "AWS_CONFIG_FILE"),
+            (Scope::Kubernetes, "kubectl", "KUBECONFIG"),
+            (Scope::Remote, "git", "GIT_CONFIG_GLOBAL"),
+        ] {
+            assert!(reached(scope, program, &[]).is_empty(), "{program} unset");
+            assert!(
+                reached(scope, program, &[(variable, "")]).is_empty(),
+                "{program} empty"
+            );
+        }
+        let policy =
+            SandboxPolicy::strict().allow_read(PathBuf::from("/home/a-person/work/aws-config"));
+        assert!(reaches(&policy, "/home/a-person/work/aws-config"));
+        assert!(!reaches(&policy, "/home/a-person/work/aws-keys"));
+        assert!(!reaches(&policy, "/home/a-person/work/another-file"));
+    }
+
+    /// A variable belongs to the tool that reads it: `git` is not lent the directory `docker`
+    /// reads, nor `docker` the file `aws` does.
+    #[test]
+    fn a_variable_moves_the_row_of_the_tool_that_reads_it_and_no_other() {
+        let everything = [
+            ("GH_CONFIG_DIR", "/home/a-person/a"),
+            ("GIT_CONFIG_GLOBAL", "/home/a-person/b"),
+            ("AWS_CONFIG_FILE", "/home/a-person/c"),
+            ("KUBECONFIG", "/home/a-person/d"),
+            ("DOCKER_CONFIG", "/home/a-person/e"),
+        ];
+        for (scope, program, expected) in [
+            (Scope::Remote, "git", "/home/a-person/b"),
+            (Scope::Remote, "gh", "/home/a-person/a"),
+            (Scope::Aws, "aws", "/home/a-person/c"),
+            (Scope::Kubernetes, "kubectl", "/home/a-person/d"),
+            (Scope::Docker, "docker", "/home/a-person/e"),
+        ] {
+            assert_eq!(
+                reached(scope, program, &everything),
+                [PathBuf::from(expected)],
+                "{program}"
+            );
+        }
+    }
+
+    /// `KUBECONFIG` is a list. Each entry is judged on its own, so one that is refused leaves the
+    /// others, and none of the list is read as one path.
+    #[cfg(unix)]
+    #[test]
+    fn a_kubeconfig_list_is_judged_one_entry_at_a_time() {
+        assert_eq!(
+            reached(
+                Scope::Kubernetes,
+                "kubectl",
+                &[(
+                    "KUBECONFIG",
+                    "/home/a-person/one:/home/a-person/.ssh/id_ed25519:relative:/home/a-person/two"
+                )]
+            ),
+            [
+                PathBuf::from("/home/a-person/one"),
+                PathBuf::from("/home/a-person/two")
+            ]
+        );
+    }
+
+    /// An entry named twice is one row in the prompt and one in the profile.
+    #[test]
+    fn an_entry_a_list_names_twice_is_reached_once() {
+        assert_eq!(
+            reached(
+                Scope::Kubernetes,
+                "kubectl",
+                &[("KUBECONFIG", "/home/a-person/one:/home/a-person/one")]
+            ),
+            [PathBuf::from("/home/a-person/one")]
+        );
+    }
+
+    /// A value that is not a place a person's tool opens, or that holds a private key, is not
+    /// granted, for a file as for a directory.
+    #[test]
+    fn a_value_that_is_relative_or_reaches_a_key_is_refused_for_every_tool() {
+        for (scope, program, variable) in [
+            (Scope::Docker, "docker", "DOCKER_CONFIG"),
+            (Scope::Aws, "aws", "AWS_CONFIG_FILE"),
+            (Scope::Aws, "aws", "AWS_SHARED_CREDENTIALS_FILE"),
+            (Scope::Kubernetes, "kubectl", "KUBECONFIG"),
+            (Scope::Remote, "git", "GIT_CONFIG_GLOBAL"),
+        ] {
+            for value in [
+                "relative/config",
+                "config",
+                "/home/a-person/../another-person/config",
+                "/home/a-person/.ssh/id_ed25519",
+                "/home/a-person/.ssh",
+            ] {
+                assert!(
+                    reached(scope, program, &[(variable, value)]).is_empty(),
+                    "{variable}={value}"
+                );
+            }
+        }
+        // A path is granted with everything under it, so a variable that names a file may not name
+        // the home, what holds it, or a directory.
+        for (scope, program, variable) in [
+            (Scope::Aws, "aws", "AWS_CONFIG_FILE"),
+            (Scope::Kubernetes, "kubectl", "KUBECONFIG"),
+            (Scope::Remote, "git", "GIT_CONFIG_GLOBAL"),
+        ] {
+            for value in ["/home/a-person", "/home", "/"] {
+                assert!(
+                    reached(scope, program, &[(variable, value)]).is_empty(),
+                    "{variable}={value}"
+                );
+            }
+        }
+        // A directory is read whole, so the places that hold other programs' files are refused;
+        // a file is read as itself.
+        for value in [
+            "/home/a-person",
+            "/",
+            "/home/a-person/.config",
+            "/home/a-person/.cache",
+        ] {
+            assert!(
+                reached(Scope::Docker, "docker", &[("DOCKER_CONFIG", value)]).is_empty(),
+                "DOCKER_CONFIG={value}"
+            );
+        }
+        assert_eq!(
+            reached(
+                Scope::Aws,
+                "aws",
+                &[("AWS_CONFIG_FILE", "/home/a-person/.config/aws-config")]
+            ),
+            [PathBuf::from("/home/a-person/.config/aws-config")]
+        );
+    }
+
+    /// A file that is a link into `~/.ssh` is judged by where it leads.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_is_a_link_to_a_private_key_is_refused() {
+        use std::os::unix::fs::symlink;
+        let home = scratch_dir("file-configuration-links");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::write(home.join(".ssh/id_ed25519"), "").unwrap();
+        std::fs::write(home.join("config"), "").unwrap();
+        symlink(home.join(".ssh/id_ed25519"), home.join("to-key")).unwrap();
+        symlink(home.join("config"), home.join("to-config")).unwrap();
+        let reads = |file: &Path| {
+            environment_reach(
+                Scope::Aws,
+                "aws",
+                &home,
+                &the_environment(&[("AWS_CONFIG_FILE", file.to_str().unwrap())]),
+            )
+        };
+        assert!(reads(&home.join("to-key")).is_empty());
+        std::fs::create_dir_all(home.join("a-directory")).unwrap();
+        assert!(reads(&home.join("a-directory")).is_empty());
+        assert!(reads(&home).is_empty());
+        assert_eq!(
+            reads(&home.join("to-config"))
+                .into_iter()
+                .map(|reach| reach.path)
+                .collect::<Vec<_>>(),
+            [std::fs::canonicalize(home.join("config")).unwrap()]
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A variable that points where the scope already reads says nothing a person is not told, so
+    /// the prompt carries no row for it. `XDG_CONFIG_HOME=~/.config` is set on most machines.
+    #[test]
+    fn a_variable_pointing_at_a_row_the_scope_already_holds_adds_none() {
+        assert!(
+            reached(
+                Scope::Remote,
+                "gh",
+                &[("XDG_CONFIG_HOME", "/home/a-person/.config")]
+            )
+            .is_empty()
+        );
+        assert!(
+            reached(
+                Scope::Remote,
+                "git",
+                &[("XDG_CONFIG_HOME", "/home/a-person/.config")]
+            )
+            .is_empty()
+        );
+        assert!(
+            reached(
+                Scope::Kubernetes,
+                "kubectl",
+                &[("KUBECONFIG", "/home/a-person/.kube/config")]
+            )
+            .is_empty()
+        );
+        assert!(
+            reached(
+                Scope::Remote,
+                "git",
+                &[("GIT_CONFIG_GLOBAL", "/home/a-person/.gitconfig")]
+            )
+            .is_empty()
+        );
+    }
+
+    /// The variable is named with the path it led to, since that is what the prompt says.
+    #[test]
+    fn a_reach_names_the_variable_it_came_from() {
+        let found = environment_reach(
+            Scope::Remote,
+            "gh",
+            Path::new(A_HOME),
+            &the_environment(&[("XDG_CONFIG_HOME", "/home/a-person/xdg")]),
+        );
+        assert_eq!(
+            found,
+            [Reach {
+                variable: "XDG_CONFIG_HOME",
+                path: PathBuf::from("/home/a-person/xdg/gh")
+            }]
+        );
     }
 }

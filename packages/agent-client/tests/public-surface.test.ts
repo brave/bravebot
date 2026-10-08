@@ -7,9 +7,9 @@ import * as node from '@brave/agent-client/node'
 // would let a caller open a session in any directory or answer a question the client never offered,
 // so the lists below name every export and a new one has to be added on purpose.
 const COMMON = [
-  'CapabilityError', 'ConnectionLostError', 'ProtocolError', 'ROW_KINDS', 'RpcAgentClient', 'RpcError',
+  'CapabilityError', 'ConnectionLostError', 'ProtocolError', 'ROW_KINDS', 'RpcAgentClient', 'RpcError', 'StaleActionError',
   'SESSION_VIEW_START', 'SESSION_VIEW_VERSION', 'STATUSES', 'SUPPORTED_APPROVALS', 'UnsupportedError',
-  'decodeIncoming', 'decodeUpdate', 'readSessionViewCapability',
+  'decodeIncoming', 'decodeUpdate', 'readActionTargets', 'readSessionViewCapability',
 ]
 
 test('the package entry points export only the intended names', () => {

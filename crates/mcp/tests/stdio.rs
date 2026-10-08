@@ -843,3 +843,258 @@ fn a_server_receives_the_variables_it_was_handed_and_no_others() {
 
     let _ = std::fs::remove_file(&script);
 }
+
+/// A server that answers a tool call two seconds after it is put, and answers everything else at
+/// once, so a bound on the call decides whether the reply is read.
+const SLOW_CALL_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/call"'*)
+      sleep 2
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"late but whole"}]}}\n' "$id"
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#;
+
+/// A server that does not answer its handshake for two seconds.
+const SLOW_HANDSHAKE_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      sleep 2
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+      ;;
+  esac
+done
+"#;
+
+fn launched(sandbox: &dyn Sandbox, script: &Path) -> StdioServer {
+    StdioServer::launch(
+        "fake",
+        script.to_str().expect("path"),
+        &[],
+        Variables::new(),
+        sandbox,
+        &sandbox_policy(),
+        Stream::Inherited,
+    )
+    .expect("server launches")
+}
+
+fn policy_for_fake(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+    Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("fake"))]),
+        sink,
+    )
+    .expect("policy")
+}
+
+/// A call that is not answered within its bound is reported as a timeout naming the tool and the
+/// bound, and it is reported when the bound passes rather than when the server next writes.
+///
+/// The same server answers whole in two seconds, so a bound that were ignored would return the
+/// reply after two seconds instead of an error after one.
+#[test]
+fn a_call_not_answered_within_its_bound_is_a_timeout_naming_the_tool_and_the_bound() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let script = fake_server("slow-call-bound", SLOW_CALL_SERVER);
+    let mut server = launched(sandbox.as_ref(), &script);
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+    server.set_bound(std::time::Duration::from_secs(1));
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_for_fake(&mut sink);
+
+    let started = std::time::Instant::now();
+    let error = server
+        .call_tool(&mut policy, "echo", serde_json::json!({}))
+        .expect_err("the reply came after the bound");
+
+    let McpError::TimedOut { what, after } = &error else {
+        panic!("got: {error}");
+    };
+    assert_eq!(what, "tool 'echo'");
+    assert_eq!(*after, std::time::Duration::from_secs(1));
+    assert_eq!(error.to_string(), "tool 'echo' timed out after 1 seconds");
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(1900),
+        "the call waited for the server: {:?}",
+        started.elapsed()
+    );
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// A bound longer than the server takes lets its reply through, so a slow server that works can be
+/// given the time it needs.
+#[test]
+fn a_longer_bound_lets_a_slow_reply_through() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let script = fake_server("slow-call-longer", SLOW_CALL_SERVER);
+    let mut server = launched(sandbox.as_ref(), &script);
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+    server.set_bound(std::time::Duration::from_secs(20));
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_for_fake(&mut sink);
+
+    let result = server
+        .call_tool(&mut policy, "echo", serde_json::json!({}))
+        .expect("a reply within the bound is read");
+
+    assert_eq!(result.label(), Label::untrusted_private());
+    assert!(policy.finish());
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// A call that ran out of time stops the process, so no later request is put to a server still
+/// working on the one that was given up on, and its late reply is never read as an answer.
+///
+/// The second call is given a bound the server would meet if it were still running: a server left
+/// alive answers it after the first call's two seconds are done.
+#[test]
+fn a_server_that_ran_out_of_time_is_stopped_and_answers_nothing_later() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let script = fake_server("slow-call-stopped", SLOW_CALL_SERVER);
+    let mut server = launched(sandbox.as_ref(), &script);
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+    server.set_bound(std::time::Duration::from_secs(1));
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_for_fake(&mut sink);
+    let first = server.call_tool(&mut policy, "echo", serde_json::json!({}));
+    assert!(matches!(first, Err(McpError::TimedOut { .. })));
+
+    server.set_bound(std::time::Duration::from_secs(20));
+    let started = std::time::Instant::now();
+    let second = server.call_tool(&mut policy, "echo", serde_json::json!({}));
+
+    assert!(
+        matches!(second, Err(McpError::Transport(_))),
+        "a later call was answered or timed out again: {second:?}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "the later call waited on the stopped server: {:?}",
+        started.elapsed()
+    );
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// A handshake is bound like a call, and says which request ran out of time.
+#[test]
+fn a_handshake_not_answered_within_its_bound_is_a_timeout_naming_the_request() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let script = fake_server("slow-handshake", SLOW_HANDSHAKE_SERVER);
+    let mut server = launched(sandbox.as_ref(), &script);
+    server.set_bound(std::time::Duration::from_secs(1));
+
+    let error = server
+        .initialize("bravebot", "0.1.0")
+        .expect_err("the reply came after the bound");
+
+    let McpError::TimedOut { what, after } = &error else {
+        panic!("got: {error}");
+    };
+    assert_eq!(what, "initialize");
+    assert_eq!(*after, std::time::Duration::from_secs(1));
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// Runs `run` with the diagnostic log at `level` in a scratch directory and returns what it wrote.
+/// Called with `one_at_a_time` held, which is what keeps another test from writing to it.
+fn logged(level: bravebot_diag::Level, run: impl FnOnce()) -> String {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    bravebot_diag::configure(level, Some(dir.path().join("logs")));
+    run();
+    bravebot_diag::configure(bravebot_diag::Level::Error, None);
+    std::fs::read_dir(dir.path().join("logs"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A server that did not start is the first thing a bug report asks about, so the log says which
+/// kind of failure it was, and not the program that was tried or the name the server was given.
+#[test]
+fn a_launch_that_failed_is_written_to_the_diagnostic_log() {
+    let _spawning = one_at_a_time();
+    let log = logged(bravebot_diag::Level::Error, || {
+        for sandbox in [&Unavailable as &dyn Sandbox, &ProgramWouldNotStart] {
+            let _ = StdioServer::launch(
+                "private-alias",
+                "/bravebot-no-such-server/never-installed",
+                &[],
+                Variables::new(),
+                sandbox,
+                &SandboxPolicy::strict(),
+                Stream::Inherited,
+            );
+        }
+    });
+
+    assert!(log.contains("ERROR mcp.launch kind=confinement"), "{log}");
+    assert!(log.contains("ERROR mcp.launch kind=transport"), "{log}");
+    assert!(!log.contains("never-installed"), "{log}");
+    assert!(!log.contains("private-alias"), "{log}");
+}
+
+/// Each step of getting a server going is written as having worked or as the kind of failure it
+/// was, so a bug report can say whether the server started and whether it answered.
+#[test]
+fn a_handshake_is_written_to_the_diagnostic_log() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let working = fake_server("logged-handshake", WORKING_SERVER);
+    let exits = fake_server("logged-exits", "#!/bin/sh\nexit 0\n");
+
+    let log = logged(bravebot_diag::Level::Info, || {
+        let mut server = launched(sandbox.as_ref(), &working);
+        server.initialize("bravebot", "0.1.0").expect("handshake");
+        server.list_tools().expect("tools listed");
+
+        let mut dead = launched(sandbox.as_ref(), &exits);
+        dead.initialize("bravebot", "0.1.0")
+            .expect_err("a dead server cannot handshake");
+    });
+    let _ = std::fs::remove_file(&working);
+    let _ = std::fs::remove_file(&exits);
+
+    for line in [
+        "INFO mcp.launch outcome=ok",
+        "INFO mcp.initialize outcome=ok",
+        "INFO mcp.list_tools outcome=ok",
+        "ERROR mcp.initialize kind=transport",
+    ] {
+        assert!(log.contains(line), "missing {line:?} in {log}");
+    }
+    assert!(!log.contains("tool output"), "{log}");
+}

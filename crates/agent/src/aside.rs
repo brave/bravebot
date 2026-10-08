@@ -76,6 +76,29 @@ only where the answer is no use without it.";
 /// what makes the last message read as the thing being asked.
 const INSTRUCTION: &str = "Setting the work aside for a moment, here is my question:";
 
+/// What `/recap` asks, in the driver's own words.
+///
+/// The exchange it is asked over is the planner's own context, so the recap reads the person's
+/// messages, the planner's replies and what the planner was shown, and nothing else.
+pub const RECAP_QUESTION: &str = "\
+I am coming back to this session. Recap it for me in plain text, in at most 400 characters: what \
+we are trying to do, where the work stands, and what is next.";
+
+/// The most a recap shows or keeps, in characters.
+pub const RECAP_LIMIT: usize = 400;
+
+/// Cut `text` to at most `limit` characters, ending in an ellipsis where something was cut.
+fn capped(text: &str, limit: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let mut cut: String = text.chars().take(limit.saturating_sub(1)).collect();
+    cut.truncate(cut.trim_end().len());
+    cut.push('\u{2026}');
+    cut
+}
+
 /// One question, and the exchange it was asked beside.
 ///
 /// Taken off the conversation before anything else happens, on the thread that holds it, because
@@ -99,6 +122,8 @@ pub struct Question {
     dropped: Vec<crate::attached::Carried>,
     /// What the exchange had met, which is what decides whether the answer may be written down.
     context: Integrity,
+    /// The most the answer may run to, where the question asked for a short one.
+    limit: Option<usize>,
 }
 
 impl Question {
@@ -118,6 +143,16 @@ impl Question {
             pasted,
             dropped: Vec::new(),
             context: conversation.context(),
+            limit: None,
+        }
+    }
+
+    /// The recap of the exchange so far, which is a question the driver writes and an answer that
+    /// is cut to [`RECAP_LIMIT`] whatever the model made of the instruction.
+    pub fn recap(conversation: &Conversation) -> Self {
+        Self {
+            limit: Some(RECAP_LIMIT),
+            ..Self::about(conversation, RECAP_QUESTION, Vec::new())
         }
     }
 
@@ -246,6 +281,7 @@ pub fn ask<S: Sink>(
     // The exchange is given up once this answers, so nothing asks for a cache of it: a mark would
     // sit on the question at the end of the request, which only a later question repeating those
     // words could read back. The instructions keep their mark, being the same bytes every question.
+    let limit = question.limit;
     let request = ChatRequest::new(model, question.into_request()).giving_up_its_conversation();
 
     let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
@@ -287,6 +323,10 @@ pub fn ask<S: Sink>(
     };
 
     let shown = completion.content.declassify(&as_written);
+    let (shown, kept) = match limit {
+        Some(limit) => (capped(&shown, limit), kept.map(|body| capped(&body, limit))),
+        None => (shown, kept),
+    };
 
     Ok(Answered {
         shown,
@@ -392,6 +432,56 @@ mod tests {
         assert!(
             SYSTEM_PROMPT.contains("Do not invent the contents"),
             "a model with no tools and no such instruction answers from an imagined file"
+        );
+    }
+
+    /// A model that ignores the length it was asked for still cannot put more than the limit on
+    /// the person's screen or into the record.
+    #[test]
+    fn a_recap_longer_than_the_limit_is_cut_to_it() {
+        let long = "word ".repeat(200);
+        let cut = capped(&long, RECAP_LIMIT);
+        assert!(cut.chars().count() <= RECAP_LIMIT, "over the limit: {cut}");
+        assert!(cut.ends_with('\u{2026}'), "the cut is not marked: {cut}");
+        assert!(
+            !cut.ends_with(" \u{2026}"),
+            "the ellipsis follows a space: {cut}"
+        );
+    }
+
+    /// A recap that fits is shown as the model wrote it, apart from surrounding whitespace.
+    #[test]
+    fn a_recap_within_the_limit_is_not_cut() {
+        let exact = "x".repeat(RECAP_LIMIT);
+        assert_eq!(capped(&format!("  {exact}\n"), RECAP_LIMIT), exact);
+    }
+
+    /// The limit counts characters, so a multi-byte reply is neither split inside a character nor
+    /// cut short of the limit.
+    #[test]
+    fn the_recap_limit_counts_characters_rather_than_bytes() {
+        let cut = capped(&"\u{e9}".repeat(RECAP_LIMIT + 10), RECAP_LIMIT);
+        assert_eq!(cut.chars().count(), RECAP_LIMIT);
+    }
+
+    /// `/recap` is a question with a limit, asked over the exchange and leaving it as it was.
+    #[test]
+    fn a_recap_asks_its_own_question_with_a_limit_and_leaves_the_exchange_alone() {
+        let conversation = an_exchange();
+        let before = conversation.len();
+
+        let asking = Question::recap(&conversation);
+
+        assert_eq!(asking.limit, Some(RECAP_LIMIT));
+        assert_eq!(conversation.len(), before);
+        let request = asking.into_request();
+        let last = request.last().expect("the question closes the request");
+        assert!(last.content.text().contains(RECAP_QUESTION));
+        assert!(
+            request
+                .iter()
+                .any(|message| message.content.text().contains("add the feature")),
+            "the recap was asked without the exchange"
         );
     }
 }

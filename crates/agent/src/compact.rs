@@ -104,7 +104,7 @@ fn instruction(focus: Option<&str>) -> String {
 /// Shared by compaction and the goal judge so one setting means one model for both. `Err` says why
 /// the named model cannot be used, which the caller refuses on rather than falling back: the setting
 /// is a cost boundary, and a summary quietly sent to the session's expensive model spends exactly
-/// what naming a cheaper one was meant to cap (COMPACT-14, GOAL-19).
+/// what naming a cheaper one was meant to cap (COMPACT-15, GOAL-19).
 ///
 /// Nothing here reads a model's output. The name comes from the person's own settings file, and both
 /// questions are asked of this machine, so the decision is made from what the driver already had.

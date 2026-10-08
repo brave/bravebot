@@ -20,6 +20,7 @@
 use crate::diff::Diff;
 use bravebot_core::Pipeline;
 use bravebot_core::ask::{Answer, Asking};
+use bravebot_core::remembered::RememberedLine;
 use bravebot_core::vetting::Verdict;
 use bravebot_i18n::t;
 use std::fmt;
@@ -256,9 +257,17 @@ pub struct RunRequest {
 /// model supplied beyond the plan a person is reading.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Confined {
+    /// Whether a stage reads the machine except the places that hold a credential, which is every
+    /// stage on Linux and macOS, rather than the system directories and what its lists add.
+    pub reads_the_machine: bool,
     /// The directories every stage reads and writes: those the session was opened on and its
     /// scratch directory.
     pub directories: Vec<std::path::PathBuf>,
+    /// What the session decided about the network for these stages.
+    pub network: bravebot_sandbox::network::Network,
+    /// How many entries of the person's own filesystem lists are in force for these stages, which
+    /// is a count and never a path a glob turned up.
+    pub filesystem: bravebot_sandbox::rules::Counts,
     /// What a stage carries beyond them, in step order. A stage that carries nothing is absent.
     pub carried: Vec<Carried>,
 }
@@ -272,21 +281,75 @@ pub struct Carried {
     pub toolchain: Option<bravebot_sandbox::toolchain::Toolchain>,
     /// The credential scope its argv names.
     pub scope: Option<bravebot_sandbox::scope::Scope>,
+    /// What the person's environment moves that scope to, beyond its fixed rows, each named with
+    /// the variable it came from.
+    pub reaches: Vec<bravebot_sandbox::scope::Reach>,
+    /// Whether the stage keeps the network a closed session took from the others.
+    pub network: bool,
+    /// What a person attached to this command with `/reach`, each with the day it was allowed.
+    pub remembered: Vec<Remembered>,
+}
+
+/// One reach a person remembered for a command, as the plan that carries it says so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Remembered {
+    /// What is added.
+    pub reached: crate::reach::Reached,
+    /// Whether a directory is written as well as read.
+    pub write: bool,
+    /// The day it was allowed.
+    pub allowed: String,
 }
 
 impl Confined {
-    /// The sentence that introduces the directories, for a front end to draw above them.
-    pub fn heading(&self) -> String {
-        t!(run_confined).to_string()
+    /// What a credential scope brings to `program`, in the one wording both a scope the argv names
+    /// and one a person remembered use.
+    fn scope_sentence(&self, scope: bravebot_sandbox::scope::Scope, program: &str) -> String {
+        use bravebot_sandbox::scope::Scope;
+        match scope {
+            Scope::Remote if self.reads_the_machine => {
+                t!(run_carries_known_hosts, program = program)
+            }
+            Scope::Remote => t!(run_carries_remote, program = program),
+            Scope::Aws => t!(run_carries_aws, program = program),
+            Scope::Kubernetes => t!(run_carries_kubernetes, program = program),
+            Scope::Docker => t!(run_carries_docker, program = program),
+        }
+        .to_string()
     }
 
-    /// One sentence for each toolchain list and each credential scope a stage brings, in step
-    /// order, worded once here so no front end carries its own copy of them.
+    /// The sentence that introduces the directories, for a front end to draw above them.
+    pub fn heading(&self) -> String {
+        match self.reads_the_machine {
+            true => t!(run_confined_machine).to_string(),
+            false => t!(run_confined).to_string(),
+        }
+    }
+
+    /// One sentence for each toolchain list, each credential scope and each stage that keeps a
+    /// closed network, in step order, worded once here so no front end carries its own copy of them.
     pub fn sentences(&self) -> Vec<String> {
-        use bravebot_sandbox::scope::Scope;
         let mut sentences = Vec::new();
+        if self.network.is_closed() {
+            sentences.push(t!(run_network_closed).to_string());
+        }
+        if !self.filesystem.is_empty() {
+            sentences.push(
+                t!(
+                    run_filesystem_rules,
+                    allow_read = self.filesystem.allow_read,
+                    deny_read = self.filesystem.deny_read,
+                    allow_write = self.filesystem.allow_write,
+                    deny_write = self.filesystem.deny_write
+                )
+                .to_string(),
+            );
+        }
         for stage in &self.carried {
             let program = stage.program.as_str();
+            if stage.network {
+                sentences.push(t!(run_keeps_network, program = program).to_string());
+            }
             if let Some(toolchain) = stage.toolchain {
                 sentences.push(
                     t!(
@@ -298,15 +361,43 @@ impl Confined {
                 );
             }
             if let Some(scope) = stage.scope {
+                sentences.push(self.scope_sentence(scope, program));
+            }
+            for reach in &stage.reaches {
                 sentences.push(
-                    match scope {
-                        Scope::Remote => t!(run_carries_remote, program = program),
-                        Scope::Aws => t!(run_carries_aws, program = program),
-                        Scope::Kubernetes => t!(run_carries_kubernetes, program = program),
-                        Scope::Docker => t!(run_carries_docker, program = program),
-                    }
+                    t!(
+                        run_carries_reach,
+                        program = program,
+                        variable = reach.variable,
+                        path = reach.path.display().to_string()
+                    )
                     .to_string(),
                 );
+            }
+            for remembered in &stage.remembered {
+                let date = remembered.allowed.as_str();
+                sentences.push(match &remembered.reached {
+                    crate::reach::Reached::Scope(scope) => t!(
+                        run_carries_remembered,
+                        sentence = self.scope_sentence(*scope, program),
+                        date = date
+                    )
+                    .to_string(),
+                    crate::reach::Reached::Directory(path) if remembered.write => t!(
+                        run_carries_remembered_write,
+                        program = program,
+                        path = path.display().to_string(),
+                        date = date
+                    )
+                    .to_string(),
+                    crate::reach::Reached::Directory(path) => t!(
+                        run_carries_remembered_read,
+                        program = program,
+                        path = path.display().to_string(),
+                        date = date
+                    )
+                    .to_string(),
+                });
             }
         }
         sentences
@@ -424,6 +515,22 @@ impl RunRequest {
     /// Whether the prompt may offer to record this answer past the session.
     pub fn may_record(&self) -> bool {
         self.record.is_some()
+    }
+
+    /// Whether the prompt may also offer to record this line with its number left free: it may
+    /// record at all, and the line is one the table in
+    /// [`bravebot_core::remembered::families`] lists.
+    pub fn offers_a_family(&self) -> bool {
+        self.may_record() && RememberedLine::family_of(&self.plan).is_some()
+    }
+
+    /// The line as the family answer would record it, drawn with its number free, where the
+    /// prompt offers that answer.
+    pub fn family_display(&self) -> Option<String> {
+        if !self.offers_a_family() {
+            return None;
+        }
+        RememberedLine::family_of(&self.plan).map(|line| line.display())
     }
 
     /// Whether the prompt says a pattern in a settings file is what answers this line.
@@ -862,6 +969,15 @@ pub struct RunDecision {
     /// lifetimes, and one field could not carry both: this one stops the asking and leaves every
     /// label where it was, while `remember` also says what the command prints may be read.
     pub record: bool,
+    /// Whether the person asked for this line to stop being asked about past the session with its
+    /// number free ([RUN-20]).
+    ///
+    /// A third field rather than a variant of `record`, so a front end that sets `record` keeps
+    /// meaning exactly the line. Never set together with `record`: the acting layer takes `record`
+    /// first.
+    ///
+    /// [RUN-20]: ../../../docs/specs/tools/run.md
+    pub record_family: bool,
 }
 
 impl RunDecision {
@@ -871,6 +987,7 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: false,
             record: false,
+            record_family: false,
         }
     }
 
@@ -880,6 +997,7 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: true,
             record: false,
+            record_family: false,
         }
     }
 
@@ -893,6 +1011,18 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: false,
             record: true,
+            record_family: false,
+        }
+    }
+
+    /// Run it, and record this line with its number left free, so every session in this directory
+    /// runs the same sub-command on the same repository with any number unasked.
+    pub fn approve_and_record_family() -> Self {
+        Self {
+            decision: Decision::Approve,
+            remember: false,
+            record: false,
+            record_family: true,
         }
     }
 
@@ -902,11 +1032,30 @@ impl RunDecision {
             decision: Decision::Reject,
             remember: false,
             record: false,
+            record_family: false,
         }
     }
 
     pub fn approved(self) -> bool {
         self.decision == Decision::Approve
+    }
+
+    /// The line this answer asks to have recorded for `plan`, where it asks for one.
+    ///
+    /// The exact line for `record`, which outranks the other. The family for `record_family`, and
+    /// only where the table lists the plan: for any other plan that answer records nothing. The
+    /// caller still asks the policy whether the plan may be remembered at all.
+    pub fn line_to_record(&self, plan: &bravebot_core::command::Plan) -> Option<RememberedLine> {
+        if !self.approved() {
+            return None;
+        }
+        if self.record {
+            Some(RememberedLine::of(plan))
+        } else if self.record_family {
+            RememberedLine::family_of(plan)
+        } else {
+            None
+        }
     }
 }
 
@@ -1972,6 +2121,108 @@ impl fmt::Display for Decision {
 mod tests {
     use super::*;
 
+    fn gh_plan(args: &[&str]) -> bravebot_core::command::Plan {
+        use bravebot_core::command::{Plan, Step, Steps};
+        Plan {
+            line: String::new(),
+            directory: std::path::PathBuf::from("/work"),
+            steps: Steps::Pipeline(vec![Step {
+                program: "gh".to_string(),
+                resolved: std::path::PathBuf::from("/usr/bin/gh"),
+                started_as: std::path::PathBuf::from("/usr/bin/gh"),
+                args: args.iter().map(|arg| (*arg).to_string()).collect(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            }]),
+            writes: Vec::new(),
+            reads: Vec::new(),
+            stdin: None,
+        }
+    }
+
+    fn a_listed_line() -> bravebot_core::command::Plan {
+        gh_plan(&["pr", "view", "1081", "--repo", "brave/bravebot"])
+    }
+
+    /// RUN-20: the family answer records the family, the exact answer records the line, and
+    /// neither records anything for a refusal.
+    #[test]
+    fn each_answer_records_the_line_it_names() {
+        let plan = a_listed_line();
+        assert_eq!(
+            RunDecision::approve_and_record().line_to_record(&plan),
+            Some(RememberedLine::of(&plan))
+        );
+        let family = RunDecision::approve_and_record_family()
+            .line_to_record(&plan)
+            .expect("a listed line has a family");
+        assert!(family.is_family());
+        assert_eq!(family, RememberedLine::family_of(&plan).unwrap());
+        assert_eq!(RunDecision::approve().line_to_record(&plan), None);
+        assert_eq!(RunDecision::approve_always().line_to_record(&plan), None);
+        let refused = RunDecision {
+            decision: Decision::Reject,
+            ..RunDecision::approve_and_record_family()
+        };
+        assert_eq!(refused.line_to_record(&plan), None);
+    }
+
+    /// RUN-20: the family answer for a line the table does not list records nothing, so a front
+    /// end that sends it for any line cannot widen the record.
+    #[test]
+    fn the_family_answer_for_an_unlisted_line_records_nothing() {
+        for plan in [
+            gh_plan(&["pr", "view", "1081", "--repo", "brave/bravebot", "--web"]),
+            gh_plan(&["pr", "merge", "1081", "--repo", "brave/bravebot"]),
+            gh_plan(&["pr", "view", "abc", "--repo", "brave/bravebot"]),
+        ] {
+            assert_eq!(
+                RunDecision::approve_and_record_family().line_to_record(&plan),
+                None
+            );
+        }
+    }
+
+    /// RUN-20: a front end that sets both keys gets the exact line, the narrower of the two.
+    #[test]
+    fn both_keys_at_once_record_the_exact_line() {
+        let plan = a_listed_line();
+        let both = RunDecision {
+            record: true,
+            record_family: true,
+            ..RunDecision::approve()
+        };
+        assert_eq!(both.line_to_record(&plan), Some(RememberedLine::of(&plan)));
+    }
+
+    /// RUN-20: the prompt offers the family key only where it offers to record at all and the
+    /// table lists the line.
+    #[test]
+    fn the_prompt_offers_the_family_key_for_a_listed_line_it_may_record() {
+        let request = |plan, record: Option<&str>| RunRequest {
+            plan,
+            record: record.map(std::path::PathBuf::from),
+            pattern: None,
+            stdin: None,
+            confined: None,
+        };
+        let offered = request(
+            a_listed_line(),
+            Some("/home/.bravebot/remembered/work.jsonl"),
+        );
+        assert!(offered.offers_a_family());
+        assert_eq!(
+            offered.family_display().as_deref(),
+            Some("/usr/bin/gh pr view <number> --repo brave/bravebot")
+        );
+        assert!(!request(a_listed_line(), None).offers_a_family());
+        assert_eq!(request(a_listed_line(), None).family_display(), None);
+        let unlisted = gh_plan(&["pr", "merge", "1", "--repo", "brave/bravebot"]);
+        assert!(
+            !request(unlisted, Some("/home/.bravebot/remembered/work.jsonl")).offers_a_family()
+        );
+    }
+
     fn a_series() -> Asking {
         bravebot_core::ask::asking(&bravebot_core::ask::Series::new(vec![
             bravebot_core::ask::Question::new(
@@ -2270,9 +2521,15 @@ mod tests {
             program: program.into(),
             toolchain: None,
             scope: Some(scope),
+            reaches: Vec::new(),
+            network: false,
+            remembered: Vec::new(),
         };
         let confined = Confined {
+            reads_the_machine: false,
             directories: Vec::new(),
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
             carried: vec![
                 carried("aws", Scope::Aws),
                 carried("kubectl", Scope::Kubernetes),
@@ -2282,6 +2539,9 @@ mod tests {
                     program: "npm".into(),
                     toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Node),
                     scope: None,
+                    reaches: Vec::new(),
+                    network: false,
+                    remembered: Vec::new(),
                 },
             ],
         };
@@ -2299,6 +2559,114 @@ mod tests {
             assert!(sentence.starts_with(program), "{sentence}");
             assert!(sentence.contains(reached), "{sentence}");
         }
+    }
+
+    /// Where the machine is read, `gh` reads nothing it did not already, so its sentence says what
+    /// the scope does add and does not claim a read of the logins and keys every stage has.
+    #[test]
+    fn where_the_machine_is_read_the_remote_scope_names_only_what_it_adds() {
+        use bravebot_sandbox::scope::Scope;
+        let confined = Confined {
+            reads_the_machine: true,
+            directories: Vec::new(),
+            carried: vec![Carried {
+                program: "git".into(),
+                toolchain: None,
+                scope: Some(Scope::Remote),
+                reaches: Vec::new(),
+                network: false,
+                remembered: Vec::new(),
+            }],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+        };
+
+        let sentences = confined.sentences();
+
+        assert_eq!(sentences.len(), 1);
+        assert!(sentences[0].contains("known hosts"), "{}", sentences[0]);
+        assert!(
+            !sentences[0].contains("never a private key"),
+            "{}",
+            sentences[0]
+        );
+        assert_ne!(
+            confined.heading(),
+            Confined {
+                reads_the_machine: false,
+                ..confined.clone()
+            }
+            .heading()
+        );
+    }
+
+    /// A closed network is said once, and a stage that keeps it is named, so a person approving a
+    /// plan learns which program leaves the machine. An open one says nothing: it is today's.
+    #[test]
+    fn a_closed_network_is_said_once_and_each_stage_that_keeps_it_is_named() {
+        use bravebot_sandbox::network::Network;
+        let keeping = |program: &str| Carried {
+            program: program.into(),
+            toolchain: None,
+            scope: None,
+            reaches: Vec::new(),
+            network: true,
+            remembered: Vec::new(),
+        };
+        let confined = |network, carried| Confined {
+            reads_the_machine: false,
+            directories: Vec::new(),
+            network,
+            filesystem: Default::default(),
+            carried,
+        };
+
+        let closed = confined(Network::Closed, vec![keeping("curl")]).sentences();
+        assert_eq!(closed.len(), 2, "{closed:?}");
+        assert!(closed[0].contains("network is closed"), "{closed:?}");
+        assert!(
+            closed[1].starts_with("curl") && closed[1].contains("network"),
+            "{closed:?}"
+        );
+
+        assert!(
+            confined(Network::Open, Vec::new()).sentences().is_empty(),
+            "an open network was announced"
+        );
+    }
+
+    /// A person's own filesystem lists are said once with how many entries each holds, and nothing is
+    /// said where none is in force, so the prompt of a session that wrote none is the prompt it was.
+    #[test]
+    fn the_persons_filesystem_lists_are_said_once_and_only_where_they_exist() {
+        use bravebot_sandbox::rules::Counts;
+        let confined = |filesystem| Confined {
+            reads_the_machine: true,
+            directories: Vec::new(),
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem,
+            carried: Vec::new(),
+        };
+        let said = confined(Counts {
+            allow_read: 1,
+            deny_read: 2,
+            allow_write: 3,
+            deny_write: 4,
+        })
+        .sentences();
+        assert_eq!(said.len(), 1, "{said:?}");
+        for (key, count) in [
+            ("allowRead", 1),
+            ("denyRead", 2),
+            ("allowWrite", 3),
+            ("denyWrite", 4),
+        ] {
+            assert!(
+                said[0].contains(&format!("{count} {key}")),
+                "{key}: {said:?}"
+            );
+        }
+        assert!(confined(Counts::default()).sentences().is_empty());
     }
 
     fn a_run() -> RunRequest {

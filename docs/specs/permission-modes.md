@@ -23,7 +23,7 @@ documented-by: docs/website/docs/security/permissions.md
 ## Scope
 
 A standing answer to the questions a person is otherwise asked one at a time. Four modes: asking,
-accepting edits, planning, and bypassing every check. One key cycles them and the mode in force is
+accepting edits, planning, and bypassing every check. One key cycles them, and `/plan` sets planning. The mode in force is
 drawn under the input box for as long as it holds.
 
 What each of those questions *is*, and what a prompt owes its reader, is
@@ -392,6 +392,22 @@ again.
 `verified-by: bravebot_ui_bridge::permission_mode::accepting_edits_writes_unasked_and_still_asks_about_a_command`
 `verified-by: bravebot_ui_bridge::permission_mode::planning_writes_nothing_and_asks_nothing_about_a_write`
 `verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_is_the_next_turns`
+
+<a id="MODE-12"></a>
+### MODE-12: `/plan` sets plan mode, with the same standing as the key, and sends only its task
+
+`/plan` sets the session to plan mode from whichever mode it is in, and `/plan <task>` also starts a
+turn on the task. The turn reads plan mode when it begins (MODE-8), and what it is sent is the task
+after the word, never the typed line. Typed while a turn runs it waits for that turn to end. No command sets bypassing, which stays reachable only as MODE-5 says.
+
+**Why.** Plan mode only narrows what is permitted, so a typed word carries the same endorsement as
+the key that reaches it, and a person who wants one read-only request has one line to say so. A
+word for bypassing would let a session reach the one mode MODE-5 keeps to the command line.
+
+`verified-by: bravebot_tui::app::the_plan_command_sets_plan_mode_and_sends_only_its_task`
+`verified-by: bravebot_tui::app::the_plan_command_without_a_task_sets_the_mode_and_sends_nothing`
+`verified-by: bravebot_tui::app::the_plan_command_sets_plan_mode_rather_than_cycling_to_the_next`
+`verified-by: bravebot_tui::app::the_plan_command_waits_for_the_turn_in_flight`
 
 ## Known costs
 

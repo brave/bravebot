@@ -207,6 +207,74 @@ fn a_rule_an_earlier_session_granted_is_still_honoured() {
     );
 }
 
+/// A grant of reach to a command, in the shape the two tests below use.
+fn a_reach() -> bravebot_agent::reach::Grant {
+    bravebot_agent::reach::Grant {
+        binary: PathBuf::from("/usr/bin/git"),
+        operation: Some("push".to_string()),
+        reached: bravebot_agent::reach::Reached::Scope(
+            bravebot_sandbox::scope::Scope::named("remote").expect("a scope"),
+        ),
+        write: false,
+        allowed: "2026-10-07".to_string(),
+        lifetime: bravebot_agent::reach::Lifetime::Always,
+        workspace: None,
+    }
+}
+
+/// INCOG-5, SANDBOX-23: reach a person remembered for a command outlives the session that gave it,
+/// so a private session neither adds a line nor says it did. The regression it rejects is a
+/// `/reach` that reports the grant made and leaves the person believing the next plan will carry it.
+#[test]
+fn no_remembered_reach_is_written_down() {
+    let scratch = Scratch::new("reach-nothing");
+    let store = bravebot_agent::reach::Store::new(&scratch.home);
+    assert!(!bravebot_agent::reach::may_be_added_to());
+
+    assert!(!store.allow(&a_reach()), "a grant was reported written");
+    let said = bravebot_agent::reach::command(
+        &bravebot_agent::reach::Typed {
+            home: &scratch.home,
+            profile: Some(Path::new("/home/person")),
+            session: "a-private-session",
+            directory: Path::new("/work"),
+            today: "2026-10-07",
+        },
+        "remote -- ls",
+    );
+
+    assert!(!store.path().exists(), "an incognito session wrote a grant");
+    assert!(
+        store
+            .read(Some("a-private-session"), Path::new("/work"))
+            .is_empty()
+    );
+    assert_eq!(said, bravebot_i18n::t!(reach_refused_incognito));
+}
+
+/// INCOG-5, SANDBOX-23: reading is unchanged, so a private session carries the reach an earlier one
+/// was given.
+#[test]
+fn a_reach_an_earlier_session_remembered_is_still_honoured() {
+    let scratch = Scratch::new("reach-still-reads");
+    let store = bravebot_agent::reach::Store::new(&scratch.home);
+    std::fs::write(
+        store.path(),
+        concat!(
+            r#"{"action":"allow","binary":"/usr/bin/git","operation":"push","scope":"remote","#,
+            r#""directory":null,"write":false,"allowed":"2026-10-07","session":null}"#,
+            "\n"
+        ),
+    )
+    .expect("seed a record");
+
+    assert_eq!(
+        store.read(Some("a-private-session"), Path::new("/work")),
+        [a_reach()],
+        "an incognito session read no reach back"
+    );
+}
+
 /// The finding these two tests are about, taken from the scanner so it is the shape a real one has.
 fn a_finding() -> bravebot_core::credentials::Finding {
     bravebot_core::credentials::scan(".env", "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE", 17)

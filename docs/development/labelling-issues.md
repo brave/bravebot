@@ -1,5 +1,11 @@
 # Filing an issue
 
+A session files an issue through the [issue-poster](../../agents/agents/issue-poster.md) definition,
+which holds the procedure: search the backlog, apply the labels below, assign, post, and read the
+issue back. This page holds what the labels mean, and the definition links here rather than copying
+it. `make check-spec` fails when the definition writes a label this page does not describe, and when
+a skill that files an issue does not name it.
+
 ## The title
 
 The backlog is read as a list. A title is what somebody decides to open an issue from, and what

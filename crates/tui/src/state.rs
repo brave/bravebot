@@ -696,7 +696,7 @@ pub enum Offered {
         commands: Vec<crate::app::Command>,
         skills: Vec<crate::skills::Skill>,
     },
-    Files(Vec<crate::entries::Entry>),
+    Files(Vec<bravebot_mentions::Entry>),
     /// Every key and marker, listed under the box. Not a completion: there is nothing to choose,
     /// which is why the keys that walk a list leave this one alone.
     Shortcuts,
@@ -1071,6 +1071,13 @@ pub struct Scroller {
     pub at: usize,
     /// A count typed and waiting for the key it is for.
     pub count: Option<u32>,
+    /// The request this scroller is showing in place of the transcript, when `/request` opened it.
+    ///
+    /// A copy of the value the turn sent, so what is read is that request and a turn going on
+    /// underneath cannot change it.
+    pub request: Option<Box<bravebot_agent::request_view::RequestView>>,
+    /// The view the transcript had when `/request` opened this, put back when it closes.
+    pub before: Option<(u16, Laid)>,
 }
 
 /// Where `needle` occurs in `text`, as character ranges, left to right and never overlapping.
@@ -1362,6 +1369,11 @@ pub struct Session {
     /// `None` at rest, which is what every key in the box is answered against: the mode is the
     /// one thing that decides whether a letter is a letter or a movement.
     scroller: Option<Scroller>,
+    /// The last request a turn built for the planner, kept in memory and nowhere else.
+    ///
+    /// Not part of the conversation and never saved: it is what `/request` reads, and a session
+    /// that has sent nothing in this process has nothing to show.
+    last_request: Option<bravebot_agent::request_view::RequestView>,
     /// The delegate view, while it is open.
     ///
     /// `None` at rest, on the same footing as the scroller: what decides whether a letter is a
@@ -1583,6 +1595,8 @@ pub struct Session {
     /// moment of its own. A phase is replaced by the next phase, and the moment this has to stop
     /// being drawn is the moment before a prompt is put up, which no phase is announced at.
     checking: Option<bravebot_core::vetting::Checking>,
+    /// The hook holding the turn open, as its moment and program, while one runs (HOOK-8).
+    hook: Option<(&'static str, String)>,
     /// The points this session can be put back to.
     pub rewind: bravebot_session::rewind::RewindStack,
     /// Where the turn in flight began, for the snapshot that rewinds to it.
@@ -1667,6 +1681,8 @@ pub struct Session {
     /// (ADDRESS-3). A turn nobody typed carries it because the person started the session under
     /// it, and nothing a turn produced can set it.
     standing: Option<Addressed>,
+    /// Whether the `agent` setting is what chose `standing`, which `/status` says (ADDRESS-13).
+    standing_by_setting: bool,
     /// The standing watches this session holds, where a turn armed any.
     ///
     /// Private for the reason the loop and the goal are: a watch is looked at, fires, and has the
@@ -1677,6 +1693,8 @@ pub struct Session {
     /// that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
     watches: watch::Watches,
+    /// Set when `/init` hands back its prompt, so the turn that sends it says the driver wrote it.
+    init_prompt_pending: bool,
     /// The same prompts, resolved, for the turn in flight to take between rounds.
     ///
     /// Shared with the worker rather than sent down a channel, because a queued prompt can be
@@ -1789,6 +1807,10 @@ pub struct Session {
     /// Kept for the session only: the `advisorModel` setting is the saved route, and a turn that
     /// finds none here leaves it to that.
     advisor: Option<String>,
+    /// The built-in output style `/style` chose, which opens the system prompt of each turn.
+    ///
+    /// Kept for the session only, as `advisor` is.
+    style: Option<&'static bravebot_agent::styles::Style>,
     /// Which offered command is under the cursor while one is being typed.
     ///
     /// An index into what [`Session::offered`] returns for the current input rather than a copy of
@@ -1877,6 +1899,7 @@ impl Session {
             identity: Identity::default(),
             scroll: 0,
             scroller: None,
+            last_request: None,
             watching: None,
             outputs: Vec::new(),
             jobs_from: 0,
@@ -1926,6 +1949,7 @@ impl Session {
             todos: Vec::new(),
             phase: None,
             checking: None,
+            hook: None,
             running: None,
             movable: None,
             queued: Vec::new(),
@@ -1934,10 +1958,12 @@ impl Session {
             ctrl_enter_arrives: false,
             looping: None,
             watches: watch::Watches::new(),
+            init_prompt_pending: false,
             goal: None,
             addressing: None,
             system_prompts: bravebot_agent::turn::SystemPrompts::default(),
             standing: None,
+            standing_by_setting: false,
             rewind: Default::default(),
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
@@ -1957,6 +1983,7 @@ impl Session {
             effort: None,
             model_reads_effort: true,
             advisor: None,
+            style: None,
             completion: 0,
             workspace: std::path::PathBuf::new(),
             skills: None,
@@ -2036,6 +2063,25 @@ impl Session {
         self.permission_mode = self.permission_mode.cycle(self.bypass_reachable);
     }
 
+    /// Set plan mode, from whichever mode the session is in, and say nothing for the reason
+    /// [`Session::cycle_permission_mode`] gives.
+    ///
+    /// Plan mode only narrows what is permitted, so this grants nothing the key would not, and no
+    /// word reaches bypassing (MODE-5).
+    pub fn enter_plan_mode(&mut self) {
+        self.permission_mode = bravebot_agent::PermissionMode::Plan;
+    }
+
+    /// Start a turn on a person's task, after [`Session::enter_plan_mode`] (MODE-12).
+    pub fn start_planned(
+        &mut self,
+        task: &str,
+        pasted: Vec<AttachedImage>,
+        attached: Vec<Attached>,
+    ) -> String {
+        self.begin_turn(task.to_string(), (attached, pasted), Vec::new())
+    }
+
     /// Load history from disk and keep writing to it.
     ///
     /// Separate from [`Session::new`] so persistence is a deliberate choice at one call site
@@ -2077,6 +2123,16 @@ impl Session {
     /// The model `/advisor` named, resolved, or `None` where it named none.
     pub fn advisor(&self) -> Option<&str> {
         self.advisor.as_deref()
+    }
+
+    /// The output style `/style` chose, or `None` where it chose none.
+    pub fn style(&self) -> Option<&'static bravebot_agent::styles::Style> {
+        self.style
+    }
+
+    /// Open every later turn's system prompt with this style, or `None` to clear the pick.
+    pub fn choose_style(&mut self, style: Option<&'static bravebot_agent::styles::Style>) {
+        self.style = style;
     }
 
     /// Name the model the planner may consult from the next turn on, or `None` to drop the choice.
@@ -2150,6 +2206,17 @@ impl Session {
             } else {
                 t!(indicator_stopping_delegates, count = running).to_string()
             });
+        }
+
+        // A hook holds the turn open and nothing else on screen says so, so a slow one looks like
+        // a slow model (HOOK-8). Ahead of the phases for the reason a check is: the round's own
+        // word is the one thing here that is not what the session is waiting on. The moment is
+        // the driver's literal and the program is the person's own file, so no byte read out of
+        // anything untrusted is drawn.
+        if let Some((moment, program)) = &self.hook {
+            return Some(
+                t!(indicator_hook, moment = *moment, program = program.as_str()).to_string(),
+            );
         }
 
         // A check next, and ahead of every phase: it is a whole model call inside the tool call
@@ -2366,6 +2433,7 @@ impl Session {
         // A new conversation has sent nothing yet, so Up starts from nothing of its own.
         self.history.forget_session();
         self.transcript.clear();
+        self.last_request = None;
         self.turns = 0;
         self.turn_history.clear();
         self.prompt_at = None;
@@ -2388,6 +2456,7 @@ impl Session {
         self.todos.clear();
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.started = None;
@@ -2510,6 +2579,18 @@ impl Session {
     /// Record that the check is over.
     pub fn checked(&mut self) {
         self.checking = None;
+        self.hook = None;
+    }
+
+    /// Record that a hook is running. The tail is left alone, for the reason [`Session::checking`]
+    /// leaves it: a hook runs in the middle of a round.
+    pub fn hook_running(&mut self, moment: &'static str, program: String) {
+        self.hook = Some((moment, program));
+    }
+
+    /// Record that the hook is over.
+    pub fn hook_over(&mut self) {
+        self.hook = None;
     }
 
     /// Add what the model has written since the last frame to the reply taking shape.
@@ -5904,11 +5985,22 @@ impl Session {
         if self.shortcuts {
             return Offered::Shortcuts;
         }
-        // A line being composed while a turn runs is one Enter will queue; what is offered for it is
-        // machinery for finishing something about to be sent, which is the one thing a running turn
-        // refuses.
+        // A command typed while work runs is carried out or queued (CMD-8), so the words are
+        // offered to be found. Skills and files are not: the skills are not read while work runs.
         if self.status == Status::Working {
-            return Offered::Nothing;
+            let commands = if self.shell {
+                Vec::new()
+            } else {
+                crate::app::completions(&self.input)
+            };
+            return if commands.is_empty() {
+                Offered::Nothing
+            } else {
+                Offered::Slash {
+                    commands,
+                    skills: Vec::new(),
+                }
+            };
         }
         // A command line is neither a slash command nor a sentence with a file reference in it.
         // `/usr/bin/env` and an address with an `@` in it are ordinary arguments here, and
@@ -5924,9 +6016,9 @@ impl Session {
         if !commands.is_empty() || !skills.is_empty() {
             return Offered::Slash { commands, skills };
         }
-        match crate::entries::typed_reference(&self.input) {
+        match bravebot_mentions::typed_reference(&self.input) {
             Some(typed) => {
-                let entries = crate::entries::matching(&self.workspace, typed);
+                let entries = bravebot_mentions::matching(&self.workspace, &typed);
                 if entries.is_empty() {
                     Offered::Nothing
                 } else {
@@ -5969,7 +6061,7 @@ impl Session {
     }
 
     /// Which offered file is under the cursor, or `None` when no file is offered.
-    pub fn highlighted_entry(&self) -> Option<crate::entries::Entry> {
+    pub fn highlighted_entry(&self) -> Option<bravebot_mentions::Entry> {
         let Offered::Files(entries) = self.offered() else {
             return None;
         };
@@ -6012,24 +6104,16 @@ impl Session {
                     .zip(typed)
                     .is_some_and(|(skill, typed)| skill.name != typed)
             }
-            Offered::Files(_) => {
-                let Some(typed) = crate::entries::typed_reference(&self.input) else {
+            Offered::Files(entries) => {
+                let Some(typed) = bravebot_mentions::typed_reference(&self.input) else {
                     return false;
                 };
-                // A name the user finished typing is a finished sentence, whatever the list
-                // happens to be highlighting: `@test` names a file of its own while a `tests/`
-                // beside it sorts above. Walking the list with the arrows is a choice among the
-                // rows and still wins, which is why this asks the untouched cursor.
-                //
-                // Asked of the workspace rather than of `entries`, which is capped for display:
-                // forty directories sharing the prefix sort above the file and cut it from the
-                // list, and scanning the list would then complete a finished name away into a
-                // directory nobody chose.
-                if self.completion == 0 && crate::entries::names_a_file(&self.workspace, typed) {
-                    return false;
-                }
-                self.highlighted_entry()
-                    .is_some_and(|entry| typed != entry.path)
+                bravebot_mentions::enter_completes(
+                    &self.workspace,
+                    &typed,
+                    &entries,
+                    self.completion,
+                )
             }
         }
     }
@@ -6091,13 +6175,15 @@ impl Session {
                 // not the last `@` in the line. A file may have one in its name, and cutting
                 // there rebuilds the line around a path nobody chose: `@logo@2` plus the
                 // offered `logo@2x.png` becomes `@logo@logo@2x.png`.
-                let start = self.last_word_starts_at();
+                let start = bravebot_mentions::last_word_starts_at(&self.input);
                 if !self.input[start..].starts_with('@') {
                     return;
                 }
                 let kept = self.input[..start].to_string();
                 let trailing = if entry.is_directory { "" } else { " " };
-                self.put_in_the_box(format!("{kept}@{}{trailing}", entry.path));
+                // Escaped, so a name holding a space is still one word when the line is read back.
+                let path = bravebot_mentions::escape(&entry.path);
+                self.put_in_the_box(format!("{kept}@{path}{trailing}"));
             }
             Offered::Nothing | Offered::Shortcuts => return,
         }
@@ -6741,6 +6827,7 @@ impl Session {
         self.started = None;
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         // A prompt is English and a command line is not, so the line coming back must not land
@@ -7540,11 +7627,17 @@ impl Session {
             self.note(t!(init_already_there, file = crate::init_command::FILE));
             return None;
         }
+        self.init_prompt_pending = true;
         Some(self.begin_turn(
             crate::init_command::PROMPT.to_string(),
             (Vec::new(), Vec::new()),
             Vec::new(),
         ))
+    }
+
+    /// Whether the turn starting now sends `/init`'s prompt, which the driver wrote. Taken once.
+    pub fn take_init_prompt(&mut self) -> bool {
+        std::mem::take(&mut self.init_prompt_pending)
     }
 
     /// The definition the turn starting now was addressed to, taken so no later turn inherits it.
@@ -7569,6 +7662,7 @@ impl Session {
             self.model = Some(model.clone());
         }
         self.standing = Some(definition);
+        self.standing_by_setting = false;
     }
 
     /// Carry these words in the system prompt of every turn this session sends (CLI-19).
@@ -7583,6 +7677,16 @@ impl Session {
     /// The words the command line put in the system prompt of every turn this session sends.
     pub fn system_prompts(&self) -> &bravebot_agent::turn::SystemPrompts {
         &self.system_prompts
+    }
+
+    /// Say that the `agent` setting is what chose the definition this session works under.
+    pub fn standing_chosen_by_setting(&mut self) {
+        self.standing_by_setting = true;
+    }
+
+    /// Whether the `agent` setting, and not the command line or a record, chose the definition.
+    pub fn standing_is_by_setting(&self) -> bool {
+        self.standing_by_setting
     }
 
     /// The definition every turn of this session addresses, where it was started under one.
@@ -7686,7 +7790,10 @@ impl Session {
         }
         self.end_watches_for_another_kind();
         self.note(t!(goal_set, condition = &condition));
-        self.goal = Some(crate::goals::Running::begin(condition));
+        self.goal = Some(crate::goals::Running::begin(
+            condition,
+            self.tokens + self.progress.tokens,
+        ));
     }
 
     /// Take the goal off without saying anything, and say whether there was one.
@@ -7731,6 +7838,7 @@ impl Session {
 
     /// Take the goal off because it has been met, and say so.
     pub fn goal_met(&mut self, reason: String) {
+        let usage = self.goal_usage();
         if !self.drop_goal() {
             return;
         }
@@ -7738,6 +7846,29 @@ impl Session {
             self.note(t!(goal_met_unsaid));
         } else {
             self.note(t!(goal_met, reason = &reason));
+        }
+        self.note_usage(usage);
+    }
+
+    /// How long the goal has run and what the session has spent since it was armed, in words, or
+    /// `None` where there is no goal.
+    ///
+    /// A turn is charged to the session only when it ends, so what the turn in flight has spent so
+    /// far is added, or the figure would sit still until the turn is over.
+    fn goal_usage(&self) -> Option<String> {
+        let goal = self.goal.as_ref()?;
+        Some(t!(
+            goal_usage,
+            elapsed = crate::indicator::format_elapsed(goal.elapsed(Instant::now())),
+            tokens = crate::status::tokens(goal.spent(self.spent_tokens()))
+        ))
+    }
+
+    /// Say what a goal that has just ended cost. Taken before the goal is dropped, so it is passed
+    /// in.
+    fn note_usage(&mut self, usage: Option<String>) {
+        if let Some(usage) = usage {
+            self.note(usage);
         }
     }
 
@@ -7753,7 +7884,9 @@ impl Session {
         };
         let condition = goal.condition().to_string();
         let last = goal.last_reason().map(str::to_string);
+        let usage = self.goal_usage();
         self.note(t!(goal_active, condition = &condition));
+        self.note_usage(usage);
         match last {
             Some(reason) => self.note(t!(goal_last_check, reason = &reason)),
             None => self.note(t!(goal_never_checked)),
@@ -7769,8 +7902,10 @@ impl Session {
         let condition = goal.condition().to_string();
         if !goal.not_met(reason.clone()) {
             let rounds = goal.rounds();
+            let usage = self.goal_usage();
             self.goal = None;
             self.note(t!(goal_spent, rounds = rounds));
+            self.note_usage(usage);
             // The sentence `/goal` answers with, said here because there is no goal left to ask:
             // the round that spent the budget is the one whose reason a person wants, and this is
             // the only place it is ever reported.
@@ -7830,8 +7965,10 @@ impl Session {
                 None
             }
             Verdict::Impossible { reason } => {
+                let usage = self.goal_usage();
                 self.drop_goal();
                 self.note(t!(goal_impossible, reason = &reason));
+                self.note_usage(usage);
                 None
             }
             Verdict::Unreadable => {
@@ -8237,6 +8374,18 @@ impl Session {
         }
     }
 
+    /// Name each checkout in the working directory's `checkouts/` that no session record lists,
+    /// where nothing removes one (CHECKOUT-16). Another session may be using it.
+    pub fn report_unlisted_checkouts(&mut self, unlisted: &[(String, std::path::PathBuf)]) {
+        for (id, path) in unlisted {
+            self.note(t!(
+                checkouts_unlisted,
+                id = id.as_str(),
+                path = path.display().to_string()
+            ));
+        }
+    }
+
     /// Send the next tick, if one is due and the session is free to take it.
     ///
     /// Called on the way round the interface's own loop, so a tick waits for the turn in flight
@@ -8431,6 +8580,7 @@ impl Session {
         self.progress = Default::default();
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.started = Some(Instant::now());
@@ -8459,6 +8609,7 @@ impl Session {
         self.started = None;
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.streaming.clear();
@@ -8742,6 +8893,7 @@ impl Session {
         self.back_to_the_tail();
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.started = Some(Instant::now());
@@ -8773,6 +8925,7 @@ impl Session {
         self.started = None;
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.tokens += tokens;
@@ -8804,6 +8957,7 @@ impl Session {
         self.started = None;
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.tokens += tokens;
@@ -8847,6 +9001,21 @@ impl Session {
         self.transcript.extend(said);
     }
 
+    /// Tokens the turn in flight has spent so far, which are charged to the session when it ends.
+    pub fn running_tokens(&self) -> u64 {
+        if self.a_turn_is_running() {
+            self.progress.tokens
+        } else {
+            0
+        }
+    }
+
+    /// Tokens the session has spent, the figure `/cost` opens with: what earlier turns were charged
+    /// and what the turn in flight has spent so far.
+    pub fn spent_tokens(&self) -> u64 {
+        self.tokens + self.running_tokens()
+    }
+
     /// Put what each turn has spent in the transcript.
     ///
     /// What `/cost` answers, and the question the session total cannot: a total tells twenty even
@@ -8862,15 +9031,11 @@ impl Session {
         // A turn still running is charged when it ends, so what it has spent so far is added here:
         // asked mid-turn (CMD-8), the count of turns already includes it.
         let mut spend = self.spend.clone();
-        let running = if self.a_turn_is_running() {
-            self.progress.tokens
-        } else {
-            0
-        };
+        let running = self.running_tokens();
         if running > 0 {
             *spend.entry(self.turns).or_default() += running;
         }
-        let total = self.tokens + running;
+        let total = self.spent_tokens();
         let mut lines = vec![crate::status::Line::new(
             t!(status_this_session),
             if total == 0 && spend.is_empty() {
@@ -9295,7 +9460,46 @@ impl Session {
 
     /// Close it, leaving the view where it was left.
     pub fn close_scroller(&mut self) {
-        self.scroller = None;
+        if let Some(Scroller {
+            before: Some((scroll, laid)),
+            ..
+        }) = self.scroller.take()
+        {
+            self.scroll = scroll;
+            self.laid = laid;
+        }
+    }
+
+    /// Keep the request a turn is about to send, replacing the one before it.
+    pub fn set_last_request(&mut self, view: bravebot_agent::request_view::RequestView) {
+        self.last_request = Some(view);
+    }
+
+    /// Open the scroller on the last request a turn built (`/request`).
+    ///
+    /// Read from the value the turn handed over, so it shows what was sent and nothing is rebuilt
+    /// from the transcript. Before any turn has sent one there is nothing to open, which is said.
+    pub fn show_request(&mut self) {
+        let Some(view) = self.last_request.clone() else {
+            self.note(t!(request_none_yet));
+            return;
+        };
+        let before = (self.scroll, self.laid.clone());
+        // The first row, counted from the end of the layout the last frame drew; the next frame
+        // measures the request and holds this row.
+        self.scroll = self.furthest();
+        self.scroller = Some(Scroller {
+            request: Some(Box::new(view)),
+            before: Some(before),
+            ..Scroller::default()
+        });
+    }
+
+    /// Whether the scroller is showing a request rather than the transcript.
+    pub fn viewing_request(&self) -> bool {
+        self.scroller
+            .as_ref()
+            .is_some_and(|scroller| scroller.request.is_some())
     }
 
     pub fn scrolling(&self) -> bool {
@@ -9878,6 +10082,37 @@ mod tests {
                     .watched_delegate()
                     .map(|delegate| delegate.kind.as_str()),
                 Some("checker")
+            );
+        }
+
+        /// The session is the row above the first delegate, so moving down from it lands on the
+        /// first delegate and not on the second, and the highlight sits one row below the session.
+        #[test]
+        fn moving_down_from_the_session_in_the_list_reaches_the_first_delegate() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            session.watch();
+            session.watch_previous();
+            session.watch_previous();
+            assert!(session.listing_on_the_session());
+
+            session.watch_next();
+            assert!(
+                !session.listing_on_the_session(),
+                "moving down from the session stayed on the session"
+            );
+            assert_eq!(
+                session.list_highlight(),
+                1,
+                "moving down from the session did not land on the first delegate"
+            );
+            assert_eq!(
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
+                Some("reader"),
+                "moving down from the session skipped the first delegate"
             );
         }
 
@@ -11102,6 +11337,33 @@ mod tests {
             session.streaming(" and now the delegate is");
 
             assert_eq!(session.streaming, "the turn is thinking");
+        }
+
+        /// A delegate says a great deal on its way to an answer and none of it is the turn's.
+        /// Pushed into the transcript, it reads as the planner announcing something it never said.
+        #[test]
+        fn what_a_delegate_says_between_its_tool_calls_is_not_in_the_transcript() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.narrate("DELEGATE-SAID-THIS");
+
+            assert!(
+                !session
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.text.contains("DELEGATE-SAID-THIS")),
+                "a delegate's words between tool calls landed in the turn's transcript"
+            );
+
+            session.reporting_for(None);
+            session.narrate("THE-TURN-SAID-THIS");
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.text.contains("THE-TURN-SAID-THIS")),
+                "the turn's own words were dropped along with the delegate's"
+            );
         }
 
         /// The block where a delegate started is a glance at it rather than the whole of it. It
@@ -13591,6 +13853,102 @@ mod tests {
         );
     }
 
+    /// `/init`'s prompt is the driver's, said once for the turn that sends it and not for the next.
+    #[test]
+    fn the_init_prompt_is_the_drivers_for_one_turn_only() {
+        let root = crate::testutil::scratch_dir("init-prompt-pending");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut s = Session::new("none").in_workspace(&root);
+        assert!(!s.take_init_prompt());
+        assert!(s.start_init().is_some());
+        assert!(s.take_init_prompt());
+        assert!(!s.take_init_prompt());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn a_request() -> bravebot_agent::request_view::RequestView {
+        use bravebot_agent::request_view::{Provenance, RequestView, Span};
+        RequestView {
+            model: "m".to_string(),
+            spans: vec![
+                Span {
+                    role: "user",
+                    provenance: Provenance::Typed,
+                    text: "read it".to_string(),
+                },
+                Span {
+                    role: "tool",
+                    provenance: Provenance::Reference("ref:1".to_string()),
+                    text: "ref:1 stands for a file".to_string(),
+                },
+            ],
+            tools: vec!["read_file".to_string()],
+        }
+    }
+
+    /// Nothing built means nothing to open, and the person is told so rather than shown an empty
+    /// view that reads as a request with nothing in it.
+    #[test]
+    fn the_request_view_before_any_request_says_so_and_opens_nothing() {
+        let mut s = session();
+        s.show_request();
+        assert!(s.scroller().is_none());
+        assert!(!s.viewing_request());
+        assert!(
+            s.transcript
+                .iter()
+                .any(|entry| entry.text == t!(request_none_yet))
+        );
+    }
+
+    /// The view is of the latest request, and closing it puts the transcript back where it was.
+    #[test]
+    fn the_request_view_opens_on_the_last_request_and_closing_restores_the_transcript() {
+        let mut s = session();
+        s.note_layout(Laid {
+            width: 80,
+            height: 10,
+            rows: 100,
+            ..Laid::default()
+        });
+        s.scroll = 7;
+        let laid = s.laid.clone();
+        let mut older = a_request();
+        older.model = "older".to_string();
+        s.set_last_request(older);
+        s.set_last_request(a_request());
+
+        s.show_request();
+        assert!(s.viewing_request());
+        assert_eq!(
+            s.scroller()
+                .and_then(|scroller| scroller.request.as_deref()),
+            Some(&a_request()),
+            "the view is not of the latest request"
+        );
+
+        s.close_scroller();
+        assert!(s.scroller().is_none());
+        assert_eq!(s.scroll, 7, "the transcript was left somewhere else");
+        assert_eq!(s.laid, laid);
+    }
+
+    /// A cleared conversation has sent nothing, so `/request` has nothing of the old one to show.
+    #[test]
+    fn clearing_the_conversation_forgets_the_request_it_sent() {
+        let mut s = session();
+        s.set_last_request(a_request());
+
+        s.clear();
+        s.show_request();
+
+        assert!(
+            !s.viewing_request(),
+            "the cleared conversation's request opened"
+        );
+    }
+
     fn reported_checkouts(
         checkouts: &[bravebot_agent::workspace::SessionCheckout],
         pushed: impl Fn(&bravebot_agent::workspace::SessionCheckout) -> crate::checkouts_command::Pushed,
@@ -13602,6 +13960,42 @@ mod tests {
             .iter()
             .map(|entry| entry.text.clone())
             .collect()
+    }
+
+    /// CHECKOUT-16. Each checkout no record lists is named with its own path and the sentence that
+    /// another session may be using it, and none is named where there are none.
+    #[test]
+    fn a_checkout_no_record_lists_is_named_with_its_path() {
+        let mut s = session();
+        let before = s.transcript.len();
+        s.report_unlisted_checkouts(&[]);
+        assert_eq!(s.transcript.len(), before, "a note with nothing to name");
+
+        s.report_unlisted_checkouts(&[
+            ("c2".to_string(), "/state/checkouts/work/c2".into()),
+            ("c10".to_string(), "/state/checkouts/work/c10".into()),
+        ]);
+        let said: Vec<&str> = s.transcript[before..]
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert_eq!(
+            said,
+            [
+                t!(
+                    checkouts_unlisted,
+                    id = "c2",
+                    path = "/state/checkouts/work/c2"
+                )
+                .to_string(),
+                t!(
+                    checkouts_unlisted,
+                    id = "c10",
+                    path = "/state/checkouts/work/c10"
+                )
+                .to_string(),
+            ]
+        );
     }
 
     /// CHECKOUT-15. Each checkout is listed with what the record shows done in it, and with the
@@ -14337,10 +14731,10 @@ mod tests {
         s.start_goal("cargo test exits 0".to_string());
         let rounds = spend(&mut s, "the linker is still missing");
 
-        let ending = &s.transcript[s.transcript.len() - 2..];
+        let ending = &s.transcript[s.transcript.len() - 3..];
         assert_eq!(ending[0].text, t!(goal_spent, rounds = rounds));
         assert_eq!(
-            ending[1].text,
+            ending[2].text,
             t!(goal_last_check, reason = "the linker is still missing"),
             "the give-up said nothing about the round that spent the budget"
         );
@@ -14350,9 +14744,86 @@ mod tests {
         let rounds = spend(&mut s, "");
 
         assert_eq!(
-            s.transcript.last().expect("an entry").text,
+            s.transcript[s.transcript.len() - 2].text,
             t!(goal_spent, rounds = rounds),
             "a check that said nothing was quoted as having said it"
+        );
+    }
+
+    /// How long a goal ran and what it cost is said where it ends and where it is asked about, so
+    /// a person deciding whether it was converging has more than a round count. The spend is what
+    /// the session spent after the goal was set, so tokens from before it are not in the figure.
+    #[test]
+    fn a_goal_says_what_it_has_cost_since_it_was_set() {
+        let spent = |s: &Session| -> Vec<String> {
+            s.transcript
+                .iter()
+                .filter(|entry| entry.text.starts_with("it has run for"))
+                .map(|entry| entry.text.clone())
+                .collect()
+        };
+
+        let mut s = session();
+        s.tokens = 50_000;
+        s.start_goal("cargo test exits 0".to_string());
+        s.tokens = 62_400;
+        s.report_goal();
+        let reported = spent(&s);
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert!(reported[0].contains("12.4k tokens"), "{reported:?}");
+
+        for judged in [
+            Ok(bravebot_agent::goal::Verdict::Met {
+                reason: "it exits 0".to_string(),
+            }),
+            Ok(bravebot_agent::goal::Verdict::Impossible {
+                reason: "no such crate".to_string(),
+            }),
+        ] {
+            let mut s = session();
+            s.start_goal("cargo test exits 0".to_string());
+            s.tokens = 3_000;
+            s.goal_judged(judged.clone());
+            let ended = spent(&s);
+            assert_eq!(ended.len(), 1, "{judged:?} did not say the cost");
+            assert!(ended[0].contains("3.0k tokens"), "{ended:?}");
+        }
+
+        let mut s = session();
+        s.start_goal("cargo test exits 0".to_string());
+        s.tokens = 1_500;
+        spend(&mut s, "still nothing");
+        assert_eq!(spent(&s).len(), 1, "giving up did not say the cost");
+    }
+
+    /// The moment a person asks what a goal has cost is often while its turn is running, and a turn
+    /// is charged to the session only when it ends. The figure has to include what that turn has
+    /// spent so far, or it sits still until the turn is over.
+    #[test]
+    fn the_goal_report_counts_what_the_turn_in_flight_has_spent() {
+        let mut s = session();
+        s.complete("before the goal", Vec::new(), 1_000);
+        s.start_goal("cargo test exits 0".to_string());
+        s.complete("under the goal", Vec::new(), 3_500);
+        s.begin_turn("carry on".to_string(), (Vec::new(), Vec::new()), Vec::new());
+        s.progressed(bravebot_agent::Spent {
+            tokens: 700,
+            ..Default::default()
+        });
+
+        s.report_goal();
+
+        let usage = s
+            .transcript
+            .iter()
+            .rev()
+            .find(|entry| entry.text.starts_with("it has run for"))
+            .expect("the report said what the goal had cost")
+            .text
+            .clone();
+        assert!(
+            usage.contains(&crate::status::tokens(4_200)),
+            "the report left out what the running turn had spent: {usage:?}"
         );
     }
 
@@ -16751,6 +17222,21 @@ mod tests {
             s.set_phase(Phase::Planning);
             s.checking(bravebot_core::vetting::Checking::Lines(3));
             assert_eq!(s.indicator().expect("working").verb, "Checking 3 lines");
+        }
+
+        /// HOOK-8: a hook holding the turn names the program and the moment ahead of the phase,
+        /// and gives the phase back when it is over.
+        #[test]
+        fn a_running_hook_names_the_indicator_and_gives_it_back() {
+            let mut s = working();
+            s.set_phase(Phase::Planning);
+            s.hook_running("tool-finished", "cargo".to_string());
+            assert_eq!(
+                s.indicator().expect("working").verb,
+                "Running hook: cargo (tool-finished)"
+            );
+            s.hook_over();
+            assert_eq!(s.indicator().expect("working").verb, "Planning");
         }
 
         /// CHECK-14: a picture has no lines to count, and "Checking 1 line" over a photograph is

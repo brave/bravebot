@@ -20,6 +20,8 @@ export type Phase = 'planning' | 'thinking' | 'compacting' | 'reconnecting'
 export type Waiting = Phase | 'starting-servers'
 
 /** What a running confined check was given: lines of text, or one picture or PDF, which has none. */
+/** A hook holding the turn open: the moment's word and the program as the person's file spells it. */
+export type Hook = { moment: string; program: string }
 export type Checking = { lines: number } | { file: 'picture' | 'pdf' }
 export type Reach = 'not_the_planner' | 'no_model'
 export type Landing = 'context' | 'quarantined' | 'reserved'
@@ -124,7 +126,17 @@ export interface SettingsRules {
   proposed: { rule: string; file: string }[]
   /** A directory a settings file asked to have opened. This app opens none of them. */
   directories: string[]
+  /**
+   * Every entry of the four `sandbox.filesystem` lists a confined program is held to, with the
+   * file that wrote it (null for the command line) and, where it is not in force, the agent's
+   * sentence about why. Absent from an older bridge.
+   */
+  filesystem?: { key: FilesystemKey; path: string; file: string | null; pinned: boolean; refused: string | null }[]
+  /** `allowRead` and `allowWrite` a project's file wrote, which are not in force. Absent from an older bridge. */
+  filesystemIgnored?: { key: FilesystemKey; file: string }[]
 }
+
+export type FilesystemKey = 'allowRead' | 'denyRead' | 'allowWrite' | 'denyWrite'
 
 export interface SessionSummary {
   id: string
@@ -782,6 +794,8 @@ export interface EventMap {
   'tool.finished': Activity
   'check.started': Checking
   'check.finished': Record<string, never>
+  'hook.started': Hook
+  'hook.finished': Record<string, never>
   landed: { landing: Landing }
   quarantined: Shown
   todos: { rows: TodoRow[] }

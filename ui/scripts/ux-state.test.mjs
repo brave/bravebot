@@ -221,8 +221,9 @@ test('attachment grants are per session and revalidate changed files at send', a
     writeFileSync(selected, Buffer.from([0, 1, 2]))
     assert.throws(() => files.attachmentPaths('a', [file.id]))
     await assert.rejects(files.chooseAttachments({}, 'a'))
+    // No size cap, as the terminal has none for a named file.
     writeFileSync(selected, 'x'.repeat(300000))
-    assert.throws(() => files.attachmentPaths('a', [file.id]))
+    assert.deepEqual(files.attachmentPaths('a', [file.id]), ['notes.txt'])
     writeFileSync(selected, 'Text again')
     files.forgetRoot('a')
     assert.throws(() => files.attachmentPaths('a', [file.id]))
@@ -366,12 +367,23 @@ function liveSession() {
   const { apply } = load('src/renderer/App.tsx')
   const { workingWord } = load('src/renderer/components/Transcript.tsx')
   const session = {
-    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, composing: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
+    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
   }
   session.send = (event, data) => apply({ event, data }, (update) => { session.live = update(session.live) }, () => {}, () => {})
-  session.word = () => workingWord(session.live.phase, session.live.checking, session.live.composing)
+  session.word = () => workingWord(session.live.phase, session.live.checking, session.live.composing, session.live.hook)
   return session
 }
+
+// HOOK-8: a hook holds the turn open, so the word names it for exactly as long as it runs, and
+// the phase underneath comes back when the hook is over.
+test('a running hook names its program, and its end gives the phase back', () => {
+  const session = liveSession()
+  session.send('phase', { phase: 'thinking' })
+  session.send('hook.started', { moment: 'tool-finished', program: 'cargo' })
+  assert.equal(session.word(), 'Running hook: cargo (tool-finished)')
+  session.send('hook.finished', {})
+  assert.equal(session.word(), 'Thinking')
+})
 
 // A long call can take minutes to write, and the round's phase is the same for all of it, so the
 // call's name is the only thing that says what the wait is for. It goes when anything else takes over.

@@ -334,6 +334,45 @@ gate and reads each import through it, so nothing untrusted decides what is read
 `verified-by: bravebot_agent::preamble::an_untrusted_project_loads_no_import`
 `verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_imports_does_not_reach_the_system_prompt`
 
+<a id="INSTR-12"></a>
+### INSTR-12: a built-in output style stands where `--system-prompt` stands, and yields to it
+
+`/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`),
+`/style off` clears the pick and `/style` alone says which is in force and lists the names. The
+pick lasts for the session and is not recorded, so a resumed session starts with none. A name is
+compared whole against the built-in list: nothing a person types after `/style` reaches the prompt,
+and no style is read from a file.
+
+A style's words stand in for the opening of the system prompt, as `--system-prompt` does
+([CLI-19](cli.md#CLI-19), [INSTR-10](#INSTR-10)), and for nothing after it. Where both are present
+the words of `--system-prompt` are used and the style's are not, because a person who typed the flag
+for this run has given the more specific instruction. Every turn of the session carries the style
+in force when it begins, `/loop` ticks and `/goal` rounds included. A delegate is not given one,
+and nothing else reads it: not the aside, the summariser, the goal judge, the classifier that vets
+a slot, a processor or the planner of a manifest run. A pick made under `--system-prompt` is held and
+the person is told it does not show.
+
+A style grants nothing. A write is still put to the person where it would have been, plan mode still
+refuses it, and the guidance on reading a tool's output is not in the opening, so no style can
+remove it. `proactive` says so in its own words and does not change the mode.
+
+**Why.** Wording for tone and format is a thing a person wants to switch between tasks, and
+`--system-prompt` can only be given when the program starts. Fixing the set at build time keeps the
+rule INSTR-10 relies on: the words in the opening are written by this program or typed by the person,
+and nothing read from a project reaches that place.
+
+**Known costs.** Only the terminal interface has `/style`. Styles are not read from `~/.bravebot/styles` or from a project, there is no
+`style` setting, and the choice is not written to the trace. Each needs the trust map or the
+settings layers to say who may name a style, and none is built.
+
+`verified-by: bravebot_agent::turn::a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt`
+`verified-by: bravebot_agent::styles::a_style_is_found_by_its_whole_name_only`
+`verified-by: bravebot_agent::styles::no_style_takes_the_quarantine_guidance_with_it`
+`verified-by: bravebot_tui::app::the_style_command_takes_a_name_or_nothing`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_style_picked_under_a_replaced_opening_says_it_does_not_show`
+`verified-by: bravebot_tui::app::a_style_named_to_the_command_reaches_the_next_turn_and_only_a_known_name_does`
+
 ## Known costs
 
 Accepted deliberately. Do not "fix" one without changing this spec first.

@@ -6,7 +6,7 @@ Status: proposal with Q2 resolved for the first Rust block. This is the single r
 
 ## What can proceed
 
-Stages 1–2a can continue from the first Rust block; Q2 records its placement. U1 blocks real-session listener control; U2 and U3 block authenticated network exposure. The restricted stage-3d synthetic experiment can proceed under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). Device UI, real credentials, distribution, and dependency additions have the separate checkpoints below.
+Stages 1–2a are complete; Q2 records the placement of the view. U1 blocks real-session listener control; U2 and U3 block authenticated network exposure. The restricted stage-3d synthetic experiment can proceed under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). Device UI, real credentials, distribution, and dependency additions have the separate checkpoints below.
 
 ## Unresolved security decisions
 
@@ -20,6 +20,7 @@ These are not accepted risks or implementation details that can be skipped. The 
 - **Current limit:** synthetic data and controlled model/tool stubs only until the boundary is demonstrated. General same-user malware resistance is not claimed.
 - **Candidates to assess:** OS-enforced separation between tool execution and the control service; or a private connection capability that tools cannot inherit or obtain, such as an inherited descriptor with no public listener. Neither is a proven solution here. Check the cost of platform confinement and how authorized clients reconnect after the original client exits. Process ancestry alone is not a boundary because a child can detach.
 - **Completion evidence:** a short design note and an adversarial test with an approved unconfined child, including a child that detaches before attempting to connect and answer. A passing peer-credential test does not establish this boundary. See [local control boundary](architecture.md#local-control-boundary).
+- **Investigation so far (2026-10-07, macOS only):** the stdio client's control channel is an inherited anonymous descriptor with no name. Node created it as a socketpair (`lsof` showed `unix` for descriptors 0–2 of `bravebot-rpc`). A real `run` approved through the client, with the planner a test stub, ran `lsof -p <bravebot-rpc pid>` under the macOS sandbox. It listed those descriptors by number but gave the child no path or address to connect to, and `ls /dev/fd` in the same sandbox was refused. A child can therefore see the channel and has no way found to write to it on this host. Not tested: Linux, where `/proc/<pid>/fd` can reopen a pipe for the same user (a socketpair it cannot); a launcher that uses pipes; an unconfined child; a child that detaches first; same-user debugger attach, which is outside the prototype claim. A persistent host that clients reconnect to needs a named endpoint, which the inherited-descriptor candidate does not provide. **Real-session listener control stays blocked.** Stage 3b may use stdio-like inherited descriptors for synthetic experiments only. The adversarial test above is still to be written.
 
 ### U2. Pairing and transport identity
 
@@ -61,9 +62,11 @@ These are not accepted risks or implementation details that can be skipped. The 
   Existing CLI/TUI marking helpers inspect text and produce terminal output; importing them into
   bridge dispatch would violate its boundary. Extract a narrow allowed presentation module or
   crate when the first rendering caller needs shared transforms, with its layering entry and tests.
-- **Remaining:** TypeScript capability-refusal and binding fixtures, native rendering and marking.
-  See [implemented scope](client-contract.md#implemented-rust-block). This decision completes the
-  placement choice for this block, not stages 1–2a or device presentation.
+- **Remaining:** native rendering and marking. See [implemented scope](client-contract.md#implemented-typescript-client).
+  The TypeScript client library carries payloads as received and reads none of them. Its terminal
+  program escapes control, zero-width and bidirectional characters locally in a diagnostic dump and renders
+  nothing, so neither needed a presentation module. This decision completes the placement choice for the stdio client, not
+  device presentation.
 
 ### Q3. How are embedded API keys set up, stored, and revoked after device loss?
 

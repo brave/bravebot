@@ -109,6 +109,8 @@ pub struct Facts<'a> {
     pub model: Option<&'a str>,
     /// The definition every turn is addressed to, where `--agent` named one (CLI-17).
     pub agent: Option<&'a crate::state::Addressed>,
+    /// Whether the `agent` setting chose it (ADDRESS-13).
+    pub agent_by_setting: bool,
     /// How hard the model is asked to think, or `None` where nothing is asked and the service
     /// applies its own default.
     pub effort: Option<bravebot_aichat::protocol::Effort>,
@@ -149,6 +151,9 @@ pub struct Facts<'a> {
     pub auto_vetting: bool,
     pub turns: usize,
     pub tokens: u64,
+    /// What the turn in flight has spent so far, which `tokens` does not hold until the turn ends.
+    /// Added to the goal's spend, since `/status` is answered while a turn runs.
+    pub tokens_in_flight: u64,
     /// Where the session's wall clock went, every turn added together.
     ///
     /// Beside the token count because it is the other half of what a session cost. A person
@@ -241,6 +246,86 @@ pub fn named_mode(
 }
 
 /// Compose the report.
+/// The line for the network the programs `run` starts have, where it is closed.
+fn network_line(
+    settled: Option<&bravebot_config::RunNetwork>,
+    mode: bravebot_sandbox::SandboxMode,
+) -> Option<Line> {
+    // Not under `off`: nothing confines a program then, so a closed network would be a claim about
+    // a boundary that is not there. The confinement line says the programs are unconfined.
+    let settled = settled.filter(|settled| {
+        settled.network.is_closed() && mode != bravebot_sandbox::SandboxMode::Off
+    })?;
+    Some(
+        Line::new(t!(status_network), t!(status_network_closed))
+            .with_note(run_network_source(&settled.decided)),
+    )
+}
+
+/// The line for the person's own filesystem lists, where any has an entry: how many each holds and
+/// the files that wrote them, never an entry, since a path is for `doctor` and a glob's matches are
+/// the machine's.
+fn filesystem_line(settled: Option<&bravebot_config::Filesystem>) -> Option<Line> {
+    let lists = &settled.filter(|settled| !settled.lists.is_empty())?.lists;
+    let mut sources: Vec<String> = Vec::new();
+    for list in [
+        &lists.allow_read,
+        &lists.deny_read,
+        &lists.allow_write,
+        &lists.deny_write,
+    ] {
+        for entry in list {
+            let source = match &entry.by {
+                Some(path) => path.display().to_string(),
+                None => t!(status_sandbox_filesystem_flags).to_string(),
+            };
+            if !sources.contains(&source) {
+                sources.push(source);
+            }
+        }
+    }
+    Some(
+        Line::new(
+            t!(status_sandbox_filesystem),
+            t!(
+                status_sandbox_filesystem_counts,
+                allow_read = lists.allow_read.len(),
+                deny_read = lists.deny_read.len(),
+                allow_write = lists.allow_write.len(),
+                deny_write = lists.deny_write.len()
+            ),
+        )
+        .with_note(t!(
+            status_sandbox_filesystem_files,
+            files = sources.join(", ")
+        )),
+    )
+}
+
+/// Why an entry of one of the filesystem lists is not in force, in the words `doctor` uses.
+pub fn filesystem_reason(reason: bravebot_sandbox::rules::Reason) -> &'static str {
+    bravebot_agent::permissions::filesystem_reason(reason)
+}
+
+/// Who closed the network for the programs `run` starts, in the words `/status` and `doctor` share.
+pub fn run_network_source(decided: &bravebot_config::Decided) -> String {
+    use bravebot_config::Decided;
+    match decided {
+        Decided::Default => t!(status_network_by_default).to_string(),
+        Decided::Flag => t!(status_network_by_flag).to_string(),
+        Decided::Settings(Some(path)) => t!(
+            status_network_by_settings,
+            path = path.display().to_string()
+        )
+        .to_string(),
+        Decided::Settings(None) => t!(status_network_by_a_setting).to_string(),
+        Decided::Managed(Some(path)) => {
+            t!(status_network_pinned, path = path.display().to_string()).to_string()
+        }
+        Decided::Managed(None) => t!(status_network_pinned_by_policy).to_string(),
+    }
+}
+
 pub fn report(facts: &Facts<'_>) -> Report {
     let mut lines = Vec::new();
 
@@ -324,7 +409,11 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // Nothing else on the screen shows that the session is not the planner's, since the input box
     // is unchanged.
     if let Some(agent) = facts.agent {
-        lines.push(Line::new(t!(status_agent), &agent.name).with_note(t!(status_agent_every_turn)));
+        let note = match facts.agent_by_setting {
+            true => t!(status_agent_by_setting),
+            false => t!(status_agent_every_turn),
+        };
+        lines.push(Line::new(t!(status_agent), &agent.name).with_note(note));
     }
 
     // What actually answered, where that is not what was asked for. The endpoint substitutes a
@@ -395,6 +484,19 @@ pub fn report(facts: &Facts<'_>) -> Report {
         ),
     );
 
+    // Only where it is closed, for the reason the mode and the vetting lines are: an open network is
+    // what every session had, and a line saying so on each would be skimmed past. The note says who
+    // closed it, because the way to open it again depends on that.
+    lines.extend(network_line(
+        bravebot_config::settled_run_network(),
+        bravebot_config::sandbox::in_force().mode,
+    ));
+    // Beside it and on the same terms: nothing for a session that wrote no list, which is the
+    // session this screen has always described.
+    lines.extend(filesystem_line(
+        bravebot_config::settled_sandbox_filesystem(),
+    ));
+
     // Named rather than counted, since the question is which of them this session can reach, and
     // said where there are none, since a checkout that asked for one is where somebody looks. The
     // note is how each one's tools stand, since a started server whose list nobody has read yet
@@ -455,6 +557,12 @@ pub fn report(facts: &Facts<'_>) -> Report {
             0 => t!(goal_never_checked).to_string(),
             rounds => t!(status_goal_rounds, rounds = rounds, left = goal.left()),
         };
+        let note = t!(
+            status_goal_usage,
+            note = note,
+            elapsed = crate::indicator::format_elapsed(goal.elapsed(std::time::Instant::now())),
+            tokens = tokens(goal.spent(facts.tokens + facts.tokens_in_flight))
+        );
         lines.push(Line::new(t!(status_goal), goal.condition()).with_note(note));
     }
 
@@ -851,6 +959,7 @@ mod tests {
             checkouts: &[],
             model: None,
             agent: None,
+            agent_by_setting: false,
             effort: None,
             model_reads_effort: true,
             // Nothing observed, which is what a session looks like before its first turn. Tests
@@ -869,6 +978,7 @@ mod tests {
             auto_vetting: false,
             turns: 4,
             tokens: 12_400,
+            tokens_in_flight: 0,
             // Nothing measured, which is what a session looks like before its first turn. Tests
             // about the time report set this themselves.
             timing: bravebot_agent::timing::Timing::default(),
@@ -1106,7 +1216,7 @@ mod tests {
     fn the_report_says_what_the_session_is_working_towards_and_how_many_rounds_are_left() {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string());
+        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
         goal.not_met("nothing above runs the tests".to_string());
 
         let mut facts = facts(&config, &trust);
@@ -1128,6 +1238,46 @@ mod tests {
             "the report did not say how many rounds had gone: {}",
             line.note
         );
+    }
+
+    /// A person deciding whether a goal is converging wants the time and the spend as much as the
+    /// round count, and the spend is counted from when the goal was armed.
+    #[test]
+    fn the_report_says_how_long_a_goal_has_run_and_what_it_has_spent() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut facts = facts(&config, &trust);
+        // The session had already spent part of its total before the goal was set.
+        let goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 10_000);
+        facts.goal = Some(&goal);
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_goal))
+            .expect("the goal is on the report");
+        assert!(line.note.ends_with(" · 2.4k tokens"), "{:?}", line.note);
+    }
+
+    /// `/status` is answered at once during a turn, and a turn is charged to the session only when
+    /// it ends, so the goal's spend adds what the running turn has spent.
+    #[test]
+    fn the_goal_spend_includes_the_turn_in_flight() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut facts = facts(&config, &trust);
+        let goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 10_000);
+        facts.goal = Some(&goal);
+        facts.tokens_in_flight = 500;
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_goal))
+            .expect("the goal is on the report");
+        assert!(line.note.ends_with(" · 2.9k tokens"), "{:?}", line.note);
     }
 
     /// CLI-17. The note saying a session works under a definition scrolls away, and the input box
@@ -1176,6 +1326,17 @@ mod tests {
             ))
         );
 
+        facts.agent_by_setting = true;
+        assert_eq!(
+            agent_line(&report(&facts)),
+            Some((
+                "rule-reviewer".to_string(),
+                t!(status_agent_by_setting).to_string()
+            )),
+            "a definition the setting chose was said to be named with --agent"
+        );
+        facts.agent_by_setting = false;
+
         facts.model = Some("the-definitions-model");
         facts.agent = Some(&naming_a_model);
         assert_eq!(
@@ -1194,7 +1355,7 @@ mod tests {
     fn the_report_says_a_goal_is_paused() {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string());
+        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
         goal.not_met("nothing above runs the tests".to_string());
         goal.pause();
 
@@ -1212,7 +1373,11 @@ mod tests {
             "{:?}",
             line.value
         );
-        assert_eq!(line.note, t!(status_goal_paused));
+        assert!(
+            line.note.starts_with(t!(status_goal_paused)),
+            "{:?}",
+            line.note
+        );
     }
 
     #[test]
@@ -1439,7 +1604,9 @@ mod tests {
                             program: "make".to_string(),
                             resolved: std::path::PathBuf::from("/usr/bin/make"),
                             started_as: std::path::PathBuf::from("/usr/bin/make"),
-                            args: vec![format!("check{nth}")],
+                            args: vec![bravebot_core::remembered::RememberedArg::Literal(format!(
+                                "check{nth}"
+                            ))],
                             environment: Vec::new(),
                             routes: Vec::new(),
                         },
@@ -1824,6 +1991,82 @@ mod tests {
                 "the opening screen says something the configuration does not: {opening}"
             );
         }
+    }
+
+    /// A closed network is on the report with who closed it, an open one and a session that never
+    /// settled one are not, and a pin says it cannot be changed from a flag.
+    #[test]
+    fn a_closed_network_is_reported_with_who_closed_it_and_an_open_one_is_not() {
+        use bravebot_config::{Decided, RunNetwork};
+        use bravebot_sandbox::SandboxMode::{self, Standard};
+        use bravebot_sandbox::network::Network;
+        let settled = |network, decided| RunNetwork { network, decided };
+
+        assert!(network_line(None, Standard).is_none());
+        assert!(network_line(Some(&settled(Network::Open, Decided::Flag)), Standard).is_none());
+        let flag =
+            network_line(Some(&settled(Network::Closed, Decided::Flag)), Standard).expect("a line");
+        assert!(
+            network_line(
+                Some(&settled(Network::Closed, Decided::Flag)),
+                SandboxMode::Off
+            )
+            .is_none(),
+            "a closed network was claimed for programs nothing confines"
+        );
+        assert_eq!(flag.label.trim(), t!(status_network));
+        assert!(flag.note.contains("--run-network"));
+        let pinned = network_line(
+            Some(&settled(
+                Network::Closed,
+                Decided::Managed(Some("/etc/bravebot/managed.json".into())),
+            )),
+            Standard,
+        )
+        .expect("a line");
+        let note = pinned.note.as_str();
+        assert!(
+            note.contains("/etc/bravebot/managed.json") && note.contains("pinned"),
+            "{note}"
+        );
+    }
+
+    /// The lists are on the report with how many entries each holds and the files that wrote them,
+    /// never an entry, and a session with none says nothing.
+    #[test]
+    fn filesystem_rules_are_reported_by_count_and_file_and_never_by_path() {
+        use bravebot_sandbox::rules::{Entry, Lists};
+        let entry = |path: &str, by: Option<&str>| Entry {
+            path: path.into(),
+            by: by.map(Into::into),
+            pinned: false,
+        };
+        let settled = |lists| bravebot_config::Filesystem {
+            lists,
+            ..Default::default()
+        };
+
+        assert!(filesystem_line(None).is_none());
+        assert!(filesystem_line(Some(&settled(Lists::default()))).is_none());
+        let line = filesystem_line(Some(&settled(Lists {
+            deny_read: vec![
+                entry("~/very-secret", Some("/home/a/.bravebot/settings.json")),
+                entry("~/other", None),
+            ],
+            deny_write: vec![entry(".env", Some("/home/a/.bravebot/settings.json"))],
+            ..Lists::default()
+        })))
+        .expect("a line");
+
+        assert_eq!(line.label.trim(), t!(status_sandbox_filesystem));
+        assert!(
+            line.value.contains("2 denyRead") && line.value.contains("1 denyWrite"),
+            "{}",
+            line.value
+        );
+        assert!(!line.value.contains("very-secret") && !line.note.contains("very-secret"));
+        assert!(line.note.contains("/home/a/.bravebot/settings.json"));
+        assert!(line.note.contains(t!(status_sandbox_filesystem_flags)));
     }
 
     /// Before the first turn nothing has been observed, so the panel says premium is available

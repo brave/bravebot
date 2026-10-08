@@ -251,10 +251,12 @@ mod tests {
         before.messages.push(Stored {
             message: Message::user(format!("{TOOL_RESULT_PREFIX}read_file: contents")),
             composed: Some(Composed::ToolResult),
+            source: None,
         });
         before.messages.push(Stored {
             message: Message::user(format!("{RESUMED_PREFIX} references are dead")),
             composed: Some(Composed::Resumed),
+            source: None,
         });
         before
             .messages
@@ -299,6 +301,7 @@ mod tests {
             composed: Some(Composed::Attached {
                 path: "readme.md".into(),
             }),
+            source: None,
         });
         before.messages.push(Stored::plain(Message::user("second")));
         let said = drawn(&before);
@@ -322,6 +325,7 @@ mod tests {
             composed: Some(Composed::Attached {
                 path: "readme.md".into(),
             }),
+            source: None,
         });
         before
             .messages
@@ -342,6 +346,7 @@ mod tests {
         before.messages.push(Stored {
             message: Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")),
             composed: Some(Composed::Summary),
+            source: None,
         });
         before.messages.push(Stored::plain(Message::user("third")));
         before.archive = plain(vec![
@@ -375,6 +380,7 @@ mod tests {
                     Message::assistant(*words)
                 },
                 composed: Some(Composed::Imported),
+                source: None,
             })
             .collect();
         before.messages.push(Stored::plain(Message::user("third")));
@@ -399,6 +405,7 @@ mod tests {
         before.messages.push(Stored {
             message: Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")),
             composed: Some(Composed::Summary),
+            source: None,
         });
         before.messages.extend(plain(vec![
             Message::user("third"),

@@ -21,6 +21,7 @@ Usage:
   bravebot -p "<task>" --continue        Send a one-shot task as the next turn of the most recent session
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
+  bravebot doctor --sandbox-check              Run everyday workflows under the sandbox and report which work
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
   bravebot auth logout <way>             Forget an imported Leo Premium subscription or a stored gateway key
   bravebot auth status [way]             Say whether a sign-in is usable, exiting 0 only if it is
@@ -28,6 +29,7 @@ Usage:
   bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
   bravebot completion <bash|zsh|fish>    Print a shell completion script
+  bravebot shell-init <bash|zsh|fish>    Print the shell hook that gives @bravebot the commands you ran
 ```
 
 ## Commands
@@ -45,6 +47,7 @@ Usage:
 | `bravebot -p "<task>" --continue` | the same, for the most recent session in this directory |
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |
+| `bravebot doctor --sandbox-check` | run `git`, `cargo`, `npm` and the other everyday programs under the sandbox and report which work |
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
 | `bravebot auth logout leo` | forget an imported Leo Premium subscription |
 | `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
@@ -52,8 +55,10 @@ Usage:
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot sessions import claude-code` | copy Claude Code's sessions for this directory in as words to read ([Sessions](../using/sessions.md#importing-sessions-from-claude-code)) |
+| `bravebot sessions search [workspace:<dir>] [since:<n>h\|d\|w] <text>` | print the ids and titles of past sessions that said it ([Sessions](../using/sessions.md#picking-one-back-up)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
+| `bravebot shell-init <shell>` | print a shell hook that gives `@bravebot` the commands you ran ([below](#shell-init)) |
 | `bravebot --version`, `-V` | print the build |
 | `bravebot --help`, `-h` | print this |
 
@@ -72,6 +77,9 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--advisor <name>` | a model the planner may put a question to, through the `advisor` tool ([below](#--advisor-name)) |
 | `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
+| `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../customize/configuration.md#runnetwork)) |
+| `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
+| `--log-level <error\|info\|debug>` | how much of a failure's shape goes to the [diagnostic log](#--log-level-errorinfodebug) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
 | `--system-prompt <prompt>` | replace the opening of the system prompt for this run; the rest of it stays ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--append-system-prompt <prompt>` | add your own words to the system prompt for this run, after the project's `AGENTS.md` ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
@@ -269,6 +277,9 @@ without it, says which definition is gone and that the narrowing is gone with it
 recording the name. A recorded definition whose model needs a sign-in is refused rather than
 replaced by the planner.
 
+To start every session under one definition without typing the flag, set [`agent`](../customize/configuration.md#agent)
+in your settings. `--agent` outranks it, and so does the name a resumed session's record carries.
+
 A model the definition names is the one every turn uses. In a session, `/status` shows it as the
 definition's, and `/model` is refused. On a one-shot run, `--model` outranks the definition's model,
 and the run says so on stderr.
@@ -306,7 +317,7 @@ standing is better piped in, where it is quarantined.
 A flag with no words after it, a blank one, or one whose words open with `-` and hold no space is
 refused with status 2. A sentence opening with `-` is words. If a flag is given twice, the last is
 used. Both are refused with `--mode manifest`, and with `doctor`, `auth`, `mcp`,
-`import-leo-creds`, `import-providers` and `completion`. There is no settings key for them: words a checkout
+`import-leo-creds`, `import-providers`, `completion` and `shell-init`. There is no settings key for them: words a checkout
 always wants belong in its `AGENTS.md`.
 
 ## `--json`
@@ -417,6 +428,20 @@ takes the next one as its answer. Only the affirmative approves, so the line has
 word for an effect to follow.
 :::
 
+## `--log-level <error|info|debug>`
+
+Brave Bot keeps a diagnostic log you can attach to a bug report. It records the shape of a failure:
+the host a request went to, the status it came back with, how many attempts were made, and whether
+a language server or an MCP server started. It never records a prompt, a reply, a file's contents,
+a header, a credential or the text of an error.
+
+Each run that has something to write makes its own file in `logs/` in the [state
+directory](#doctor), readable by you alone, and the ten most recent are kept. At the default level,
+`error`, a run that fails nowhere leaves no file. `info` adds the steps taken, such as a retry or a
+server starting, and `debug` adds the detail between them. `doctor` prints the directory.
+
+An [`--incognito`](../using/sessions.md) session writes no log.
+
 ## `--vet`
 
 ```sh
@@ -466,10 +491,22 @@ Answers "what will this actually use", and changes nothing. It reports:
 - which names a machine-level file pinned, and where that file is;
 - how to configure a model service where nothing configured will serve a turn;
 - the model in force, and whether it was chosen or defaulted;
-- where the state directory is, or that there is none;
+- where the state directory is, or that there is none, and the diagnostic logs in it;
 - what a TLS handshake is validated against, and what a request is routed through;
 - the confinement available on this platform;
 - the state of any imported subscription.
+
+```sh
+bravebot doctor --sandbox-check
+```
+
+Runs everyday workflows under the sandbox the way a person's shell command would: `git` init, commit
+and branch, a script, `make`, `cargo` build and test, `npm`, Python, Go, `gh` offline and an editor.
+Each runs on a throwaway account that holds a credential of each kind. It also runs the rows that must stay
+refused, a read of an SSH key or AWS credentials and a write beside or outside the session. A workflow that works
+without the sandbox and fails with it is reported with its stage, its exit code, a fix and a log path. A
+program that is not installed is reported as skipped, by name, and does not fail the report. It exits
+non-zero when a workflow fails or a refused row gets through. It takes no further argument.
 
 **No value from a settings file is ever printed.** Where a credential decides whether a backend
 works, what is reported is that one was found, because a settings file holds credentials on some
@@ -564,8 +601,8 @@ each. It takes no arguments, needs a terminal to ask on, and refuses in an incog
 ## `mcp`
 
 ```sh
-bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--stdio] -- <program> [args...]
-bravebot mcp add <alias> [-s <scope>] --http <url>
+bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--stdio] -- <program> [args...]
+bravebot mcp add <alias> [-s <scope>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
 bravebot mcp approve <alias>
@@ -615,6 +652,53 @@ bravebot completion fish > ~/.config/fish/completions/bravebot.fish
 Then type `bravebot ` and press Tab, or `bravebot --` and Tab. The command takes exactly one shell
 name and exits with status 2 for anything else.
 
+## `shell-init`
+
+```sh
+bravebot shell-init <bash|zsh|fish>
+```
+
+Prints a hook for your shell. It keeps the command lines you run in each terminal and defines
+`@bravebot`, which asks one question with the lines you ran since the last question.
+
+```sh
+# bash: add to ~/.bashrc
+eval "$(bravebot shell-init bash)"
+
+# zsh: add to ~/.zshrc
+eval "$(bravebot shell-init zsh)"
+
+# fish: add to ~/.config/fish/config.fish
+bravebot shell-init fish | source
+```
+
+Then, in that terminal:
+
+```sh
+cargo test
+@bravebot "why did that fail?"
+```
+
+`@bravebot "question"` runs `bravebot -p "question"` with up to the last 200 recorded lines (at most
+64 KiB) as piped input, so they are quarantined like any other piped input and the planner is given
+a reference to them. Quote the question. The lines are emptied once sent, so the next question
+carries only what you ran after it.
+
+- Only the command line is recorded, as you submitted it. What a command printed is not.
+- Lines are written to `~/.bravebot/shell/<process id of the shell>`, readable by you alone, and the
+  file is removed when the terminal closes. A terminal that is killed leaves its file until another
+  shell with the same process id starts.
+- A line that is `@bravebot` or begins with `@bravebot` and a space is not recorded. bash records a
+  line when the command finishes, and a line your `HISTCONTROL` or `HISTIGNORE` drops is not
+  recorded. Anything piped into `@bravebot` is ignored, and the lines are emptied when the question
+  is sent, even if the run then fails to start.
+- With `BRAVEBOT_INCOGNITO` set to a non-empty value, nothing is recorded and the question runs with
+  `--incognito`. It is read at each command, so `export BRAVEBOT_INCOGNITO=1` stops recording from the
+  next line.
+
+The command prints a fixed script and reads and writes nothing under `~/.bravebot`. It takes exactly
+one shell name and exits with status 2 for anything else.
+
 ## Interactive keys
 
 | Key | What it does |
@@ -661,6 +745,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/rename <name>` | Call this conversation something else |
 | `/compact` | Summarise the conversation so far, keeping the recent part |
 | `/btw <question>` | Ask something beside the work, without putting it in the conversation |
+| `/recap` | Recap where this session stands, without putting it in the conversation |
 | `/clear` | Start a new session here, keeping this one resumable |
 | `/loop [interval] <prompt>` | Send a prompt again and again, on your interval or at a pace each turn sets |
 | `/goal [<condition> \| clear]` | Keep working until a condition you set is judged met |

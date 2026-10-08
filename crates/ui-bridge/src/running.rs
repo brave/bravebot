@@ -19,7 +19,7 @@ use bravebot_session::sessions::Handle;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 
 /// Everything a session carries between turns.
@@ -116,6 +116,10 @@ pub struct State {
     /// Held here so it lasts as long as the session's state does: the directory is removed when
     /// this is dropped, which happens once the session is closed and no turn still holds the state.
     pub scratch: Scratch,
+    /// The last question number this session has put to a person, shared by every turn and run in
+    /// it. A number is never reused, so an answer meant for one question cannot match a later one
+    /// that happens to carry the same number (RPCVIEW-6).
+    pub question_ids: Arc<AtomicU64>,
 }
 
 /// The session's own directory outside the project, or why it has none.
@@ -198,6 +202,7 @@ impl State {
             servers: None,
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
+            question_ids: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -242,6 +247,7 @@ impl State {
             servers: None,
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
+            question_ids: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -306,6 +312,7 @@ impl State {
             servers: None,
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
+            question_ids: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -323,6 +330,9 @@ pub struct Running {
     /// Which question is waiting, if any.
     pub pending: crate::turn::Pending,
     pub turn: usize,
+    /// Whether this is a manifest run, which takes the session's last turn number but is not a
+    /// turn, so a cancel that names a turn never stops it (RPCVIEW-6).
+    pub run: bool,
     /// Set by the worker on its way out.
     ///
     /// The dispatch thread needs to know a turn has ended without joining on it, and it

@@ -505,10 +505,12 @@ fn a_session_holding_imported_words_is_not_forked() {
         bravebot_agent::conversation::Stored {
             message: Message::user("a prompt typed elsewhere"),
             composed: Some(bravebot_agent::conversation::Composed::Imported),
+            source: None,
         },
         bravebot_agent::conversation::Stored {
             message: Message::assistant("an answer given elsewhere"),
             composed: Some(bravebot_agent::conversation::Composed::Imported),
+            source: None,
         },
     ];
     let mut handle = Handle::begin(

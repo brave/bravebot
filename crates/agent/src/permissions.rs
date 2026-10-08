@@ -89,6 +89,21 @@ pub fn describe(rejected: &Rejected) -> String {
     }
 }
 
+/// Why an entry of one of the four filesystem lists is not in force, in the words `doctor` and a
+/// window share.
+pub fn filesystem_reason(reason: bravebot_sandbox::rules::Reason) -> &'static str {
+    use bravebot_sandbox::rules::Reason;
+    match reason {
+        Reason::NoHome => t!(sandbox_rule_no_home),
+        Reason::Climbs => t!(sandbox_rule_climbs),
+        Reason::GlobOnAWrite => t!(sandbox_rule_glob_on_a_write),
+        Reason::ConfinesNothing => t!(sandbox_rule_confines_nothing),
+        Reason::PrivateKey => t!(sandbox_rule_private_key),
+        Reason::TooBroad => t!(sandbox_rule_too_broad),
+        Reason::Overridden => t!(sandbox_rule_overridden),
+    }
+}
+
 /// What was wrong, as a clause to follow the entry.
 ///
 /// One arm per reason and no catch-all, so a reason added to the kernel does not compile until it

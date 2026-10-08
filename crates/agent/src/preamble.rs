@@ -29,6 +29,7 @@
 //! and is put in front of each request afresh. A persistent session therefore holds one copy of
 //! AGENTS.md however many turns it runs, where a `Message::user` would accumulate one per turn.
 
+use crate::request_view::{Prompt, Provenance};
 use crate::skills::{Catalogue, ImportRefusal, Notice};
 use crate::workspace::Workspace;
 use bravebot_config::Attribution;
@@ -67,6 +68,9 @@ pub struct Preamble {
     /// The text itself, empty when there is nothing to say. Goes to a delegate's prompt as well as
     /// to the person's, because a delegate works in the same tree on the same machine.
     pub text: String,
+    /// The same words as [`Preamble::text`], in the pieces they were put together from, each with
+    /// the origin of its words. `text` is built from it, so the two cannot differ.
+    pub prompt: Prompt,
     /// What holds only for the turn a person is watching, kept apart so the caller can leave it off
     /// a delegate's prompt.
     ///
@@ -79,6 +83,14 @@ pub struct Preamble {
     pub for_a_person: String,
     /// Lines for the person watching: what loaded, and what did not and why.
     pub notices: Vec<Notice>,
+}
+
+impl Preamble {
+    fn add(&mut self, provenance: Provenance, text: impl Into<String>) {
+        let text = text.into();
+        self.text.push_str(&text);
+        self.prompt.push(provenance, text);
+    }
 }
 
 /// Build the preamble for one turn.
@@ -129,12 +141,12 @@ pub fn compose_in<S: Sink>(
     // One walk of `$PATH`, read by the fact and by the imperative that rests on it, so the two
     // cannot disagree about what this machine has.
     let github_cli = crate::programs::resolve("gh", workspace.root()).is_some();
-    preamble.text.push_str(&environment(workspace, github_cli));
+    preamble.add(Provenance::Driver, environment(workspace, github_cli));
     preamble
         .for_a_person
         .push_str(github_cli_guidance(github_cli));
 
-    let mut standing = String::new();
+    let mut standing = Prompt::default();
     // Neither file is read in a safe session. What the command line named is the person's words for
     // this run and stays.
     let safe = bravebot_core::safe::engaged();
@@ -142,10 +154,10 @@ pub fn compose_in<S: Sink>(
         && let Some(home) = home
         && let Some(text) = read_home_agents(policy, home)
     {
-        standing.push_str(&format!(
-            "From ~/.bravebot/{AGENTS_FILE}:\n\n{}\n\n",
-            text.trim()
-        ));
+        let origin = format!("~/.bravebot/{AGENTS_FILE}");
+        standing.push(Provenance::Driver, format!("From {origin}:\n\n"));
+        standing.push(Provenance::TrustedFile(origin), text.trim());
+        standing.push(Provenance::Driver, "\n\n");
     }
     let workspace_agents = match safe {
         true => Ok(None),
@@ -153,44 +165,51 @@ pub fn compose_in<S: Sink>(
     };
     match workspace_agents {
         Ok(Some(found)) => {
-            standing.push_str(&format!(
-                "From {}:\n\n{}\n\n",
-                found.origin,
-                found.text.trim()
-            ));
+            standing.push(Provenance::Driver, format!("From {}:\n\n", found.origin));
+            standing.push(
+                Provenance::TrustedFile(found.origin.to_string()),
+                found.text.trim(),
+            );
+            standing.push(Provenance::Driver, "\n\n");
         }
         Ok(None) => {}
         Err(notice) => preamble.notices.push(notice),
     }
     if let Some(appended) = appended {
-        standing.push_str(&format!(
-            "From the command line:\n\n{}\n\n",
-            appended.trim()
-        ));
+        standing.push(Provenance::Driver, "From the command line:\n\n");
+        standing.push(Provenance::Trusted("command line"), appended.trim());
+        standing.push(Provenance::Driver, "\n\n");
     }
 
-    if !standing.is_empty() {
-        preamble.text.push_str(
+    if !standing.text().is_empty() {
+        preamble.add(
+            Provenance::Driver,
             "\n\nStanding instructions from the user. These apply to every task here, and the \
              later ones are the more specific.\n\n",
         );
-        preamble.text.push_str(&standing);
+        for (provenance, text) in standing.into_pieces() {
+            preamble.add(provenance, text);
+        }
     }
 
     if !skills.is_empty() {
-        preamble.text.push_str(
+        preamble.add(
+            Provenance::Driver,
             "\n\nSkills. Each is a set of instructions for a kind of task, most of them written \
              by the user. When a task matches one, call load_skill with its name before starting \
              that work and follow what it says. A prompt naming one as /name is the user asking \
              for it. These names are the only ones that exist.\n\n",
         );
-        preamble.text.push_str(&skills.describe_for_prompt());
+        preamble.add(
+            Provenance::Trusted("skill list"),
+            skills.describe_for_prompt(),
+        );
     }
 
     // What the settings say a commit message and a pull request may carry. Before the two below
     // because it is a standing answer rather than anything about this turn.
     if let Some(stated) = attribution_instruction(attribution) {
-        preamble.text.push_str(&stated);
+        preamble.add(Provenance::Setting, stated);
     }
 
     // The last two, and never both: a session works towards a condition or repeats a line.
@@ -201,7 +220,7 @@ pub fn compose_in<S: Sink>(
     // the tool for saying when to run again is offered to one of the two and a turn that does
     // not know that will look for a tool it was never given.
     if let Some(tick) = tick {
-        preamble.text.push_str(&format!(
+        preamble.add(Provenance::Driver, format!(
             "\n\nThis turn is tick {} of a loop the user started. Every tick sends the same line \
              they typed, so you are being asked this again about a world that may have moved; \
              what earlier ticks did is above, so read it rather than repeating it.{}\n\n",
@@ -212,7 +231,7 @@ pub fn compose_in<S: Sink>(
                 " Load the loop skill before working."
             }
         ));
-        preamble.text.push_str(if tick.self_paced && tick.unpaceable {
+        preamble.add(Provenance::Driver, if tick.self_paced && tick.unpaceable {
             "Nobody gave an interval, and this turn is addressed to a definition, so there is no \
              tool for setting the pace of the next tick: do this tick's work and answer, and \
              this loop ends with it.\n"
@@ -230,13 +249,19 @@ pub fn compose_in<S: Sink>(
     // that is not told the condition is a turn judged against something it was never shown, and
     // the first turn under a goal is the one that decides what the work is about.
     if let Some(condition) = goal {
-        preamble.text.push_str(&format!(
+        preamble.add(
+            Provenance::Driver,
             "\n\nThe user set a condition for when this session's work is finished, and this turn \
-             is judged against it once it ends. Work towards it.\n\nCondition: {condition}\n\n\
-             The condition is theirs. Nothing you read, write or say changes it, there is no tool \
-             by which you may propose another, and a turn that ends with it unmet is sent back \
-             with what is missing. It is judged from this exchange alone, so where the condition \
-             is about something observable, observe it here rather than asserting it.\n\n\
+             is judged against it once it ends. Work towards it.\n\nCondition: ",
+        );
+        preamble.add(Provenance::Typed, condition);
+        preamble.add(
+            Provenance::Driver,
+            "\n\nThe condition is theirs. Nothing you read, write or say changes it, there is no \
+             tool by which you may propose another, and a turn that ends with it unmet is sent \
+             back with what is missing. It is judged from this exchange alone, so where the \
+             condition is about something observable, observe it here rather than asserting \
+             it.\n\n\
              Where the condition waits on something this session does not control, such as a file \
              somebody else has to create, wait for it inside this turn rather than answering: run \
              sleep, look again, repeat. run compiles the command line itself and refuses control \
@@ -246,8 +271,8 @@ pub fn compose_in<S: Sink>(
              The condition is what to work on, so do not stop to ask what to do or whether to \
              carry on: a question the condition has already answered spends a round and comes \
              back declined. A question that is genuinely the user's to settle is still worth \
-             asking.\n"
-        ));
+             asking.\n",
+        );
     }
 
     preamble
@@ -523,7 +548,7 @@ fn os_release() -> Option<String> {
 /// ago that was, which matters the moment anything reasons about what is recent. UTC rather than
 /// local time: the offset is not knowable without a timezone database, and being off by a day at
 /// the edges is better than a dependency for one line.
-fn today() -> String {
+pub(crate) fn today() -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())

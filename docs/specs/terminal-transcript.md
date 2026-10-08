@@ -250,6 +250,9 @@ user file may not take either name: it would load and then be unreachable.
 `verified-by: bravebot_tui::theme::a_user_file_cannot_take_a_name_that_reaches_the_default_theme`
 `verified-by: bravebot_session::store::an_empty_theme_file_is_not_a_choice`
 `verified-by: bravebot_session::store::an_over_long_theme_name_is_not_a_choice`
+`verified-by: bravebot_tui::themes::a_theme_file_in_the_workspace_is_not_a_theme`
+`verified-by: bravebot_tui::themes::user_theme_files_are_read_from_the_themes_directory_of_the_state_directory`
+`verified-by: bravebot_tui::themes::a_stored_name_nothing_offers_is_brave`
 
 <a id="VIEW-12"></a>
 ### VIEW-12: the theme picker is a centred panel over the session
@@ -694,3 +697,20 @@ word is what an interface is given, so no interface can draw the name as it was 
 `verified-by: bravebot_tui::remote_confirm::questions_and_reports_share_the_channel`
 `verified-by: bravebot_agent::turn::the_call_being_written_reaches_the_interface_before_it_runs`
 `verified-by: bravebot_agent::turn::a_call_named_by_an_attempt_thrown_away_is_taken_back`
+
+<a id="VIEW-27"></a>
+### VIEW-27: a held view says it is held, and how many rows arrived below
+
+While the resting view is scrolled off the tail ([VIEW-1](#VIEW-1)), the hint line says it is held,
+how many rows lie below it and the key that returns to the latest. The cue is dim, is dropped whole
+on a terminal with no room for it, and is gone once the view is at the tail.
+
+**Why.** The view stays where it was put while the turn goes on, and a person who scrolled up and
+looked away had no sign on the screen that the turn had moved on, or which key returned to it.
+Only the scroller's footer reported rows below.
+
+The count is read from the layout's row geometry and the sentence is the session's own, so the cue
+holds no bytes of what the rows contain and the rule is kept ([SCROLL-5](scroller.md#SCROLL-5)).
+
+`verified-by: bravebot_tui::render::a_held_view_says_how_many_rows_arrived_below_and_the_key_back`
+`verified-by: bravebot_tui::render::a_held_view_on_a_narrow_terminal_drops_the_cue_and_keeps_the_mode`

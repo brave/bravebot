@@ -95,6 +95,10 @@ const MODEL_ALLOW: &str = "models.allow";
 /// Where the models it may not request are listed, and the name `doctor` reports that list by.
 const MODEL_DENY: &str = "models.deny";
 
+/// Where the network for the programs `run` starts is pinned, and the name `doctor` reports the pin
+/// by.
+const RUN_NETWORK: &str = "run.network";
+
 /// A server as the managed layer compares it with an entry (SERVERS-12).
 #[derive(Debug, Clone, Copy)]
 pub enum Server<'a> {
@@ -247,6 +251,33 @@ pub struct Managed {
     /// quoted `"true"` in a file nobody at the machine can change is the person least likely to find
     /// out the pin does nothing.
     narrowing_unreadable: Vec<&'static str>,
+    /// What it pinned `run.network` to, or `None` where it said nothing.
+    ///
+    /// Final, unlike the strictest-wins keys above: an administrator who pins `closed` takes the
+    /// flag from the person too, and one who pins `open` has said the programs on this machine keep
+    /// the network whatever a checkout asks. Anything but the two words is not a pin.
+    network: Option<bravebot_sandbox::network::Network>,
+    /// Whether the key was there and was neither word, for `doctor` to report for the reason
+    /// `narrowing_unreadable` is.
+    network_unreadable: bool,
+    /// The sandbox mode it pinned, as a floor (SANDBOX-22).
+    ///
+    /// Read from this layer for the reason the narrowing keys are: an administrator asking for
+    /// `strict` takes nothing from the person at the machine. Unlike them it is final, since the
+    /// modes are ordered: a request looser than this is refused, and a stricter one is kept.
+    sandbox: Option<bravebot_sandbox::SandboxMode>,
+    /// Whether it named `sandbox.mode` as something that is not a mode, which pins nothing.
+    sandbox_unreadable: bool,
+    /// The lists of `sandbox.filesystem` it wrote, one slot to a list in the order of
+    /// `FILESYSTEM_LISTS`, and `None` for a list it said nothing about.
+    ///
+    /// A list it wrote is pinned: a pinned `allowRead` or `allowWrite` replaces the person's, so a
+    /// person's entry cannot widen it, and a refusal it wrote is one nothing a person wrote lifts.
+    /// `Some` of an empty list pins that list to nothing.
+    filesystem: [Option<Vec<String>>; 4],
+    /// The lists it gave something other than a list of strings, for `doctor` to report for the
+    /// reason `narrowing_unreadable` is.
+    filesystem_unreadable: Vec<bravebot_sandbox::rules::List>,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -282,9 +313,33 @@ impl Managed {
         };
         let layer = Settings::from_map(&root);
         let (narrowing, narrowing_unreadable) = crate::settings::narrowing_stated(&root);
+        let (network, network_unreadable) = match crate::settings::network_word(&root) {
+            crate::settings::NetworkStated::Word(network) => (Some(network), false),
+            crate::settings::NetworkStated::Unreadable => (None, true),
+            crate::settings::NetworkStated::Absent => (None, false),
+        };
+        let sandbox = crate::sandbox::stated(&root);
+        let mut filesystem: [Option<Vec<String>>; 4] = Default::default();
+        let mut filesystem_unreadable = Vec::new();
+        for (slot, list) in crate::settings::FILESYSTEM_LISTS.into_iter().enumerate() {
+            match crate::settings::filesystem_list(&root, list) {
+                crate::settings::ListStated::Absent => {}
+                crate::settings::ListStated::Entries(entries) => filesystem[slot] = Some(entries),
+                crate::settings::ListStated::Unreadable => filesystem_unreadable.push(list),
+            }
+        }
         Self {
             narrowing,
             narrowing_unreadable,
+            network,
+            network_unreadable,
+            sandbox: match sandbox {
+                crate::sandbox::Stated::Mode(mode) => Some(mode),
+                _ => None,
+            },
+            sandbox_unreadable: sandbox == crate::sandbox::Stated::Unreadable,
+            filesystem,
+            filesystem_unreadable,
             pins: PINNABLE
                 .iter()
                 .filter_map(|name| {
@@ -382,9 +437,44 @@ impl Managed {
         self.narrowing
     }
 
+    /// The sandbox mode it pinned, which no flag or settings file may loosen (SANDBOX-22).
+    pub fn sandbox(&self) -> Option<bravebot_sandbox::SandboxMode> {
+        self.sandbox
+    }
+
+    /// Whether it named `sandbox.mode` as something that is not a mode, which pins nothing.
+    pub fn sandbox_unreadable(&self) -> bool {
+        self.sandbox_unreadable
+    }
+
     /// The keys it named as something other than a boolean, which are absence.
     pub fn narrowing_unreadable(&self) -> impl Iterator<Item = &str> {
         self.narrowing_unreadable.iter().copied()
+    }
+
+    /// What this layer pinned the network for `run`'s programs to, which no flag and no settings
+    /// file changes.
+    pub fn network(&self) -> Option<bravebot_sandbox::network::Network> {
+        self.network
+    }
+
+    /// Whether the file named `run.network` as neither `open` nor `closed`, which pins nothing.
+    pub fn network_unreadable(&self) -> bool {
+        self.network_unreadable
+    }
+
+    /// What this layer pinned `list` of `sandbox.filesystem` to, or `None` where it said nothing.
+    pub fn filesystem(&self, list: bravebot_sandbox::rules::List) -> Option<&[String]> {
+        let slot = crate::settings::FILESYSTEM_LISTS
+            .iter()
+            .position(|held| *held == list)?;
+        self.filesystem[slot].as_deref()
+    }
+
+    /// The lists of `sandbox.filesystem` the file gave something other than a list of strings,
+    /// which pin nothing.
+    pub fn filesystem_unreadable(&self) -> impl Iterator<Item = bravebot_sandbox::rules::List> {
+        self.filesystem_unreadable.iter().copied()
     }
 
     /// The names it pinned, for `doctor` to report.
@@ -402,6 +492,15 @@ impl Managed {
             .chain(self.models.allowed.is_some().then_some(MODEL_ALLOW))
             .chain((!self.models.denied.is_empty()).then_some(MODEL_DENY))
             .chain(self.narrowing.named())
+            .chain(self.network.is_some().then_some(RUN_NETWORK))
+            .chain(self.sandbox.is_some().then_some("sandbox.mode"))
+            .chain(
+                crate::settings::FILESYSTEM_LISTS
+                    .into_iter()
+                    .zip(self.filesystem.iter())
+                    .filter(|(_, pinned)| pinned.is_some())
+                    .map(|(list, _)| list.setting()),
+            )
     }
 
     /// The file, where there is one there at all, read or not.
@@ -612,6 +711,60 @@ mod tests {
         assert_eq!(
             managed.pinned().collect::<Vec<_>>(),
             vec![env_var::ENDPOINT]
+        );
+    }
+
+    /// A pin of the network is read from the managed file, named by `doctor`, and a word that is
+    /// neither `open` nor `closed` pins nothing and says so.
+    #[test]
+    fn the_network_is_pinnable() {
+        use bravebot_sandbox::network::Network;
+        let closed = scratch(
+            "managed-network-closed",
+            r#"{"run": {"network": "closed"}}"#,
+        );
+        assert_eq!(closed.network(), Some(Network::Closed));
+        assert!(closed.pinned().any(|name| name == "run.network"));
+        let open = scratch("managed-network-open", r#"{"run": {"network": "open"}}"#);
+        assert_eq!(open.network(), Some(Network::Open));
+        let unreadable = scratch("managed-network-bad", r#"{"run": {"network": "off"}}"#);
+        assert_eq!(unreadable.network(), None);
+        assert!(unreadable.network_unreadable());
+        assert!(!unreadable.pinned().any(|name| name == "run.network"));
+    }
+
+    /// A list of `sandbox.filesystem` is pinned by being written, an empty one included, `doctor`
+    /// names each by its key, and one that is not a list of strings pins nothing and says so.
+    #[test]
+    fn the_filesystem_lists_are_pinnable() {
+        use bravebot_sandbox::rules::List;
+        let layer = scratch(
+            "managed-filesystem",
+            r#"{"sandbox": {"filesystem": {"allowWrite": [], "denyRead": ["/etc/secret"], "denyWrite": "x"}}}"#,
+        );
+        assert_eq!(layer.filesystem(List::AllowWrite), Some(&[][..]));
+        assert_eq!(
+            layer.filesystem(List::DenyRead),
+            Some(&["/etc/secret".to_string()][..])
+        );
+        assert_eq!(layer.filesystem(List::AllowRead), None);
+        assert_eq!(layer.filesystem(List::DenyWrite), None);
+        assert_eq!(
+            layer.filesystem_unreadable().collect::<Vec<_>>(),
+            vec![List::DenyWrite]
+        );
+        let pinned: Vec<&str> = layer.pinned().collect();
+        assert!(
+            pinned.contains(&"sandbox.filesystem.allowWrite"),
+            "{pinned:?}"
+        );
+        assert!(
+            pinned.contains(&"sandbox.filesystem.denyRead"),
+            "{pinned:?}"
+        );
+        assert!(
+            !pinned.contains(&"sandbox.filesystem.denyWrite"),
+            "{pinned:?}"
         );
     }
 

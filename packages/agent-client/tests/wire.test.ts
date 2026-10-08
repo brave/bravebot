@@ -9,12 +9,14 @@ import {
   SUPPORTED_APPROVALS,
   decodeIncoming,
   decodeUpdate,
+  readActionTargets,
   readSessionViewCapability,
 } from '../src/common/index.js'
 import { FIXTURES } from './support/scenario.js'
 
 const contract = JSON.parse(readFileSync(join(FIXTURES, 'wire-contract.json'), 'utf8')) as {
   capability: { approvals: string[] } & Record<string, unknown>
+  actionTargets: Record<string, unknown>
   statuses: string[]
   rowKinds: string[]
   update: unknown
@@ -74,5 +76,15 @@ test('messages are told apart as events and responses', () => {
   })
   for (const bad of [null, [], { id: 'x', ok: 1 }, { id: 1 }, { id: 1, error: {} }, { event: 'e', session: 3 }]) {
     assert.throws(() => decodeIncoming(bad), ProtocolError, JSON.stringify(bad))
+  }
+})
+
+test('the action targets the Rust runtime advertises are read, and anything else is not', () => {
+  assert.equal(readActionTargets({ capabilities: { actionTargets: contract.actionTargets } }), true)
+  assert.equal(readActionTargets({ capabilities: {} }), false)
+  assert.equal(readActionTargets({}), false)
+  for (const field of ['version', 'questionIds', 'cancel', 'trust']) {
+    const changed = { ...contract.actionTargets, [field]: field === 'version' ? 2 : 'something else' }
+    assert.equal(readActionTargets({ capabilities: { actionTargets: changed } }), false, field)
   }
 })
