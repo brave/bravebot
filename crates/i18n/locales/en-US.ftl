@@ -2100,6 +2100,7 @@ command-issue = Say which issue this session is for, show it, or clear it
 command-pr = Say which pull request this session is for, show it, or clear it
 command-compact = Summarise the conversation so far, keeping the recent part
 command-btw = Ask something beside the work, without putting it in the conversation
+command-recap = Recap where this session stands, without putting it in the conversation
 command-clear = Start a new session here, keeping this one resumable
 command-forget-trust = Stop remembering that this directory is trusted, so later sessions here ask
 command-loop = Send a prompt again and again, say what is repeating, or stop it

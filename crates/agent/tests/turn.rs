@@ -22128,6 +22128,60 @@ fn asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone() 
     assert_eq!(watched, "because the grammar nests");
 }
 
+/// What `/recap` runs. The request holds the driver's recap question and the exchange and offers no
+/// tools, the answer is cut to the limit however long the model made it, and the conversation is as
+/// long afterwards as it was.
+#[test]
+fn a_recap_is_cut_to_its_limit_and_leaves_the_conversation_alone() {
+    let long = "the parser is being ported. ".repeat(40);
+    let (endpoint, received) = serve_sequence(vec![reply_with(&long)]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+    let before = conversation.len();
+
+    let answered = turn::aside(
+        &config,
+        &egress,
+        bravebot_agent::aside::Question::recap(&conversation),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        |_| {},
+    )
+    .expect("a recap must not be refused");
+
+    assert!(
+        answered.shown.chars().count() <= bravebot_agent::aside::RECAP_LIMIT,
+        "the person was shown {} characters",
+        answered.shown.chars().count()
+    );
+    assert!(
+        answered
+            .kept
+            .as_deref()
+            .is_some_and(|kept| kept.chars().count() <= bravebot_agent::aside::RECAP_LIMIT),
+        "the record was offered more than the limit"
+    );
+    assert_eq!(conversation.len(), before, "a recap changed the exchange");
+
+    let body = received.recv().expect("the recap's request");
+    assert!(
+        body.contains("port the parser to the new grammar"),
+        "the recap was asked without the exchange: {body}"
+    );
+    assert!(
+        body.contains("Recap it for me"),
+        "the recap's question did not reach the request: {body}"
+    );
+    assert!(
+        !body.contains("\"tools\""),
+        "the recap was sent with tools it could call: {body}"
+    );
+}
+
 /// A picture pasted beside the question goes with it, in the one message. A question about a
 /// screenshot is the commonest thing to ask beside the work, and answered without the screenshot it
 /// is answered about nothing: what is sent has to be what the words say it is.
