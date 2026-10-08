@@ -20,6 +20,7 @@ governs:
   - crates/config/src/sandbox_network.rs
   - crates/agent/src/confine.rs
   - crates/agent/src/reach.rs
+  - crates/tui/src/status.rs
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -1151,7 +1152,9 @@ argument, unless that is an option), so a grant made for `git push` is not one f
 `git -C dir push`, and one made for `/usr/bin/make` is not one for another `make` earlier on the
 path. It lasts the session that made it, a `--resume` of it included, or every session with
 `always`, and is in force only in the workspace root it was typed in (below). `/reach` alone lists
-the grants in force there and `/reach remove <n>` removes the one numbered. A grant is attached when the plan is composed ([SANDBOX-18](#SANDBOX-18)): its rows are
+the grants in force there and `/reach remove <n>` removes the one numbered. `/status` lists the same
+rows, numbered the same way, under a heading of their own, and a session with none in force lists
+none. A grant is attached when the plan is composed ([SANDBOX-18](#SANDBOX-18)): its rows are
 in the stage's profile, the plan the person endorses names it with the day it was allowed, and the
 failure line ([SANDBOX-19](#SANDBOX-19)) names a remembered scope as it names any other.
 
@@ -1198,9 +1201,15 @@ that needs a directory once needs it again in every session and the person is as
 type `--add-dir`, for the same command each time. The grant is still the plan: it is shown before the
 run, in the words of the other reach, so there is nothing new to trust.
 
-**What is not built.** A key at the confirmation that remembers the reach, a path the planner
-proposes, and a reach attached to a command the planner has never run. Each puts a path or a shape
-the planner chose in front of a person to approve, and none is decided here.
+**What is not built.** A path the planner proposes, and a reach attached to a command the planner
+has never run. Each puts a path or a shape the planner chose in front of a person to approve, and
+neither is decided here.
+
+**A key at the confirmation that remembers the reach is decided against.** A line whose call asked
+for a scope offers no `a` or `r` and records no entry ([SANDBOX-26](#SANDBOX-26)), so the person is
+asked every time. A person who wants a scope remembered for a program shape types
+`/reach <scope> -- <command>`, which writes the standing answer where they can read it, and the next
+plan shows it as a row.
 
 `verified-by: bravebot_agent::reach::a_grant_covers_the_file_and_the_operation_it_was_made_for`
 `verified-by: bravebot_agent::reach::an_assignment_in_front_of_a_step_removes_every_grant`
@@ -1208,6 +1217,8 @@ the planner chose in front of a person to approve, and none is decided here.
 `verified-by: bravebot_agent::reach::a_revoked_grant_is_gone_until_it_is_allowed_again`
 `verified-by: bravebot_agent::reach::a_line_that_is_not_a_grant_grants_nothing`
 `verified-by: bravebot_agent::reach::a_grant_made_for_one_command_is_made_for_that_command_only`
+`verified-by: bravebot_agent::reach::the_status_rows_are_the_grants_in_force_here_and_no_others`
+`verified-by: bravebot_tui::status::the_report_lists_the_reach_remembered_for_commands`
 `verified-by: bravebot_agent::reach::a_pipeline_gets_one_grant_for_each_distinct_stage`
 `verified-by: bravebot_agent::reach::a_command_that_starts_with_an_option_carries_no_grant`
 `verified-by: bravebot_agent::reach::a_directory_is_read_unless_the_person_said_write`

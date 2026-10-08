@@ -1009,6 +1009,10 @@ fn status_report(
         ))
     });
     let checkouts = workspace.session_checkouts();
+    // Read now for the same reason: `/reach` in another session here may have added or removed one.
+    let reach = bravebot_agent::home::directory()
+        .map(|home| bravebot_agent::reach::listed(&home, stored.id(), workspace.root()))
+        .unwrap_or_default();
     crate::status::report(&crate::status::Facts {
         session_name: stored.title(),
         session_id: stored.id(),
@@ -1049,6 +1053,7 @@ fn status_report(
                 lines,
                 path: store.path(),
             }),
+        reach: &reach,
         kept_trust: kept
             .as_ref()
             .map(|(when, path)| crate::status::KeptTrust { when, path }),
