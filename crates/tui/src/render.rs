@@ -3677,6 +3677,14 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         count => t!(jobs_hint, count = count),
     };
 
+    // The view is held where it was scrolled to, so what arrives goes below it and nothing else on
+    // the screen says so. A count of rows from the layout and the key that returns, never any of
+    // what those rows hold (VIEW-27).
+    let held = match session.rows_below() {
+        0 => String::new(),
+        count => t!(held_hint, chord = "ctrl-end", count = count),
+    };
+
     // Only while the command the turn is waiting on can be moved, for the reason the trail is only
     // named once there is one: offered at any other moment, the press does nothing.
     let movable = if session.can_move_to_background() {
@@ -3724,8 +3732,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
             looping,
             jobs,
             watchable,
+            held,
         ];
-        let kept = fitted(&parts, &[2, 1, 6, 3, 5, 4], area.width);
+        let kept = fitted(&parts, &[2, 1, 6, 3, 7, 5, 4], area.width);
         let mut spans = Vec::new();
         for (position, index) in kept.iter().enumerate() {
             let part = parts[*index].clone();
@@ -3815,6 +3824,7 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         movable,
         SHORTCUTS_HINT.to_string(),
         info,
+        held,
     ];
     // Indices into `parts`, in the order they are given up: the way to the panel before anything,
     // since the panel is a press away whether or not the line names it (PANEL-7), then the way to
@@ -3837,9 +3847,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // reading this line for a way out of the wait; a job is spending something unwatched, as the
     // loop is.
     let expendable: &[usize] = if context_is_unmeasured {
-        &[10, 3, 9, 2, 4, 7, 8, 6, 5]
+        &[10, 3, 9, 2, 4, 7, 8, 11, 6, 5]
     } else {
-        &[10, 9, 2, 3, 4, 7, 8, 6, 5]
+        &[10, 9, 2, 3, 4, 7, 8, 11, 6, 5]
     };
     // A note is drawn over the right of this same row, so what the parts may occupy is the width
     // less that note. Fitted against the whole width instead, the last part that fits is one the
@@ -9812,13 +9822,122 @@ mod tests {
         );
     }
 
+    /// The view is held where it was scrolled to, so the one place that can say so, and how much
+    /// has arrived below, is the hint line. It goes when the view reaches the tail.
+    #[test]
+    fn a_held_view_says_how_many_rows_arrived_below_and_the_key_back() {
+        let mut session = Session::new("none");
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+        let hint = |session: &mut Session| rows_of_a_frame(session).pop().expect("a last row");
+
+        let tail = hint(&mut session);
+        assert!(
+            !tail.contains("below"),
+            "a view at the tail was said to be held: {tail}"
+        );
+
+        session.scroll_up(60);
+        let held = hint(&mut session);
+        assert!(held.contains("held"), "{held}");
+        assert!(held.contains("ctrl-end to return"), "{held}");
+        let before = session.rows_below();
+        assert!(
+            before > 0 && held.contains(&format!("{before} rows below")),
+            "{held}"
+        );
+
+        session.streaming("a long chunk\n\n\n\nof the next reply");
+        // The first frame lays the new rows out and the second draws against what it measured.
+        hint(&mut session);
+        let arrived = hint(&mut session);
+        let after = session.rows_below();
+        assert!(after > before, "{before} -> {after}");
+        assert!(
+            arrived.contains(&format!("{after} rows below")),
+            "{arrived}"
+        );
+
+        session.scroll_down(u16::MAX);
+        let back = hint(&mut session);
+        assert!(!back.contains("below") && !back.contains("held"), "{back}");
+    }
+
+    /// The cue is the first of the things the hint line keeps for its own sake to go, so a terminal
+    /// with no room for it loses the cue and keeps the mode, in the ordinary line and the shell
+    /// line. Left out of either order, the line would be cleared whole and the mode with it.
+    #[test]
+    fn a_held_view_on_a_narrow_terminal_drops_the_cue_and_keeps_the_mode() {
+        let mut session = Session::new("none").starting_in_bypass();
+        while session.permission_mode() != bravebot_agent::PermissionMode::AcceptEdits {
+            session.cycle_permission_mode();
+        }
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+        let hint_at = |session: &mut Session, width: u16| {
+            // The first frame lays the transcript out at this width and the second draws against it.
+            rows_of_a_frame_at(session, width, 24);
+            rows_of_a_frame_at(session, width, 24)
+                .pop()
+                .expect("a last row")
+        };
+        let mode =
+            crate::status::named_mode(session.permission_mode(), true).expect("a named mode");
+
+        session.scroll_up(60);
+        let roomy = hint_at(&mut session, 90);
+        assert!(
+            roomy.contains("rows below") && roomy.contains(mode),
+            "the cue was not drawn where it fits, so its absence below proves nothing: {roomy}"
+        );
+
+        let narrow = hint_at(&mut session, 40);
+        assert!(session.rows_below() > 0, "the view left the held position");
+        assert!(
+            narrow.contains(mode),
+            "the mode went with the cue: {narrow:?}"
+        );
+        assert!(
+            !narrow.contains("held") && !narrow.contains("below"),
+            "a cue with no room was drawn: {narrow:?}"
+        );
+
+        session.shell = true;
+        let roomy = hint_at(&mut session, 120);
+        assert!(
+            roomy.contains("rows below"),
+            "the shell line did not draw the cue where it fits: {roomy}"
+        );
+        let narrow = hint_at(&mut session, 40);
+        assert!(session.rows_below() > 0, "the view left the held position");
+        assert!(
+            narrow.trim_start().starts_with("! "),
+            "the shell went with the cue: {narrow:?}"
+        );
+        assert!(
+            !narrow.contains("held") && !narrow.contains("below"),
+            "a cue with no room was drawn in shell mode: {narrow:?}"
+        );
+    }
+
     /// Draw one frame the way the loop draws it, tell the session what the frame laid out, and give
     /// back the rows of the screen.
     ///
     /// [`rendered`] cannot answer a question about a held view: it never reports the layout, so the
     /// offset stays measured against a screen the session has not seen.
     fn rows_of_a_frame(session: &mut Session) -> Vec<String> {
-        let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+        rows_of_a_frame_at(session, 90, 24)
+    }
+
+    /// [`rows_of_a_frame`] at a chosen size.
+    fn rows_of_a_frame_at(session: &mut Session, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         let mut laid = crate::state::Laid::default();
         terminal
             .draw(|frame| laid = draw(frame, session))

@@ -2443,6 +2443,12 @@ watching-hint = { $chord } { $count } a ouvrir
 # Dit sur la ligne du bas tant qu'une commande attendue par le tour peut passer en arrière-plan,
 # et retiré dès qu'elle se termine ou y passe. Court, car il partage la ligne avec tout le reste.
 background-hint = { $chord } en arrière-plan
+# Dit sur la ligne du bas tant que la vue est remontée au-dessus de la fin, et retiré dès qu'elle y
+# revient.
+held-hint = { $count ->
+    [one] figée, { $count } ligne en dessous  ·  { $chord } pour revenir
+   *[other] figée, { $count } lignes en dessous  ·  { $chord } pour revenir
+    }
 # Dit sur la ligne du bas tant qu'une tâche en arrière-plan tourne, et retiré quand la dernière se
 # termine.
 jobs-hint = { $count ->
