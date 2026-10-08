@@ -883,7 +883,7 @@ puts back what a kill took, as characters. A kill never changes what `p` does wi
 took. Ctrl-Y inserts a register that holds whole lines as its characters, without the newline. A
 marker that was killed comes back as the marker, and names its attachment again for as long as that is
 still staged; once it is not, it is text like any other ([INPUT-3](#INPUT-3)). A chord moved onto
-`ctrl-y` ([INPUT-32](#INPUT-32)) is read first, and `yank` is not one of the nine movable actions.
+`ctrl-y` ([INPUT-32](#INPUT-32)) is read first, and `yank` is not one of the ten movable actions.
 While `R` is typing over the line ([INPUT-37](#INPUT-37)), Ctrl-U and Ctrl-W are Backspace and keep
 nothing, and Alt-D does nothing.
 
@@ -1909,26 +1909,31 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
 
 <a id="INPUT-40"></a>
-### INPUT-40: Up walks this session's prompts, and Ctrl-Right reaches every stored one
+### INPUT-40: Up walks this session's prompts, and the scope chord reaches every stored one
 
 Up and Down walk the prompts this session sent, and the ones its record holds when it was resumed,
-and Up stops at the oldest of them (INPUT-18). While a stored prompt is on screen, Ctrl-Right walks
-every stored prompt from every session and workspace instead, staying on the prompt on screen, and
-Ctrl-Left goes back to this session's. Where the prompt on screen is not this session's, Ctrl-Left
-lands on the newest of this session's before it, and failing that the oldest of them. The border of
-the box names the scope with the position, `This session 2/3` or `All 78/83`, and the key that
-changes it. Ending the walk, editing the line, or sending puts the scope back to this session's.
-`/clear` starts a new session's own prompts, and a prompt queued during a turn counts as sent from
-the moment it is queued (INPUT-10). The stored file is unchanged: which prompts are this session's
-is known from what this process sent and from the turns of a resumed record.
+and Up stops at the oldest of them (INPUT-18). While a stored prompt is on screen, the scope chord,
+Ctrl-N by default, walks every stored prompt from every session and workspace instead, staying on
+the prompt on screen, and pressed again goes back to this session's. Where the prompt on screen is
+not this session's, the way back lands on the newest of this session's before it, and failing that
+the oldest of them. The border of the box names the scope with the position, `This session 2/3` or
+`All 78/83`, and the chord that changes it. Ending the walk, editing the line, or sending puts the
+scope back to this session's. `/clear` starts a new session's own prompts, and a prompt queued
+during a turn counts as sent from the moment it is queued (INPUT-10). The stored file is unchanged:
+which prompts are this session's is known from what this process sent and from the turns of a
+resumed record.
 
-A session that has sent nothing has nothing to recall, and Up says so on the hint line, naming
-Ctrl-Right; with an empty box that key then widens the scope, and Up walks every stored prompt.
-It does not walk into earlier sessions silently. Ctrl-Left and Ctrl-Right are the caret's word motion
-everywhere else, and Alt-Left and Alt-Right stay the word motion on a recalled prompt, since a prompt is
-recalled in order to be edited. A terminal that does not deliver the chord (macOS reserves it for
-Mission Control) still reaches every stored prompt through the search (INPUT-19). The chord is not
-one of the nine a settings file can move (INPUT-32).
+A session that has sent nothing has nothing to recall, and Up says so on the hint line, naming the
+scope chord; with an empty box that chord then widens the scope, and Up walks every stored prompt.
+It does not walk into earlier sessions silently. Where the history has nothing to switch, in a line
+being typed or with nothing recalled, the chord is not typed and does nothing, except that a
+chord moved onto a line-editing key still edits there. Ctrl-Left, Ctrl-Right, Alt-Left and
+Alt-Right are the caret's word motion everywhere, a recalled prompt included, since a prompt is
+recalled in order to be edited and a terminal may deliver the arrows with a modifier as something
+other than the key (macOS reserves Ctrl-Left and Ctrl-Right for Mission Control). The chord is
+one of the ten a settings file can move (INPUT-32), and the border and the hint name the chord in
+force. A person who moved it, or whose terminal delivers nothing for it, still reaches every stored
+prompt through the search (INPUT-19).
 
 `bravebot --incognito` stores nothing, so there are no earlier prompts there and the session scope
 is all there is.
@@ -1936,28 +1941,36 @@ is all there is.
 **Why.** A person who presses Up wants the last thing said in this conversation first. A walk
 across every session mixes this conversation's prompts with other sessions' and gives no mark where
 this one's end, so a person reaching for what they just said can land on a prompt from last week.
-The wide list stays one chord away, and the search is where an old prompt is found by a word.
+The wide list stays one chord away, and the search is where an old prompt is found by a word. The
+switch is a letter chord because a letter chord reaches the app in every terminal, while a Ctrl
+arrow chord may be taken by the system (Mission Control on macOS) and never arrive. It is one chord
+that toggles because a pair of directions is two things to remember.
 
-`verified-by: bravebot_tui::app::ctrl_right_widens_the_walk_to_every_stored_prompt_and_ctrl_left_narrows_it`
+`verified-by: bravebot_tui::app::the_scope_chord_widens_the_walk_to_every_stored_prompt_and_narrows_it_again`
 `verified-by: bravebot_tui::app::switching_scope_keeps_a_prompt_that_is_in_both`
+`verified-by: bravebot_tui::app::ctrl_and_alt_arrows_on_a_recalled_prompt_move_the_caret_and_leave_the_scope`
+`verified-by: bravebot_tui::app::the_scope_chord_does_nothing_in_a_line_being_typed`
+`verified-by: bravebot_tui::app::a_moved_scope_chord_switches_and_the_old_one_does_not`
+`verified-by: bravebot_tui::app::a_moved_scope_chord_is_not_typed_and_keeps_the_edit_it_landed_on`
 `verified-by: bravebot_tui::app::the_word_keys_still_move_the_caret_outside_a_recalled_prompt`
 `verified-by: bravebot_tui::app::up_in_a_new_session_says_why_it_recalled_nothing`
-`verified-by: bravebot_tui::app::the_scope_chords_work_while_a_turn_runs`
+`verified-by: bravebot_tui::app::the_scope_chord_works_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_prompt_queued_during_a_turn_is_one_this_session_sent`
 `verified-by: bravebot_tui::app::clearing_the_session_empties_the_scope_up_walks`
 `verified-by: bravebot_tui::render::the_border_names_the_scope_and_the_hint_line_the_way_to_earlier_prompts`
+`verified-by: bravebot_tui::render::the_border_and_hint_name_the_scope_chord_a_settings_file_moved`
 `verified-by: bravebot_tui::state::a_resumed_sessions_own_prompts_are_in_its_session_scope`
 `verified-by: bravebot_tui::history::stored_prompts_are_not_this_sessions`
 `verified-by: bravebot_tui::history::narrowing_from_a_prompt_of_another_session_lands_on_the_one_before_it`
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move nine chords, and nothing else
+### INPUT-32: a settings file can move ten chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
-action's key says nothing about the other eight. There is no second file and no other spelling of the
-block, so one place answers what a key does. Nine actions can be moved, and nothing else can:
+action's key says nothing about the other nine. There is no second file and no other spelling of the
+block, so one place answers what a key does. Ten actions can be moved, and nothing else can:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
@@ -1969,6 +1982,8 @@ block, so one place answers what a key does. Nine actions can be moved, and noth
 - `trail` (default: `ctrl-t`): toggle turn execution trail visibility.
 - `paste` (default: `ctrl-v`): paste from clipboard.
 - `panel` (default: `ctrl-x`): show or hide the info panel ([PANEL-5](info-panel.md#PANEL-5)).
+- `scope` (default: `ctrl-n`): switch the prompt history Up walks between this session's prompts and
+  every stored one (INPUT-40).
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
 typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk
@@ -2013,14 +2028,14 @@ readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather t
 editing arm. In vi's normal mode, `/` translates to the chord configured for history search.
 
 **The screen names the chord that answers.** `?` lists the keys from the one place they are written
-down (INPUT-13), and the nine rows above are asked of the chord in force rather than spelled out
+down (INPUT-13), and the ten rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
 (INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
 search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
 clipboard needs a key of its own, and the scroller's way out
 ([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
 no catalog has to be revisited when a default moves. Where a clause of this spec or another names one
-of the nine, it names the default.
+of the ten, it names the default.
 
 **Why.** A list is worth having only where it is right, and a person reads it at the moment a key
 they pressed did nothing. Keeping a second copy for the defaults is the same list twice: the copy
@@ -2041,11 +2056,13 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::unknown_actions_in_map_are_ignored`
 `verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`
 `verified-by: bravebot_tui::keybindings::the_background_chord_is_ctrl_b_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::the_scope_chord_is_ctrl_n_and_can_be_moved`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
 `verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
 `verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`
 `verified-by: bravebot_config::settings::a_local_layer_overrides_project_and_global_keybindings`
 `verified-by: bravebot_tui::render::the_shortcut_list_reflects_custom_keybindings`
+`verified-by: bravebot_tui::render::the_shortcut_list_names_the_scope_chord`
 `verified-by: bravebot_tui::render::the_stashed_line_names_the_custom_stash_chord`
 `verified-by: bravebot_tui::render::the_help_names_the_chord_the_scroller_was_opened_with`
 `verified-by: bravebot_tui::render::the_help_names_every_key_that_closes_the_scroller`

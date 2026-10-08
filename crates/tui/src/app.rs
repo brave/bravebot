@@ -765,23 +765,24 @@ pub enum Action {
     Quit,
 }
 
-/// Ctrl-Right and Ctrl-Left as the prompt history's scope, and say whether the key was that.
+/// The scope chord as the prompt history's switch, and the answer to the key if it was that.
 ///
-/// Only where the history can use them (INPUT-40): on a stored prompt, or where Up found nothing
-/// this session sent. Everywhere else they are the word motion `edit_line` makes of them, and Alt
-/// stays the word motion there too, since a person who recalled a prompt to edit it needs one.
-fn change_history_scope(session: &mut Session, key: KeyEvent) -> bool {
-    if !key.modifiers.contains(KeyModifiers::CONTROL) || key.modifiers.contains(KeyModifiers::ALT) {
-        return false;
+/// One key toggles: it widens to every stored prompt where that is on offer and otherwise narrows
+/// to this session's. Only where the history can use it (INPUT-40): on a stored prompt, or where
+/// Up found nothing this session sent. Anywhere else the chord is not a switch, so the key is what
+/// `edit_line` makes of it, and when that is nothing it is swallowed rather than typed.
+fn change_history_scope(session: &mut Session, key: KeyEvent) -> Option<Action> {
+    if !session.bindings().is_scope(&key) {
+        return None;
     }
-    match key.code {
-        KeyCode::Right if session.history.can_widen(session.input().is_empty()) => {
-            session.widen_history();
-        }
-        KeyCode::Left if session.history.can_narrow() => session.narrow_history(),
-        _ => return false,
+    if session.history.can_widen(session.input().is_empty()) {
+        session.widen_history();
+    } else if session.history.can_narrow() {
+        session.narrow_history();
+    } else if !edit_line(session, key) {
+        return Some(Action::None);
     }
-    true
+    Some(Action::Redraw)
 }
 
 /// Move the caret or delete around it, and say whether the key was one that does.
@@ -1619,8 +1620,8 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 
     // Before the match, since a key that moves the caret cannot also be one of the keys below:
     // the ones this answers are exactly the ones nothing else claims.
-    if !session.bindings().claims(&key) && change_history_scope(session, key) {
-        return Action::Redraw;
+    if let Some(action) = change_history_scope(session, key) {
+        return action;
     }
     if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
@@ -2687,8 +2688,8 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // Before the modifier guard, since the readline bindings are how the caret moves on a terminal
     // that sends nothing for the named keys, and a line that can be typed mid-turn has to be
     // editable mid-turn: the alternative is a box that takes words and will not let them be fixed.
-    if !session.bindings().claims(&key) && change_history_scope(session, key) {
-        return Action::Redraw;
+    if let Some(action) = change_history_scope(session, key) {
+        return action;
     }
     if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
@@ -22671,10 +22672,10 @@ mod tests {
         session
     }
 
-    /// Up walks this session's prompts and stops at the oldest of them; Ctrl-Right goes on into
-    /// every stored prompt from the one on screen, and Ctrl-Left comes back.
+    /// Up walks this session's prompts and stops at the oldest of them; the scope chord goes on
+    /// into every stored prompt from the one on screen, and pressed again comes back.
     #[test]
-    fn ctrl_right_widens_the_walk_to_every_stored_prompt_and_ctrl_left_narrows_it() {
+    fn the_scope_chord_widens_the_walk_to_every_stored_prompt_and_narrows_it_again() {
         let mut session = with_earlier_sessions();
         handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(session.input(), "mine");
@@ -22685,7 +22686,7 @@ mod tests {
             "Up walked past this session's prompts"
         );
 
-        handle_key(&mut session, ctrl_key(KeyCode::Right));
+        handle_key(&mut session, ctrl('n'));
         assert_eq!(
             session.input(),
             "mine",
@@ -22697,9 +22698,99 @@ mod tests {
 
         // Not this session's, so the nearest of this session's before it, and failing that the
         // oldest.
-        handle_key(&mut session, ctrl_key(KeyCode::Left));
+        handle_key(&mut session, ctrl('n'));
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
         assert_eq!(session.input(), "mine");
         assert_eq!(session.history.position(), Some((1, 1)));
+    }
+
+    /// The terminal sees Ctrl-Right as a window-manager key on some systems (macOS gives it to
+    /// Mission Control), so the switch is a chord of its own and the arrows are only the word
+    /// motion, on a recalled prompt as everywhere else.
+    #[test]
+    fn ctrl_and_alt_arrows_on_a_recalled_prompt_move_the_caret_and_leave_the_scope() {
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            let mut session = with_earlier_sessions();
+            handle_key(&mut session, key(KeyCode::Up));
+            assert_eq!(session.input(), "mine");
+            let end = session.caret();
+            handle_key(&mut session, KeyEvent::new(KeyCode::Left, modifiers));
+            assert!(
+                session.caret() < end,
+                "{modifiers:?}-Left did not move the caret"
+            );
+            handle_key(&mut session, KeyEvent::new(KeyCode::Right, modifiers));
+            assert_eq!(
+                session.caret(),
+                end,
+                "{modifiers:?}-Right did not move it back"
+            );
+            assert_eq!(session.history.scope(), crate::history::Scope::Session);
+            assert_eq!(session.input(), "mine");
+        }
+    }
+
+    /// A settings file can move the switch. The chord it left goes dead, and the one it moved to
+    /// works in the same two places the default does.
+    #[test]
+    fn a_moved_scope_chord_switches_and_the_old_one_does_not() {
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("scope".to_string(), "alt-n".to_string());
+
+        let mut session = with_earlier_sessions();
+        session.adopt_keybindings(&moved);
+        handle_key(&mut session, key(KeyCode::Up));
+        handle_key(&mut session, ctrl('n'));
+        assert_eq!(
+            session.history.scope(),
+            crate::history::Scope::Session,
+            "the chord the switch was moved off still switched"
+        );
+        handle_key(&mut session, alt('n'));
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
+        handle_key(&mut session, alt('n'));
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+    }
+
+    /// With nothing on screen from the history there is nothing to switch, so the chord does not
+    /// type, move or widen anything in a line being written.
+    #[test]
+    fn the_scope_chord_does_nothing_in_a_line_being_typed() {
+        let mut session = with_earlier_sessions();
+        type_line(&mut session, "read src now");
+        let caret = session.caret();
+        handle_key(&mut session, ctrl('n'));
+        assert_eq!(session.input(), "read src now");
+        assert_eq!(session.caret(), caret);
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+    }
+
+    /// A moved chord is dead in a typed line like the default is, and where it lands on a readline
+    /// key the key still edits there, since the switch only takes it on a recalled prompt.
+    #[test]
+    fn a_moved_scope_chord_is_not_typed_and_keeps_the_edit_it_landed_on() {
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("scope".to_string(), "alt-n".to_string());
+        let mut session = with_earlier_sessions();
+        session.adopt_keybindings(&moved);
+        type_line(&mut session, "read src now");
+        handle_key(&mut session, alt('n'));
+        assert_eq!(session.input(), "read src now", "the chord was typed");
+
+        let mut onto_edit = std::collections::BTreeMap::new();
+        onto_edit.insert("scope".to_string(), "ctrl-a".to_string());
+        let mut session = with_earlier_sessions();
+        session.adopt_keybindings(&onto_edit);
+        type_line(&mut session, "read src now");
+        handle_key(&mut session, ctrl('a'));
+        assert_eq!(
+            session.caret(),
+            0,
+            "the edit key it was moved onto went dead"
+        );
+        handle_key(&mut session, key(KeyCode::Up));
+        handle_key(&mut session, ctrl('a'));
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
     }
 
     /// A prompt that is in both lists stays on screen across the switch, at its place in each.
@@ -22712,15 +22803,14 @@ mod tests {
         handle_key(&mut session, key(KeyCode::Up));
         handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(session.input(), "mine");
-        handle_key(&mut session, ctrl_key(KeyCode::Right));
+        handle_key(&mut session, ctrl('n'));
         assert_eq!(session.history.position(), Some((3, 4)));
-        handle_key(&mut session, ctrl_key(KeyCode::Left));
+        handle_key(&mut session, ctrl('n'));
         assert_eq!(session.input(), "mine");
         assert_eq!(session.history.position(), Some((1, 2)));
     }
 
-    /// Where a person recalled a prompt to edit it, Alt is still the word motion, and so is
-    /// Ctrl in a line that is being typed.
+    /// Alt is the word motion on a recalled prompt, and Ctrl is in a line that is being typed.
     #[test]
     fn the_word_keys_still_move_the_caret_outside_a_recalled_prompt() {
         let mut session = with_earlier_sessions();
@@ -22742,21 +22832,21 @@ mod tests {
         assert!(session.caret() < before, "Alt-Left did not move the caret");
     }
 
-    /// A turn can begin while a stored prompt is on screen, and the chords mean the same there as
-    /// at rest: Ctrl-Right widens and stays on the prompt, Ctrl-Left comes back.
+    /// A turn can begin while a stored prompt is on screen, and the chord means the same there as
+    /// at rest: it widens and stays on the prompt, and pressed again comes back.
     #[test]
-    fn the_scope_chords_work_while_a_turn_runs() {
+    fn the_scope_chord_works_while_a_turn_runs() {
         let mut session = with_earlier_sessions();
         handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(session.input(), "mine");
         session.status = Status::Working;
 
-        handle_key_while_working(&mut session, ctrl_key(KeyCode::Right));
+        handle_key_while_working(&mut session, ctrl('n'));
         assert_eq!(session.history.scope(), crate::history::Scope::All);
         assert_eq!(session.input(), "mine");
         assert_eq!(session.history.position(), Some((3, 3)));
 
-        handle_key_while_working(&mut session, ctrl_key(KeyCode::Left));
+        handle_key_while_working(&mut session, ctrl('n'));
         assert_eq!(session.history.scope(), crate::history::Scope::Session);
         assert_eq!(session.history.position(), Some((1, 1)));
     }
@@ -22814,7 +22904,7 @@ mod tests {
         assert!(session.offered_all_prompts);
         assert!(!session.history.is_browsing());
 
-        handle_key(&mut session, ctrl_key(KeyCode::Right));
+        handle_key(&mut session, ctrl('n'));
         assert!(!session.offered_all_prompts);
         handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(session.input(), "old one");

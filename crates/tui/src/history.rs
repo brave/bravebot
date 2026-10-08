@@ -117,8 +117,8 @@ impl History {
         self.draft.is_none() && !self.has_visible() && !self.entries.is_empty()
     }
 
-    /// Whether Ctrl-Right means "every stored prompt" now. `line_is_empty` is whether the box is
-    /// empty, since the key is the caret's word motion in a line being typed.
+    /// Whether the scope chord means "every stored prompt" now. `line_is_empty` is whether the box
+    /// is empty, since in a line being typed the chord has nothing to switch.
     ///
     /// While a stored prompt is on screen, or where Up found nothing of this session's and the box
     /// holds nothing to move around in.
@@ -128,7 +128,7 @@ impl History {
                 || (self.back.is_none() && line_is_empty && self.only_earlier_sessions()))
     }
 
-    /// Whether Ctrl-Left means "this session's prompts" now: a stored prompt is on screen in the
+    /// Whether the scope chord means "this session's prompts" now: a stored prompt is on screen in the
     /// wide scope and this session has some.
     pub fn can_narrow(&self) -> bool {
         self.scope == Scope::All && self.on_a_sent_prompt() && self.mine.iter().any(|mine| *mine)

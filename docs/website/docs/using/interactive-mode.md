@@ -26,6 +26,7 @@ growing further. It keeps growing while a turn runs.
 | Escape | discard a half-typed prompt, keeping it for Up, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |
 | Up / Down | walk back through prompts you have sent, starting with a line you cleared |
+| Ctrl-N | on a prompt recalled with Up, walk every stored prompt instead of this session's, and press it again to come back |
 | Ctrl-R | search every prompt you have sent |
 | Tab | complete a slash command or an `@path` |
 | Ctrl-U, Ctrl-K, Ctrl-W, Alt-D | delete to the line start, to the line end, the word before, the word after; the text is kept |
@@ -42,7 +43,7 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Eight of these chords can be [moved to keys of your own](#moving-a-key). Every chord named on this
+Ten of these chords can be [moved to keys of your own](#moving-a-key). Every chord named on this
 page, and every one the interface names on your screen, is the default.
 
 ## Editing the way vi does
@@ -61,7 +62,7 @@ objects, VISUAL selection and REPLACE mode, and how each treats a [marker](#mark
 
 A `keybindings` block in [`settings.json`](../customize/configuration.md) names an action and the
 chord you want to answer it. Write a chord as `ctrl-x`, `alt-o` or `ctrl+x`. The block layers per
-action the way `env` does, so a project file moving one action says nothing about the other eight.
+action the way `env` does, so a project file moving one action says nothing about the other nine.
 
 ```json
 {
@@ -72,7 +73,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Nine actions can be moved, and nothing else can:**
+**Ten actions can be moved, and nothing else can:**
 
 | Action | Default | What it does |
 |---|---|---|
@@ -85,6 +86,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `trail` | `ctrl-t` | show or hide the audit trail |
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](sessions.md#telling-sessions-apart) |
+| `scope` | `ctrl-n` | switch Up between this session's prompts and every stored one |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, and the arrows walk the caret and the history.
