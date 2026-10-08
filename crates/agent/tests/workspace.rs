@@ -8487,6 +8487,42 @@ fn a_workspace_taking_the_records_checkouts_back_lists_them_with_their_candidate
     assert_eq!(third.checkout().unwrap().id(), "c3");
 }
 
+/// CHECKOUT-16. Where nothing is removed, the checkouts to name are the ones under the working
+/// directory's key that no record lists and this session does not keep. A session's own checkout
+/// is not among them whether or not a record lists it yet.
+///
+/// The failure this rejects is naming a checkout the session made and has not yet recorded, which
+/// would tell a person to delete a directory a delegate is working in.
+#[test]
+fn a_checkout_the_session_keeps_is_not_named_as_one_no_record_lists() {
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-unlisted-named", &[("README", "hello\n")]);
+    let beside = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    for _ in 0..3 {
+        workspace
+            .checkout_for(&policy, &state.path, d1())
+            .expect("a checkout");
+    }
+    let named = |one: &Workspace, listed: &'static str| -> Vec<String> {
+        one.unlisted_checkouts(&state.path, &|id| id == listed)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    };
+
+    assert_eq!(named(&workspace, "c1"), Vec::<String>::new());
+    assert_eq!(named(&beside, "c1"), ["c2", "c3"]);
+    assert!(
+        beside
+            .unlisted_checkouts(&state.path, &|_| false)
+            .iter()
+            .all(|(id, path)| path.ends_with(id) && path.join("README").exists()),
+        "naming one changed it"
+    );
+}
+
 /// CHECKOUT-16. A sweep run beside a session leaves the checkouts that session made and the ones
 /// it took back from a record, even where no record lists them, and takes them once the session
 /// lets them go.

@@ -6844,6 +6844,36 @@ mod tests {
             assert!(at.join("c2/README").exists());
         }
 
+        /// CHECKOUT-16: where nothing is removed, the checkouts to name are the plain numbered
+        /// directories no record lists, by number and not by spelling, and nothing is removed.
+        #[test]
+        fn the_unlisted_checkouts_are_the_numbered_directories_no_record_lists() {
+            use crate::git::checkout::unlisted;
+            let repo = Repo::new("checkout-unlisted");
+            let at = repo.root.join("checkouts");
+            for name in ["c1", "c2", "c10", "c9", "scratch", "c", "cx", "c1x", "c-3"] {
+                std::fs::create_dir_all(at.join(name)).expect("directory");
+            }
+            std::fs::write(at.join("c4"), "a file").expect("a file");
+            #[cfg(unix)]
+            {
+                let outside = repo.root.join("outside");
+                std::fs::create_dir_all(&outside).expect("outside");
+                std::os::unix::fs::symlink(&outside, at.join("c5")).expect("link");
+            }
+
+            let named: Vec<String> = unlisted(&at, &|id| id == "c1")
+                .into_iter()
+                .map(|(id, path)| {
+                    assert_eq!(path, at.join(&id), "the path is the directory's own");
+                    id
+                })
+                .collect();
+            assert_eq!(named, ["c2", "c9", "c10"]);
+            assert!(at.join("c2").exists() && at.join("c10").exists());
+            assert!(unlisted(&at.join("absent"), &|_| false).is_empty());
+        }
+
         #[cfg(unix)]
         #[test]
         fn removing_a_checkout_leaves_everything_where_worktrees_is_a_link() {

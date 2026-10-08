@@ -2519,6 +2519,9 @@ checkouts-unread =
     { $id }: its status was not read, so a file changed other than by a write is not named here
 checkouts-none =
     this session keeps no checkout. A delegate given one keeps it when something was done in it
+# The path is where the directory is, and is left as it is.
+checkouts-unlisted =
+    { $id } at { $path }: no session record lists it, and another session may be using it. If none is, delete the directory and run git worktree prune to remove it
 checkouts-no-such = this session keeps no checkout { $id }. /checkouts lists the ones it keeps
 checkouts-command-takes =
     /checkouts lists the checkouts this session keeps, /checkouts apply <n> [path ...] brings back

@@ -4236,6 +4236,9 @@ fn event_loop(
                         })
                         .pushed(&checkout.id)
                 });
+                session.report_unlisted_checkouts(&bravebot_session::sessions::unlisted_checkouts(
+                    &workspace,
+                ));
                 needs_draw = true;
             }
             Action::ListMemories => {
