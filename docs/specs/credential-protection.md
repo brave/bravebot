@@ -141,8 +141,10 @@ Everything outside the working tree has it already: `read_file`, `write_file`, `
 `search` resolve a path and refuse one that lands outside, symlinks included. Its strict form
 covers what the agent authenticates with, `~/.bravebot/leo-premium.json`,
 `~/.bravebot/gateway-keys.json` and the credentials that sign a model request, which CRED-14 puts out of reach of every program, prompt and record with no
-legitimate exception. Two things get past it: a command a turn runs, and `/add-dir`, which makes a
-named directory reachable for the session.
+legitimate exception. A program a turn runs under the confined default is refused `~/.bravebot` as
+it is refused `~/.ssh` ([SANDBOX-12](sandboxing.md#SANDBOX-12)), and no `allowRead` or `allowWrite`
+row, scope variable or `/reach` grant lifts that. Two things get past it: a command a turn runs
+with `sandbox` off, and `/add-dir`, which makes a named directory reachable for the session.
 
 **2. Something else performs the action.** The agent asks for an outcome and never sees a secret.
 A hardware key signs and a touch refuses; a signing agent with per-use confirmation does the same;

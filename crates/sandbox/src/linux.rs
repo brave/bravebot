@@ -937,6 +937,9 @@ mod tests {
         let home = crate::testutil::scratch_dir("bravebot-run-base-table");
         let _ = std::fs::remove_dir_all(&home);
         let held_back = [
+            ".bravebot/gateway-keys.json",
+            ".bravebot/leo-premium.json",
+            ".bravebot/mcp.json",
             ".ssh/id_ed25519",
             ".ssh/id_rsa",
             ".aws/credentials",
@@ -965,6 +968,7 @@ mod tests {
             ".ssh/config",
             ".ssh/known_hosts",
             ".ssh/id_ed25519.pub",
+            ".bravebotx/state",
             "docs/notes.txt",
         ];
         for row in held_back.iter().chain(&read) {
@@ -975,6 +979,8 @@ mod tests {
         }
         let door = home.join("docs").join("door");
         std::os::unix::fs::symlink(home.join(".aws"), &door).expect("a link");
+        let state_door = home.join("docs").join("state-door");
+        std::os::unix::fs::symlink(home.join(".bravebot"), &state_door).expect("a link");
         let policy = crate::base::run_base(Prelude::Linux, &temporary_directory, Some(&home))
             .nameable_under(&sandbox.capabilities())
             .policy;
@@ -1001,6 +1007,11 @@ mod tests {
             cat(&door.join("credentials")),
             Some(CAT_FAILED),
             "a link to a credential directory was followed"
+        );
+        assert_eq!(
+            cat(&state_door.join("gateway-keys.json")),
+            Some(CAT_FAILED),
+            "a link to the state directory was followed"
         );
         assert_eq!(
             cat(&home.join(".kube-not-there/config")),

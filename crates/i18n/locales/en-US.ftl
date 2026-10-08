@@ -527,6 +527,7 @@ sandbox-rule-climbs = it climbs out of the directory it is read from, or holds .
 sandbox-rule-glob-on-a-write = a wildcard applies to reads and not to writes
 sandbox-rule-confines-nothing = a write row over the home directory or the whole filesystem confines nothing
 sandbox-rule-private-key = no list adds reach to ~/.ssh, where a private key is
+sandbox-rule-state-directory = no list adds reach to ~/.bravebot, where the gateway keys are
 sandbox-rule-too-broad = its wildcard looked at more of the disk than a pattern may, so what it names is not known
 sandbox-rule-overridden = another entry decides that path: a refusal at the same path, or one the managed file wrote
 # An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for

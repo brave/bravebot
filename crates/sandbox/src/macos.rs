@@ -1955,6 +1955,9 @@ int main(void) {
         let (scratch, home, temporary) =
             a_home_and_a_temporary_directory("bravebot-sandbox-run-base-table");
         let held_back = [
+            ".bravebot/gateway-keys.json",
+            ".bravebot/leo-premium.json",
+            ".bravebot/mcp.json",
             ".ssh/id_ed25519",
             ".ssh/id_rsa",
             ".aws/credentials",
@@ -1981,6 +1984,7 @@ int main(void) {
             ".ssh/config",
             ".ssh/known_hosts",
             ".ssh/id_ed25519.pub",
+            ".bravebotx/state",
             "Documents/notes.txt",
             "Library/Application Support/Other/state",
         ];

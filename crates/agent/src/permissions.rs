@@ -99,6 +99,7 @@ pub fn filesystem_reason(reason: bravebot_sandbox::rules::Reason) -> &'static st
         Reason::GlobOnAWrite => t!(sandbox_rule_glob_on_a_write),
         Reason::ConfinesNothing => t!(sandbox_rule_confines_nothing),
         Reason::PrivateKey => t!(sandbox_rule_private_key),
+        Reason::StateDirectory => t!(sandbox_rule_state_directory),
         Reason::TooBroad => t!(sandbox_rule_too_broad),
         Reason::Overridden => t!(sandbox_rule_overridden),
     }

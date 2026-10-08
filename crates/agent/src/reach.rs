@@ -691,6 +691,7 @@ mod tests {
             );
             std::fs::create_dir_all(&home).expect("state");
             std::fs::create_dir_all(profile.join(".ssh")).expect(".ssh");
+            std::fs::create_dir_all(profile.join(".bravebot/sessions")).expect(".bravebot");
             std::fs::create_dir_all(&project).expect("project");
             let (first, second) = (root.join("profile/first"), root.join("profile/second"));
             std::fs::create_dir_all(&first).expect("first checkout");
@@ -934,9 +935,9 @@ mod tests {
         assert_eq!(place.held("s").len(), 3, "{tilde}");
     }
 
-    /// The home, what is above it, `~/.ssh`, a path that is not there and one that is not absolute
-    /// are each refused, and nothing is written. The regression it rejects: the person's own words
-    /// reaching the sandbox unjudged.
+    /// The home, what is above it, `~/.ssh`, `~/.bravebot` and a place in it, a path that is not
+    /// there and one that is not absolute are each refused, and nothing is written. The regression
+    /// it rejects: the person's own words reaching the sandbox unjudged.
     #[test]
     fn a_directory_that_holds_a_key_or_does_not_exist_is_refused() {
         let place = Place::new("refused-directory");
@@ -951,6 +952,13 @@ mod tests {
             above,
             place.profile.join(".ssh").display().to_string(),
             "~/.ssh".to_string(),
+            place.profile.join(".bravebot").display().to_string(),
+            place
+                .profile
+                .join(".bravebot/sessions")
+                .display()
+                .to_string(),
+            "~/.bravebot".to_string(),
             place.profile.join("missing").display().to_string(),
             "relative/dir".to_string(),
             format!("{}/../profile/project", place.project.display()),
