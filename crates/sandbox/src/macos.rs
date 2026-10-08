@@ -209,8 +209,8 @@ fn quote(value: &str) -> String {
 /// one, so such a path is read as a variable, the program it names is never exec'd, and
 /// `env` prints its environment and exits reporting success.
 fn confined_argv(
-    program: &str,
-    args: &[String],
+    program: &OsStr,
+    args: &[OsString],
     environment: &Environment,
     held: &[(OsString, OsString)],
 ) -> Result<Vec<OsString>, SandboxError> {
@@ -230,12 +230,13 @@ fn confined_argv(
         .collect();
 
     if !restore.is_empty() {
-        if program.contains('=') {
+        if program.as_bytes().contains(&b'=') {
             return Err(SandboxError::SetupFailed {
                 mechanism: "seatbelt",
                 detail: format!(
-                    "the program path {program} contains '=', which {ENV} reads as a \
-                     variable assignment rather than as the program to run"
+                    "the program path {} contains '=', which {ENV} reads as a \
+                     variable assignment rather than as the program to run",
+                    program.to_string_lossy()
                 ),
             });
         }
@@ -248,8 +249,8 @@ fn confined_argv(
         }));
     }
 
-    argv.push(OsString::from(program));
-    argv.extend(args.iter().map(OsString::from));
+    argv.push(program.to_os_string());
+    argv.extend(args.iter().cloned());
     Ok(argv)
 }
 
@@ -269,8 +270,8 @@ impl Sandbox for SeatbeltSandbox {
 
     fn spawn(
         &self,
-        program: &str,
-        args: &[String],
+        program: &OsStr,
+        args: &[OsString],
         policy: &SandboxPolicy,
         streams: Streams,
         environment: Environment,
@@ -281,8 +282,8 @@ impl Sandbox for SeatbeltSandbox {
 
     fn command(
         &self,
-        program: &str,
-        args: &[String],
+        program: &OsStr,
+        args: &[OsString],
         policy: &SandboxPolicy,
         environment: &Environment,
     ) -> Result<Command, SandboxError> {
@@ -295,13 +296,32 @@ impl Sandbox for SeatbeltSandbox {
 impl SeatbeltSandbox {
     /// `program` behind `sandbox-exec` with the profile for `policy`, or a refusal of the policy.
     fn wrapping(
-        program: &str,
-        args: &[String],
+        program: &OsStr,
+        args: &[OsString],
         policy: &SandboxPolicy,
         environment: &Environment,
     ) -> Result<Command, SandboxError> {
         if !policy.is_meaningful() {
             return Err(SandboxError::PolicyTooPermissive);
+        }
+
+        if let Some(path) = policy
+            .readable
+            .iter()
+            .chain(&policy.unreadable)
+            .chain(policy.writable.iter().map(|row| &row.path))
+            .chain(&policy.unwritable)
+            .find(|path| path.to_str().is_none())
+        {
+            return Err(SandboxError::SetupFailed {
+                mechanism: "seatbelt",
+                detail: format!(
+                    "the policy names the path {}, which is not text and cannot be written \
+                     into a profile without naming a different file; refusing rather than \
+                     granting that one",
+                    path.display()
+                ),
+            });
         }
 
         let mut wrapped = Command::new(SANDBOX_EXEC);
@@ -354,8 +374,8 @@ mod argument_tests {
     #[test]
     fn a_variable_the_platform_strips_from_the_wrapper_is_carried_to_the_program_as_an_argument() {
         let argv = confined_argv(
-            "/opt/tool/server",
-            &["--stdio".to_owned()],
+            OsStr::new("/opt/tool/server"),
+            &["--stdio".into()],
             &Environment::Inherited,
             &held(&[
                 ("DYLD_LIBRARY_PATH", "/tmp/lib"),
@@ -377,6 +397,71 @@ mod argument_tests {
         );
     }
 
+    /// RUN-8: a program or argument that is not text is handed to `sandbox-exec` as the bytes it
+    /// holds, with and without the assignments restoring the loader variables. The regression it
+    /// rejects is a conversion to text on the way, which hands over the file whose name spells the
+    /// replacement of the bytes.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_and_an_argument_that_are_not_text_reach_the_program_as_their_bytes() {
+        let program = OsStr::from_bytes(b"/opt/dir-\xff/server");
+        let argument = OsString::from(OsStr::from_bytes(b"dir-\xff"));
+
+        for (environment, held_variables) in [
+            (Environment::Inherited, held(&[("PATH", "/usr/bin")])),
+            (
+                Environment::Inherited,
+                held(&[("DYLD_LIBRARY_PATH", "/tmp/lib")]),
+            ),
+        ] {
+            let argv = confined_argv(
+                program,
+                std::slice::from_ref(&argument),
+                &environment,
+                &held_variables,
+            )
+            .expect("a program path `env` can name");
+
+            assert_eq!(&argv[argv.len() - 2..], [program, argument.as_os_str()]);
+        }
+    }
+
+    /// RUN-8: a profile is text, so a path in the policy that is not text cannot be written into
+    /// one without naming the file whose name spells the replacement. It is refused instead of
+    /// granted: the regression it rejects is the lossy rendering written as the rule.
+    #[cfg(unix)]
+    #[test]
+    fn a_policy_path_that_is_not_text_is_refused_rather_than_granted_as_another() {
+        let not_text = std::path::PathBuf::from(OsStr::from_bytes(b"/usr/dir-\xff"));
+        let granted_to: [fn(SandboxPolicy, &Path) -> SandboxPolicy; 4] = [
+            |policy, path| policy.allow_read(path),
+            |policy, path| policy.deny_read(path),
+            |policy, path| policy.allow_write(path),
+            |policy, path| policy.deny_write(path),
+        ];
+
+        for grant in granted_to {
+            let policy = grant(
+                SandboxPolicy::strict()
+                    .allow_read("/usr")
+                    .allow_write("/usr"),
+                &not_text,
+            );
+
+            let refused = SeatbeltSandbox::wrapping(
+                OsStr::new("/usr/bin/true"),
+                &[],
+                &policy,
+                &Environment::Inherited,
+            );
+
+            assert!(
+                matches!(refused, Err(SandboxError::SetupFailed { .. })),
+                "{refused:?}"
+            );
+        }
+    }
+
     /// A caller holding nothing the platform would strip reaches its program the way it
     /// did before there was anything to restore: the program `sandbox-exec` execs is the
     /// caller's own. Everything the confined process receives arrives by inheritance, so
@@ -385,8 +470,8 @@ mod argument_tests {
     #[test]
     fn a_caller_holding_nothing_the_platform_strips_reaches_its_program_directly() {
         let argv = confined_argv(
-            "/opt/tool/server",
-            &["--stdio".to_owned()],
+            OsStr::new("/opt/tool/server"),
+            &["--stdio".into()],
             &Environment::Inherited,
             &held(&[("PATH", "/usr/bin"), ("HOME", "/Users/someone")]),
         )
@@ -408,8 +493,8 @@ mod argument_tests {
     #[test]
     fn a_confined_process_asked_to_receive_no_variables_is_handed_none_as_an_argument() {
         let argv = confined_argv(
-            "/opt/tool/server",
-            &["--stdio".to_owned()],
+            OsStr::new("/opt/tool/server"),
+            &["--stdio".into()],
             &Environment::Empty,
             &held(&[
                 ("DYLD_LIBRARY_PATH", "/tmp/lib"),
@@ -435,7 +520,7 @@ mod argument_tests {
     #[test]
     fn a_caller_naming_its_variables_has_only_the_named_loader_variables_carried_as_arguments() {
         let argv = confined_argv(
-            "/opt/tool/server",
+            OsStr::new("/opt/tool/server"),
             &[],
             &Environment::Only(
                 crate::process::Variables::new()
@@ -468,7 +553,7 @@ mod argument_tests {
         let path = "/opt/name=value/server";
 
         let refused = confined_argv(
-            path,
+            OsStr::new(path),
             &[],
             &Environment::Inherited,
             &held(&[("DYLD_LIBRARY_PATH", "/tmp/lib")]),
@@ -487,7 +572,7 @@ mod argument_tests {
 
         assert_eq!(
             confined_argv(
-                path,
+                OsStr::new(path),
                 &[],
                 &Environment::Inherited,
                 &held(&[("PATH", "/usr/bin")])
@@ -706,7 +791,7 @@ int main(void) {
         );
         let mut confined = SeatbeltSandbox
             .spawn(
-                "/usr/bin/true",
+                OsStr::new("/usr/bin/true"),
                 &[],
                 &policy,
                 nothing_attached(),
@@ -743,7 +828,7 @@ int main(void) {
             .allow_read("/bin")
             .allow_write(&absent);
         let started = sandbox.spawn(
-            "/usr/bin/true",
+            OsStr::new("/usr/bin/true"),
             &[],
             &policy,
             nothing_attached(),
@@ -819,7 +904,7 @@ int main(void) {
 
         let mut child = sandbox
             .spawn(
-                "/usr/bin/true",
+                OsStr::new("/usr/bin/true"),
                 &[],
                 &policy,
                 nothing_attached(),
@@ -838,7 +923,7 @@ int main(void) {
             .allow_write("/");
         let err = sandbox
             .spawn(
-                "/usr/bin/true",
+                OsStr::new("/usr/bin/true"),
                 &[],
                 &policy,
                 nothing_attached(),
@@ -882,10 +967,11 @@ int main(void) {
             .allow_read("/bin")
             .allow_read(&granted);
         let succeeds = |program: &str, arguments: &[String]| {
+            let arguments: Vec<OsString> = arguments.iter().map(OsString::from).collect();
             sandbox
                 .spawn(
-                    program,
-                    arguments,
+                    OsStr::new(program),
+                    &arguments,
                     &policy,
                     nothing_attached(),
                     Environment::Inherited,
@@ -938,8 +1024,8 @@ int main(void) {
         );
         let read_env = sandbox
             .spawn(
-                "/bin/cat",
-                &[ENV.to_owned()],
+                OsStr::new("/bin/cat"),
+                &[ENV.into()],
                 &without_usr_bin,
                 nothing_attached(),
                 Environment::Inherited,
@@ -966,7 +1052,7 @@ int main(void) {
             .allow_read("/bin");
         let mut child = sandbox
             .spawn(
-                "/usr/bin/true",
+                OsStr::new("/usr/bin/true"),
                 &[],
                 &policy,
                 nothing_attached(),
@@ -995,8 +1081,8 @@ int main(void) {
 
         let mut child = sandbox
             .spawn(
-                "/usr/bin/touch",
-                &[target.display().to_string()],
+                OsStr::new("/usr/bin/touch"),
+                &[target.display().to_string().into()],
                 &policy,
                 nothing_attached(),
                 Environment::Inherited,
@@ -1047,7 +1133,7 @@ int main(void) {
         // environment here is this process's own: a machine whose shell exports `http_proxy`
         // would otherwise have both halves of this test measure a connection to somewhere else.
         let curl = |policy: &SandboxPolicy| {
-            let args: Vec<String> = [
+            let args: Vec<OsString> = [
                 "-s",
                 "--noproxy",
                 "*",
@@ -1056,11 +1142,11 @@ int main(void) {
                 &format!("http://127.0.0.1:{port}/"),
             ]
             .iter()
-            .map(|s| s.to_string())
+            .map(OsString::from)
             .collect();
             sandbox
                 .spawn(
-                    "/usr/bin/curl",
+                    OsStr::new("/usr/bin/curl"),
                     &args,
                     policy,
                     nothing_attached(),
@@ -1090,12 +1176,12 @@ int main(void) {
     fn nc_to_socket(sandbox: &SeatbeltSandbox, policy: &SandboxPolicy, path: &Path) -> Option<i32> {
         let args = ["-U", "-w", "1"]
             .iter()
-            .map(|s| s.to_string())
-            .chain([path.display().to_string()])
+            .map(OsString::from)
+            .chain([path.as_os_str().to_os_string()])
             .collect::<Vec<_>>();
         sandbox
             .spawn(
-                "/usr/bin/nc",
+                OsStr::new("/usr/bin/nc"),
                 &args,
                 policy,
                 nothing_attached(),
@@ -1237,10 +1323,10 @@ int main(void) {
             .allow_write(&dir);
         let mut child = sandbox
             .spawn(
-                "/bin/mv",
+                OsStr::new("/bin/mv"),
                 &[
-                    source.display().to_string(),
-                    destination.display().to_string(),
+                    source.display().to_string().into(),
+                    destination.display().to_string().into(),
                 ],
                 &policy,
                 nothing_attached(),
@@ -1288,8 +1374,8 @@ int main(void) {
         let touch = |target: &Path| {
             sandbox
                 .spawn(
-                    "/usr/bin/touch",
-                    &[target.display().to_string()],
+                    OsStr::new("/usr/bin/touch"),
+                    &[target.display().to_string().into()],
                     &policy,
                     nothing_attached(),
                     Environment::Inherited,
@@ -1363,8 +1449,8 @@ int main(void) {
         let target = dir.join(".git").join("config");
         let status = sandbox
             .spawn(
-                "/usr/bin/touch",
-                &[target.display().to_string()],
+                OsStr::new("/usr/bin/touch"),
+                &[target.display().to_string().into()],
                 &policy,
                 nothing_attached(),
                 Environment::Inherited,
@@ -1378,8 +1464,8 @@ int main(void) {
         let outside = dir.parent().expect("a parent").join("bravebot-not-granted");
         let refused = sandbox
             .spawn(
-                "/usr/bin/touch",
-                &[outside.display().to_string()],
+                OsStr::new("/usr/bin/touch"),
+                &[outside.display().to_string().into()],
                 &policy,
                 nothing_attached(),
                 Environment::Inherited,
@@ -1432,8 +1518,8 @@ int main(void) {
         let touch = |target: &Path| {
             sandbox
                 .command(
-                    "/usr/bin/touch",
-                    &[target.display().to_string()],
+                    OsStr::new("/usr/bin/touch"),
+                    &[target.display().to_string().into()],
                     &policy,
                     &environment,
                 )
@@ -1452,7 +1538,7 @@ int main(void) {
         assert!(!withheld.join("written").exists());
 
         let printed = sandbox
-            .command("/usr/bin/env", &[], &policy, &environment)
+            .command(OsStr::new("/usr/bin/env"), &[], &policy, &environment)
             .expect("a command")
             .output()
             .expect("spawned");
@@ -1498,7 +1584,7 @@ int main(void) {
 
         let mut child = sandbox
             .spawn(
-                &program.to_string_lossy(),
+                program.as_os_str(),
                 &[],
                 &policy,
                 capturing_stdout(),
@@ -1541,8 +1627,8 @@ int main(void) {
 
         let mut child = sandbox
             .spawn(
-                "/bin/pwd",
-                &["-P".to_owned()],
+                OsStr::new("/bin/pwd"),
+                &["-P".into()],
                 &policy,
                 capturing_stdout(),
                 Environment::Empty,
@@ -1590,13 +1676,8 @@ int main(void) {
             .arg("-p")
             .arg(SeatbeltSandbox::profile(&policy));
         as_arguments.args(
-            confined_argv(
-                &program.to_string_lossy(),
-                &[],
-                &Environment::Inherited,
-                &stripped,
-            )
-            .expect("a program path `env` can name"),
+            confined_argv(program.as_os_str(), &[], &Environment::Inherited, &stripped)
+                .expect("a program path `env` can name"),
         );
         let mut restored =
             crate::process::start(as_arguments, capturing_stdout(), &Environment::Inherited)
@@ -1651,7 +1732,7 @@ int main(void) {
 
         let mut child = sandbox
             .spawn(
-                &program.to_string_lossy(),
+                program.as_os_str(),
                 &[],
                 &policy,
                 capturing_stdout(),
@@ -1717,11 +1798,11 @@ int main(void) {
         arguments: &[&str],
         streams: crate::process::Streams,
     ) -> Option<i32> {
-        let arguments: Vec<String> = arguments.iter().map(|a| a.to_string()).collect();
+        let arguments: Vec<OsString> = arguments.iter().map(OsString::from).collect();
         SeatbeltSandbox::new()
             .expect("sandbox-exec is present on macOS")
             .spawn(
-                program,
+                OsStr::new(program),
                 &arguments,
                 policy,
                 streams,

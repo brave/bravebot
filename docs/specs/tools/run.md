@@ -347,6 +347,13 @@ matching on one, and a recorded path that *is* a rendering designates no file: i
 rather than covering every file it could have meant, which is what [RUN-9](#RUN-9) and
 [RUN-19](#RUN-19) say of the two records that outlive the prompt.
 
+The same holds where the program is started under a confinement. The command handed to the
+platform's mechanism holds the program's path and each argument as the bytes they were, so the
+process started is the file the approval and the profile were computed for and not the file whose
+name spells the rendering of its bytes. A mechanism that can carry text alone, which is a Seatbelt
+profile and a Windows command line, refuses a path or an argument that is not text before a process
+exists, and does not write the rendering in its place.
+
 Nothing else a person settled in advance reaches a tree of its own: the trust map's relative rules,
 a rule in a settings file, and a line remembered past the session ([RUN-19](#RUN-19)) are spelled
 against the workspace root, and a remembered line records no tree at all. So a line running outside
@@ -428,6 +435,12 @@ meaning is not in its argv, not the setting of a variable.
 `verified-by: bravebot_core::policy::vouching_does_not_follow_a_binary_onto_another_path_it_is_started_by`
 `verified-by: bravebot_core::policy::a_program_started_by_another_name_or_from_the_project_is_not_proven`
 `verified-by: bravebot_session::sessions::the_path_a_command_was_started_by_comes_back_with_it`
+`verified-by: bravebot_agent::confine::a_program_whose_path_is_not_text_is_started_by_its_own_bytes`
+`verified-by: bravebot_agent::confine::an_argument_that_is_not_text_is_carried_by_its_own_bytes`
+`verified-by: bravebot_sandbox::linux::a_program_and_an_argument_that_are_not_text_reach_the_command_as_their_bytes`
+`verified-by: bravebot_sandbox::macos::a_program_and_an_argument_that_are_not_text_reach_the_program_as_their_bytes`
+`verified-by: bravebot_sandbox::macos::a_policy_path_that_is_not_text_is_refused_rather_than_granted_as_another`
+`verified-by: bravebot_sandbox::windows::a_program_or_an_argument_that_is_not_text_is_refused_for_a_command_line`
 
 <a id="RUN-9"></a>
 ### RUN-9: the vouched list belongs to the session
