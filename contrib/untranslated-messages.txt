@@ -38,5 +38,7 @@ fr:doctor-sandbox-passed
 fr:doctor-sandbox-skipped
 fr:doctor-sandbox-temporary
 fr:doctor-sandbox-total
+fr:doctor-scrub-pattern
+fr:doctor-scrub-pattern-matched
 fr:doctor-state-directory-logs
 fr:reply-stopping

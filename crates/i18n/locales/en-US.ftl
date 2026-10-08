@@ -440,6 +440,10 @@ doctor-tiers-absent = none configured (set ANTHROPIC_DEFAULT_OPUS_MODEL)
 doctor-settings = settings
 doctor-settings-names = { $names }
 doctor-settings-absent = no settings.json
+# A pattern in run.scrubEnv and one variable name it selected on this machine, one line each. Names
+# only: the values are what the list exists to withhold (RUN-28).
+doctor-scrub-pattern = by pattern
+doctor-scrub-pattern-matched = { $pattern } selected { $variable }, which no program this agent runs is handed
 doctor-permissions = permissions
 doctor-permissions-absent = no rules
 doctor-permissions-count =
