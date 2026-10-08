@@ -474,8 +474,13 @@ does not appear, so it has to be readable back.
 It never decides what may run. A command nobody vouched for still runs after a prompt, nothing is
 refused for being absent, and the set is empty at the start of every session. Programs are not
 enumerated: the set of programs someone might ask for cannot be listed in advance. Each runs
-confined to what its plan accounts for ([SANDBOX-17](#SANDBOX-17)), with the credential a
-`git push` needs lent by the operation it names ([SANDBOX-16](#SANDBOX-16)).
+confined ([SANDBOX-17](#SANDBOX-17)): on Linux and macOS to reading the machine except the places
+that hold a credential and writing only the session's directories, on Windows to what its plan
+accounts for, with the credential a `git push` needs lent by the operation it names
+([SANDBOX-16](#SANDBOX-16)), and the network kept only by a stage that has a reason to reach it
+where the session closed it ([SANDBOX-20](sandboxing.md#SANDBOX-20)), unless the person chose another
+sandbox mode ([SANDBOX-22](../sandboxing.md#SANDBOX-22)), and moved by the four lists of paths a person
+wrote ([SANDBOX-25](../sandboxing.md#SANDBOX-25)).
 
 Do not add an allowlist and treat it as the safety property. What holds is the label on the
 output, not a belief about the binary. The audited table in [command-line.md](command-line.md) is
@@ -556,8 +561,9 @@ process starts, so editing it applies to the next session rather than to a run a
 
 **Not a confinement mechanism, and it must not be read as one.** A program that reaches the network
 is unpoliced, so it can send anything it can read, which is what its profile
-reaches ([SANDBOX-18](#SANDBOX-18)): the workspace and what its plan names, and not a file or a credential
-of the user's own that it does not. Those requests are the program's own and do not pass the gate in
+reaches ([SANDBOX-18](#SANDBOX-18)): on Linux and macOS the machine except the credential table
+([SANDBOX-12](#SANDBOX-12)), so a token file a tool reads by name is one it can send, and on Windows the workspace and what
+its plan names, and not a file or a credential of the user's own that it does not. Those requests are the program's own and do not pass the gate in
 [network-egress.md](../network-egress.md), which governs what this process sends rather than what a
 program it started sends. What closes here is the narrow part of the gap, the credentials a person
 could not have been shown at the prompt and had no way to withhold. The rest of what they hand over is

@@ -10,7 +10,7 @@ use std::io::Write;
 pub(crate) const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 
 /// The subcommands, as the usage table lists them.
-pub(crate) const COMMANDS: [&str; 9] = [
+pub(crate) const COMMANDS: [&str; 10] = [
     "doctor",
     "auth",
     "mcp",
@@ -20,6 +20,7 @@ pub(crate) const COMMANDS: [&str; 9] = [
     "import-leo-creds",
     "import-providers",
     "completion",
+    "shell-init",
 ];
 
 /// What follows `auth`.
@@ -42,7 +43,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 26] = [
+const FLAGS: [Flag; 33] = [
     flag("plain", None, false),
     flag("bg", None, false),
     flag("resume", Some('r'), false),
@@ -52,10 +53,16 @@ const FLAGS: [Flag; 26] = [
     flag("file", None, true),
     flag("add-dir", None, true),
     flag("settings", None, true),
+    flag("run-network", None, true),
+    flag("sandbox-allow-read", None, true),
+    flag("sandbox-deny-read", None, true),
+    flag("sandbox-allow-write", None, true),
+    flag("sandbox-deny-write", None, true),
     flag("agent", None, true),
     flag("system-prompt", None, true),
     flag("append-system-prompt", None, true),
     flag("mode", None, true),
+    flag("sandbox", None, true),
     flag("model", None, true),
     flag("effort", None, true),
     flag("advisor", None, true),
@@ -66,6 +73,7 @@ const FLAGS: [Flag; 26] = [
     flag("incognito", None, false),
     flag("safe", None, false),
     flag("vet", None, false),
+    flag("sandbox-check", None, false),
     flag("dangerously-skip-permissions", None, false),
     flag("help", Some('h'), false),
     flag("version", Some('V'), false),
@@ -116,7 +124,7 @@ fn bash() -> String {
         case "${{COMP_WORDS[1]}}" in
             auth) COMPREPLY=($(compgen -W "{auth}" -- "$cur")); return 0 ;;
             mcp) COMPREPLY=($(compgen -W "{mcp}" -- "$cur")); return 0 ;;
-            completion) COMPREPLY=($(compgen -W "{shells}" -- "$cur")); return 0 ;;
+            completion|shell-init) COMPREPLY=($(compgen -W "{shells}" -- "$cur")); return 0 ;;
         esac
     fi
     case "$cur" in
@@ -147,7 +155,7 @@ _bravebot() {{
         case "$words[2]" in
             auth) compadd -- {auth}; return ;;
             mcp) compadd -- {mcp}; return ;;
-            completion) compadd -- {shells}; return ;;
+            completion|shell-init) compadd -- {shells}; return ;;
         esac
     fi
     if [[ "$words[CURRENT]" == -* ]]; then
@@ -183,6 +191,7 @@ fn fish() -> String {
         ("auth", AUTH.join(" ")),
         ("mcp", MCP.join(" ")),
         ("completion", SHELLS.join(" ")),
+        ("shell-init", SHELLS.join(" ")),
     ] {
         script.push_str(&format!(
             "complete -c bravebot -f -n '__fish_seen_subcommand_from {command}' -a '{words}'\n"

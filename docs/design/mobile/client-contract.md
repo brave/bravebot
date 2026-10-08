@@ -1,6 +1,6 @@
 # Client interface and prototype contract
 
-Status: the first Rust session-view block and the stdio TypeScript client's session lifecycle are implemented. Approval replies, the local client program and the remaining stage 1–2a evidence are outstanding, so stages 1–2a are incomplete. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
+Status: stages 1–2a are complete: the Rust session view and the stdio TypeScript client in `packages/agent-client`, tested against a real `bravebot-rpc`. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
 
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
@@ -59,8 +59,9 @@ These tests do not establish TypeScript adapter behavior or native rendering.
 This block supplies no saved-history import, late subscription, reconnect, controller state,
 send deduplication, persistent listener, networking or embedded bindings. Session identity lasts
 for the connection. Closing detaches the view without claiming worker termination or save
-success. Legacy reply targets are unchanged; stage 3a still supplies stronger stale-action
-protection.
+success. Question numbers last the session, a cancel can name its turn, and the trust answer is taken once
+(RPCVIEW-6); a runtime that does not advertise these keeps its older, weaker targets. A cancel issued
+while a send is unanswered names no turn, since the turn it starts is not yet known.
 
 ## Implemented TypeScript client
 
@@ -89,19 +90,36 @@ released content.
 - list the configured workspaces by id and name;
 - create a fresh session in one of them with the view started (`createSession` never accepts a path);
 - answer startup trust when asked to, after which the question is no longer offered;
-- send, cancel, and close.
+- send, cancel, and close;
+- approve or reject a `confirm`, `run` or `fetch` question, and answer an `ask` question.
 
 Raw dispatch of arbitrary bridge methods is not part of the package. The entry points export no `raw`, no connection class, and no way to reach the client's connection, because dispatch is not confined to configured workspaces and could answer a question the client never offered. Tests reach it through an internal module that the package's `exports` map does not expose.
 
+A reply addresses the question on screen. The method comes from the pending kind Rust reports, not
+from anything in its payload; a reply for a request that is not displayed is refused without
+sending (`StaleActionError`); a question Rust does not mark supported, a decision given to an `ask`
+question, and answers given to an approval are refused without sending. A `run` is answered once
+and the request never carries `remember`. Rust still checks every reply and refuses a wrong-kind,
+duplicate or late one, which the client reports with its code. A decision other than `approve` or
+`reject`, answers that are not typed text, chosen indexes or `null`, and a second reply to a request
+while the first is being sent are refused locally.
+
 `attach`, `takeControl` and `messageStatus` fail locally. A question a turn asks appears in the
-view and can be cancelled, which refuses it. Answering it is not yet supported.
+view, and cancelling the turn refuses it.
 
 A runtime without version 1 of the capability is refused before any session is created. A close
 reports the view as detached, ending it on the bridge's response even if the detach update has
 not arrived, and worker termination and save success as unknown. A failed close
 keeps the session subscribed to view updates and connection loss, unless the bridge answers that the session no longer exists.
 
-A request unanswered past its deadline (30 seconds by default) ends the connection and stops the
+A failed request carries an `outcome`: `rejected` when the request was refused and had no effect, and
+`unknown` when it may have reached the bridge (a lost connection, a failed write, a deadline, or the
+bridge reporting an `internal` error), so the
+caller must look at the current state before trying again. At most 256 requests wait for an answer at
+once and one request is at most 8 MiB; beyond that a request is refused before it is written. Cancel
+and close are exempt from the first limit, so a caller can always stop work. Parameters that cannot be
+written fail the request instead of throwing. A request
+unanswered past its deadline (30 seconds by default) ends the connection and stops the
 child, since its outcome cannot be known. Nothing is retried. The cleanup request sent after a
 failed session startup has no deadline, so a silent bridge cannot end the connection. Stdout EOF,
 a read error, or a failed write to the child also ends the connection immediately, even if the
@@ -116,6 +134,14 @@ A startup that breaks the protocol (a malformed or out-of-order initial view, a 
 refuses the session for good, even if a valid initial view follows. Startup trust questions are
 held only while a session is being created, and at most 64 sessions' worth are held, earliest first.
 
+**Local program.** `scripts/local-client.ts` drives one fresh session from a terminal: it requires an
+explicit `--trust yes|no`, answers an approval only as `--decide approve|reject|prompt` says (a
+prompt needs a terminal, and without one the answer is reject), declines a user question, and cancels
+a question it cannot answer. It prints each released payload as one line of JSON with every control, format and separator
+character escaped (zero-width, bidirectional and tag characters among them). The bridge's own version,
+build, event names and error messages are escaped the same way. It is a diagnostic dump, not a display surface, and does not
+render or mark released content.
+
 **Evidence.** The scenarios run under four read-chunkings against a scripted server: split and
 combined frames, early events, interleaved sessions, out-of-order responses, gaps, malformed
 input, labelled rows carried whole, connection loss, an unknown method and a question of an
@@ -123,13 +149,28 @@ unsupported kind. The real-process tests use a model service of the test's own, 
 a scratch project. They show:
 
 - trust deciding whether a write is asked about;
-- two sessions with turns in flight together keeping their own rows;
+- an approved write landing and a rejected one not, and the same for a command;
+- two sessions with turns in flight together keeping their own rows, and two waiting sessions
+  answered in the opposite order to their questions;
 - a cancelled write not landing, and its late approval refused;
+- a fetched page arriving with its label in the view and never reaching a planner request, with a
+  rejected fetch sending nothing;
+- a typed answer to a user question reaching the planner and a declined one not;
+- fetched page bytes copied into a file: the write is asked about as untrusted, shows those bytes
+  with their label, and the bytes never reach a planner request;
+- a write that lands while the session store cannot be written: the final reply carries a record id
+  that is not proof of saving, and a close still reports saving as unknown;
+- the local program approving or rejecting as told, refusing to start without an explicit trust
+  answer, rejecting by default without a terminal, declining a user question, and printing released
+  text with control, zero-width, separator and bidirectional characters escaped;
+- the same session driven through a proxy that hands the real bridge's output on one to three bytes
+  at a time, with multi-byte text intact and every update in sequence;
 - close, EOF, a killed process and unreadable input.
 
-**Not established.** Answering questions, a local program, real-process evidence for labelled
-released content, native rendering, remote security, reconnect and recovery, send deduplication,
-controller ownership, a stronger stale-action guarantee than the bridge's, a persistent host, and
+**Not established.** The local program cancelling a question of an unsupported kind (written, not
+exercised), native rendering, remote security, reconnect and recovery, send deduplication,
+qualifying a session by target and runtime instance (a session object belongs to one connection and
+ends with it, but carries no identity a caller could store across restarts), controller ownership, a stale-action guarantee beyond the targets RPCVIEW-6 gives, a persistent host, and
 operating systems other than macOS.
 
 ## Common interface

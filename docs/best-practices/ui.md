@@ -39,9 +39,13 @@ identity and actions in a header.
 
 **A UI change adds no shortcut, default, or focus behaviour that lets a keypress or a stray click
 approve a decision card.** A card that appears does not take focus from the composer, and a
-decision is reached by a deliberate action on the card. Attaching a file goes through the native
-picker's grant, not drag or paste. The reasoning is in `ui/docs/security.md` and
-`ui/docs/file-access-security.md`.
+decision is reached by a deliberate action on the card. A file reaches a turn as context in one of
+two ways: the native picker's grant, or an `@` name in the prompt the person sends, which is
+trusted context on the terminal's terms ([NAME-1](../specs/naming-files.md#NAME-1),
+[NAME-2](../specs/naming-files.md#NAME-2)). The bridge reads each `@` name back out of the sent
+prompt itself and the agent's workspace confines it to the conversation's folder, so neither the
+renderer nor the main process supplies a path. A drag or a paste attaches nothing. The reasoning is
+in `ui/docs/security.md` and `ui/docs/file-access-security.md`.
 
 ---
 

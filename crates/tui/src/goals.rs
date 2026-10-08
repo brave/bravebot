@@ -73,17 +73,42 @@ pub struct Running {
     last: Option<String>,
     /// Whether the person has held the goal still. The condition and the count are kept either way.
     paused: bool,
+    /// When the goal was armed. Counted through a pause, since the goal is still set.
+    started: std::time::Instant,
+    /// The session's token total when the goal was armed, so what the goal has cost is the
+    /// difference and not a second tally kept beside the session's.
+    tokens_at_start: u64,
 }
 
 impl Running {
     /// Arm a goal. Nothing is sent: a goal has a condition and no prompt.
-    pub fn begin(condition: String) -> Self {
+    ///
+    /// `tokens` is what the session has spent so far, which is where [`Running::spent`] counts from.
+    pub fn begin(condition: String, tokens: u64) -> Self {
         Self {
             condition,
             rounds: 0,
             last: None,
             paused: false,
+            started: std::time::Instant::now(),
+            tokens_at_start: tokens,
         }
+    }
+
+    /// How long the goal has been set, as of `now`.
+    pub fn elapsed(&self, now: std::time::Instant) -> std::time::Duration {
+        now.saturating_duration_since(self.started)
+    }
+
+    /// What the session has spent since the goal was armed, given the session's total now.
+    pub fn spent(&self, tokens: u64) -> u64 {
+        tokens.saturating_sub(self.tokens_at_start)
+    }
+
+    /// The moment the goal was armed, for a test that needs a clock it can move.
+    #[cfg(test)]
+    pub fn started(&self) -> std::time::Instant {
+        self.started
     }
 
     /// Whether turns are being judged against this goal, or the person has held it still.
@@ -179,7 +204,7 @@ mod tests {
 
     #[test]
     fn pausing_keeps_the_condition_and_the_rounds_and_resuming_arms_it_again() {
-        let mut goal = Running::begin("the tests pass".to_string());
+        let mut goal = Running::begin("the tests pass".to_string(), 0);
         goal.not_met("nothing ran them".to_string());
         assert!(goal.pause());
         assert!(!goal.pause(), "a second pause reported a change");
@@ -203,7 +228,7 @@ mod tests {
 
     #[test]
     fn a_fresh_goal_has_sent_nothing_back_and_has_heard_nothing() {
-        let goal = Running::begin("the tests pass".to_string());
+        let goal = Running::begin("the tests pass".to_string(), 0);
         assert_eq!(goal.rounds(), 0);
         assert_eq!(goal.last_reason(), None);
         assert_eq!(goal.left(), MAX_ROUNDS);
@@ -211,7 +236,7 @@ mod tests {
 
     #[test]
     fn a_verdict_of_not_yet_is_kept_and_counted() {
-        let mut goal = Running::begin("the tests pass".to_string());
+        let mut goal = Running::begin("the tests pass".to_string(), 0);
         assert!(goal.not_met("nothing ran them".to_string()));
         assert_eq!(goal.rounds(), 1);
         assert_eq!(goal.last_reason(), Some("nothing ran them"));
@@ -221,7 +246,7 @@ mod tests {
     /// conversation that grows every round.
     #[test]
     fn a_goal_stops_sending_the_work_back_once_its_rounds_are_spent() {
-        let mut goal = Running::begin("the tests pass".to_string());
+        let mut goal = Running::begin("the tests pass".to_string(), 0);
         for round in 1..=MAX_ROUNDS {
             assert!(
                 goal.not_met("still nothing".to_string()),
@@ -236,11 +261,26 @@ mod tests {
     /// giving up must not also throw away what the judge said.
     #[test]
     fn the_reason_from_the_round_that_gave_up_is_still_kept() {
-        let mut goal = Running::begin("the tests pass".to_string());
+        let mut goal = Running::begin("the tests pass".to_string(), 0);
         for _ in 0..MAX_ROUNDS {
             goal.not_met("still nothing".to_string());
         }
         goal.not_met("the linker is missing".to_string());
         assert_eq!(goal.last_reason(), Some("the linker is missing"));
+    }
+
+    /// What a goal has cost is counted from when it was armed, not from the start of the session,
+    /// and the time from the same moment.
+    #[test]
+    fn a_goal_counts_what_was_spent_and_how_long_from_the_moment_it_was_armed() {
+        let goal = Running::begin("the tests pass".to_string(), 4_000);
+
+        assert_eq!(goal.spent(4_000), 0);
+        assert_eq!(goal.spent(9_500), 5_500);
+        assert_eq!(goal.spent(100), 0, "a total that went down underflowed");
+        assert_eq!(
+            goal.elapsed(goal.started() + std::time::Duration::from_secs(125)),
+            std::time::Duration::from_secs(125)
+        );
     }
 }

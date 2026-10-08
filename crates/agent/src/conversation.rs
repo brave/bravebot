@@ -22,6 +22,7 @@
 //!   whether the planner was shown private content, for the same reason on the other axis
 //!   ([`bravebot_core::policy::Policy::holding`]).
 
+use crate::request_view::Provenance;
 use bravebot_aichat::protocol::{Message, Role};
 #[cfg(test)]
 use bravebot_aichat::protocol::{ToolCallRequest, ToolCallRequestFunction};
@@ -130,6 +131,13 @@ pub struct Stored {
     /// Absent for a prompt, an answer and a result, which is nearly all of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composed: Option<Composed>,
+    /// Whose words these are, as the composer recorded it, for the view of a request.
+    ///
+    /// Not written down: a saved session is a record of the exchange and not of this process's
+    /// reading of it, so a message restored from one has no origin until a turn composes a new
+    /// one. [`Stored::provenance`] says so rather than guessing.
+    #[serde(skip)]
+    pub source: Option<Provenance>,
 }
 
 impl Stored {
@@ -138,6 +146,30 @@ impl Stored {
         Self {
             message,
             composed: None,
+            source: None,
+        }
+    }
+
+    /// Whose words this message holds.
+    ///
+    /// What the composer recorded where it recorded anything. Failing that, only what the shape of
+    /// the record settles: the tag of a message that holds a file somebody named, a summary the
+    /// driver put in, and the planner's own role. A user message with nothing recorded is not taken
+    /// for a typed one, since being wrong that way would tell a person that words they never wrote
+    /// were theirs.
+    pub fn provenance(&self) -> Provenance {
+        if let Some(source) = &self.source {
+            return source.clone();
+        }
+        match (&self.composed, self.message.role) {
+            (Some(Composed::Attached { path }), _) => Provenance::TrustedFile(path.clone()),
+            (Some(Composed::Summary), _) => Provenance::Summary,
+            (Some(Composed::Vetted { reference, .. }), _) => Provenance::Vetted(reference.clone()),
+            (Some(Composed::Watch { .. } | Composed::Resumed | Composed::Consolidation), _) => {
+                Provenance::Driver
+            }
+            (_, Role::Assistant) => Provenance::Planner,
+            _ => Provenance::Unrecorded,
         }
     }
 }
@@ -298,27 +330,55 @@ impl Conversation {
         Self::assembled(system, &self.messages)
     }
 
+    /// The same, and whose words each message after the system prompt holds.
+    ///
+    /// One list from one pass, so a mark cannot land on a message other than the one it was made
+    /// for: a call answered here has the driver's sentence as its answer.
+    pub fn with_system_marked(&self, system: &str) -> (Vec<Message>, Vec<Provenance>) {
+        let marked = Self::assembled_marked(system, &self.messages);
+        let marks = marked
+            .iter()
+            .skip(1)
+            .map(|(_, mark)| mark.clone())
+            .collect();
+        (
+            marked.into_iter().map(|(message, _)| message).collect(),
+            marks,
+        )
+    }
+
     /// The same, over some prefix of the exchange.
     ///
     /// Shared with [`Conversation::with_system`] rather than written twice, because the gap
     /// filling below is the difference between a well-formed request and one a server refuses,
     /// and a summariser sending a prefix needs it exactly as much as a turn sending the whole.
     fn assembled(system: &str, exchange: &[Stored]) -> Vec<Message> {
+        Self::assembled_marked(system, exchange)
+            .into_iter()
+            .map(|(message, _)| message)
+            .collect()
+    }
+
+    /// [`Conversation::assembled`] with each message's origin beside it.
+    fn assembled_marked(system: &str, exchange: &[Stored]) -> Vec<(Message, Provenance)> {
         let mut messages = Vec::with_capacity(exchange.len() + 1);
-        messages.push(Message::system(system));
+        messages.push((Message::system(system), Provenance::Driver));
 
         for (index, stored) in exchange.iter().enumerate() {
             let message = &stored.message;
-            messages.push(message.clone());
+            messages.push((message.clone(), stored.provenance()));
 
             let Some(calls) = &message.tool_calls else {
                 continue;
             };
             for call in calls {
                 if !answered(exchange, index, &call.id) {
-                    messages.push(Message::tool_result(
-                        call.id.clone(),
-                        "(this call did not run: the turn ended first)",
+                    messages.push((
+                        Message::tool_result(
+                            call.id.clone(),
+                            "(this call did not run: the turn ended first)",
+                        ),
+                        Provenance::Driver,
                     ));
                 }
             }
@@ -351,6 +411,29 @@ impl Conversation {
         self.messages.push(Stored {
             message,
             composed: Some(composed),
+            source: None,
+        });
+    }
+
+    /// [`Conversation::push_composed`] for a message whose composer also knows whose words it holds.
+    pub fn push_composed_from(&mut self, message: Message, composed: Composed, source: Provenance) {
+        self.messages.push(Stored {
+            message,
+            composed: Some(composed),
+            source: Some(source),
+        });
+    }
+
+    /// The same as [`Conversation::push`], for a message whose composer knows whose words it holds.
+    ///
+    /// Written where the prose is written, by the one caller that knows, for the reason the tag of
+    /// [`Conversation::push_composed`] is. It is shown to a person who wants to see where each span
+    /// of a request came from, so it is never worked out from the words.
+    pub fn push_from(&mut self, message: Message, source: Provenance) {
+        self.messages.push(Stored {
+            message,
+            composed: None,
+            source: Some(source),
         });
     }
 
@@ -534,6 +617,7 @@ impl Conversation {
             Stored {
                 message: Message::user(note),
                 composed: Some(Composed::Summary),
+                source: None,
             },
         );
 
@@ -738,6 +822,7 @@ impl Conversation {
             messages.push(Stored {
                 message: Message::user(note),
                 composed: Some(Composed::Resumed),
+                source: None,
             });
         }
 
@@ -929,6 +1014,31 @@ fn dead_references(references: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The origin is what the composer recorded. Where nothing was, the message is unrecorded and
+    /// never typed: a restored session has no record of who wrote what, and a guess from the words
+    /// would let a file's own bytes pick their label.
+    #[test]
+    fn a_message_is_labelled_by_what_was_recorded_and_never_guessed_at() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("who knows"));
+        conversation.push_from(Message::user("typed words"), Provenance::Typed);
+        conversation.push_composed(
+            Message::user("Contents of a.rs:\n\nfn main() {}"),
+            Composed::Attached {
+                path: "a.rs".to_string(),
+            },
+        );
+        let (_, marks) = conversation.with_system_marked("system");
+        assert_eq!(
+            marks,
+            vec![
+                Provenance::Unrecorded,
+                Provenance::Typed,
+                Provenance::TrustedFile("a.rs".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn a_new_conversation_has_nothing_in_it_and_has_seen_nothing() {

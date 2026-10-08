@@ -636,3 +636,105 @@ fn a_rejected_reply_names_what_was_read_and_not_the_servers_words() {
     assert!(!said.contains("disregard"), "{said}");
     assert!(!format!("{error:?}").contains("disregard"), "{error:?}");
 }
+
+/// Serve `responses` in order, holding each one back for `delay` after its request is read.
+fn serve_after(delay: std::time::Duration, responses: Vec<String>) -> String {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    thread::spawn(move || {
+        for (position, response) in responses.into_iter().enumerate() {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut content_length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            let _ = reader.read_exact(&mut body);
+            // The handshake is answered at once, so the delay is the call's alone.
+            if position >= 1 {
+                thread::sleep(delay);
+            }
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+fn permitted() -> CapabilitySet {
+    CapabilitySet::from_iter([
+        Capability::WebFetch,
+        Capability::McpCall(ServerAlias::new("remote")),
+    ])
+}
+
+/// A call not answered within its bound is a timeout naming the tool and the bound, reported when
+/// the bound passes and not when the server finally writes.
+#[test]
+fn a_call_not_answered_within_its_bound_is_a_timeout_naming_the_tool_and_the_bound() {
+    let url = serve_after(
+        std::time::Duration::from_secs(4),
+        vec![json_response(INIT_OK), json_response(CALL_OK)],
+    );
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy =
+        Policy::begin(routing(), ReleasePlan::new(), permitted(), &mut sink).expect("policy");
+    let mut server = HttpServer::new("remote", &url);
+    server
+        .initialize(&mut policy, &egress, "bravebot", "0.1.0")
+        .expect("handshake");
+    server.set_bound(std::time::Duration::from_secs(1));
+
+    let started = std::time::Instant::now();
+    let error = server
+        .call_tool(&mut policy, &egress, "lookup", serde_json::json!({}))
+        .expect_err("the reply came after the bound");
+
+    let McpError::TimedOut { what, after } = &error else {
+        panic!("got: {error}");
+    };
+    assert_eq!(what, "tool 'lookup'");
+    assert_eq!(*after, std::time::Duration::from_secs(1));
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(3500),
+        "the call waited for the server: {:?}",
+        started.elapsed()
+    );
+}
+
+/// The same slow server answers within a longer bound, so the bound is the declaration's and not
+/// a constant of the transport.
+#[test]
+fn a_longer_bound_lets_a_slow_reply_through() {
+    let url = serve_after(
+        std::time::Duration::from_secs(2),
+        vec![json_response(INIT_OK), json_response(CALL_OK)],
+    );
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy =
+        Policy::begin(routing(), ReleasePlan::new(), permitted(), &mut sink).expect("policy");
+    let mut server = HttpServer::new("remote", &url).within(std::time::Duration::from_secs(20));
+    server
+        .initialize(&mut policy, &egress, "bravebot", "0.1.0")
+        .expect("handshake");
+
+    let result = server
+        .call_tool(&mut policy, &egress, "lookup", serde_json::json!({}))
+        .expect("a reply within the bound is read");
+
+    assert_eq!(result.label(), Label::untrusted_private());
+    assert!(policy.finish());
+}

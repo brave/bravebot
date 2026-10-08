@@ -1,0 +1,14 @@
+[package]
+name = "bravebot-mentions"
+description = "What an @ name in a prompt offers and names, shared by the terminal and the desktop bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bravebot-filetype = { path = "../filetype" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

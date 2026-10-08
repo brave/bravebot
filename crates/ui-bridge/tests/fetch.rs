@@ -141,9 +141,13 @@ fn a_planner_fetching(url: &str) -> (String, mpsc::Receiver<String>) {
                 }
                 let request: Value =
                     serde_json::from_slice(&received.body).expect("a request the stub can read");
-                let results = request["messages"]
-                    .as_array()
-                    .expect("a conversation")
+                // The tool results since the latest prompt, so each turn of a session starts over.
+                let messages = request["messages"].as_array().expect("a conversation");
+                let latest = messages
+                    .iter()
+                    .rposition(|message| message["role"] == "user")
+                    .map_or(0, |at| at + 1);
+                let results = messages[latest..]
                     .iter()
                     .filter(|message| message["role"] == "tool")
                     .count();
@@ -712,4 +716,49 @@ fn a_legacy_session_emits_no_view_events() {
             .as_str()
             .is_some_and(|name| name.starts_with("session.view."))
     }));
+}
+
+/// Two turns of one session ask their questions with different numbers, so an answer meant for the
+/// first cannot be taken as the answer to the second, and the second stays answerable (RPCVIEW-6).
+#[test]
+fn a_later_turn_does_not_reuse_an_earlier_questions_number() {
+    let mut asked = a_turn_that_asks_to_fetch("bridge-fetch-numbers");
+    let first = asked.question["data"]["request"]
+        .as_u64()
+        .expect("a number");
+    asked.reply("fetch.reply", "reject");
+    asked.finish();
+
+    asked.front.send(
+        "turn.send",
+        json!({"session": asked.session, "prompt": "read the docs page again"}),
+    );
+    let second = asked.front.question_or_the_end();
+    assert_eq!(second["event"], "fetch.request", "{second}");
+    let second_number = second["data"]["request"].as_u64().expect("a number");
+    assert!(second_number > first, "turn two reused number {first}");
+
+    // The delayed answer to the first question: refused, and it approved nothing.
+    asked.question = json!({"data": {"request": first}});
+    let late = asked.reply("fetch.reply", "approve");
+    assert_eq!(late["error"]["code"], "no_such_request", "{late}");
+    assert!(
+        asked.requests.recv_timeout(QUIET).is_err(),
+        "a late answer approved the second fetch"
+    );
+
+    asked.question = second;
+    let answer = asked.reply("fetch.reply", "approve");
+    assert!(
+        answer.get("ok").is_some(),
+        "the second question was refused: {answer}"
+    );
+    asked.finish();
+    assert!(
+        asked
+            .requests
+            .recv_timeout(PATIENCE)
+            .unwrap()
+            .starts_with("GET /docs ")
+    );
 }

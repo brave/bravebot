@@ -166,8 +166,8 @@ machine asks again, and a deliberate `rm -rf` of the workspace no longer forgets
 ## The command line
 
 ```
-bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--stdio] -- <program> [args...]
-bravebot mcp add <alias> [-s <scope>] --http <url>
+bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--stdio] -- <program> [args...]
+bravebot mcp add <alias> [-s <scope>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
 bravebot mcp approve <alias>
@@ -201,6 +201,8 @@ environment at launch. It takes the words up to the next flag, as Claude Code's 
 given more than once. A program given by a bare name has `PATH` named for it where none was stored;
 `--dir <path>` is the directory it runs in, written into the file as the absolute path it resolves
 to. A directory git would open a repository from is refused, as [SERVERS-10](#SERVERS-10) says.
+`--startup-timeout <seconds>` and `--tool-timeout <seconds>` bound the handshake and each call, on
+either transport ([SERVERS-15](#SERVERS-15)).
 
 `forget` takes one path at most, and the current directory without one. The path is read with its
 links followed, as answer 2 recorded it, and one that no longer resolves, a deleted checkout's, is
@@ -229,7 +231,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 
 | What | Where | Scope | Lifetime |
 |---|---|---|---|
-| A declaration: alias, transport, argv or url, the variable names it needs, the values it stores, the files it may read, its directory | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
+| A declaration: alias, transport, argv or url, the variable names it needs, the values it stores, the files it may read, its directory, its startup and call bounds | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
 | An approval of a server, one digest and the alias it was given about per line, and a `changed` line per alias whose approved declaration changed since | `~/.bravebot/mcp-approved` | the person's own directory | until the declaration changes |
 | The list of tools a person vouched for, a `tools` line holding the declaration's digest and the list's | `~/.bravebot/mcp-approved` | the person's own directory | until another list is vouched for under that declaration, or no declaration resolves to it |
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
@@ -1386,6 +1388,58 @@ the report [SANDBOX-10](sandboxing.md#SANDBOX-10) would otherwise make untrue.
 `verified-by: bravebot_tui::status::the_servers_a_session_started_are_named_and_what_is_confined_follows_them`
 `verified-by: bravebot_tui::status::each_servers_note_says_how_its_tools_stand`
 
+<a id="SERVERS-15"></a>
+### SERVERS-15: a server has a bound on its handshake and on each call, and a call past it fails
+
+A declaration may carry `startup_timeout_secs` and `tool_timeout_secs`, on either transport: whole
+seconds from 1 to 3600, so a bound of nothing is not a call that fails at once. `bravebot mcp add`
+takes them as `--startup-timeout <seconds>` and `--tool-timeout <seconds>`. A word that is not a
+number in that range is refused naming the key, and an entry carrying a value outside it is listed
+with that problem. A bound left unsaid is 60 seconds for the handshake and 120 for a call.
+
+The startup bound is given to each request of the handshake, `initialize` and each page of
+`tools/list`, and a handshake is given up on after twice the bound and 5 seconds whatever it is doing. A request that is not answered within a bound is reported as a failure naming what was
+asked, a tool by its name or the handshake's method, and the bound, and it is reported when the bound
+passes and not when the server next writes. The planner is told that the call timed out and nothing
+else: the sentence is this process's own words, and its content is a method or a tool name this
+process chose and a clock reading, so no branch is taken on anything a server sent
+([MCP-5](mcp.md#MCP-5), [MCP-8](mcp.md#MCP-8)). A stdio server whose request ran out of time is
+stopped, so that a late reply is not read as the answer to a later request, and every later request
+to it fails. A server whose handshake ran out of time is left out of the session with a line giving
+the reason, as one whose handshake failed is ([SERVERS-9](#SERVERS-9)). An HTTP call has the bound as
+its reply bound, in place of the general one, so a hop it follows
+([SERVERS-11](#SERVERS-11)) is bounded as it is.
+
+A bound is not part of what an approval binds to ([SERVERS-5](#SERVERS-5)). It is a deadline this
+process keeps, it grants nothing, and no byte a server sends sets it, so editing one leaves the
+answer already given about the server standing. It is shown where the declaration is drawn, at the
+question and in `get`, where a declaration gives one, and nothing is added to what is drawn where it
+gives none. A server that moves ([SERVERS-11](#SERVERS-11)) keeps the bounds it was declared with.
+
+**Why.** A stdio call that gets no reply waits until the server writes a line or exits, and the turn
+holds for as long as the process lives. A fixed handshake bound cannot be given to a server that
+needs longer, such as a runner fetching a package on its first launch, nor shortened for one that
+hangs. The bound is a clock reading and decides only when this process stops waiting, so it is not a
+branch on untrusted content.
+
+`verified-by: bravebot_mcp::stdio::a_call_not_answered_within_its_bound_is_a_timeout_naming_the_tool_and_the_bound`
+`verified-by: bravebot_mcp::stdio::a_longer_bound_lets_a_slow_reply_through`
+`verified-by: bravebot_mcp::stdio::a_server_that_ran_out_of_time_is_stopped_and_answers_nothing_later`
+`verified-by: bravebot_mcp::stdio::a_handshake_not_answered_within_its_bound_is_a_timeout_naming_the_request`
+`verified-by: bravebot_mcp::http::a_call_not_answered_within_its_bound_is_a_timeout_naming_the_tool_and_the_bound`
+`verified-by: bravebot_mcp::http::a_longer_bound_lets_a_slow_reply_through`
+`verified-by: bravebot_config::mcp::declared_timeouts_are_read_written_and_kept_on_either_transport`
+`verified-by: bravebot_config::mcp::a_timeout_that_is_not_a_whole_number_of_seconds_in_range_is_a_problem`
+`verified-by: bravebot_config::mcp::a_timeout_is_not_part_of_what_an_approval_binds_to`
+`verified-by: bravebot_cli::mcp::the_timeout_flags_set_the_declarations_bounds_and_refuse_what_is_not_seconds`
+`verified-by: bravebot_agent::servers::a_server_not_answering_its_handshake_within_its_startup_bound_is_left_out_at_that_bound`
+`verified-by: bravebot_agent::servers::a_server_answering_its_handshake_within_a_longer_startup_bound_is_kept`
+`verified-by: bravebot_agent::servers::a_started_server_is_held_to_the_call_bound_its_declaration_gives`
+`verified-by: bravebot_agent::servers::a_declarations_own_timeouts_are_drawn_and_the_defaults_are_not`
+`verified-by: bravebot_agent::mcp::a_call_that_outlasts_its_bound_is_a_failure_the_planner_is_told_timed_out`
+`verified-by: bravebot_agent::mcp::a_move_keeps_the_bounds_the_declaration_it_replaces_gave`
+`verified-by: bravebot_ui_bridge::connectors::editing_a_connector_keeps_the_bounds_its_declaration_gave`
+
 ## Testing this with the weather server
 
 The acceptance walk, end to end, with the server this spec was written against. Every prompt below
@@ -1586,10 +1640,18 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **The full-screen interface discards a server's stderr.** It owns the screen, and a server's
   diagnostics drawn over it would be a server's bytes where the interface draws. A one-shot run and
   the plain interface pass it through to their own stderr.
-- **A server too slow for its handshake is left running.** A server that has not answered within 60
-  seconds is left out of the session, and the thread waiting for it holds it until it answers or the
-  process exits. The session opens after the last handshake or those 60 seconds, and draws nothing
-  while it waits.
+- **A server too slow for its handshake is left out.** A stdio server that has not answered
+  `initialize` or `tools/list` within its startup bound is stopped and left out of the session
+  ([SERVERS-15](#SERVERS-15)). A handshake stuck where no request bound reaches, a name that will not
+  resolve for one, is given up on after twice the bound and 5 seconds, and its thread holds the
+  server until it answers or the process exits. The session opens after the last handshake or that
+  time, and draws nothing while it waits.
+- **A call past its bound may have acted.** A server whose call timed out has been stopped or
+  abandoned, and what it was doing may have finished or half finished. The planner is told that the
+  call timed out, not whether it took effect ([SERVERS-15](#SERVERS-15)).
+- **A write to a server is not bounded.** The bound covers the wait for a reply. A stdio server that
+  stops reading its input while a request is larger than the pipe holds the write, and the bound is
+  not reached until it is done.
 - **A server's line is read whole.** The client reads each line a server writes to its end before
   looking at it, with no bound, so a started server that writes one line without end holds this
   process's memory while it does.
@@ -1615,7 +1677,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
   leaves out the variables a server starts with. The allow list is the form that holds
   ([SERVERS-12](#SERVERS-12)).
 - **The desktop application starts its servers on a session's first turn.** That turn waits for
-  the server question and for every handshake, up to the 60 seconds above, before the model is
+  the server question and for every handshake, up to the startup bounds above, before the model is
   asked anything, and the window says it is starting servers while it does. A turn stopped while
   they start starts none of them, and the next turn asks again. A reopened or forked session starts
   its own, since what a session started is not written to its record. A server's stderr is

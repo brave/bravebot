@@ -63,8 +63,11 @@ the default: an ordinary turn. **Plan** makes the next Send start a manifest run
 The agent plans the whole task before reading anything, shows you the plan, and runs it only if
 you approve. The menu goes back to Agent once the run starts, so the next message is an ordinary
 turn; a conversation never holds the mode. A run cannot take attached files, and a bot cannot
-start one, so Plan is greyed with the reason in either case. The run is saved as its own record
-and is not part of the conversation, so a later turn is not sent what the run said.
+start one, so Plan is greyed with the reason in either case. A file named with `@` in the task
+stays a word of the task and is not read into it, as with `/manifest` in the terminal: a plan is
+fixed before anything is read, so the run reads that file, if it does, as one of its steps. The
+run is saved as its own record and is not part of the conversation, so a later turn is not sent
+what the run said.
 
 A run's record is listed with the conversations and marked **Plan run**. Choosing one reads
 it: the task, the goal, the plan, the steps that ran, and why it stopped if it did. It has
@@ -469,10 +472,13 @@ Two more things are honestly imperfect and worth knowing:
 #### What the window cannot do
 
 The bridge protocol accepts `files` and `dropped` paths, both admitted as trusted
-context. The main process strips those raw lists from renderer requests. User
-attachments instead use native-picker grants bound to the session and revalidated
-when sending; bot briefings are composed by the main process from a bot definition,
-and are the only path a bot contributes.
+context. The main process strips those raw lists from renderer requests. A person's
+files reach `files` two ways: native-picker grants bound to the session, which the
+main process revalidates as text files at send, and names written with `@` in the
+prompt, which the bridge reads back out of the prompt at `turn.send` and surveys with
+the agent's own confined read before the turn starts.
+Bot briefings are composed by the main process from a bot definition, and are the only
+`dropped` path a bot contributes.
 
 The preload does carry file contents for previews and memory editing. These are
 bounded, explicit operations rather than unrestricted filesystem access, and previews
@@ -511,7 +517,9 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 | `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Ask again; needs a session |
 | | Chat › Undo Last Turn… | [Undo](#undo-and-rewind) the latest turn; greyed while a turn runs or with nothing to undo |
 | `⌥⌘←` / `⌥⌘→` | View › Hide/Show Chat List / Context Panel | Fold the chat list / the context panel |
-| `Enter` | | In the message box: send, or queue the message while a turn is running |
+| `Enter` | | In the message box: send, or queue the message while a turn is running. With the file list open on a half-typed `@` name, complete it instead |
+| `Tab` | | In the message box, on an `@` name: complete it to the highlighted file or directory |
+| `↑` / `↓` | | In the message box, with the file list open: move through it |
 | `Shift+Enter` | | In the message box: insert a new line |
 | `Esc` | | See below |
 | right-click | | A chat row, or anything in the transcript |
@@ -520,10 +528,28 @@ The round button at the foot of the composer is **Send** (`⌘↩` in its toolti
 a reply is generating, **Stop** (`⌘.`). The working row has no stop control of its own; `Esc` in
 the composer also stops the turn, as described below.
 
+Typing `@` as the start of the last word in the message box opens a list of what is in the
+chat's folder, the terminal's list ([NAME-4](../../docs/specs/naming-files.md#NAME-4)):
+directories first and then files, at most 40, narrowed by what follows the `@`, without
+version-control, build and dependency directories. A slash lists that directory. Accepting a
+file replaces only the last word and adds a space, which closes the list; accepting a
+directory keeps it open on that directory. `Enter` sends a message whose last word already
+names a file, and completes one that is half typed. When the message is sent, each `@` name
+goes as a file the agent reads as trusted context and draws a **Read** row above the message,
+as a picked file does; a name ending in `/` names nothing. A name that is not a text file
+inside the project, a directory written without its slash included, stops the send, says which
+name it was above the box, and leaves the message there to fix. The folder is the one the chat runs in: its project, or for
+a bot's conversation with no project, the bot's home folder. A bot's page before its first
+conversation has no folder yet, so it offers no list; a name typed there is still read and
+checked against the folder the conversation opens in, and a refused one waits in that
+conversation's queue with the reason.
+
 `Esc` is the one that is not in a menu. As an accelerator it would fire with no session open
 and would fight every other use of the key, so it stays where it was: a convenience local to
 whichever surface has it, and each one gives way to the one above it:
 
+- In the composer, with the `@` file list open: close the list and keep the text. Typing on
+  into another name opens it again.
 - In the composer, with a turn running: cancel it. If the find bar or a menu is open, `Esc`
   closes that instead and the turn keeps running.
 - In the find bar: close it.

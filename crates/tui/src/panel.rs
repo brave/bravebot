@@ -194,6 +194,23 @@ fn head(session: &Session, text: usize) -> Vec<Line<'static>> {
         section(&mut body, t!(panel_session).to_string(), about);
     }
 
+    let mut model = Vec::new();
+    if let Some(chosen) = session.model() {
+        model.push(row(
+            ending(&crate::render::printable(chosen), text),
+            Style::default(),
+        ));
+    }
+    if let Some(level) = session.effort_in_force() {
+        model.push(row(
+            t!(panel_effort, level = level.as_str()).to_string(),
+            dim(),
+        ));
+    }
+    if !model.is_empty() {
+        section(&mut body, t!(panel_model).to_string(), model);
+    }
+
     if let Some(goal) = session.goal() {
         let rows = wrapped(goal.condition(), text)
             .into_iter()
@@ -221,6 +238,13 @@ fn head(session: &Session, text: usize) -> Vec<Line<'static>> {
         crate::render::context_reading(session),
         Style::default(),
     )];
+    let spent = session.spent_tokens();
+    if spent > 0 {
+        context.push(row(
+            t!(panel_spent, tokens = crate::status::tokens(spent)).to_string(),
+            dim(),
+        ));
+    }
     if let Some(rate) = crate::render::cache_hit_rate(session) {
         context.push(row(rate, dim()));
     }
@@ -356,6 +380,16 @@ mod tests {
             "the panel did not open at {width} columns"
         );
         session
+    }
+
+    fn model_config() -> bravebot_config::Config {
+        bravebot_config::Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("a-signing-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.com".into()),
+            _ => None,
+        })
+        .expect("config")
     }
 
     fn plan(rows: &[(&str, Status)]) -> Vec<bravebot_core::todo::Row> {
@@ -774,11 +808,105 @@ mod tests {
         );
     }
 
+    /// Rejects: drawing the model a reply named in place of the one the person chose, drawing the
+    /// effort of a model that reads none, and a heading over nothing where neither is set.
+    #[test]
+    fn the_model_section_shows_the_choice_and_the_effort_in_force_and_ignores_a_reply() {
+        let heading = t!(panel_model).to_string();
+        let bare = texts(&lines(&Session::new("none"), WIDTH, 30));
+        assert!(
+            !bare.contains(&heading),
+            "a heading over nothing: {bare:#?}"
+        );
+
+        let mut session = Session::new("none");
+        session.choose_model("claude-sonnet".to_string(), &model_config());
+        session.choose_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
+        let level = bravebot_aichat::protocol::Effort::Xhigh.as_str();
+        let expected = vec![
+            heading.clone(),
+            "claude-sonnet".to_string(),
+            t!(panel_effort, level = level).to_string(),
+        ];
+        let at = |drawn: &[String]| {
+            let start = drawn.iter().position(|row| *row == heading);
+            start.map(|start| drawn[start..start + 3].to_vec())
+        };
+        assert_eq!(
+            at(&texts(&lines(&session, WIDTH, 30))),
+            Some(expected.clone())
+        );
+
+        session.served("claude-sonnet", "qwen-14b-instruct", false, true);
+        let after_a_reply = texts(&lines(&session, WIDTH, 30));
+        assert_eq!(at(&after_a_reply), Some(expected));
+        assert!(
+            !after_a_reply.iter().any(|row| row.contains("qwen")),
+            "the model a reply named was drawn: {after_a_reply:#?}"
+        );
+
+        session.note_model_reads_effort(false);
+        let unread = texts(&lines(&session, WIDTH, 30));
+        assert!(
+            !unread.iter().any(|row| row.contains(level)),
+            "an effort the model does not read was drawn: {unread:#?}"
+        );
+        assert!(unread.contains(&"claude-sonnet".to_string()), "{unread:#?}");
+    }
+
+    /// Rejects: a total that leaves out the turn in flight (which `/cost` counts), one drawn
+    /// before anything was spent, and one that is not the session's sum.
+    #[test]
+    fn the_token_total_is_a_context_row_that_sums_the_session() {
+        let spent = |session: &Session| {
+            texts(&lines(session, WIDTH, 30))
+                .into_iter()
+                .find(|row| row.ends_with(t!(panel_spent, tokens = "").trim()))
+        };
+        let mut session = Session::new("none");
+        assert_eq!(spent(&session), None);
+
+        session.end_run(1_500, None);
+        session.end_run(2_000, None);
+        assert_eq!(session.spent_tokens(), 3_500);
+        assert_eq!(
+            spent(&session),
+            Some(t!(panel_spent, tokens = crate::status::tokens(3_500)).to_string())
+        );
+
+        let mut running = Session::new("none");
+        running.end_run(1_000, None);
+        running.type_char('a');
+        running.submit();
+        running.progressed(bravebot_agent::Spent {
+            tokens: 4_200,
+            ..Default::default()
+        });
+        assert!(running.a_turn_is_running(), "no turn was running");
+        assert_eq!(
+            spent(&running),
+            Some(t!(panel_spent, tokens = crate::status::tokens(5_200)).to_string())
+        );
+
+        let drawn = texts(&lines(&session, WIDTH, 30));
+        let context = drawn
+            .iter()
+            .position(|row| *row == t!(panel_context))
+            .expect("the Context heading");
+        assert!(
+            drawn[context..]
+                .iter()
+                .any(|row| row.contains(&crate::status::tokens(3_500))),
+            "the total is not under Context: {drawn:#?}"
+        );
+    }
+
     /// A heading over nothing tells somebody scanning the panel there is something to read.
     #[test]
     fn the_sections_come_in_order_and_an_empty_one_leaves_no_heading() {
         let headings = [
             t!(panel_session).to_string(),
+            t!(panel_model).to_string(),
             t!(panel_goal).to_string(),
             t!(panel_links).to_string(),
             t!(panel_context).to_string(),
@@ -790,7 +918,7 @@ mod tests {
         let shown: Vec<&String> = headings.iter().filter(|h| bare.contains(h)).collect();
         assert_eq!(
             shown,
-            vec![&headings[3]],
+            vec![&headings[4]],
             "headings over nothing: {bare:#?}"
         );
 
@@ -800,6 +928,7 @@ mod tests {
             "~/bravebot".to_string(),
             Some("fix-info-panel"),
         );
+        full.choose_model("claude-sonnet".to_string(), &model_config());
         full.start_goal("the tests pass".to_string());
         full.link(Some("https://x.test/i/1"), None);
         full.report_language_servers(Roster::of([Language::Rust]));
@@ -822,6 +951,7 @@ mod tests {
             "the info panel",
             "~/bravebot",
             "fix-info-panel",
+            "claude-sonnet",
             "the tests pass",
             "Issue https://x.test/i/1",
             "rust-analyzer",

@@ -40,6 +40,7 @@
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The declarations, inside the state directory.
 const DECLARATIONS_FILE: &str = "mcp.json";
@@ -73,6 +74,17 @@ const LIST_FORM: &str = "bravebot-mcp-tool-list-1";
 
 /// The longest word a server's tool may be offered under.
 pub const MAX_TOOL: usize = 64;
+
+/// How long a server has to answer its handshake, where its declaration says nothing.
+///
+/// Long enough for a runner fetching a package on its first launch.
+pub const STARTUP_SECS: u64 = 60;
+
+/// How long a server has to answer one call, where its declaration says nothing.
+pub const TOOL_SECS: u64 = 120;
+
+/// The most a declaration may give either bound, an hour.
+pub const MAX_TIMEOUT_SECS: u64 = 3600;
 
 /// Where a person's servers are declared.
 pub fn declarations_file(directory: &Path) -> PathBuf {
@@ -173,6 +185,73 @@ pub enum Problem {
     Credentials,
     /// A remote server was given something only a process can use, and this is the key.
     Remote(&'static str),
+    /// A timeout, by the key the file spells it with, is not a whole number of seconds from one to
+    /// [`MAX_TIMEOUT_SECS`].
+    Timeout(&'static str),
+}
+
+/// How long a server has for its handshake and for each call, where a declaration says.
+///
+/// Neither is part of what an approval binds to: a bound is a deadline this process keeps, grants
+/// nothing, and is read from no byte a server sends. A bound left unsaid is the default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Timeouts {
+    /// Seconds for the handshake, where the declaration says.
+    pub startup: Option<u64>,
+    /// Seconds for one call, where the declaration says.
+    pub tool: Option<u64>,
+}
+
+impl Timeouts {
+    /// The key the file spells the startup bound with.
+    pub const STARTUP_KEY: &'static str = "startup_timeout_secs";
+    /// The key the file spells the call bound with.
+    pub const TOOL_KEY: &'static str = "tool_timeout_secs";
+
+    /// Bounds checked as a file's entry is.
+    pub fn new(startup: Option<u64>, tool: Option<u64>) -> Result<Self, Problem> {
+        let within = |secs: Option<u64>, key| match secs {
+            Some(secs) if !(1..=MAX_TIMEOUT_SECS).contains(&secs) => Err(Problem::Timeout(key)),
+            _ => Ok(()),
+        };
+        within(startup, Self::STARTUP_KEY)?;
+        within(tool, Self::TOOL_KEY)?;
+        Ok(Self { startup, tool })
+    }
+
+    /// How long the handshake may take.
+    pub fn startup(&self) -> Duration {
+        Duration::from_secs(self.startup.unwrap_or(STARTUP_SECS))
+    }
+
+    /// How long one call may take.
+    pub fn tool(&self) -> Duration {
+        Duration::from_secs(self.tool.unwrap_or(TOOL_SECS))
+    }
+
+    /// Whether the declaration says neither.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Read the two keys out of an entry.
+    fn from_entry(entry: &serde_json::Map<String, serde_json::Value>) -> Result<Self, Problem> {
+        let read = |key: &'static str| match entry.get(key) {
+            None => Ok(None),
+            Some(value) => value.as_u64().map(Some).ok_or(Problem::Timeout(key)),
+        };
+        Self::new(read(Self::STARTUP_KEY)?, read(Self::TOOL_KEY)?)
+    }
+
+    /// Write the keys the declaration says into an entry.
+    fn write_into(&self, entry: &mut serde_json::Map<String, serde_json::Value>) {
+        if let Some(secs) = self.startup {
+            entry.insert(Self::STARTUP_KEY.into(), secs.into());
+        }
+        if let Some(secs) = self.tool {
+            entry.insert(Self::TOOL_KEY.into(), secs.into());
+        }
+    }
 }
 
 /// One server, as a person declared it.
@@ -195,11 +274,15 @@ pub enum Declaration {
         reads: Vec<String>,
         /// Where it runs, where somebody said. Absolute.
         directory: Option<String>,
+        /// How long it has for its handshake and for each call.
+        timeouts: Timeouts,
     },
     /// A server somewhere else, reached over HTTP.
     Http {
         /// Where it is, as somebody wrote it.
         url: String,
+        /// How long it has for its handshake and for each call.
+        timeouts: Timeouts,
     },
 }
 
@@ -212,6 +295,7 @@ impl std::fmt::Debug for Declaration {
                 env,
                 reads,
                 directory,
+                timeouts,
             } => f
                 .debug_struct("Stdio")
                 .field("argv", argv)
@@ -219,8 +303,13 @@ impl std::fmt::Debug for Declaration {
                 .field("env", &env.keys().collect::<Vec<_>>())
                 .field("reads", reads)
                 .field("directory", directory)
+                .field("timeouts", timeouts)
                 .finish(),
-            Self::Http { url } => f.debug_struct("Http").field("url", url).finish(),
+            Self::Http { url, timeouts } => f
+                .debug_struct("Http")
+                .field("url", url)
+                .field("timeouts", timeouts)
+                .finish(),
         }
     }
 }
@@ -274,6 +363,7 @@ impl Declaration {
             env: BTreeMap::new(),
             reads: Vec::new(),
             directory,
+            timeouts: Timeouts::default(),
         })
     }
 
@@ -287,6 +377,7 @@ impl Declaration {
             variables,
             reads,
             directory,
+            timeouts,
             ..
         } = self
         else {
@@ -312,6 +403,7 @@ impl Declaration {
             env,
             reads,
             directory,
+            timeouts,
         })
     }
 
@@ -322,6 +414,7 @@ impl Declaration {
             variables,
             env,
             directory,
+            timeouts,
             ..
         } = self
         else {
@@ -345,13 +438,46 @@ impl Declaration {
             env,
             reads: kept,
             directory,
+            timeouts,
         })
+    }
+
+    /// This declaration with `timeouts` as the bounds it was given.
+    pub fn timing(self, timeouts: Timeouts) -> Self {
+        match self {
+            Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                ..
+            } => Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                timeouts,
+            },
+            Self::Http { url, .. } => Self::Http { url, timeouts },
+        }
+    }
+
+    /// How long this server has for its handshake and for each call.
+    pub fn timeouts(&self) -> Timeouts {
+        match self {
+            Self::Stdio { timeouts, .. } | Self::Http { timeouts, .. } => *timeouts,
+        }
     }
 
     /// An HTTP declaration, checked as a file's entry is.
     pub fn http(url: String) -> Result<Self, Problem> {
         remote(&url)?;
-        Ok(Self::Http { url })
+        Ok(Self::Http {
+            url,
+            timeouts: Timeouts::default(),
+        })
     }
 
     /// The transport's name, as the file spells it.
@@ -404,6 +530,7 @@ impl Declaration {
                 env,
                 reads,
                 directory,
+                ..
             } => {
                 let variables: BTreeSet<&String> = variables.iter().collect();
                 let mut form = vec![
@@ -421,7 +548,7 @@ impl Declaration {
                 }
                 serde_json::Value::Array(form)
             }
-            Self::Http { url } => serde_json::json!([DIGEST_FORM, "http", url]),
+            Self::Http { url, .. } => serde_json::json!([DIGEST_FORM, "http", url]),
         };
         Digest(Sha256::digest(form.to_string().as_bytes()).into())
     }
@@ -439,6 +566,7 @@ impl Declaration {
                     env,
                     reads,
                     directory,
+                    ..
                 },
                 Self::Stdio {
                     argv: other_argv,
@@ -446,6 +574,7 @@ impl Declaration {
                     env: other_env,
                     reads: other_reads,
                     directory: other_directory,
+                    ..
                 },
             ) => {
                 let set = |names: &[String]| names.iter().cloned().collect::<BTreeSet<_>>();
@@ -468,7 +597,7 @@ impl Declaration {
                 .filter_map(|(changed, field)| changed.then_some(field))
                 .collect()
             }
-            (Self::Http { url }, Self::Http { url: other_url }) => match url == other_url {
+            (Self::Http { url, .. }, Self::Http { url: other_url, .. }) => match url == other_url {
                 true => Vec::new(),
                 false => vec![Field::Url],
             },
@@ -487,6 +616,7 @@ impl Declaration {
                 env,
                 reads,
                 directory,
+                ..
             } => {
                 entry.insert("argv".into(), argv.clone().into());
                 if !variables.is_empty() {
@@ -506,10 +636,11 @@ impl Declaration {
                     entry.insert("directory".into(), directory.clone().into());
                 }
             }
-            Self::Http { url } => {
+            Self::Http { url, .. } => {
                 entry.insert("url".into(), url.clone().into());
             }
         }
+        self.timeouts().write_into(&mut entry);
         serde_json::Value::Object(entry)
     }
 
@@ -525,8 +656,15 @@ impl Declaration {
                 "env",
                 "reads",
                 "directory",
+                Timeouts::STARTUP_KEY,
+                Timeouts::TOOL_KEY,
             ],
-            Some("http") => &["transport", "url"],
+            Some("http") => &[
+                "transport",
+                "url",
+                Timeouts::STARTUP_KEY,
+                Timeouts::TOOL_KEY,
+            ],
             _ => return Err(Problem::Transport),
         };
         for key in entry.keys() {
@@ -538,9 +676,10 @@ impl Declaration {
                 None => Problem::Key(key.clone()),
             });
         }
+        let timeouts = Timeouts::from_entry(entry)?;
         if allowed.contains(&"url") {
             let url = entry.get("url").and_then(|url| url.as_str());
-            return Self::http(url.ok_or(Problem::Url)?.to_string());
+            return Ok(Self::http(url.ok_or(Problem::Url)?.to_string())?.timing(timeouts));
         }
         let argv = match entry.get("argv") {
             Some(serde_json::Value::Array(words)) => words
@@ -587,9 +726,10 @@ impl Declaration {
             Some(serde_json::Value::String(directory)) => Some(directory.clone()),
             Some(_) => return Err(Problem::Directory),
         };
-        Self::stdio(argv, variables, directory)?
+        Ok(Self::stdio(argv, variables, directory)?
             .storing(env)?
-            .reading(reads)
+            .reading(reads)?
+            .timing(timeouts))
     }
 }
 
@@ -1511,6 +1651,91 @@ mod tests {
         assert_eq!(
             remote().reading(words(&["/srv/key"])),
             Err(Problem::Remote("reads"))
+        );
+    }
+
+    /// A declaration states its bounds in whole seconds under the keys the spec names, on either
+    /// transport, and what it states is what is read back and what is written back.
+    #[test]
+    fn declared_timeouts_are_read_written_and_kept_on_either_transport() {
+        let text = r#"{"servers": {
+            "local": {"transport": "stdio", "argv": ["server"], "startup_timeout_secs": 5, "tool_timeout_secs": 300},
+            "remote": {"transport": "http", "url": "https://a.example.com", "tool_timeout_secs": 9},
+            "plain": {"transport": "http", "url": "https://b.example.com"}}}"#;
+        let declarations = Declarations::parse(text).unwrap();
+        let timeouts = |alias: &str| {
+            declarations
+                .get(alias)
+                .unwrap()
+                .declaration
+                .unwrap()
+                .timeouts()
+        };
+
+        assert_eq!(timeouts("local").startup(), Duration::from_secs(5));
+        assert_eq!(timeouts("local").tool(), Duration::from_secs(300));
+        assert_eq!(
+            timeouts("remote").startup(),
+            Duration::from_secs(STARTUP_SECS)
+        );
+        assert_eq!(timeouts("remote").tool(), Duration::from_secs(9));
+        assert!(timeouts("plain").is_default());
+        assert_eq!(timeouts("plain").tool(), Duration::from_secs(TOOL_SECS));
+
+        let again = Declarations::parse(&declarations.to_text()).unwrap();
+        for alias in ["local", "remote", "plain"] {
+            assert_eq!(again.get(alias), declarations.get(alias), "{alias}");
+        }
+        let only_plain = Declarations::parse(
+            r#"{"servers": {"plain": {"transport": "http", "url": "https://b.example.com"}}}"#,
+        )
+        .unwrap();
+        assert!(
+            !only_plain.to_text().contains("timeout"),
+            "a bound nobody gave was written"
+        );
+    }
+
+    /// A bound is a number of seconds from one to an hour, and anything else makes that entry a
+    /// problem naming the key, so a bound of nothing cannot be a call that fails at once.
+    #[test]
+    fn a_timeout_that_is_not_a_whole_number_of_seconds_in_range_is_a_problem() {
+        for value in ["0", "3601", "-1", "1.5", "\"60\"", "null"] {
+            let text = format!(
+                r#"{{"servers": {{"a": {{"transport": "http", "url": "https://a.example.com", "startup_timeout_secs": {value}}}}}}}"#
+            );
+            assert_eq!(
+                Declarations::parse(&text)
+                    .unwrap()
+                    .get("a")
+                    .unwrap()
+                    .declaration,
+                Err(Problem::Timeout("startup_timeout_secs")),
+                "{value}"
+            );
+        }
+        assert_eq!(
+            Timeouts::new(None, Some(0)),
+            Err(Problem::Timeout("tool_timeout_secs"))
+        );
+        assert!(Timeouts::new(Some(MAX_TIMEOUT_SECS), Some(1)).is_ok());
+    }
+
+    /// A bound is a deadline this process keeps and grants nothing, so changing one leaves what an
+    /// approval binds to alone: the answer already given about the server still stands.
+    #[test]
+    fn a_timeout_is_not_part_of_what_an_approval_binds_to() {
+        let timed = weather().timing(Timeouts::new(Some(5), Some(500)).unwrap());
+
+        assert_eq!(timed.digest(), weather().digest());
+        assert_eq!(timed.changes(&weather()), Vec::new());
+        let remote = Declaration::http("https://a.example.com".into()).unwrap();
+        assert_eq!(
+            remote
+                .clone()
+                .timing(Timeouts::new(None, Some(5)).unwrap())
+                .digest(),
+            remote.digest()
         );
     }
 

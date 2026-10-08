@@ -16,7 +16,6 @@ docs/specs/background-sessions.md:BG-9: attaching draws the session as a foregro
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
 docs/specs/background-sessions.md:BG-11: a person can stop a session, and there is one supervisor per account
 docs/specs/background-sessions.md:BG-12: a process that ends between turns is restarted, and one that ends in a turn is not repeated
-docs/specs/background-sessions.md:BG-13: an idle session is stopped after an hour and wakes on the next reply
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
 docs/specs/session-messages.md:MSG-1: `message_session` has one routing field, the target's name, and one content field, the text
 docs/specs/session-messages.md:MSG-2: a message is sent only from a context that has met nothing untrusted, and carries what that context held

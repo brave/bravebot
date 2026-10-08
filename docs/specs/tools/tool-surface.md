@@ -133,7 +133,6 @@ and whoever reviews it is asked what footing its text is on.
 `verified-by: bravebot_agent::turn::a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose`
 `verified-by: bravebot_agent::turn::a_credential_created_as_a_whole_file_is_not_created_and_the_planner_is_told_so`
 `verified-by: bravebot_agent::tools::a_failed_listing_names_the_directory_as_typed_and_not_where_it_landed`
-`verified-by: bravebot_agent::tools::a_failed_search_names_the_directory_as_typed_and_not_where_it_landed`
 
 <a id="TOOL-5"></a>
 ### TOOL-5: every tool asks why it is called, and only a screen reads the answer

@@ -246,6 +246,111 @@ pub fn base(
     policy
 }
 
+/// Directories under the home directory that hold a credential on every unix platform, each
+/// refused with everything beneath it.
+///
+/// `~/.ssh` is here as a whole and [`SSH_READABLE`] lifts the three kinds of file in it that hold
+/// no secret. Token files that a program reads by name (`~/.config/gh`, `~/.git-credentials`,
+/// `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.pypirc`) are not here: they are what
+/// `gh`, `git`, `npm`, `cargo` and `pip` read to do what a person asked, and the network is where
+/// they could leave, which is decided by the plan.
+const CREDENTIAL_DIRECTORIES: &[&str] = &[
+    ".ssh",
+    ".aws",
+    ".kube",
+    ".docker",
+    ".azure",
+    ".config/gcloud",
+    ".gnupg",
+];
+
+/// The same, where only macOS keeps them, under the home directory.
+const MACOS_CREDENTIAL_DIRECTORIES: &[&str] = &[
+    "Library/Keychains",
+    "Library/Application Support/BraveSoftware",
+    "Library/Application Support/Google/Chrome",
+    "Library/Application Support/Firefox",
+    "Library/Cookies",
+    "Library/Safari",
+];
+
+/// The same, where only Linux keeps them, under the home directory.
+const LINUX_CREDENTIAL_DIRECTORIES: &[&str] = &[
+    ".local/share/keyrings",
+    ".password-store",
+    ".config/BraveSoftware",
+    ".config/google-chrome",
+    ".config/chromium",
+    ".mozilla",
+];
+
+/// The machine-wide keychain directory on macOS.
+const MACOS_SYSTEM_KEYCHAINS: &str = "/Library/Keychains";
+
+/// The files of `~/.ssh` that hold no secret: the client configuration, the hosts already
+/// verified, and the default public keys. Everything else in the directory is a private key or
+/// something named after one.
+const SSH_READABLE: &[&str] = &[
+    ".ssh/config",
+    ".ssh/known_hosts",
+    ".ssh/id_rsa.pub",
+    ".ssh/id_dsa.pub",
+    ".ssh/id_ecdsa.pub",
+    ".ssh/id_ecdsa_sk.pub",
+    ".ssh/id_ed25519.pub",
+    ".ssh/id_ed25519_sk.pub",
+];
+
+/// The rows a stage of a `run` command gets before its plan is read.
+///
+/// On Linux and macOS a stage reads the whole machine except the locations in the credential
+/// tables above, and writes only the temporary directory and the null device here, with the
+/// session's own directories added by the caller. That is what lets a script that starts `gh`,
+/// `git` or `cargo` run: what such a script reaches is decided by this table and not by a
+/// per-tool list that a program the list never heard of is refused for.
+///
+/// `home` is the account's home directory. Without one only the rows that are absolute apply.
+///
+/// On Windows a container is granted the paths it is given and reaches nothing else, so the base
+/// is [`base`] and nothing here widens it.
+pub fn run_base(
+    prelude: Prelude,
+    temporary_directory: &Path,
+    home: Option<&Path>,
+) -> SandboxPolicy {
+    if prelude == Prelude::Windows {
+        return base(prelude, temporary_directory, None, home);
+    }
+
+    let mut policy = SandboxPolicy::strict()
+        .allow_network_egress()
+        .allow_subprocesses()
+        .allow_read("/")
+        .allow_write(temporary_directory);
+    if let Some(null_device) = prelude.null_device() {
+        policy = policy.allow_write(null_device);
+    }
+
+    if prelude == Prelude::MacOs {
+        policy = policy.deny_read(MACOS_SYSTEM_KEYCHAINS);
+    }
+    if let Some(home) = home {
+        let platform = match prelude {
+            Prelude::MacOs => MACOS_CREDENTIAL_DIRECTORIES,
+            Prelude::Linux => LINUX_CREDENTIAL_DIRECTORIES,
+            Prelude::Windows => &[],
+        };
+        for row in CREDENTIAL_DIRECTORIES.iter().chain(platform) {
+            policy = policy.deny_read(under(home, row));
+        }
+        for row in SSH_READABLE {
+            policy = policy.allow_read(under(home, row));
+        }
+    }
+
+    policy
+}
+
 /// The row a developer directory is granted as, where it is one of the two the platform installs.
 ///
 /// The Command Line Tools' is granted as it is. An application bundle's, one directly in
@@ -321,6 +426,174 @@ mod tests {
             Some(Path::new(developer_directory)),
             Some(Path::new(A_HOME)),
         )
+    }
+
+    fn a_run_base(prelude: Prelude) -> SandboxPolicy {
+        run_base(
+            prelude,
+            Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+            Some(Path::new(A_HOME)),
+        )
+    }
+
+    /// The regression it rejects: a run base that lists what a stage reaches, which refuses a
+    /// script for starting a program the list never heard of, or one that reads the machine with
+    /// no refusals, which hands the first program that asks a credential. Spelled out here and
+    /// not read from the tables, so a row dropped from them fails this.
+    #[test]
+    fn the_run_base_reads_the_machine_and_refuses_each_credential_location() {
+        let expected_everywhere = [
+            ".ssh",
+            ".aws",
+            ".kube",
+            ".docker",
+            ".azure",
+            ".config/gcloud",
+            ".gnupg",
+        ];
+        let expected_on_macos = [
+            "Library/Keychains",
+            "Library/Application Support/BraveSoftware",
+            "Library/Application Support/Google/Chrome",
+            "Library/Application Support/Firefox",
+            "Library/Cookies",
+            "Library/Safari",
+        ];
+        let expected_on_linux = [
+            ".local/share/keyrings",
+            ".password-store",
+            ".config/BraveSoftware",
+            ".config/google-chrome",
+            ".config/chromium",
+            ".mozilla",
+        ];
+
+        for (prelude, own) in [
+            (Prelude::MacOs, &expected_on_macos[..]),
+            (Prelude::Linux, &expected_on_linux[..]),
+        ] {
+            let policy = a_run_base(prelude);
+            let mut expected: Vec<PathBuf> = expected_everywhere
+                .iter()
+                .chain(own)
+                .map(|row| under(Path::new(A_HOME), row))
+                .collect();
+            if prelude == Prelude::MacOs {
+                expected.push(PathBuf::from("/Library/Keychains"));
+            }
+            expected.sort();
+            let mut refused = policy.unreadable.clone();
+            refused.sort();
+
+            assert_eq!(refused, expected, "{prelude:?}");
+            assert!(policy.readable.contains(&PathBuf::from("/")), "{prelude:?}");
+            assert!(policy.is_meaningful(), "{prelude:?}");
+            assert!(
+                policy.allow_network && policy.allow_subprocesses,
+                "{prelude:?}"
+            );
+        }
+    }
+
+    /// The regression it rejects: a refusal of `~/.ssh` as a whole, which takes the client
+    /// configuration, the verified hosts and the public keys from `ssh`, `git` and `gh`; or a
+    /// lift written as a glob, which reads a private key named after one.
+    #[test]
+    fn the_run_base_lifts_the_ssh_files_that_hold_no_secret_and_only_those() {
+        let lifted: Vec<PathBuf> = a_run_base(Prelude::Linux)
+            .readable
+            .into_iter()
+            .filter(|row| row.starts_with(under(Path::new(A_HOME), ".ssh")))
+            .collect();
+        let expected: Vec<PathBuf> = [
+            "config",
+            "known_hosts",
+            "id_rsa.pub",
+            "id_dsa.pub",
+            "id_ecdsa.pub",
+            "id_ecdsa_sk.pub",
+            "id_ed25519.pub",
+            "id_ed25519_sk.pub",
+        ]
+        .iter()
+        .map(|name| under(Path::new(A_HOME), &format!(".ssh/{name}")))
+        .collect();
+
+        assert_eq!(lifted, expected);
+    }
+
+    /// The regression it rejects: a token file refused, which is `gh`, `git`, `npm`, `cargo` and
+    /// `pip` refused the login they were started to use.
+    #[test]
+    fn the_run_base_leaves_the_token_files_readable() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let policy = a_run_base(prelude);
+            for token in [
+                ".config/gh",
+                ".git-credentials",
+                ".netrc",
+                ".npmrc",
+                ".cargo/credentials.toml",
+                ".pypirc",
+                ".gitconfig",
+            ] {
+                let path = under(Path::new(A_HOME), token);
+                assert!(
+                    !policy
+                        .unreadable
+                        .iter()
+                        .any(|refused| path.starts_with(refused)),
+                    "{token} is refused on {prelude:?}"
+                );
+            }
+        }
+    }
+
+    /// The regression it rejects: the run base widening a stage's writes past the temporary
+    /// directory and the null device.
+    #[test]
+    fn the_run_base_writes_only_the_temporary_directory_and_the_null_device() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let written: Vec<PathBuf> = a_run_base(prelude)
+                .writable
+                .into_iter()
+                .map(|row| row.path)
+                .collect();
+            let mut expected = vec![PathBuf::from(THE_SESSIONS_TEMPORARY_DIRECTORY)];
+            expected.extend(prelude.null_device().map(PathBuf::from));
+
+            assert_eq!(written, expected, "{prelude:?}");
+        }
+    }
+
+    /// The regression it rejects: a Windows container handed a read of `/`, which it has no
+    /// meaning for, or a refusal, which an AppContainer cannot hold.
+    #[test]
+    fn the_run_base_on_windows_is_the_keyed_base() {
+        let run = a_run_base(Prelude::Windows);
+        let keyed = base(
+            Prelude::Windows,
+            Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+            None,
+            Some(Path::new(A_HOME)),
+        );
+
+        assert_eq!(run.readable, keyed.readable);
+        assert!(run.unreadable.is_empty());
+    }
+
+    /// Without a home directory only the absolute refusal can apply, and the policy still means
+    /// something.
+    #[test]
+    fn the_run_base_without_a_home_refuses_only_the_machine_wide_keychains() {
+        let policy = run_base(
+            Prelude::MacOs,
+            Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+            None,
+        );
+
+        assert_eq!(policy.unreadable, vec![PathBuf::from("/Library/Keychains")]);
+        assert!(policy.is_meaningful());
     }
 
     /// Every path the policy names, whichever list it is in, since a program reaches what either

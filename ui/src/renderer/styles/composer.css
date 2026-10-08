@@ -34,7 +34,7 @@
   flex-direction: column;
   min-width: 0;
 }
-.composer-stack { display: flex; flex-direction: column; min-width: 0; }
+.composer-stack { position: relative; display: flex; flex-direction: column; min-width: 0; }
 
 /* The white box sits in a sunken shell that also carries the footer strip under it. The box's
    border lies over the shell's on three sides, so the two read as one object. */
@@ -150,6 +150,68 @@
   --leo-button-padding: var(--leo-spacing-m);
   --leo-button-radius: var(--radius-pill);
 }
+
+/* ---- `@` mentions
+
+   Floats above the box and everything docked on it, so opening it moves nothing. The field keeps
+   focus, so a row is marked active rather than focused. */
+
+.mention-list {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(100% + var(--leo-spacing-s));
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-floating);
+  animation: mention-rise var(--motion-fast) ease-out;
+}
+@keyframes mention-rise {
+  from { opacity: 0; transform: translateY(var(--leo-spacing-xs)); }
+}
+.mention-rows {
+  display: flex;
+  flex-direction: column;
+  max-height: min(calc(var(--hit) * 10), 40vh);
+  overflow-y: auto;
+  padding: var(--leo-spacing-s);
+}
+.mention-option {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  min-width: 0;
+  min-height: var(--hit);
+  padding-inline: var(--leo-spacing-m);
+  border-radius: var(--radius-control);
+  color: var(--ink-primary);
+  cursor: default;
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-color: var(--ink-secondary);
+}
+.mention-option.active { background: var(--surface-hover); }
+.mention-path {
+  min-width: 0;
+  overflow: hidden;
+  font: var(--type-code);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-parent { color: var(--ink-tertiary); }
+.mention-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  padding: var(--leo-spacing-s) var(--leo-spacing-l);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  --leo-icon-size: var(--icon-meta);
+  --leo-icon-color: var(--status-warning);
+}
+.mention-keys { margin-inline-start: auto; }
 
 /* ---- context meter */
 
@@ -406,6 +468,8 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
   .composer-box:focus-within { outline: 2px solid Highlight; }
   .composer .permission-trigger.permission-acceptEdits,
   .composer .permission-trigger.permission-plan { outline: 1px solid CanvasText; }
+  .mention-list { border: 1px solid CanvasText; }
+  .mention-option.active { outline: 2px solid Highlight; outline-offset: -2px; }
 }
 
 /* Beside Send, so it reads as the other way to send what is written. */

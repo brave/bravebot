@@ -3740,6 +3740,7 @@ mod preserved_history {
                             | ToMain::Written(_)
                             | ToMain::Returned(_)
                             | ToMain::Landed(_)
+                            | ToMain::RequestBuilt(_)
                     ),
                     "unexpected worker event: {other:?}"
                 ),
@@ -4820,6 +4821,73 @@ fn the_checkouts_the_records_list_are_every_id_and_none_where_one_cannot_be_read
     let directory = sessions::project_directory(&scratch.project).expect("a directory");
     std::fs::write(directory.join("torn.json"), "{\"id\": ").expect("a torn record");
     assert_eq!(sessions::listed_checkouts(&scratch.project), None);
+}
+
+/// CHECKOUT-16: the checkouts to name are the directories no record lists and this session does not
+/// keep, and none where one record cannot be read. `/checkouts` asks only where the opening sweep
+/// removes nothing, so on Unix it names none.
+///
+/// The failures this rejects are naming a checkout a record lists, naming one the session itself
+/// keeps, and naming every directory when a record cannot be read.
+#[test]
+fn the_checkouts_no_record_lists_are_named_and_nothing_is_named_where_a_record_is_unreadable() {
+    let scratch = Scratch::new("checkouts-unlisted");
+    let workspace = Workspace::new(&scratch.project).expect("workspace");
+    let state = bravebot_agent::home::directory().expect("a home");
+    std::fs::create_dir_all(&state).expect("state");
+    let at = state
+        .canonicalize()
+        .expect("state")
+        .join("checkouts")
+        .join(bravebot_agent::home::key_for(workspace.root()));
+    for id in ["c1", "c2", "c3"] {
+        std::fs::create_dir_all(at.join(id)).expect("a checkout");
+    }
+    let kept = a_kept_checkout();
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(workspace.root(), Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        "make a space invaders game",
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 1,
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &a_trust_map(),
+            programs: &TrustedPrograms::new(),
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+            checkouts: std::slice::from_ref(&kept),
+        },
+    );
+
+    let ids = |named: Vec<(String, PathBuf)>| -> Vec<String> {
+        named.into_iter().map(|(id, _)| id).collect()
+    };
+    assert_eq!(
+        sessions::checkouts_no_record_lists(&workspace),
+        [
+            ("c2".to_string(), at.join("c2")),
+            ("c3".to_string(), at.join("c3"))
+        ],
+        "c1 is the one the record lists"
+    );
+    let named = ids(sessions::unlisted_checkouts(&workspace));
+    assert_eq!(
+        named,
+        if cfg!(unix) { vec![] } else { vec!["c2", "c3"] },
+        "only a platform whose sweep removes nothing names them"
+    );
+
+    let directory = sessions::project_directory(workspace.root()).expect("a directory");
+    std::fs::write(directory.join("torn.json"), "{\"id\": ").expect("a torn record");
+    assert!(sessions::checkouts_no_record_lists(&workspace).is_empty());
 }
 
 /// A record from before checkouts were kept reads as having none.

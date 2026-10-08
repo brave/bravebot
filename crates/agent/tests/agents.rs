@@ -448,7 +448,7 @@ fn a_project_cannot_hand_back_a_server_a_persons_own_definition_left_off() {
     );
 }
 
-/// DELEGATE-26. `inherit` is how other agents spell "no level of my own", and `model: inherit` is
+/// DELEGATE-27. `inherit` is how other agents spell "no level of my own", and `model: inherit` is
 /// already read that way, so the pair a ported definition writes means the same by both and neither
 /// is reported. Without this a person gets a notice on every discovery about behaviour they asked
 /// for and got.
@@ -485,7 +485,7 @@ fn an_effort_of_inherit_names_the_spawning_turns_level_and_is_not_reported() {
     );
 }
 
-/// DELEGATE-26. An effort word naming none of the five levels is reported, naming the file and
+/// DELEGATE-27. An effort word naming none of the five levels is reported, naming the file and
 /// the word, and the definition still loads: a value that cannot be used is not a reason to drop
 /// a definition, and its delegate keeps the spawning turn's level.
 #[test]

@@ -13,7 +13,9 @@ mod json;
 mod mcp;
 mod plain;
 mod progress;
+mod sandbox_check;
 mod session_import;
+mod shell_init;
 use bravebot_agent::servers;
 
 use crate::exit::{Ending, fail};
@@ -32,8 +34,8 @@ use bravebot_net::Transport;
 use bravebot_net::transport::{
     CERTIFICATE_DIRECTORY, CERTIFICATE_FILE, PROXY_VARIABLES, TrustRoots,
 };
-use bravebot_sandbox::SandboxError;
 use bravebot_sandbox::policy::Capabilities;
+use bravebot_sandbox::{SandboxError, SandboxMode};
 use bravebot_session::sessions::Resumable;
 use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -74,7 +76,16 @@ fn main() -> ExitCode {
         .find(|arg| {
             matches!(
                 arg.as_str(),
-                "--incognito" | "--safe" | "--vet" | "--settings"
+                "--incognito"
+                    | "--safe"
+                    | "--vet"
+                    | "--settings"
+                    | "--run-network"
+                    | "--sandbox"
+                    | "--sandbox-allow-read"
+                    | "--sandbox-deny-read"
+                    | "--sandbox-allow-write"
+                    | "--sandbox-deny-write"
             )
         })
         .cloned();
@@ -130,6 +141,31 @@ fn main() -> ExitCode {
         }
     }
 
+    // After the settings file is registered, which the settings it reads include, and before a
+    // session is assembled: a stage started under one answer and the next under another would
+    // make the network a property of the line rather than of the session.
+    match take_run_network(&mut args) {
+        Ok(flag) => {
+            bravebot_config::settle_run_network(flag);
+        }
+        Err(complaint) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+        }
+    }
+
+    // Settled with the network and for the same reason: the lists a stage is held to are a property
+    // of the session, and a line started under one answer and the next under another would make
+    // them a property of the line. The flags are the person's own act for this run, so they add to
+    // what their settings say.
+    match take_sandbox_filesystem(&mut args) {
+        Ok(lists) => {
+            bravebot_config::settle_sandbox_filesystem(&lists);
+        }
+        Err(complaint) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+        }
+    }
+
     // Taken out here, like the settings file, because a session, a session in lines and a one-shot
     // run all use the name the same way. It is matched later, by whichever of them starts, because
     // the set it is matched against depends on the directory's trust (CLI-17).
@@ -174,6 +210,36 @@ fn main() -> ExitCode {
             Ending::Argument,
             t!(cli_bypass_unreachable, path = path.display().to_string()),
         );
+    }
+
+    // After the settings file is named and before anything dispatches, for the reason the settings
+    // are: a turn started by any of the ways below holds its programs to the one answer settled
+    // here, and a managed floor that the flag or a file goes under stops the session before it
+    // starts rather than being met on the first `run`.
+    let sandbox_flag = match take_sandbox(&mut args) {
+        Ok(flag) => flag,
+        Err(complaint) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+        }
+    };
+    match bravebot_config::sandbox::resolve(
+        sandbox_flag,
+        &bravebot_config::Settings::load(),
+        &Managed::load(),
+    ) {
+        Ok(choice) => bravebot_config::sandbox::engage(choice),
+        // The commands that start no program are let through, `doctor` among them: the person
+        // holding a setting the managed file refuses is the one who needs the report that names it,
+        // and a diagnosis that is itself refused cannot be read.
+        Err(refused) if starts_no_program(args.first().map(String::as_str)) => {
+            bravebot_config::sandbox::engage(bravebot_config::sandbox::Choice {
+                mode: refused.pinned,
+                source: bravebot_config::sandbox::Source::Managed(refused.pinned_in),
+            });
+        }
+        Err(refused) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, sandbox_refusal(&refused));
+        }
     }
 
     args.extend(foreign);
@@ -249,6 +315,12 @@ fn main() -> ExitCode {
             "-p" | "--print" | "--mode" | "--model" | "--advisor" | "--effort" | "--file"
             | "--add-dir" | "--trace" | "--json" | "--json-stream",
         ) => run_task(&args, skip_permissions, agent, prompts),
+        Some("doctor") if args.get(1).map(String::as_str) == Some("--sandbox-check") => {
+            match args.len() {
+                2 => sandbox_check::run(),
+                _ => refused_with_the_usage(as_json, t!(cli_doctor_sandbox_takes_nothing_else)),
+            }
+        }
         Some("doctor") => doctor(),
         Some("auth") => auth::command(&args[1..]),
         Some("sessions") => background::sessions(&args[1..]),
@@ -271,6 +343,12 @@ fn main() -> ExitCode {
             Some(()) => ExitCode::SUCCESS,
             None => {
                 stopped_before_the_turn(as_json, Ending::Argument, t!(cli_completion_needs_a_shell))
+            }
+        },
+        Some("shell-init") => match shell_init::command(&args[1..]) {
+            Some(()) => ExitCode::SUCCESS,
+            None => {
+                stopped_before_the_turn(as_json, Ending::Argument, t!(cli_shell_init_needs_a_shell))
             }
         },
         Some("import-leo-creds") => import_leo_creds(&args[1..]),
@@ -366,7 +444,7 @@ fn continues_with_a_task(args: &[String]) -> bool {
 fn without_a_definition(first: Option<&str>) -> Option<String> {
     match first? {
         command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
-        | "import-leo-creds" | "import-providers" | "completion") => {
+        | "import-leo-creds" | "import-providers" | "completion" | "shell-init") => {
             Some(t!(cli_agent_not_for_a_command, command = command).to_string())
         }
         _ => None,
@@ -429,7 +507,7 @@ fn flag_named(prompts: &SystemPrompts) -> Option<&'static str> {
 fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
     match first? {
         command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
-        | "import-leo-creds" | "import-providers" | "completion") => Some(
+        | "import-leo-creds" | "import-providers" | "completion" | "shell-init") => Some(
             t!(
                 cli_system_prompt_not_for_a_command,
                 flag = flag,
@@ -524,6 +602,211 @@ fn take_settings(args: &mut Vec<String>) -> Result<Option<PathBuf>, String> {
     Ok(named)
 }
 
+/// Take `--run-network <open|closed>` out of the arguments, answering with the setting it named.
+///
+/// Removed before dispatch for the reason `--settings` is. A word that is neither is refused with
+/// the two that are named, since a typo read as `open` would leave the network a person meant to
+/// close open and say nothing. Given twice the last one wins, as `--settings` does. The arguments
+/// are rewritten only once the whole scan has succeeded.
+fn take_run_network(
+    args: &mut Vec<String>,
+) -> Result<Option<bravebot_sandbox::network::Network>, String> {
+    let mut named = None;
+    let mut kept = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] != "--run-network" {
+            kept.push(args[index].clone());
+            index += 1;
+            continue;
+        }
+        let Some(word) = args.get(index + 1) else {
+            return Err(t!(cli_run_network_needs_a_word).to_string());
+        };
+        match bravebot_sandbox::network::Network::parse(word) {
+            Some(network) => named = Some(network),
+            None => return Err(t!(cli_run_network_unknown, word = word.clone()).to_string()),
+        }
+        index += 2;
+    }
+    *args = kept;
+    Ok(named)
+}
+
+/// Take `--sandbox <mode>` out of the arguments, answering with the mode it named.
+///
+/// Removed before dispatch for the reason `--settings` is: how far a program may reach is a
+/// property of the run, and a flag read per subcommand would be one silently ignored by whichever
+/// forgot it. Given twice the last one wins, as `--settings` does. A blank or unknown word is
+/// refused rather than read as the default, because the three modes differ in what a program may
+/// reach and a script whose variable expanded to nothing asked for one of them.
+fn take_sandbox(args: &mut Vec<String>) -> Result<Option<SandboxMode>, String> {
+    let mut named = None;
+    let mut kept = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] != "--sandbox" {
+            kept.push(args[index].clone());
+            index += 1;
+            continue;
+        }
+        match args
+            .get(index + 1)
+            .and_then(|word| SandboxMode::parse(word))
+        {
+            Some(mode) => {
+                named = Some(mode);
+                index += 2;
+            }
+            None => {
+                return Err(t!(
+                    cli_sandbox_needs_a_mode,
+                    names = [SandboxMode::Strict, SandboxMode::Standard, SandboxMode::Off]
+                        .map(SandboxMode::name)
+                        .join(", ")
+                )
+                .to_string());
+            }
+        }
+    }
+    *args = kept;
+    Ok(named)
+}
+
+/// Whether the command line's first argument names a command that starts no program `run` would
+/// confine, so that a refused mode does not stop it.
+fn starts_no_program(first: Option<&str>) -> bool {
+    matches!(
+        first,
+        Some(
+            "doctor"
+                | "--help"
+                | "-h"
+                | "--version"
+                | "-V"
+                | "auth"
+                | "sessions"
+                | "attach"
+                | "completion"
+                | "import-leo-creds"
+                | "import-providers"
+        )
+    )
+}
+
+/// The line `doctor` gives the sandbox mode: which it is and where it was chosen, or what the
+/// managed file refuses.
+///
+/// Resolved from the files alone. A flag on `doctor` is not part of what the machine is set to, and
+/// the report is of that.
+fn sandbox_mode_line(
+    settings: &bravebot_config::Settings,
+    managed: &Managed,
+) -> Result<String, String> {
+    use bravebot_config::sandbox::{Source, resolve};
+    let label = t!(doctor_sandbox_mode);
+    match resolve(None, settings, managed) {
+        Ok(choice) => {
+            let detail = match choice.source {
+                Source::Default | Source::Flag => {
+                    t!(doctor_sandbox_default, mode = choice.mode.name()).to_string()
+                }
+                Source::File(path) | Source::Managed(path) => t!(
+                    doctor_sandbox_from,
+                    mode = choice.mode.name(),
+                    path = path.display().to_string()
+                )
+                .to_string(),
+            };
+            Ok(aligned(label, detail, DETAIL))
+        }
+        Err(refused) => Err(sandbox_refusal(&refused)),
+    }
+}
+
+/// What a refused mode says: the file that asked, when it was a file, and the file that holds the
+/// floor.
+fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
+    use bravebot_config::sandbox::Floor;
+    let pinned_in = refused.pinned_in.display().to_string();
+    match (&refused.asked_in, refused.because) {
+        (Some(file), Floor::Mode) => t!(
+            cli_sandbox_refused_file,
+            asked = refused.asked.name(),
+            asked_in = file.display().to_string(),
+            pinned = refused.pinned.name(),
+            pinned_in = pinned_in
+        )
+        .to_string(),
+        (None, Floor::Mode) => t!(
+            cli_sandbox_refused_flag,
+            asked = refused.asked.name(),
+            pinned = refused.pinned.name(),
+            pinned_in = pinned_in
+        )
+        .to_string(),
+        (Some(file), Floor::Network) => t!(
+            cli_sandbox_refused_network_file,
+            asked = refused.asked.name(),
+            asked_in = file.display().to_string(),
+            pinned_in = pinned_in
+        )
+        .to_string(),
+        (None, Floor::Network) => t!(
+            cli_sandbox_refused_network_flag,
+            asked = refused.asked.name(),
+            pinned_in = pinned_in
+        )
+        .to_string(),
+    }
+}
+
+/// Take `--sandbox-allow-read`, `--sandbox-deny-read`, `--sandbox-allow-write` and
+/// `--sandbox-deny-write` out of the arguments, each with the path that follows it, answering with
+/// the lists they came to. Each may be given any number of times.
+///
+/// Removed before dispatch for the reason `--settings` is. A flag with nothing after it is refused,
+/// since a path read as the next flag would be an entry nobody wrote. The arguments are rewritten
+/// only once the whole scan has succeeded.
+fn take_sandbox_filesystem(
+    args: &mut Vec<String>,
+) -> Result<bravebot_sandbox::rules::Lists, String> {
+    use bravebot_sandbox::rules::{Entry, List};
+    const FLAGS: [(&str, List); 4] = [
+        ("--sandbox-allow-read", List::AllowRead),
+        ("--sandbox-deny-read", List::DenyRead),
+        ("--sandbox-allow-write", List::AllowWrite),
+        ("--sandbox-deny-write", List::DenyWrite),
+    ];
+    let mut lists = bravebot_sandbox::rules::Lists::default();
+    let mut kept = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        let Some((flag, list)) = FLAGS.iter().find(|(flag, _)| args[index] == *flag) else {
+            kept.push(args[index].clone());
+            index += 1;
+            continue;
+        };
+        let Some(path) = args.get(index + 1).filter(|path| !path.trim().is_empty()) else {
+            return Err(t!(cli_sandbox_flag_needs_a_path, flag = *flag).to_string());
+        };
+        let entry = Entry {
+            path: path.clone(),
+            by: None,
+            pinned: false,
+        };
+        match list {
+            List::AllowRead => lists.allow_read.push(entry),
+            List::DenyRead => lists.deny_read.push(entry),
+            List::AllowWrite => lists.allow_write.push(entry),
+            List::DenyWrite => lists.deny_write.push(entry),
+        }
+        index += 2;
+    }
+    *args = kept;
+    Ok(lists)
+}
+
 fn print_help() {
     /// Wide enough for the longest invocation below, so a translated description starts in the
     /// same column as every other one rather than wherever hand-counted spaces left it.
@@ -555,6 +838,10 @@ fn print_help() {
         ),
         ("bravebot --fork <id>", t!(cli_usage_fork)),
         ("bravebot doctor", t!(cli_usage_doctor)),
+        (
+            "bravebot doctor --sandbox-check",
+            t!(cli_usage_doctor_sandbox),
+        ),
         ("bravebot sessions [--json]", t!(cli_usage_sessions)),
         ("bravebot sessions stop <id>", t!(cli_usage_sessions_stop)),
         (
@@ -573,6 +860,10 @@ fn print_help() {
         (
             "bravebot completion <bash|zsh|fish>",
             t!(cli_usage_completion),
+        ),
+        (
+            "bravebot shell-init <bash|zsh|fish>",
+            t!(cli_usage_shell_init),
         ),
     ] {
         println!("  {form:<FORM$}{description}");
@@ -614,6 +905,24 @@ fn print_help() {
         ("--file <path>", t!(cli_option_file)),
         ("--add-dir <path>", t!(cli_option_add_dir)),
         ("--settings <path>", t!(cli_option_settings)),
+        ("--run-network <open|closed>", t!(cli_option_run_network)),
+        ("--sandbox <mode>", t!(cli_option_sandbox)),
+        (
+            "--sandbox-allow-read <path>",
+            t!(cli_option_sandbox_allow_read),
+        ),
+        (
+            "--sandbox-deny-read <path>",
+            t!(cli_option_sandbox_deny_read),
+        ),
+        (
+            "--sandbox-allow-write <path>",
+            t!(cli_option_sandbox_allow_write),
+        ),
+        (
+            "--sandbox-deny-write <path>",
+            t!(cli_option_sandbox_deny_write),
+        ),
         ("--agent <name>", t!(cli_option_agent)),
         ("--system-prompt <prompt>", t!(cli_option_system_prompt)),
         (
@@ -1041,7 +1350,12 @@ fn run_task(
     // matched, because the model it asks for is the definition's where the definition names one.
     // A continued session may be recorded as having worked under one, which is not known until its
     // record is read.
-    let asked_below = (agent.is_some() || resume.is_some()) && model.is_none();
+    let settings = bravebot_config::Settings::load();
+    // The `agent` setting stands in for `--agent` where there is none, except in a manifest run,
+    // which no definition addresses (ADDRESS-13).
+    let configured = settings.agent().filter(|_| mode != Mode::Manifest);
+    let asked_below =
+        (agent.is_some() || configured.is_some() || resume.is_some()) && model.is_none();
     if !asked_below
         && let Some(how) = nothing_serves(&config, &model_for_this_run(model.as_deref(), &config))
     {
@@ -1055,8 +1369,6 @@ fn run_task(
         Some(Err(how)) => return stopped_before_the_turn(as_json, Ending::Configuration, how),
         None => None,
     };
-
-    let settings = bravebot_config::Settings::load();
 
     let mut workspace = match current_workspace(&settings, &Managed::load()) {
         Ok(w) => w,
@@ -1114,10 +1426,24 @@ fn run_task(
         .as_ref()
         .and_then(|record| record.agent.as_deref());
     let (agent, under) =
-        match bravebot_tui::app::settle_definition(agent.as_deref(), recorded, |name| {
+        match bravebot_tui::app::settle_definition(agent.as_deref(), recorded, configured, |name| {
             definition_for_a_run(&config, &workspace, &permissions, name, model.is_some())
         }) {
-            Ok(bravebot_tui::app::Settled::Under { name, found }) => (Some(name), found),
+            Ok(bravebot_tui::app::Settled::Under {
+                name,
+                found,
+                by_setting,
+            }) => {
+                if by_setting {
+                    eprintln!("{}", t!(session_working_under_by_setting));
+                }
+                (Some(name), found)
+            }
+            Ok(bravebot_tui::app::Settled::SettingGone { name, why }) => {
+                eprintln!("{}", t!(cli_agent_setting_gone, definition = name.as_str()));
+                eprintln!("{why}");
+                (None, None)
+            }
             Ok(bravebot_tui::app::Settled::Gone { name, why }) => {
                 eprintln!(
                     "{}",
@@ -1225,6 +1551,7 @@ fn run_task(
             settings.run_deadlines(),
         ))
         .with_confined_runs(true)
+        .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
         // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
         // of the three routes: `bravebot_core::vetting::auto` is the rule and nothing below reads
         // any of the three again. A run nobody is watching has no prompt to fall back to, so
@@ -2370,6 +2697,7 @@ fn interactive(
         Ok(sandbox) => named(sandbox.capabilities().level),
         Err(_) => named(bravebot_sandbox::policy::ConfinementLevel::None),
     };
+    let confinement = with_the_sandbox_mode(confinement, bravebot_config::sandbox::in_force().mode);
 
     // Settled on the plain terminal before the screen takes it, so a question about a server this
     // checkout requests is a line somebody answers rather than a dialog drawn over a session that
@@ -2438,6 +2766,25 @@ fn resume_hint(left: &Resumable, started_in: &Path) -> String {
         ),
     };
     format!("{heading}\nbravebot --resume {}", left.id)
+}
+
+/// The confinement line with the sandbox mode beside it, where the mode is not the one a session
+/// runs under unless somebody chose otherwise.
+///
+/// Said for `strict` and for `off`: the first changes what a program can read, and the second is the
+/// one a person has to be able to see without asking, since nothing else on the screen shows that a
+/// program `run` starts is not confined at all (SANDBOX-22).
+fn with_the_sandbox_mode(confinement: String, mode: SandboxMode) -> String {
+    match mode {
+        SandboxMode::Standard => confinement,
+        SandboxMode::Strict => t!(
+            confinement_with_mode,
+            level = confinement,
+            mode = mode.name()
+        )
+        .to_string(),
+        SandboxMode::Off => t!(confinement_with_mode_off, level = confinement).to_string(),
+    }
 }
 
 /// What to call the confinement that was achieved.
@@ -2751,6 +3098,96 @@ fn trust_already_answered(root: &Path) -> bravebot_core::TrustStore {
 }
 
 /// Report whether configuration is usable, without revealing the signing key.
+/// The `doctor` facts for `sandbox.filesystem`: each entry of the four lists with the file or flag
+/// that wrote it, and the ones that are not in force with why.
+///
+/// Resolved the way a session resolves them, against the profile directory and the working
+/// directory, so the report is the answer a stage would get; a glob is said by its entry and not by
+/// what it matched.
+fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Managed) {
+    let settled = bravebot_config::settled_sandbox_filesystem()
+        .cloned()
+        .unwrap_or_else(|| {
+            bravebot_config::resolve_sandbox_filesystem(
+                &bravebot_sandbox::rules::Lists::default(),
+                settings,
+                managed,
+            )
+        });
+    let profile = bravebot_agent::home::profile();
+    let directory = std::env::current_dir().unwrap_or_default();
+    let rules = bravebot_sandbox::rules::resolve(&settled.lists, profile.as_deref(), &directory);
+    let source = |entry: &bravebot_sandbox::rules::Entry| match &entry.by {
+        Some(path) => path.display().to_string(),
+        None => t!(doctor_sandbox_filesystem_source_flag).to_string(),
+    };
+    for item in rules.items() {
+        match item.state {
+            bravebot_sandbox::rules::State::InForce(_) => fact(
+                t!(doctor_sandbox_filesystem),
+                t!(
+                    doctor_sandbox_filesystem_entry,
+                    key = item.list.key(),
+                    path = item.entry.path.clone(),
+                    source = source(&item.entry)
+                ),
+            ),
+            bravebot_sandbox::rules::State::Refused(reason) => fact(
+                t!(doctor_sandbox_filesystem),
+                t!(
+                    doctor_sandbox_filesystem_refused,
+                    key = item.list.key(),
+                    path = item.entry.path.clone(),
+                    reason = bravebot_tui::status::filesystem_reason(reason),
+                    source = source(&item.entry)
+                ),
+            ),
+        }
+    }
+    let managed_file = bravebot_config::managed_file().display().to_string();
+    for (list, entry) in &settled.unread {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_managed_sandbox_unread,
+                key = list.key(),
+                path = entry.path.clone(),
+                managed = managed_file.clone()
+            ),
+        );
+    }
+    for (path, key) in settings.sandbox_filesystem_ignored() {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_sandbox_filesystem_ignored,
+                key = key,
+                path = path.display().to_string()
+            ),
+        );
+    }
+    for (path, key) in settings.sandbox_filesystem_misshapen() {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_sandbox_misshapen,
+                key = key,
+                path = path.display().to_string()
+            ),
+        );
+    }
+    for list in managed.filesystem_unreadable() {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_managed_sandbox_misshapen,
+                key = list.key(),
+                path = managed_file.clone()
+            ),
+        );
+    }
+}
+
 fn doctor() -> ExitCode {
     // What the report ends on, rather than whether it passed: CLI-6 gives a configuration this
     // build cannot use a status of its own, and a report collapsing every way a machine can be
@@ -2852,6 +3289,44 @@ fn doctor() -> ExitCode {
                     ),
                 );
             }
+            for path in settings.agent_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_agent_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+
+            for (path, mode) in settings.sandbox_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_sandbox_ignored,
+                        mode = mode.name(),
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            for path in settings.sandbox_unreadable() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_sandbox_unreadable,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            if managed.sandbox_unreadable() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_sandbox_unreadable,
+                        path = bravebot_config::managed_file().display().to_string()
+                    ),
+                );
+            }
 
             // A key beside the ones this build reads, which the lines above cannot cover: those name
             // a key that was recognised and not obeyed, and this one was never read at all. The file
@@ -2895,6 +3370,54 @@ fn doctor() -> ExitCode {
                     ),
                 );
             }
+
+            // The network for the programs `run` starts, named only where it is not open, with who
+            // decided it, and the layers that tried to open what a person closed. A word that
+            // is neither is read as absent, so it is said for the reason a mistyped pin is.
+            let network = bravebot_config::settled_run_network()
+                .cloned()
+                .unwrap_or_else(|| bravebot_config::resolve_run_network(None, &settings, &managed));
+            if network.network.is_closed() {
+                fact(
+                    t!(doctor_run_network),
+                    t!(
+                        doctor_run_network_closed,
+                        source = bravebot_tui::status::run_network_source(&network.decided)
+                    ),
+                );
+            }
+            for path in settings.run_network_ignored() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_network_ignored,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            for path in settings.run_network_unreadable() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_settings_network_unreadable,
+                        path = path.display().to_string()
+                    ),
+                );
+            }
+            if managed.network_unreadable() {
+                fact(
+                    t!(doctor_settings_ignored),
+                    t!(
+                        doctor_managed_network_unreadable,
+                        path = bravebot_config::managed_file().display().to_string()
+                    ),
+                );
+            }
+
+            // The lists of paths the programs `run` starts are held to, entry by entry with the
+            // file that wrote each, so a person finds what to edit; and each way an entry was not
+            // obeyed, since a refusal that is not in force holds back nothing and says nothing.
+            doctor_sandbox_filesystem(&settings, &managed);
 
             // The same, for the other name a checkout cannot answer on its own: an `allow` entry
             // stops a prompt, so one read out of a file that arrived with a clone would run a
@@ -3233,6 +3756,14 @@ fn doctor() -> ExitCode {
         bravebot_sandbox::for_current_platform().map(|sandbox| sandbox.capabilities()),
     ) {
         doctor_found(&mut ending, Ending::Failed, problem);
+    }
+
+    // Beside the confinement the platform offers, since the two answers are read together: what
+    // can be enforced here, and how much of the machine a program is held out of. A mode the managed
+    // file refuses is a configuration error, as a file the session could not use is.
+    match sandbox_mode_line(&settings, &managed) {
+        Ok(line) => println!("{line}"),
+        Err(problem) => doctor_found(&mut ending, Ending::Configuration, problem),
     }
 
     // Development setup is advisory: released binaries need neither facility.
@@ -5777,6 +6308,87 @@ mod tests {
         }
     }
 
+    /// The setting is taken out wherever it was typed, with its word, and a word that is neither
+    /// is refused rather than read as `open`.
+    #[test]
+    fn the_run_network_flag_is_taken_out_with_its_word_and_refuses_any_other() {
+        use bravebot_sandbox::network::Network;
+        for typed in [
+            &["--run-network", "closed", "-p", "do a thing"][..],
+            &["-p", "--run-network", "closed", "do a thing"][..],
+            &["-p", "do a thing", "--run-network", "closed"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert_eq!(
+                take_run_network(&mut arguments),
+                Ok(Some(Network::Closed)),
+                "{typed:?}"
+            );
+            assert_eq!(arguments, args(&["-p", "do a thing"]), "{typed:?}");
+        }
+        let mut twice = args(&["--run-network", "closed", "--run-network", "open"]);
+        assert_eq!(take_run_network(&mut twice), Ok(Some(Network::Open)));
+        let mut none = args(&["-p", "do a thing"]);
+        assert_eq!(take_run_network(&mut none), Ok(None));
+        for typed in [
+            &["-p", "x", "--run-network"][..],
+            &["--run-network", "Closed", "-p", "x"][..],
+            &["--run-network", "off", "-p", "x"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(take_run_network(&mut arguments).is_err(), "{typed:?}");
+            assert_eq!(arguments, args(typed), "a refusal rewrote the list");
+        }
+    }
+
+    /// Each of the four flags is taken out wherever it was typed, with its path, into the list it
+    /// names, any number of times, and what is left is the invocation without them. A flag with no
+    /// path after it, or a blank one, is refused and the arguments are left as they were: read as the
+    /// next flag, it would be an entry nobody wrote.
+    #[test]
+    fn the_sandbox_flags_are_taken_out_with_their_paths_into_their_lists() {
+        let mut arguments = args(&[
+            "--sandbox-deny-read",
+            "~/.config/gh",
+            "-p",
+            "--sandbox-allow-write",
+            "/data/out",
+            "do a thing",
+            "--sandbox-deny-read",
+            "**/*.env",
+            "--sandbox-allow-read",
+            "~/.aws",
+            "--sandbox-deny-write",
+            ".env",
+        ]);
+        let lists = take_sandbox_filesystem(&mut arguments).expect("well formed");
+        let paths = |entries: &[bravebot_sandbox::rules::Entry]| {
+            entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(arguments, args(&["-p", "do a thing"]));
+        assert_eq!(paths(&lists.deny_read), ["~/.config/gh", "**/*.env"]);
+        assert_eq!(paths(&lists.allow_read), ["~/.aws"]);
+        assert_eq!(paths(&lists.allow_write), ["/data/out"]);
+        assert_eq!(paths(&lists.deny_write), [".env"]);
+        assert!(lists.deny_read.iter().all(|entry| entry.by.is_none()));
+
+        for typed in [
+            &["-p", "x", "--sandbox-deny-read"][..],
+            &["--sandbox-allow-write", "  ", "-p", "x"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(
+                take_sandbox_filesystem(&mut arguments).is_err(),
+                "{typed:?}"
+            );
+            assert_eq!(arguments, args(typed), "a refusal rewrote the list");
+        }
+    }
+
     /// The file is taken out wherever it was typed, with the argument that belongs to it, and what
     /// is left is the invocation somebody would have typed without it. Left in, the flag would come
     /// back as an unknown option from whichever parser met it, and its path as a second prompt.
@@ -5992,6 +6604,7 @@ mod tests {
             "import-leo-creds",
             "import-providers",
             "completion",
+            "shell-init",
         ] {
             assert!(
                 without_a_definition(Some(first)).is_some(),
@@ -6114,6 +6727,7 @@ mod tests {
             "import-leo-creds",
             "import-providers",
             "completion",
+            "shell-init",
         ] {
             let refused = without_a_prompt_to_give("--system-prompt", Some(first))
                 .unwrap_or_else(|| panic!("{first} took the words"));
@@ -6686,5 +7300,184 @@ mod tests {
         ] {
             parse_invocation(&args(typed)).expect_err("a missing id must be refused");
         }
+    }
+
+    /// SANDBOX-22: `--sandbox` takes one of three exact words, the last of a repeat winning, and is
+    /// taken out of the arguments wherever it stood. The regression it rejects is a flag that
+    /// reads a near miss as a mode, or leaves its word behind to be read as the task.
+    #[test]
+    fn the_sandbox_flag_takes_one_of_three_words_and_the_last_wins() {
+        for (typed, expected) in [
+            (
+                &["--sandbox", "strict", "-p", "do a thing"][..],
+                SandboxMode::Strict,
+            ),
+            (
+                &["-p", "--sandbox", "off", "do a thing"][..],
+                SandboxMode::Off,
+            ),
+            (
+                &["-p", "do a thing", "--sandbox", "standard"][..],
+                SandboxMode::Standard,
+            ),
+            (
+                &["--sandbox", "off", "--sandbox", "strict"][..],
+                SandboxMode::Strict,
+            ),
+        ] {
+            let mut arguments = args(typed);
+            assert_eq!(
+                take_sandbox(&mut arguments),
+                Ok(Some(expected)),
+                "{typed:?}"
+            );
+            assert!(
+                !arguments.iter().any(|argument| argument == "--sandbox"),
+                "{typed:?} left the flag behind: {arguments:?}"
+            );
+            assert!(
+                !arguments
+                    .iter()
+                    .any(|argument| SandboxMode::parse(argument).is_some()),
+                "{typed:?} left its word behind: {arguments:?}"
+            );
+        }
+        let mut none = args(&["-p", "do a thing"]);
+        assert_eq!(take_sandbox(&mut none), Ok(None));
+        assert_eq!(none, args(&["-p", "do a thing"]));
+    }
+
+    /// SANDBOX-22: a missing, blank or unknown word is refused naming the three, and the arguments
+    /// are left as typed. The regression it rejects is a script whose variable expanded to nothing
+    /// being run under the default.
+    #[test]
+    fn the_sandbox_flag_refuses_a_word_that_is_not_a_mode() {
+        for typed in [
+            &["-p", "do a thing", "--sandbox"][..],
+            &["--sandbox", "", "-p", "do a thing"][..],
+            &["--sandbox", "Strict", "-p", "do a thing"][..],
+            &["--sandbox", "none", "-p", "do a thing"][..],
+            &["--sandbox", "-p", "do a thing"][..],
+        ] {
+            let mut arguments = args(typed);
+            let refused = take_sandbox(&mut arguments).expect_err(&format!("{typed:?}"));
+            assert!(refused.contains("strict, standard, off"), "{refused}");
+            assert_eq!(arguments, args(typed), "a refusal rewrote the arguments");
+        }
+    }
+
+    /// SANDBOX-22: a refused mode stops what runs programs and lets through what only reads or
+    /// writes the person's own files. The regression it rejects is `bravebot completion` or
+    /// `bravebot auth` failing on a machine whose settings went under the managed floor, or a
+    /// session or a task starting past one.
+    #[test]
+    fn a_refused_mode_stops_what_runs_programs_and_not_what_does_not() {
+        for first in [
+            "doctor",
+            "--help",
+            "--version",
+            "auth",
+            "sessions",
+            "attach",
+            "completion",
+            "import-providers",
+        ] {
+            assert!(starts_no_program(Some(first)), "{first}");
+        }
+        for first in [
+            None,
+            Some("-p"),
+            Some("--bg"),
+            Some("--resume"),
+            Some("reply"),
+            Some("__bg-host"),
+        ] {
+            assert!(!starts_no_program(first), "{first:?}");
+        }
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos());
+        // The pid and the stamp make the name this process's own, and `create_dir` refuses a name
+        // already taken, so another slot's copy of this test is never reused.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let dir = std::env::temp_dir().join(format!(
+            "bravebot-cli-sandbox-{name}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).expect("scratch");
+        dir
+    }
+
+    fn pin_file(name: &str, text: &str) -> Managed {
+        let dir = scratch(name);
+        let file = dir.join("managed.json");
+        std::fs::write(&file, text).expect("managed file");
+        Managed::at(&file)
+    }
+
+    /// SANDBOX-22 and SANDBOX-10: `doctor` names the mode and where it came from, and names the
+    /// managed file when the settings went under its pin. The regression it rejects is a report
+    /// that says `standard` where a machine pins `strict`.
+    #[test]
+    fn doctor_names_the_sandbox_mode_and_where_it_came_from() {
+        let unset = sandbox_mode_line(&bravebot_config::Settings::default(), &Managed::default())
+            .expect("nothing to refuse");
+        assert!(unset.contains("standard"), "{unset}");
+        assert!(unset.contains("default"), "{unset}");
+
+        let pin = pin_file("pinned", r#"{"sandbox": {"mode": "strict"}}"#);
+        let pinned = sandbox_mode_line(&bravebot_config::Settings::default(), &pin)
+            .expect("the pin alone is not a refusal");
+        assert!(pinned.contains("strict"), "{pinned}");
+        assert!(
+            pinned.contains(&pin.path().expect("a pin").display().to_string()),
+            "{pinned}"
+        );
+    }
+
+    /// SANDBOX-22: a setting under the managed floor is reported with both files rather than as
+    /// the pin. The regression it rejects is `doctor` calling a machine fine whose next session
+    /// would be refused.
+    #[test]
+    fn doctor_reports_a_mode_the_managed_file_refuses() {
+        let home = scratch("refused");
+        let file = home.join("settings.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "off"}}"#).expect("home layer");
+        let settings = bravebot_config::Settings::layered(Some(home), None, None);
+        let pin = pin_file("floor", r#"{"sandbox": {"mode": "strict"}}"#);
+
+        let refused = sandbox_mode_line(&settings, &pin).expect_err("under the floor");
+        assert!(refused.contains(&file.display().to_string()), "{refused}");
+        assert!(
+            refused.contains(&pin.path().expect("a pin").display().to_string()),
+            "{refused}"
+        );
+        assert!(
+            refused.contains("strict") && refused.contains("off"),
+            "{refused}"
+        );
+    }
+
+    /// SANDBOX-22: the line names `strict` and `off` and says nothing for `standard`. The
+    /// regression it rejects is `off` shown as the platform's level alone, which reads as a
+    /// session whose programs are confined.
+    #[test]
+    fn the_confinement_line_names_the_mode_unless_it_is_standard() {
+        let level = "kernel-enforced".to_string();
+        assert_eq!(
+            with_the_sandbox_mode(level.clone(), SandboxMode::Standard),
+            level
+        );
+        let strict = with_the_sandbox_mode(level.clone(), SandboxMode::Strict);
+        assert!(
+            strict.starts_with(&level) && strict.contains("strict"),
+            "{strict}"
+        );
+        let off = with_the_sandbox_mode(level.clone(), SandboxMode::Off);
+        assert!(off.starts_with(&level) && off.contains("off"), "{off}");
+        assert_ne!(off, strict);
     }
 }

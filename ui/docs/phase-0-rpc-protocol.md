@@ -652,7 +652,16 @@ Either list is checked in full before a turn starts. Each of these refuses the s
 
 `null` for either list is the same as leaving it out.
 
-None of these lists may be named by a renderer in this app; see §9 and `src/main/sanitise.ts`.
+None of these lists may be named by a renderer in this app; see §9 and `src/main/sanitise.ts`. The
+app's main process composes `files` itself from native-picker grants.
+
+Unless `composed` is set, the bridge adds to `files` every name `prompt` gives with `@`, read with
+the terminal's rule (NAME-6): each word starting with `@`, without the `@`, except a bare `@` and a
+name ending in `/`. Each is surveyed first by the read the turn makes of a named file: inside the
+workspace, present, not a directory, and text by the agent's binary test. A name that fails is a
+`bad_request` naming it (`@<name> is not a file in this project. …` or
+`@<name> is not a text file, so it cannot be sent. …`), and no turn starts. A prompt with
+`composed` set names no file.
 
 Spawns the worker thread and calls `turn::resume` with an
 RPC `Confirmer`, an RPC `Reporter`, and a `Trail` sink — the same call shape as
@@ -678,8 +687,17 @@ flight errors `turn_in_flight`. Different sessions run concurrently.
 #### `turn.cancel`
 
 ```json
-{ "id": 6, "method": "turn.cancel", "params": { "session": "s1" } }
+{ "id": 6, "method": "turn.cancel", "params": { "session": "s1", "turn": 3 } }
 ```
+
+`turn` is optional and names the turn the cancel is for. Absent, the cancel stops whatever is
+running and returns `{}`, as it always has. Present, it stops that turn and no other: it returns
+`{ "cancelled": true }` for the running turn, and `{ "cancelled": false }` when the named turn is
+not the one running or has ended, in which case nothing is stopped, the watches included. A `turn`
+that is not a number is refused with `bad_request`. A manifest run is never stopped by a cancel
+that names a turn, and turn numbers repeat after `session.rewind`. A client that holds a turn number should send
+it, so a cancel that arrives late cannot stop the turn after.
+
 
 Calls `Cancel::cancel()` on that turn's token — a fresh token per turn, never reused,
 matching the upstream cancellation model. Returns `{}` immediately; the turn ends with
@@ -689,6 +707,32 @@ not an error.
 A pending confirmation checks cancellation at most every 50 ms and resolves to refusal.
 No approval is sent, and no additional client reply is required. Cancellation also
 covers the race where the question is registered just after the stop request.
+
+#### `mentions.offer`
+
+```json
+{ "id": 7, "method": "mentions.offer", "params": { "session": "s1", "line": "Summarise @src/ma", "cursor": 0 } }
+→ { "typed": "src/ma", "entries": [{ "path": "src/main.rs", "directory": false }], "completes": true }
+```
+
+What the message box offers for a half-typed `@` name (NAME-4, NAME-5, NAME-9), from the
+`bravebot-mentions` crate the terminal uses, against the session's project. `typed` is what
+follows the `@` of the line's last word while it is still being typed, or `null`, which closes
+the list. `entries` is one directory of the project: directories first, narrowed by the prefix,
+at most 40, version-control, build and dependency directories left out, and nothing for `..` or
+an absolute path. `completes` is whether Enter with the cursor on row `cursor` (default 0)
+completes the name rather than sending the line (NAME-7). Names and kinds only; no file is read.
+
+#### `mentions.named`
+
+```json
+{ "id": 8, "method": "mentions.named", "params": { "session": "s1", "prompt": "Summarise @README.md" } }
+→ { "files": ["README.md"] }
+```
+
+The files a prompt names with `@`, surveyed as `turn.send` surveys them, or the same
+`bad_request` that `turn.send` would answer. For drawing the **Read** rows before a send and
+refusing it early; `turn.send` reads the prompt again, and that is the check that decides.
 
 #### `confirm.reply`
 
@@ -762,6 +806,9 @@ except `connectors.preview` returns what `connectors.list` returns.
 
 Records the user's answer to the startup question into that session's `TrustStore`,
 before the first `turn.send`. See §9. Returns `{ "trusted": true, "kept": null }`.
+
+The question is answered once. A repeat, and a reply to a session that was never asked, is refused
+with `no_such_request`, and the trust already given stands.
 
 `remember` is optional, and `true` keeps the answer for later sessions in the directory. It is
 refused with `bad_request`, and nothing is recorded, with `trusted: false` or where the
@@ -1117,7 +1164,8 @@ the directory was made.
 - Replies arrive whole in `turn.done`; output-token events report counts, not text.
 - MCP configuration (declaring, approving ahead of time, enabling and forgetting), subscription
   import and skills authoring have no dedicated UI. `bravebot mcp` in a terminal does the first.
-- File browsing, previews and attachments are Electron IPC features, not RPC methods.
+- File browsing, previews and attachments are Electron IPC features, not RPC methods. `@`
+  completion is `mentions.offer` and `mentions.named`.
 - One `bravebot-rpc` process has one client. There is no multi-client transport.
 
 ---
@@ -1413,14 +1461,15 @@ A resolved approval replacement retains its event name and payload.
 `pending` holds `row`, `request`, `kind`, `supported`, and `data`. Supported kinds are `confirm`,
 `run`, `fetch`, and `ask`; use their existing reply operations. Unsupported kinds require a capable
 local surface or cancellation. Startup trust uses the existing local operation. The view never
-authorizes an action, and does not strengthen legacy request targeting.
+authorizes an action. Question numbers last the session, a cancel can name its turn, and a trust
+answer is taken once, as `capabilities.actionTargets` advertises (RPCVIEW-6).
 
 Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
 `detached`. Session close emits `detached`, which means the view ended, not that the worker stopped
 or saving succeeded. A gap or lost connection ends the view: version 1 has no reconnect or history
-recovery. IDs are scoped to the current connection lifetime and session, with request IDs also
-qualified by turn. Keep drafts and optimistic UI separate until an accepted prompt row arrives.
+recovery. IDs are scoped to the current connection lifetime and session. A request ID is also unique
+within its session, across turns. Keep drafts and optimistic UI separate until an accepted prompt row arrives.
 
 The [shared session view spec](../../docs/specs/session-view.md) defines the supported rows, ordering,
 approval transitions, label preservation and limits. This is the Rust part of the first mobile
-block. The stdio TypeScript client for it is `packages/agent-client`, which does not yet answer questions; no native renderer is supplied yet.
+block. The stdio TypeScript client for it is `packages/agent-client`, which answers the four supported question kinds; no native renderer is supplied yet.

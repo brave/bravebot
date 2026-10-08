@@ -302,7 +302,7 @@ fn an_address_in_a_sentence_is_not_a_reference() {
 /// A directory is somewhere to type through, not a file to read, so naming one includes nothing.
 #[test]
 fn a_directory_reference_is_not_included_as_a_file() {
-    assert!(bravebot_tui::entries::referenced("look in @src/").is_empty());
+    assert!(bravebot_mentions::referenced("look in @src/").is_empty());
 }
 
 /// A prompt ending in a finished reference sends on Enter. It reads as still being completed, since
@@ -355,7 +355,50 @@ fn the_files_a_submitted_line_would_include() {
         other => panic!("the line was not sent: {other:?}"),
     };
     assert_eq!(
-        bravebot_tui::entries::referenced(&sent),
+        bravebot_mentions::referenced(&sent),
         vec!["src/main.rs".to_string(), "README.md".to_string()]
     );
+}
+
+/// A name holding a space completes to the escaped form, and that line names the same file when it
+/// is sent. Without the escape the line ends the reference at the space and names a different path.
+#[test]
+fn a_name_with_a_space_completes_to_a_reference_that_names_it() {
+    let scratch = Scratch::new("space-in-name");
+    std::fs::create_dir_all(scratch.path.join("My Documents")).expect("create");
+    std::fs::write(scratch.path.join("My Documents/notes.md"), "x").expect("write");
+    let mut session = session(&scratch);
+    typing(&mut session, "read @My");
+
+    handle_key(&mut session, key(KeyCode::Tab));
+    assert_eq!(session.input(), "read @My\\ Documents/");
+
+    typing(&mut session, "no");
+    handle_key(&mut session, key(KeyCode::Tab));
+    assert_eq!(session.input(), "read @My\\ Documents/notes.md ");
+
+    let sent = match handle_key(&mut session, key(KeyCode::Enter)) {
+        Action::Submit(sent) => sent,
+        other => panic!("the line was not sent: {other:?}"),
+    };
+    assert_eq!(
+        bravebot_mentions::referenced(&sent),
+        vec!["My Documents/notes.md".to_string()]
+    );
+}
+
+/// Enter completes a half-typed reference that already holds an escaped space, rather than sending
+/// the fragment.
+#[test]
+fn enter_completes_a_half_typed_reference_past_an_escaped_space() {
+    let scratch = Scratch::new("space-half");
+    std::fs::write(scratch.path.join("my notes.md"), "x").expect("write");
+    let mut session = session(&scratch);
+    typing(&mut session, "explain @my\\ no");
+
+    assert_eq!(
+        handle_key(&mut session, key(KeyCode::Enter)),
+        Action::Redraw
+    );
+    assert_eq!(session.input(), "explain @my\\ notes.md ");
 }

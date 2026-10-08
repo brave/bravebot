@@ -2198,6 +2198,31 @@ pub fn sweep_unlisted_checkouts(workspace: &Workspace) {
         });
 }
 
+/// What `/checkouts` names beside the ones this session keeps: the checkouts no record lists, where
+/// nothing removes them (CHECKOUT-16). Empty where the opening sweep removes them.
+pub fn unlisted_checkouts(workspace: &Workspace) -> Vec<(String, std::path::PathBuf)> {
+    if cfg!(unix) {
+        return Vec::new();
+    }
+    checkouts_no_record_lists(workspace)
+}
+
+/// The checkouts under this working directory's key that no record lists and this session does not
+/// keep, with their paths. Empty where a record cannot be read, since that record might list any of
+/// them.
+///
+/// Another running session may be using one, which nothing here can tell, so the answer is
+/// something to name and not something to remove.
+pub fn checkouts_no_record_lists(workspace: &Workspace) -> Vec<(String, std::path::PathBuf)> {
+    let Some(state) = bravebot_agent::home::directory() else {
+        return Vec::new();
+    };
+    let Some(listed) = listed_checkouts(workspace.root()) else {
+        return Vec::new();
+    };
+    workspace.unlisted_checkouts(&state, &|id| listed.contains(id))
+}
+
 /// Read one session back, by the id the list gave.
 pub fn load(project: &Path, id: &str) -> Option<Record> {
     let directory = project_directory(project)?;

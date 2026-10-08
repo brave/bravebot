@@ -100,6 +100,8 @@ export async function runScenario(scenario: Scenario, chunking: Chunking): Promi
     raw: (args) => rawRequest(client, args.method, args.params),
     answerTrust: (args, target) => target().answerTrust(args.trusted),
     send: (args, target) => target().send(args.text),
+    decide: (args, target) => target().decide(args.request, args.decision),
+    answer: (args, target) => target().answer(args.request, args.answers),
     cancel: (_args, target) => target().cancel(),
     close: (_args, target) => target().close(),
   }
@@ -141,9 +143,10 @@ export async function runScenario(scenario: Scenario, chunking: Chunking): Promi
         }
         if ('error' in step) {
           if (!('error' in outcome)) assert.fail(`${where}: expected ${JSON.stringify(step.error)}, the call succeeded`)
-          const expected = step.error as { name: string; code?: string }
+          const expected = step.error as { name: string; code?: string; outcome?: string }
           assert.equal(outcome.error.name, expected.name, `${where}: ${outcome.error.message}`)
           if (expected.code) assert.equal((outcome.error as { code?: string }).code, expected.code)
+          if (expected.outcome) assert.equal((outcome.error as { outcome?: string }).outcome, expected.outcome, `${where}: outcome`)
         } else {
           if ('error' in outcome) assert.fail(`${where}: the call failed: ${outcome.error.message}`)
           if (step.bindSession) sessions.set(String(step.bindSession), outcome.value as AgentSession)

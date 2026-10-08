@@ -4142,20 +4142,40 @@ mod tests {
     fn a_run_prompt_says_what_a_confined_run_is_held_to() {
         let mut request = a_run(false);
         request.confined = Some(bravebot_agent::Confined {
+            reads_the_machine: false,
             directories: vec![
                 "/home/someone/project".into(),
                 "/var/scratch/session".into(),
             ],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
             carried: vec![
                 bravebot_agent::Carried {
                     program: "git".into(),
                     toolchain: None,
                     scope: Some(bravebot_sandbox::scope::Scope::Remote),
+                    reaches: Vec::new(),
+                    network: false,
+                    remembered: Vec::new(),
+                },
+                bravebot_agent::Carried {
+                    program: "docker".into(),
+                    toolchain: None,
+                    scope: Some(bravebot_sandbox::scope::Scope::Docker),
+                    reaches: vec![bravebot_sandbox::scope::Reach {
+                        variable: "DOCKER_CONFIG",
+                        path: "/home/someone/.local/share/docker-work".into(),
+                    }],
+                    network: false,
+                    remembered: Vec::new(),
                 },
                 bravebot_agent::Carried {
                     program: "sed".into(),
                     toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Cargo),
                     scope: None,
+                    reaches: Vec::new(),
+                    network: false,
+                    remembered: Vec::new(),
                 },
             ],
         });
@@ -4171,9 +4191,47 @@ mod tests {
         );
         assert!(drawn.contains("never a private key"), "{drawn}");
         assert!(
+            drawn.contains(
+                "docker also reads /home/someone/.local/share/docker-work, where your DOCKER_CONFIG points"
+            ),
+            "{drawn}"
+        );
+        assert!(
             drawn.contains("sed also reaches the install and the cache of the cargo toolchain"),
             "{drawn}"
         );
+    }
+
+    /// A prompt for a session whose network is closed says so, and names the stage that keeps it,
+    /// so a yes is given knowing the one program that can reach out. An open network says nothing,
+    /// as it never did.
+    #[test]
+    fn a_run_prompt_says_the_network_is_closed_and_which_stage_keeps_it() {
+        let mut request = a_run(false);
+        let held = |network, kept| bravebot_agent::Confined {
+            reads_the_machine: false,
+            directories: vec!["/home/someone/project".into()],
+            network,
+            filesystem: Default::default(),
+            carried: vec![bravebot_agent::Carried {
+                program: "git".into(),
+                toolchain: None,
+                scope: Some(bravebot_sandbox::scope::Scope::Remote),
+                reaches: Vec::new(),
+                network: kept,
+                remembered: Vec::new(),
+            }],
+        };
+        request.confined = Some(held(bravebot_sandbox::network::Network::Closed, true));
+
+        let drawn = rendered_run(&request);
+
+        assert!(drawn.contains("the network is closed"), "{drawn}");
+        assert!(drawn.contains("git also reaches the network"), "{drawn}");
+
+        request.confined = Some(held(bravebot_sandbox::network::Network::Open, false));
+        let drawn = rendered_run(&request);
+        assert!(!drawn.contains("network"), "{drawn}");
     }
 
     /// A line that reaches an authority nothing here holds says which one, beside the line about

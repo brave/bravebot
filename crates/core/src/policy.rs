@@ -6020,6 +6020,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("ambient", named.join(", "));
     }
 
+    /// Record that the network was closed for the programs of one `run`, and which stages kept it.
+    ///
+    /// `detail` is built from the stage's place in the line and a reason from a fixed set, so it
+    /// holds nothing the plan or a program wrote. Recorded only for a closed network: an entry on
+    /// every line saying the ordinary thing would bury the ones that say something.
+    pub fn record_run_network(&mut self, detail: String) {
+        self.allow("run_network", detail);
+    }
+
     /// Record the permission mode a turn begins with, by its name.
     ///
     /// The mode decides whether the next prompt is drawn, and it is the one thing that changes
@@ -6028,6 +6037,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// skipped permissions. The name is the mode's own static text, never anything a turn read.
     pub fn record_permission_mode(&mut self, mode: &'static str) {
         self.allow("permission_mode", format!("the turn began in {mode} mode"));
+    }
+
+    /// Record the sandbox mode a `run` starts its programs under, by its name (SANDBOX-22).
+    ///
+    /// Said per run rather than per turn, because the record that matters is what bound the
+    /// programs of that line, and a reader of the trail has no other place to learn that a line
+    /// started with no profile. The name is the mode's own static text, never anything a turn read.
+    pub fn record_sandbox_mode(&mut self, mode: &'static str) {
+        self.allow("sandbox", format!("the programs ran in {mode} mode"));
     }
 
     /// Record who answered a prompt the policy had decided to put.
@@ -11838,6 +11856,24 @@ five
             !recorded.contains("the user read it"),
             "the trail credited a person who was never shown the bytes: {recorded}"
         );
+    }
+
+    /// SANDBOX-22: a `run` leaves a `sandbox` entry saying which mode its programs ran in, by the
+    /// mode's own name. The regression it rejects is a trail that is silent about a line that
+    /// started with no profile, which is the record a reader has no other way to reconstruct.
+    #[test]
+    fn the_trail_says_which_sandbox_mode_the_programs_ran_in() {
+        for mode in ["strict", "standard", "off"] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            policy.record_sandbox_mode(mode);
+            let recorded = format!("{:?}", sink.events());
+            assert!(recorded.contains("sandbox"), "{recorded}");
+            assert!(
+                recorded.contains(&format!("the programs ran in {mode} mode")),
+                "{mode}: {recorded}"
+            );
+        }
     }
 
     /// Auto-vetting changes who answers and nothing about what an answer is worth. The bytes come

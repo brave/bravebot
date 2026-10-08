@@ -316,6 +316,7 @@ class Work(unittest.TestCase):
 
         return calls, types.SimpleNamespace(
             gh=gh,
+            helper=pa.load_poster().helper,
             post=post,
             existing_labels=lambda repo: set(labels or ["bug", "security", "needs-security-review", "severity/high", "area/tools"]),
             assignable=lambda repo, login: True,

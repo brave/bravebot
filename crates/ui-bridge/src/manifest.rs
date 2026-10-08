@@ -35,6 +35,7 @@ pub(crate) struct Walk {
     pub attribution: bravebot_config::Attribution,
     pub output_cap: Option<usize>,
     pub deadlines: bravebot_agent::exec::Deadlines,
+    pub sandbox: bravebot_sandbox::SandboxMode,
     pub model: Option<String>,
     /// The session's as it stood when the run was accepted. Plan mode refuses a plan that writes
     /// (MODE-3).
@@ -72,6 +73,7 @@ pub(crate) fn walk(walk: Walk) {
         attribution,
         output_cap,
         deadlines,
+        sandbox,
         model,
         permission_mode,
         workspace,
@@ -100,6 +102,7 @@ pub(crate) fn walk(walk: Walk) {
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
+        .with_sandbox_mode(sandbox)
         // The rules the session opened under, as the terminal passes them. The agent's manifest
         // runner does not read them today, so no rule holds in a run. A front end says so on the
         // plan it puts to the person.
@@ -107,8 +110,14 @@ pub(crate) fn walk(walk: Walk) {
         .with_permission_mode(permission_mode);
 
     let mut reporter = BridgeReporter::new(emitter.clone(), &session);
-    let mut asking =
-        BridgeConfirmer::new(emitter.clone(), &session, pending, answers, cancel.clone());
+    let mut asking = BridgeConfirmer::new(
+        emitter.clone(),
+        &session,
+        pending,
+        answers,
+        Arc::clone(&state.question_ids),
+        cancel.clone(),
+    );
     // Screening off the task, which asks for none: nothing fills in a verdict before the plan is
     // fixed, so a confirmer told to screen would refuse on a word nobody made.
     let mut confirmer = Confining::new(&mut asking, permission_mode, task.auto_vetting);

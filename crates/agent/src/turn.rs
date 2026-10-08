@@ -33,6 +33,7 @@ use std::time::Instant;
 use crate::confirm::Confirmer;
 use crate::conversation::{Composed, Conversation, TOOL_RESULT_PREFIX};
 use crate::report::{DelegateId, IgnoreReports, Phase, Reporter};
+use crate::request_view::{Prompt, Provenance, RequestView};
 use crate::timing::{Elapsed, Timing};
 use crate::tools;
 use crate::workspace::{Paging, Workspace, WorkspaceError};
@@ -706,6 +707,9 @@ pub struct Task {
     /// ordinary turn whose prompt the agent composed, and a transcript drawn later has nothing
     /// but the sentence to go on unless the record says so. See [`Composed`].
     pub composed: Option<Composed>,
+    /// Whether the driver wrote this prompt and no person typed it, which the view of the request
+    /// says of it. Set only by a caller that composed the line itself.
+    pub driver_wrote_the_prompt: bool,
     /// Workspace-relative files to include as context. Trusted because the user named
     /// them, not the model.
     pub files: Vec<String>,
@@ -838,6 +842,10 @@ pub struct Task {
     /// refused. A delegate inherits the spawning turn's answer, since the person's answer about
     /// what a program may reach does not stop being theirs because the work moved.
     pub confine_runs: bool,
+    /// Which profile those programs run under, or that none does (SANDBOX-22).
+    ///
+    /// Read only where `confine_runs` is true. A delegate inherits it with `confine_runs`.
+    pub sandbox: bravebot_sandbox::SandboxMode,
     /// Rules the user wrote in advance about which actions to ask them about.
     ///
     /// Supplied per turn for the reason `home` and `model` are: which file they came from is the
@@ -1029,6 +1037,7 @@ impl Task {
             prompt: prompt.into(),
             // A line somebody typed until a caller says what composed it.
             composed: None,
+            driver_wrote_the_prompt: false,
             files: Vec::new(),
             attachments: Vec::new(),
             dropped_text: Vec::new(),
@@ -1068,6 +1077,7 @@ impl Task {
             deadlines: crate::exec::Deadlines::BUILT_IN,
             // Unconfined, which is what a turn has always done.
             confine_runs: false,
+            sandbox: bravebot_sandbox::SandboxMode::default(),
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
             permission_mode: crate::PermissionMode::default(),
@@ -1113,6 +1123,12 @@ impl Task {
     /// agent's.
     pub fn composed_rather_than_typed(mut self, composed: Composed) -> Self {
         self.composed = Some(composed);
+        self
+    }
+
+    /// Say that the driver wrote this prompt, for a line it sends when nobody typed one.
+    pub fn written_by_the_driver(mut self) -> Self {
+        self.driver_wrote_the_prompt = true;
         self
     }
 
@@ -1266,6 +1282,12 @@ impl Task {
     /// [`Task::confine_runs`].
     pub fn with_confined_runs(mut self, confine: bool) -> Self {
         self.confine_runs = confine;
+        self
+    }
+
+    /// Hold those programs to `mode`'s profile. See [`Task::sandbox`].
+    pub fn with_sandbox_mode(mut self, mode: bravebot_sandbox::SandboxMode) -> Self {
+        self.sandbox = mode;
         self
     }
 
@@ -1982,6 +2004,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             auto_vetting: task.auto_vetting,
             run_directory: &mut run_directory,
             confine_runs: false,
+            sandbox: bravebot_sandbox::SandboxMode::default(),
         },
         confirmer,
         id,
@@ -2246,13 +2269,25 @@ fn admit_context_file<S: Sink>(
         ),
         // Untagged: no byte of the file is in this, and what it says is something a person has to
         // read. A reference with nothing drawn about it is a turn that quietly read nothing.
-        Presentation::Quarantined(reference) => conversation.push(Message::user(format!(
-            "{path} could not be shown to you.\n\n{}",
-            reference.describe()
-        ))),
+        Presentation::Quarantined(reference) => conversation.push_from(
+            Message::user(format!(
+                "{path} could not be shown to you.\n\n{}",
+                reference.describe()
+            )),
+            Provenance::Reference(reference.slot.to_string()),
+        ),
     }
 
     Ok(())
+}
+
+/// Whose words a presented result holds, for the view of the request: what the kernel let through
+/// is named by what it is, and what it held back by the reference the planner was given in its place.
+fn provenance_of(presented: &Presentation, what: &'static str) -> Provenance {
+    match presented {
+        Presentation::Visible(_) => Provenance::Trusted(what),
+        Presentation::Quarantined(reference) => Provenance::Reference(reference.slot.to_string()),
+    }
 }
 
 /// One delegate this turn started and has not yet collected.
@@ -2321,12 +2356,18 @@ fn record_answer<S: Sink>(
             conversation.quarantine(),
         )
         .map_err(|d| TurnError::Precommit(d.to_string()))?;
-    conversation.push(Message::assistant(match &presented {
-        Presentation::Visible(text) => text.clone(),
-        Presentation::Quarantined(reference) => {
-            format!("(you answered. {})", reference.describe())
-        }
-    }));
+    conversation.push_from(
+        Message::assistant(match &presented {
+            Presentation::Visible(text) => text.clone(),
+            Presentation::Quarantined(reference) => {
+                format!("(you answered. {})", reference.describe())
+            }
+        }),
+        match &presented {
+            Presentation::Visible(_) => Provenance::Planner,
+            Presentation::Quarantined(_) => provenance_of(&presented, "answer"),
+        },
+    );
     conversation.observed(policy.context_label());
     Ok(answer)
 }
@@ -2396,7 +2437,7 @@ fn take_interjections<S: Sink, C: Confirmer, R: Reporter>(
         // opening prompt would be.
         policy.admit_interjection(said.chars().count());
         reporter.interjected(said.clone());
-        conversation.push(Message::user(said));
+        conversation.push_from(Message::user(said), Provenance::Typed);
     }
 }
 
@@ -2512,7 +2553,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
             );
         }
 
-        let (mut note, mut body, failed, reported) = match delegated {
+        let (mut note, mut body, failed, reported, from) = match delegated {
             Ok(delegated) => {
                 *tokens += delegated.usage.total();
                 *output_tokens += delegated.usage.completion_tokens;
@@ -2521,14 +2562,19 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 let kind = delegated.kind;
                 let rounds = ran.map_or(0, |(_, rounds)| rounds);
                 let tally = tools::tally(rounds, "round", "rounds");
-                let note = match (working.stop.was_honoured(), rounds >= working.rounds) {
+                // Two counts the driver already holds: the rounds this delegate made, and the
+                // bound its spec fixed before it started. Nothing here reads the report, so the
+                // comparison is between driver-held numbers and never between bytes a delegate
+                // wrote (DELEGATE-26).
+                let reached = rounds >= working.rounds;
+                let note = match (working.stop.was_honoured(), reached) {
                     (true, _) => format!(
                         "the person stopped a {kind} delegate after {tally} and it answered with \
                          what it had"
                     ),
                     (false, true) => format!(
                         "a {kind} delegate reached its limit of {tally} and answered with what it \
-                         had"
+                         had, so it may not be finished"
                     ),
                     (false, false) => format!("a {kind} delegate answered after {tally}"),
                 };
@@ -2539,6 +2585,17 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         format!("The person stopped the {kind} delegate {id} before it reported. ")
                     }
                     false => String::new(),
+                };
+                // Beside the report rather than inside it, so the planner reads the same sentence
+                // whether it is shown the words or handed a reference to them (AGENT-4). The
+                // delegate is told on its limiting round to say what stopped it (DELEGATE-6), and
+                // that is model text the planner may never see.
+                let bound = match (working.stop.was_honoured(), reached) {
+                    (false, true) => format!(
+                        " It stopped at its limit of {} and may not be finished.",
+                        tools::tally(working.rounds, "round", "rounds")
+                    ),
+                    _ => String::new(),
                 };
                 let slot = conversation.next_reference();
                 let presented = policy
@@ -2561,7 +2618,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         policy.heard_from_delegate(delegated.report.label());
                         (
                             format!(
-                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished. \
+                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished.{bound} \
                                  It reported:\n\n{text}"
                             ),
                             crate::report::Reported::Said(text.clone()),
@@ -2571,7 +2628,8 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         let shown = preview_for(policy, "delegate", &delegated.report);
                         (
                             format!(
-                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished. {}",
+                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished.{bound} \
+                                 {}",
                                 reference.describe()
                             ),
                             crate::report::Reported::Kept(crate::report::Shown {
@@ -2584,12 +2642,25 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         )
                     }
                 };
-                (note, body, false, Some(reported))
+                let from = provenance_of(&presented, "delegate report");
+                (note, body, false, Some(reported), from)
             }
             Err(_) => {
                 *tokens += partial.tokens;
                 *output_tokens += partial.output_tokens;
                 cached.add(partial.cached);
+                // The same comparison the answering arm makes, on the same two driver-held counts.
+                // A delegate that spent its whole budget and then failed to answer is the common
+                // way the bound is reached rather than a corner of it, and the planner told only
+                // that it did not finish retries the identical task (DELEGATE-26).
+                let reached = ran.is_some_and(|(_, rounds)| rounds >= working.rounds);
+                let bound = match reached {
+                    true => format!(
+                        " It had spent its limit of {}, so the same task will not get further.",
+                        tools::tally(working.rounds, "round", "rounds")
+                    ),
+                    false => String::new(),
+                };
                 // The same fixed name the trail records, and never the error's own text.
                 let note = match finish {
                     bravebot_core::delegate::Finish::Failed { why, .. } => {
@@ -2600,8 +2671,15 @@ fn collect_delegates<S: Sink, R: Reporter>(
                     }
                     _ => "the delegate could not finish".to_string(),
                 };
-                let body = format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish.");
-                (note, body, true, None)
+                let note = match reached {
+                    true => format!(
+                        "{note}, having spent its limit of {}",
+                        tools::tally(working.rounds, "round", "rounds")
+                    ),
+                    false => note,
+                };
+                let body = format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish.{bound}");
+                (note, body, true, None, Provenance::Driver)
             }
         };
 
@@ -2653,7 +2731,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
         }
 
         reporter.delegate_finished(id, note, failed, reported);
-        conversation.push(Message::user(body));
+        conversation.push_from(Message::user(body), from);
         conversation.observed(policy.context_label());
         collected += 1;
     }
@@ -2820,7 +2898,12 @@ fn collect_jobs<S: Sink, R: Reporter>(
             }
         };
 
-        conversation.push(Message::user(body));
+        conversation.push_from(
+            Message::user(body),
+            presented.as_ref().map_or(Provenance::Driver, |presented| {
+                provenance_of(presented, "job output")
+            }),
+        );
         conversation.observed(policy.context_label());
     }
     Ok(())
@@ -2854,7 +2937,20 @@ fn fire_hooks<R: Reporter + ?Sized>(
         }
     }
     let mut said = Vec::new();
-    for fired in crate::hooks::fire(hooks, moment, tool, workspace.root()) {
+    let fired_all = crate::hooks::fire_watched(
+        hooks,
+        moment,
+        tool,
+        workspace.root(),
+        crate::hooks::LIMIT,
+        &mut |edge| match edge {
+            crate::hooks::Watch::Starting { moment, program } => {
+                reporter.hook_started(moment, program.to_string())
+            }
+            crate::hooks::Watch::Over => reporter.hook_finished(),
+        },
+    );
+    for fired in fired_all {
         let Some(trouble) = fired.trouble else {
             continue;
         };
@@ -3327,7 +3423,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             }
         };
 
-        tools::state_confinement(&mut offered, task.confine_runs);
+        tools::state_confinement(&mut offered, task.confine_runs, task.sandbox);
 
         // Whether what a run printed can be read with nobody asked: bypassing with no screening, in a
         // turn offered read_output at all. A definition or a delegate left without it has no release
@@ -3437,17 +3533,21 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             .checkout()
             .map(crate::delegate::checkout_notice)
             .unwrap_or_default();
-        let system = match &task.delegate {
-            Some(spec) => format!(
-                "{}{checkout_notice}{}{mode}",
-                crate::delegate::prompt_for(
-                    spec.capabilities(),
-                    spec.prompt(),
-                    &memory(spec.keeps_memory(), spec.definition()),
-                    spec.may_delegate()
-                ),
-                preamble.text
-            ),
+        let mut system = Prompt::default();
+        match &task.delegate {
+            Some(spec) => {
+                system.push(
+                    Provenance::Driver,
+                    crate::delegate::prompt_for(
+                        spec.capabilities(),
+                        spec.prompt(),
+                        &memory(spec.keeps_memory(), spec.definition()),
+                        spec.may_delegate(),
+                    ),
+                );
+                system.push(Provenance::Driver, checkout_notice);
+                system.extend(preamble.prompt.clone());
+            }
             // `for_a_person` names tools only this side is offered, so it sits with the rest of what
             // only this side reads and ahead of `text`: the user's own instructions end that string and
             // have the last word over anything this program says about a machine.
@@ -3458,23 +3558,31 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             //
             // `--system-prompt` stands in for the opening alone (CLI-19): what follows it is what
             // the quarantine, the goal and the modes rest on.
-            None => format!(
-                "{}{PLANNING}{FOR_A_PERSON}{}{}{}{mode}",
-                task.system_prompts
-                    .replacing
-                    .as_deref()
-                    .map_or(OPENING, str::trim),
-                preamble.for_a_person,
-                addressed
-                    .as_ref()
-                    .map(|addressed| crate::delegate::addressed_prompt(
-                        addressed,
-                        &memory(addressed.keeps_memory(), addressed.name())
-                    ))
-                    .unwrap_or_default(),
-                preamble.text
-            ),
-        };
+            None => {
+                match task.system_prompts.replacing.as_deref() {
+                    Some(replacing) => {
+                        system.push(Provenance::Trusted("command line"), replacing.trim())
+                    }
+                    None => system.push(Provenance::Driver, OPENING),
+                }
+                system.push(Provenance::Driver, PLANNING);
+                system.push(Provenance::Driver, FOR_A_PERSON);
+                system.push(Provenance::Driver, preamble.for_a_person.clone());
+                if let Some(addressed) = &addressed {
+                    system.push(
+                        Provenance::Trusted("agent definition"),
+                        crate::delegate::addressed_prompt(
+                            addressed,
+                            &memory(addressed.keeps_memory(), addressed.name()),
+                        ),
+                    );
+                }
+                system.extend(preamble.prompt.clone());
+            }
+        }
+        system.push(Provenance::Driver, mode);
+        let system = system;
+        let system_text = system.text();
 
         // Read context files. Paths come from precommitted routing, so a path is trusted by
         // construction and the read gate can only pass for files the user named.
@@ -3522,21 +3630,25 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 .present("chat", slot, "stdin", &piped, conversation.quarantine())
                 .map_err(|d| TurnError::Precommit(d.to_string()))?;
 
-            conversation.push(Message::user(match &presented {
-                Presentation::Visible(body) => format!("Piped input:\n\n{body}"),
-                Presentation::Quarantined(reference) => {
-                    format!(
-                        "Piped input could not be shown to you.\n\n{}",
-                        reference.describe()
-                    )
-                }
-            }));
+            conversation.push_from(
+                Message::user(match &presented {
+                    Presentation::Visible(body) => format!("Piped input:\n\n{body}"),
+                    Presentation::Quarantined(reference) => {
+                        format!(
+                            "Piped input could not be shown to you.\n\n{}",
+                            reference.describe()
+                        )
+                    }
+                }),
+                provenance_of(&presented, "piped input"),
+            );
         }
 
         // The prompt and what came with it are one message, because that is what the user did: they
         // typed a line and dropped a file on it, or pasted a picture into it. Two messages would put
         // the picture somewhere other than the sentence asking about it.
         let prompt_at = conversation.recounted().len();
+        let has_attachments = !task.attachments.is_empty();
         let submitted = if task.attachments.is_empty() && task.images.is_empty() {
             Message::user(task.prompt.clone())
         } else {
@@ -3606,7 +3718,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // and by the time a transcript is being drawn the sentence is all that is left to go on.
         match &task.composed {
             Some(composed) => conversation.push_composed(submitted, composed.clone()),
-            None => conversation.push(submitted),
+            None if task.driver_wrote_the_prompt => {
+                conversation.push_from(submitted, Provenance::Driver)
+            }
+            None if has_attachments => {
+                conversation.push_from(submitted, Provenance::TypedWithFiles)
+            }
+            None => conversation.push_from(submitted, Provenance::Typed),
         }
 
         // A plain prompt can begin with an internal-note prefix that recounting omits.
@@ -3749,6 +3867,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // Cleared only by a failure. A summary that could not be made once will not be made on the
         // next round either, and a turn should not spend a request per round finding that out.
         let mut may_compact = true;
+        // Whether a request the service refused has already been answered with a compaction this turn
+        // (COMPACT-14). Once, and not reset: a second refusal is the turn's failure.
+        let mut compacted_after_a_refusal = false;
+        // The refusal waiting on a compaction, which the next pass of the loop makes before it asks
+        // again, and which is the turn's failure if there turns out to be nothing to cut.
+        let mut refused: Option<crate::backend::BackendError> = None;
         // Whether the last request went out because the one before it came back empty (TURN-6).
         let mut asked_after_an_empty_reply = false;
         // Whether it went out because the one before it reached the output ceiling (TURN-7).
@@ -3838,7 +3962,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // Before the request rather than after the reply that overflowed. The figure being
                     // compared is the last round's, so this is one round late by construction, which is why
                     // the budget sits below any window rather than at it.
-                    if may_compact && context_tokens >= config.context_budget {
+                    let mut shortened = false;
+                    if refused.is_some() || may_compact && context_tokens >= config.context_budget {
                         reporter.phase(Phase::Compacting);
                         let mut chat = crate::processor::Chat {
                             config,
@@ -3878,6 +4003,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         }
                         match summary {
                             Ok(Some(done)) => {
+                                shortened = true;
                                 tokens += done.usage.total();
                                 output_tokens += done.usage.completion_tokens;
                                 cached.add(done.usage.cached);
@@ -3924,19 +4050,30 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         }
                     }
 
+                    // A request the service refused, and nothing to cut: the refusal is reported as it
+                    // always was, with no second request to repeat it (COMPACT-14).
+                    if let Some(error) = refused.take()
+                        && !shortened
+                    {
+                        return Err(error.into());
+                    }
+
                     // Said before the request goes out, so the longest silence in a turn is explained
                     // while it happens rather than accounted for afterwards.
                     let round = Phase::of_round(steps);
                     reporter.phase(round);
 
                     let model = turn_model.as_deref().unwrap_or(&config.default_model);
-                    let request = ChatRequest::new(model, conversation.with_system(&system))
-                        .with_effort(effort);
+                    let (messages, marks) = conversation.with_system_marked(&system_text);
+                    let request = ChatRequest::new(model, messages).with_effort(effort);
                     let request = if may_call_tools {
                         request.with_tools(offered.clone())
                     } else {
                         request
                     };
+                    if task.delegate.is_none() && reporter.wants_request_view() {
+                        reporter.request_built(RequestView::of(&request, &system, &marks));
+                    }
 
                     // Streamed so the interface can show the reply growing. Each round's count restarts at
                     // zero, so earlier rounds are added back: the figure is for the turn, not the round.
@@ -4040,13 +4177,26 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // turn adds a line and asks once. Two in a row is a model with nothing to say here,
                     // and asking a third time would only spend another request finding that out.
                     let mut completion = match completion {
+                        // The service would not take the request as written, and this turn has not yet
+                        // answered one that way. Decided from the status and from the turn's own state,
+                        // so nothing the refusal said reaches it. A refusal for some other reason costs
+                        // one summary, which COMPACT-5 bounds, and is then reported as it was.
+                        Err(error)
+                            if error.refused_the_body()
+                                && may_compact
+                                && !compacted_after_a_refusal =>
+                        {
+                            compacted_after_a_refusal = true;
+                            refused = Some(error);
+                            continue;
+                        }
                         Err(error) if error.is_empty_reply() && !asked_after_an_empty_reply => {
                             asked_after_an_empty_reply = true;
-                            conversation.push(Message::user(format!(
+                            conversation.push_from(Message::user(format!(
                             "{TOOL_BUDGET_SPENT} Your last reply was empty. Carry on from where \
                              you were: make the next call, or if the work is done, say what you \
                              found."
-                        )));
+                        )), Provenance::Driver);
                             continue;
                         }
                         // A reply that reached the ceiling having written nothing: part way through
@@ -4065,11 +4215,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     AfterCeilingStop::AskedAgain,
                                 );
                                 reporter.narration(ceiling_stop_narration(cut_off, may_call_tools));
-                                conversation.push(Message::user(after_a_ceiling_stop(
-                                    cut_off,
-                                    &request,
-                                    may_call_tools,
-                                )));
+                                conversation.push_from(
+                                    Message::user(after_a_ceiling_stop(
+                                        cut_off,
+                                        &request,
+                                        may_call_tools,
+                                    )),
+                                    Provenance::Driver,
+                                );
                             }
                             continue;
                         }
@@ -4126,11 +4279,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         record_answer(&mut policy, conversation, &completion.content)?;
                         narrate_between_calls(&mut policy, &mut reporter, &completion.content);
                         reporter.narration(ceiling_stop_narration(cut_off, may_call_tools));
-                        conversation.push(Message::user(after_a_ceiling_stop(
-                            cut_off,
-                            &request,
-                            may_call_tools,
-                        )));
+                        conversation.push_from(
+                            Message::user(after_a_ceiling_stop(cut_off, &request, may_call_tools)),
+                            Provenance::Driver,
+                        );
                         continue;
                     }
                     if completion.cut_off.is_none() {
@@ -4243,11 +4395,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         may_call_tools = false;
                         stop.honour();
                         reporter.narration(t!(delegate_stopped_narration).to_string());
-                        conversation.push(Message::user(format!(
+                        conversation.push_from(Message::user(format!(
                             "{TOOL_BUDGET_SPENT} The person stopped you, and you have no more tool \
                              calls. Answer now with what you know. If the work is not finished, say \
                              what you found and what is left to do."
-                        )));
+                        )), Provenance::Driver);
                     } else if let Some(limit) = task
                         .rounds
                         .filter(|limit| steps >= *limit && may_call_tools)
@@ -4257,12 +4409,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     "that is {limit} tool calls without an answer, so this turn has to finish with \
                  what it has"
                 ));
-                        conversation.push(Message::user(format!(
+                        conversation.push_from(Message::user(format!(
                 "{TOOL_BUDGET_SPENT} You have made {limit} tool calls this turn and have no more. \
                  Answer now with what you know. If the work is not finished, say what you found, \
                  what stopped you, and what would let you finish, such as a file named or a \
                  directory trusted."
-            )));
+            )), Provenance::Driver);
                     }
 
                     // What the model said on the way to these calls. It used to be dropped on the floor,
@@ -4317,17 +4469,25 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         Presentation::Quarantined(_) => None,
                     };
 
-                    conversation.push(match (&presented, &replayed) {
-                        (Presentation::Visible(text), Some(calls)) => {
-                            Message::assistant_calling(text.clone(), calls.clone())
-                        }
-                        (Presentation::Visible(text), None) => Message::assistant(text.clone()),
-                        (Presentation::Quarantined(reference), _) => Message::assistant(format!(
-                            "(you called: {}. What you said is not shown back to you. {})",
-                            requested.join(", "),
-                            reference.describe()
-                        )),
-                    });
+                    conversation.push_from(
+                        match (&presented, &replayed) {
+                            (Presentation::Visible(text), Some(calls)) => {
+                                Message::assistant_calling(text.clone(), calls.clone())
+                            }
+                            (Presentation::Visible(text), None) => Message::assistant(text.clone()),
+                            (Presentation::Quarantined(reference), _) => {
+                                Message::assistant(format!(
+                                    "(you called: {}. What you said is not shown back to you. {})",
+                                    requested.join(", "),
+                                    reference.describe()
+                                ))
+                            }
+                        },
+                        match &presented {
+                            Presentation::Visible(_) => Provenance::Planner,
+                            Presentation::Quarantined(_) => provenance_of(&presented, "answer"),
+                        },
+                    );
 
                     // Held until every call in the round has its result, since a picture goes in a
                     // message of its own after them and never between a call and its answer.
@@ -4389,6 +4549,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 auto_vetting: task.auto_vetting,
                                 run_directory: &mut run_directory,
                                 confine_runs: task.confine_runs,
+                                sandbox: task.sandbox,
                             },
                             &mut asking,
                             &mut reporter,
@@ -4473,6 +4634,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     task.output_cap,
                                     task.deadlines,
                                     task.confine_runs,
+                                    task.sandbox,
                                     task.mcp.as_ref(),
                                     cancel,
                                     &mut confirmer,
@@ -4588,6 +4750,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // Three shapes, and which one a result takes was decided by the tool that
                         // produced it and the kernel that labelled it, never here.
                         let mut shown_window = false;
+                        // Set in each arm below, where the presentation that decides it is in scope.
+                        let result_from: Provenance;
                         let body = if let Some(entries) = &output.entries {
                             // A listing the planner may not see. The names never come out: it gets one
                             // reference per entry, and can read through and write back to the ones
@@ -4609,6 +4773,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 .iter()
                                 .map(bravebot_core::reference::Reference::describe)
                                 .collect();
+                            result_from = Provenance::Reference(
+                                ids.iter()
+                                    .map(ToString::to_string)
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            );
                             // The planner gets names it cannot read. The person watching gets the
                             // opposite, and needs it: they own the directory, and "2 files, quarantined"
                             // does not tell them whether their agent is about to work on the right one.
@@ -4768,6 +4938,17 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             let (presented, read_from) = match read_from {
                                 Some((shown, slot)) => (shown, Some(slot)),
                                 None => (presented, None),
+                            };
+                            result_from = match (&presented, &read_from) {
+                                (Presentation::Visible(_), Some(slot)) => {
+                                    Provenance::Released(slot.to_string())
+                                }
+                                (Presentation::Visible(_), None)
+                                    if output.tool == "read_output" =>
+                                {
+                                    Provenance::Released(output.origin.clone())
+                                }
+                                _ => provenance_of(&presented, "tool result"),
                             };
 
                             // A cap bounds what the conversation holds, not what the command printed, so
@@ -5129,13 +5310,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // The prose one is tagged, so nothing has to recognise it by the words it opens with.
                         match call.id.as_deref().filter(|_| replayed.is_some()) {
                             Some(id) => {
-                                conversation.push(Message::tool_result(id, body));
+                                conversation.push_from(Message::tool_result(id, body), result_from);
                                 if shown_window && let Some(window) = output.window.take() {
                                     conversation.shown_read(window);
                                 }
                             }
-                            None => conversation
-                                .push_composed(Message::user(body), Composed::ToolResult),
+                            None => conversation.push_composed_from(
+                                Message::user(body),
+                                Composed::ToolResult,
+                                result_from,
+                            ),
                         }
                         if let Some(cancelled) = cancellation {
                             attach_vetted_pictures(&mut policy, conversation, &mut attached);
@@ -5194,12 +5378,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         && steps >= ROUNDS_BEFORE_WRITING
                     {
                         said_nothing_written = true;
-                        conversation.push(Message::user(format!(
+                        conversation.push_from(Message::user(format!(
                     "{TOOL_BUDGET_SPENT} That is {steps} rounds of tools and nothing written yet. \
                      If the task asks for a change and any part of it is settled, write that part \
                      now and keep looking only for the parts that are not. If it asks for no \
                      change, carry on."
-                )));
+                )), Provenance::Driver);
                     }
 
                     // The other half of the same problem. A change nobody built is a guess about whether
@@ -5218,13 +5402,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             .is_some_and(|at| steps >= at + ROUNDS_AFTER_WRITING_BEFORE_RUNNING)
                     {
                         said_nothing_run = true;
-                        conversation.push(Message::user(format!(
+                        conversation.push_from(Message::user(format!(
                     "{TOOL_BUDGET_SPENT} Files have changed this turn and nothing has been run. \
                      A change that has not been built is a guess about whether it builds, so find \
                      how this project builds and tests, and run that. Where the log is long and \
                      what you want from it is which test failed, hand it to a checker with \
                      spawn_agent instead. If there is nothing here to build, carry on."
-                )));
+                )), Provenance::Driver);
                     }
                 };
                 Ok::<_, TurnError>(completion)
@@ -5339,12 +5523,18 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 conversation.quarantine(),
             )
             .map_err(|d| TurnError::Precommit(d.to_string()))?;
-        conversation.push(Message::assistant(match &presented {
-            Presentation::Visible(text) => text.clone(),
-            Presentation::Quarantined(reference) => {
-                format!("(you answered. {})", reference.describe())
-            }
-        }));
+        conversation.push_from(
+            Message::assistant(match &presented {
+                Presentation::Visible(text) => text.clone(),
+                Presentation::Quarantined(reference) => {
+                    format!("(you answered. {})", reference.describe())
+                }
+            }),
+            match &presented {
+                Presentation::Visible(_) => Provenance::Planner,
+                Presentation::Quarantined(_) => provenance_of(&presented, "answer"),
+            },
+        );
         conversation.observed(policy.context_label());
         // Here and nowhere earlier: a turn that was stopped or failed has not answered, and the next
         // prompt is usually the same task carried on rather than a new one.
@@ -5686,6 +5876,93 @@ mod tests {
                 "d2: ended without handing anything back, so how long it ran and how many of its \
                  60 rounds it made are not known",
             ]
+        );
+    }
+
+    /// DELEGATE-26 where the report is quarantined. The sentence about the bound is the driver's
+    /// own and sits beside the report, so the planner reads the same words whether it is shown the
+    /// text or handed a reference to it. An untrusted report is given here directly, since a
+    /// delegate's own context meets nothing untrusted on the ordinary paths.
+    #[test]
+    fn a_quarantined_report_carries_the_same_sentence_about_the_bound() {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+        );
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "collect a quarantined report");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let mut conversation = Conversation::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        // The label a delegate whose own context met untrusted bytes earns, taken from the kernel
+        // rather than written here, so the test cannot give a report a label the kernel would not.
+        let report = policy.label_piped_input("WHAT-THE-UNVOUCHED-LOOK-FOUND".to_string());
+        std::thread::scope(|scope| {
+            let handed = seeded.clone();
+            let answered = scope.spawn(move || -> Joined {
+                (
+                    crate::delegate::Ended {
+                        delegated: Ok(crate::delegate::Delegated {
+                            report,
+                            kind: "one-round".to_string(),
+                            usage: Default::default(),
+                        }),
+                        vouched: handed,
+                        notices: Vec::new(),
+                        rounds: 1,
+                        took: Duration::from_millis(900),
+                    },
+                    Default::default(),
+                    Vec::new(),
+                )
+            });
+            let mut delegates = vec![Working {
+                join_started: None,
+                id: DelegateId::nth(1),
+                seeded: seeded.clone(),
+                checkout: None,
+                rounds: 1,
+                stop: Default::default(),
+                handle: answered,
+            }];
+            collect_delegates(
+                &mut delegates,
+                &mut policy,
+                &mut conversation,
+                &mut reporter,
+                &mut 0,
+                &mut 0,
+                &mut Cached::default(),
+                true,
+                &mut crate::timing::DelegateWait::default(),
+                &mut Elapsed::default(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+        });
+
+        let told = conversation
+            .messages()
+            .iter()
+            .map(|stored| stored.message.content.text())
+            .find(|text| text.contains("The one-round delegate d1 has finished."))
+            .expect("the planner was never told the delegate finished");
+        assert!(
+            !told.contains("WHAT-THE-UNVOUCHED-LOOK-FOUND"),
+            "an untrusted report was shown to the planner, so nothing here was tested: {told}"
+        );
+        assert!(
+            told.contains("It stopped at its limit of 1 round and may not be finished."),
+            "a planner handed a reference was not told the delegate stopped at its bound: {told}"
         );
     }
 

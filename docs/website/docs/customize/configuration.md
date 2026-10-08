@@ -407,7 +407,10 @@ one thing leaves everything else in force:
 | `env`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `agent` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
+| `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
+| `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
 | anything else | the closest file that set it wins |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
@@ -444,6 +447,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `model` | the model to request when nobody has chosen one ([below](#model)) |
 | `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
 | `fallbackModel` | the model a turn moves to when its own keeps failing ([below](#fallbackmodel)) |
+| `agent` | the definition every turn of a session is addressed to when `--agent` names none ([below](#agent)) |
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
@@ -451,6 +455,8 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
 | `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
+| `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([below](#runnetwork)) |
+| `sandbox.filesystem.allowRead`, `denyRead`, `allowWrite`, `denyWrite` | lists of paths that move what a program the agent runs reads and writes ([below](#sandboxfilesystem)) |
 | `run.maxOutput` | how much of what a command printed the agent reads ([below](#runmaxoutput)) |
 | `run.defaultSeconds`, `run.maxSeconds` | how long a command may run ([below](#rundefaultseconds-and-runmaxseconds)) |
 | `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
@@ -602,6 +608,26 @@ reported by `bravebot doctor`. A model your administrator refuses is not used as
 
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
 
+### `agent`
+
+```json
+{ "agent": "rule-reviewer" }
+```
+
+The name of one of your [definitions](agents.md). A session, a session in lines or a one-shot run
+that is given no [`--agent`](../reference/cli.md#--agent-name) addresses every turn to it, as the
+flag would. `--agent` outranks the setting, and so does the name recorded by a session you resume.
+`/status` and the first line of the session say that the setting chose it. It does not apply to
+`--mode manifest`.
+
+If no definition has the name, bravebot says so and the session or run goes on without one, where
+`--agent` would refuse it. A definition whose model needs a sign-in you have not made is refused.
+
+**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that names one is ignored and
+reported by `bravebot doctor`, since it would choose the prompt and the tools of every turn from a
+file you did not write.
+
 ### `effort`
 
 ```json
@@ -740,6 +766,71 @@ editing it describes your next session.
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB=0` turns the withholding off entirely. Only that exact spelling does
 it: `false`, `no` and `off` change nothing, because a credential reaching every subprocess is not a
 thing to switch off by near-miss.
+
+### `run.network`
+
+```json
+{ "run": { "network": "closed" } }
+```
+
+`open` is the default: every program the agent runs keeps the network. `closed` takes it from every
+program except those that carry a reason to have it: a package manager that fetches (`cargo`, `npm`,
+`pip`, `go`, `mvn`, `gradle`), a `git` or `gh` command that talks to a remote, `curl`, `ssh`, and
+a command that was lent a credential (remote, cloud, cluster or container). A program the agent could have written itself, under a directory it may write to, gets nothing by being named `curl`. `cat`, `grep`, `make`, `python3` and a test
+run get none, so what they read cannot be sent anywhere.
+
+`--run-network closed` sets it for one run, and a machine-level file can pin it, which no other
+layer overrides. A project's own settings can close the network and cannot open it. On Linux the
+operating system cannot take the network from one program and leave it to another, so under
+`closed` a program that does not need it is not started, and the result says so. The opening screen,
+`/status` and `bravebot doctor` say when it is closed and which layer closed it.
+
+The desktop app reads the setting once, when it starts, from your own file, the file `--settings` names
+when it exists, the settings file of the directory it was started in and the machine-level pin. A project opened in a window afterwards, or a
+settings file chosen there, does not change it.
+
+### `sandbox.filesystem`
+
+```json
+{
+  "sandbox": {
+    "filesystem": {
+      "allowWrite": ["~/notes"],
+      "denyRead": ["~/.config/gh", "**/*.env"],
+      "denyWrite": [".env"],
+      "allowRead": ["~/.aws"]
+    }
+  }
+}
+```
+
+Four lists of paths for the programs the agent runs. `allowRead` lets them read a place that is
+refused by default, such as `~/.aws`. `denyRead` refuses them a place they could read. `allowWrite`
+lets them write and read a place. `denyWrite` takes write access away under a path, one inside a
+directory the session was opened on included. Each list is empty unless you write it.
+
+A path is absolute, starts with `~/`, or is relative to the directory the session was opened on. A
+`..` that climbs out of it is refused. `*` and `?` work in `allowRead` and `denyRead`, so
+`**/*.env` refuses every file ending in `.env` under the directory; the listing is made when a
+command starts, so a file made afterwards is not in it. A link is judged by where it leads.
+
+The narrower path wins: `allowWrite` on `~/a` and `denyWrite` on `~/a/b` writes `~/a/c` and not
+`~/a/b/x`. Where both name the same path the refusal wins, and it wins over what a command is given
+for itself, so a refusal of `~/.config/gh` stands against `gh`. Nothing adds reach to `~/.ssh`, and
+the home directory, `/` and a directory above the home are refused as write paths.
+
+Your own file and a `--settings` file outside the project may write all four. A project or local file
+may write `denyRead` and `denyWrite` and not the other two, so a repository you clone cannot widen
+what its own commands reach; `bravebot doctor` names the file that tried. A machine-level file can pin
+any list: a pinned `allowRead` or `allowWrite` replaces yours, and a pinned refusal is one nothing
+you wrote lifts. `--sandbox-allow-read`, `--sandbox-deny-read`, `--sandbox-allow-write` and
+`--sandbox-deny-write` add to the lists for one run.
+
+An entry that cannot be applied is not in force. A refused `denyRead` or `denyWrite` stops the
+commands it would have held back, with a message naming it, rather than letting them through. On
+Linux a directory holding a path you refused writes to cannot have new entries made directly in it,
+and on Windows a command the refusal would reach is not started, since neither can narrow a write
+grant.
 
 ### `run.maxOutput`
 

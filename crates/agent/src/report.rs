@@ -554,6 +554,15 @@ pub trait Reporter {
     /// A measured model call, including retries and their waits, even on failure or stop.
     fn inference_interval(&mut self, _interval: crate::timing::Interval) {}
 
+    /// Whether this interface shows the request a turn built, so a turn builds the view of it only
+    /// for one that does.
+    fn wants_request_view(&self) -> bool {
+        false
+    }
+
+    /// The request a turn is about to send the planner, read from the request itself.
+    fn request_built(&mut self, _view: crate::request_view::RequestView) {}
+
     /// The parent is about to join a delegate, which may already have finished.
     fn delegate_waiting(&mut self, _delegate: DelegateId) {}
 
@@ -698,6 +707,21 @@ pub trait Reporter {
     /// running because the backend was down is the fault this pair exists to remove.
     fn check_finished(&mut self) {}
 
+    /// A hook is about to start, for this moment, running this program.
+    ///
+    /// A hook holds the turn open while it runs, and nothing else on screen says so: a slow
+    /// formatter looks like a slow model (HOOK-8). The moment's own word and the program as the
+    /// person's hooks file spells it, both of which the person wrote, and never anything the
+    /// hook printed. Transient: a display shows it for as long as the hook runs and leaves no
+    /// line behind, which is what separates it from [`Reporter::notice`].
+    fn hook_started(&mut self, _moment: &'static str, _program: String) {}
+
+    /// The hook [`Reporter::hook_started`] announced is over.
+    ///
+    /// Sent however it ended, a hook that was stopped at its bound or never started included: a
+    /// display left saying a hook is running after it has gone is the fault this pair removes.
+    fn hook_finished(&mut self) {}
+
     /// A prompt the person typed mid-turn has reached the planner.
     ///
     /// The user's own words on their way back to them, so there is nothing to release: this is the
@@ -772,6 +796,10 @@ pub struct RecordingReporter {
     pub checks: Vec<Checking>,
     /// How many checks were announced as over.
     pub checks_finished: usize,
+    /// Each hook announced as about to start, as its moment and program.
+    pub hooks_started: Vec<(&'static str, String)>,
+    /// How many hooks were announced over.
+    pub hooks_finished: usize,
     /// Every phase the turn entered, in order.
     pub phases: Vec<Phase>,
     /// Everything the model said between tool calls, in order.
@@ -800,9 +828,19 @@ pub struct RecordingReporter {
     pub delegates_reported: Vec<(DelegateId, Option<Reported>)>,
     /// Whose work the reports that follow belong to.
     pub attributed_to: Option<DelegateId>,
+    /// Every request view a turn published, in order.
+    pub requests: Vec<crate::request_view::RequestView>,
 }
 
 impl Reporter for RecordingReporter {
+    fn wants_request_view(&self) -> bool {
+        true
+    }
+
+    fn request_built(&mut self, view: crate::request_view::RequestView) {
+        self.requests.push(view);
+    }
+
     fn prompt_recorded(&mut self, at: usize) {
         self.prompts.push(at);
     }
@@ -861,6 +899,14 @@ impl Reporter for RecordingReporter {
 
     fn check_finished(&mut self) {
         self.checks_finished += 1;
+    }
+
+    fn hook_started(&mut self, moment: &'static str, program: String) {
+        self.hooks_started.push((moment, program));
+    }
+
+    fn hook_finished(&mut self) {
+        self.hooks_finished += 1;
     }
 
     fn quarantined(&mut self, shown: Shown) {

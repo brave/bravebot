@@ -597,7 +597,7 @@ pub fn mcp_server_request(id: u64, question: &Question<'_>) -> Value {
         Declaration::Stdio {
             argv, directory, ..
         } => (Some(argv.clone()), None, directory.clone()),
-        Declaration::Http { url } => (None, Some(url.clone()), None),
+        Declaration::Http { url, .. } => (None, Some(url.clone()), None),
     };
     let program = match (question.program, declaration) {
         (Some(program), Declaration::Stdio { argv, .. })

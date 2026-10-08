@@ -218,6 +218,18 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         held.inference_interval(interval);
     }
 
+    fn wants_request_view(&self) -> bool {
+        self.from.is_none() && self.lent.hold().wants_request_view()
+    }
+
+    /// Only the turn's own request: a delegate's is a different conversation with a different
+    /// prompt.
+    fn request_built(&mut self, view: crate::request_view::RequestView) {
+        if self.from.is_none() {
+            self.lent.hold().request_built(view);
+        }
+    }
+
     fn prompt_recorded(&mut self, at: usize) {
         // A delegate has its own conversation; its offsets do not describe the parent turn.
         if self.from.is_none() {
@@ -243,6 +255,8 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn job(&mut self, event: crate::report::JobEvent);
         fn check_started(&mut self, checking: bravebot_core::vetting::Checking);
         fn check_finished(&mut self);
+        fn hook_started(&mut self, moment: &'static str, program: String);
+        fn hook_finished(&mut self);
         fn interjected(&mut self, said: String);
         fn delegate_started(&mut self, delegation: Delegation);
         fn delegate_waiting(&mut self, delegate: DelegateId);
