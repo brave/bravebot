@@ -28,7 +28,6 @@ use bravebot_aichat::ChatError;
 use bravebot_aichat::protocol::{ChatRequest, Message, Usage};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::{Denial, Policy};
-use bravebot_i18n::t;
 use std::fmt;
 
 use crate::conversation::Conversation;
@@ -204,14 +203,10 @@ impl fmt::Display for CompactError {
         match self {
             Self::Denied(d) => write!(f, "{d}"),
             Self::Chat(e) => write!(f, "{e}"),
-            Self::SummaryModel(SideModelRefusal::NeedsSignIn(model)) => {
-                write!(f, "{}", t!(summary_model_needs_sign_in, model = model))
-            }
-            Self::SummaryModel(SideModelRefusal::Refused(model)) => {
-                write!(f, "{}", t!(summary_model_refused, model = model))
-            }
-            Self::SummaryModel(SideModelRefusal::NotServed(model)) => {
-                write!(f, "{}", t!(summary_model_not_served, model = model))
+            // Rendered by the reporting surface, since every string in this module is read by the
+            // planner and this one is read by a person (`tests/audience.rs`).
+            Self::SummaryModel(refusal) => {
+                write!(f, "{}", crate::report::summary_model_refusal(refusal))
             }
         }
     }

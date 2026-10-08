@@ -223,26 +223,9 @@ impl fmt::Display for GoalError {
         match self {
             Self::Denied(d) => write!(f, "{d}"),
             Self::Chat(e) => write!(f, "{e}"),
-            Self::SummaryModel(crate::compact::SideModelRefusal::NeedsSignIn(model)) => {
-                write!(
-                    f,
-                    "{}",
-                    bravebot_i18n::t!(summary_model_needs_sign_in, model = model)
-                )
-            }
-            Self::SummaryModel(crate::compact::SideModelRefusal::Refused(model)) => {
-                write!(
-                    f,
-                    "{}",
-                    bravebot_i18n::t!(summary_model_refused, model = model)
-                )
-            }
-            Self::SummaryModel(crate::compact::SideModelRefusal::NotServed(model)) => {
-                write!(
-                    f,
-                    "{}",
-                    bravebot_i18n::t!(summary_model_not_served, model = model)
-                )
+            // Rendered by the reporting surface, for the reason `tests/audience.rs` gives.
+            Self::SummaryModel(refusal) => {
+                write!(f, "{}", crate::report::summary_model_refusal(refusal))
             }
         }
     }
