@@ -673,7 +673,10 @@ above it, is `~/.ssh` or inside it, or is `~/.config`, `~/.cache` or `~/Library`
 inside `~/.ssh`, is the home or above it, or is a directory; a link is judged by where it leads. A refused entry leaves the others, and the stage
 keeps its fixed rows. A value that lands inside a row the scope already holds adds nothing, and one named twice counts once. The run
 prompt says each place taken from the environment, with the variable that named it and the path it
-led to, beside the sentence for the scope.
+led to, beside the sentence for the scope. A scope a `run` call asked for by name
+([SANDBOX-26](#SANDBOX-26)) follows the variables of every program the scope has, since the stage
+that carries it is not one of them: `gh` and `git` for `remote`. The planner names the scope and
+never a variable or a path, and the driver reads the value from the process environment.
 
 A scope is added to the policy it is given and takes nothing from it. `run` adds the scope for each stage it
 starts ([SANDBOX-18](#SANDBOX-18)). Where the stage's base refuses a credential location
@@ -738,6 +741,10 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_agent::confine::a_gh_stage_reads_the_configuration_directory_its_environment_names`
 `verified-by: bravebot_agent::confine::a_stage_reads_the_configuration_its_variable_moves`
 `verified-by: bravebot_agent::confine::the_prompt_names_a_location_the_environment_moved`
+`verified-by: bravebot_sandbox::scope::a_requested_scope_follows_the_variables_of_every_program_it_has`
+`verified-by: bravebot_sandbox::scope::a_requested_scope_refuses_the_values_a_carried_one_refuses`
+`verified-by: bravebot_agent::confine::a_requested_scope_reads_the_configuration_its_variable_moves`
+`verified-by: bravebot_agent::confine::the_prompt_names_a_location_the_environment_moved_for_a_requested_scope`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_what_ssh_reads_and_never_a_private_key`
 `verified-by: bravebot_agent::confine::the_prompt_the_line_and_the_policy_agree_on_which_credential_a_stage_lifts`
 
@@ -1456,8 +1463,9 @@ because the path it names is the one the person was protecting.
 whose argv shows no operation to key a scope on ([SANDBOX-16](#SANDBOX-16)), a script that runs
 `gh` or `cargo` inside it. Each name is the scope or toolchain list of the same name, with the rows,
 the egress under a closed network ([SANDBOX-20](#SANDBOX-20)) and the ssh agent socket that scope
-has when a stage's argv names it, and it is added to every stage of the line that has no `NAME=value`
-in front of it. A name outside the menu, compared exactly, is an error and nothing runs: `root`,
+has when a stage's argv names it, and the places the environment moves its tool's configuration to
+([SANDBOX-16](#SANDBOX-16)), each named in the prompt with its variable. It is added to every stage
+of the line that has no `NAME=value` in front of it. A name outside the menu, compared exactly, is an error and nothing runs: `root`,
 `Remote` and the empty string are not requests for less.
 
 - Asked about every time. A line that asks is put to a person before any vouched entry, remembered

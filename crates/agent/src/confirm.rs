@@ -273,6 +273,10 @@ pub struct Confined {
     /// order. Empty for a line that asked for nothing. Not part of what the stage carries because
     /// it is the planner's request and not the stage's own argv, and it is drawn as that.
     pub requested: Vec<(String, bravebot_sandbox::scope::Requested)>,
+    /// What the person's environment moves a requested scope to, beyond its fixed rows, each with
+    /// the stage's program and the variable it came from. A place the stage's own argv already
+    /// reaches is in `carried` and not here.
+    pub requested_reaches: Vec<(String, bravebot_sandbox::scope::Reach)>,
     /// What a stage carries beyond them, in step order. A stage that carries nothing is absent.
     pub carried: Vec<Carried>,
 }
@@ -361,6 +365,17 @@ impl Confined {
                 .to_string(),
             };
             sentences.push(t!(run_carries_requested, sentence = sentence).to_string());
+        }
+        for (program, reach) in &self.requested_reaches {
+            sentences.push(
+                t!(
+                    run_carries_reach,
+                    program = program.as_str(),
+                    variable = reach.variable,
+                    path = reach.path.display().to_string()
+                )
+                .to_string(),
+            );
         }
         for stage in &self.carried {
             let program = stage.program.as_str();
@@ -2579,6 +2594,7 @@ mod tests {
             network: bravebot_sandbox::network::Network::Open,
             filesystem: Default::default(),
             requested: Vec::new(),
+            requested_reaches: Vec::new(),
             carried: vec![
                 carried("aws", Scope::Aws),
                 carried("kubectl", Scope::Kubernetes),
@@ -2619,6 +2635,7 @@ mod tests {
             reads_the_machine: true,
             directories: Vec::new(),
             requested: Vec::new(),
+            requested_reaches: Vec::new(),
             carried: vec![Carried {
                 program: "git".into(),
                 toolchain: None,
@@ -2669,6 +2686,7 @@ mod tests {
             network,
             filesystem: Default::default(),
             requested: Vec::new(),
+            requested_reaches: Vec::new(),
             carried,
         };
 
@@ -2697,6 +2715,7 @@ mod tests {
             network: bravebot_sandbox::network::Network::Open,
             filesystem,
             requested: Vec::new(),
+            requested_reaches: Vec::new(),
             carried: Vec::new(),
         };
         let said = confined(Counts {

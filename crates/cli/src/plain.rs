@@ -2327,6 +2327,7 @@ mod tests {
             network: bravebot_sandbox::network::Network::Open,
             filesystem: Default::default(),
             requested: Vec::new(),
+            requested_reaches: Vec::new(),
             carried: vec![bravebot_agent::Carried {
                 program: "docker".into(),
                 toolchain: None,

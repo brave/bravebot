@@ -21,7 +21,7 @@ use bravebot_sandbox::base::{Prelude, base, run_base, with_security_cache};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::rules::{Lists, Rules};
-use bravebot_sandbox::scope::{Reach, Requested, Scope, environment_reach};
+use bravebot_sandbox::scope::{Reach, Requested, Scope, environment_reach, requested_reach};
 use bravebot_sandbox::toolchain::Toolchain;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -377,18 +377,30 @@ impl Confinement {
                         .map(|request| (step.program.clone(), *request))
                 })
                 .collect(),
+            requested_reaches: steps
+                .iter()
+                .flat_map(|step| {
+                    let held = self.stage_reaches(step, environment);
+                    let home = self.home.as_deref();
+                    self.requested_for(step)
+                        .iter()
+                        .filter_map(|request| match (request, home) {
+                            (Requested::Scope(scope), Some(home)) => {
+                                Some(requested_reach(*scope, home, environment))
+                            }
+                            _ => None,
+                        })
+                        .flatten()
+                        .filter(move |reach| !held.iter().any(|kept| kept.path == reach.path))
+                        .map(|reach| (step.program.clone(), reach))
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
             carried: steps
                 .iter()
                 .filter_map(|step| {
                     let (toolchain, scope) = self.carries(step);
-                    // The process's own environment is what the executor starts a step with, and a
-                    // step with an assignment in front of it carries no scope to move.
-                    let reaches = match (scope, self.home.as_deref()) {
-                        (Some(scope), Some(home)) => {
-                            reaches(&step.resolved, scope, home, environment)
-                        }
-                        _ => Vec::new(),
-                    };
+                    let reaches = self.stage_reaches(step, environment);
                     let network = self.network.is_closed() && self.egress(step);
                     let remembered: Vec<Remembered> = self
                         .granted(step)
@@ -418,6 +430,16 @@ impl Confinement {
                         })
                 })
                 .collect(),
+        }
+    }
+
+    /// Where `environment` moves the scope the step's own argv names. The process's own
+    /// environment is what the executor starts a step with, and a step with an assignment in front
+    /// of it carries no scope to move.
+    fn stage_reaches(&self, step: &Step, environment: &[(String, String)]) -> Vec<Reach> {
+        match (self.carries(step).1, self.home.as_deref()) {
+            (Some(scope), Some(home)) => reaches(&step.resolved, scope, home, environment),
+            _ => Vec::new(),
         }
     }
 
@@ -476,13 +498,18 @@ impl Confinement {
                     policy = policy.allow_write(socket);
                 }
             }
-            // The fixed rows of what the planner asked for and not the places a variable names,
-            // which are keyed on the program and a script wrapping `gh` is not `gh`.
+            // The places a variable names are those of every program the scope has, since a script
+            // wrapping `gh` is not `gh` and there is no program to key them on.
             for request in self.requested_for(step) {
                 policy = match *request {
                     Requested::Toolchain(toolchain) => toolchain.grant(policy, self.prelude, home),
                     Requested::Scope(scope) => {
-                        let policy = scope.grant(policy, home);
+                        let mut policy = scope.grant(policy, home);
+                        if !self.reads_the_machine() {
+                            for reach in requested_reach(scope, home, environment) {
+                                policy = policy.allow_read(reach.path);
+                            }
+                        }
                         match variable(environment, "SSH_AUTH_SOCK") {
                             Some(socket) if scope == Scope::Remote => policy.allow_write(socket),
                             _ => policy,
@@ -1398,6 +1425,85 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// SANDBOX-16, SANDBOX-26: a requested scope reads the place the process environment moves its
+    /// tool's configuration to, for a stage whose argv names no tool, and only that scope's
+    /// variables. The control is the same stage asked for the scope with the variable unset, and a
+    /// stage that asked for another scope. The regression it rejects is a request that lends the
+    /// fixed `~/.aws` and fails for a person whose `AWS_CONFIG_FILE` lives elsewhere.
+    #[test]
+    fn a_requested_scope_reads_the_configuration_its_variable_moves() {
+        let script = step("/bin/sh", &["-c", "run-the-deploy"]);
+        let base = confinement(&["/work/project"]).with_mode(SandboxMode::Strict);
+        let environment = |name: &str, path: &str| vec![(name.to_string(), path.to_string())];
+        for (scope, name, path) in [
+            (Scope::Aws, "AWS_CONFIG_FILE", "/elsewhere/aws-config"),
+            (Scope::Docker, "DOCKER_CONFIG", "/elsewhere/docker"),
+            (Scope::Kubernetes, "KUBECONFIG", "/elsewhere/kubeconfig"),
+            (Scope::Remote, "GIT_CONFIG_GLOBAL", "/elsewhere/gitconfig"),
+            (Scope::Remote, "GH_CONFIG_DIR", "/elsewhere/gh"),
+        ] {
+            let asked = base.clone().with_requested(&[Requested::Scope(scope)]);
+            let moved = asked.policy(&script, Path::new("/work"), &environment(name, path));
+            let unset = asked.policy(&script, Path::new("/work"), &[]);
+            let other = base
+                .clone()
+                .with_requested(&[Requested::Scope(match scope {
+                    Scope::Aws => Scope::Docker,
+                    _ => Scope::Aws,
+                })])
+                .policy(&script, Path::new("/work"), &environment(name, path));
+            let none = base.policy(&script, Path::new("/work"), &environment(name, path));
+            assert!(reads(&moved, path), "{scope:?} {name}");
+            assert!(!reads(&unset, path), "{scope:?} unset");
+            assert!(!reads(&other, path), "{scope:?} asked as another scope");
+            assert!(!reads(&none, path), "{scope:?} not asked for");
+            let mut assigned = script.clone();
+            assigned.environment = vec![("GIT_SSH_COMMAND".to_string(), "ssh".to_string())];
+            let assigned = asked.policy(&assigned, Path::new("/work"), &environment(name, path));
+            assert!(!reads(&assigned, path), "{scope:?} with an assignment");
+        }
+    }
+
+    /// SANDBOX-16, SANDBOX-26: the prompt names a place a requested scope was moved to with the
+    /// variable, once, and says nothing for a stage whose argv already carried it or whose
+    /// variable is unset.
+    #[test]
+    fn the_prompt_names_a_location_the_environment_moved_for_a_requested_scope() {
+        let base = confinement(&["/work/project"])
+            .with_mode(SandboxMode::Strict)
+            .with_requested(&[Requested::Scope(Scope::Docker)]);
+        let script = step("/bin/sh", &["-c", "run-the-deploy"]);
+        let docker = step("/usr/bin/docker", &["ps"]);
+        let environment = vec![("DOCKER_CONFIG".to_string(), "/elsewhere/docker".to_string())];
+
+        let moved = base.describe_in(&[&script], &environment);
+        assert_eq!(moved.requested_reaches.len(), 1);
+        assert_eq!(moved.requested_reaches[0].0, "sh");
+        assert_eq!(moved.requested_reaches[0].1.variable, "DOCKER_CONFIG");
+        assert!(
+            moved
+                .sentences()
+                .iter()
+                .any(|line| line.contains("sh also reads /elsewhere/docker")
+                    && line.contains("DOCKER_CONFIG")),
+            "{:?}",
+            moved.sentences()
+        );
+        assert!(
+            base.describe_in(&[&script], &[])
+                .requested_reaches
+                .is_empty()
+        );
+
+        let both = base.describe_in(&[&docker], &environment);
+        let said = both
+            .sentences()
+            .iter()
+            .filter(|line| line.contains("/elsewhere/docker"))
+            .count();
+        assert_eq!(said, 1, "{:?}", both.sentences());
     }
 
     /// SANDBOX-26: a requested toolchain brings its caches, written, which the stage did not have.

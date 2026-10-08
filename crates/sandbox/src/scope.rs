@@ -274,6 +274,21 @@ pub fn environment_reach(
     reached
 }
 
+/// Where the environment moves what `scope` reads, for a stage that was asked to carry the scope
+/// by name ([SANDBOX-26](../../../docs/specs/sandboxing.md#SANDBOX-26)) and so has no program of
+/// that scope to key on: the places of every program the scope has, judged as
+/// [`environment_reach`] judges them.
+pub fn requested_reach(scope: Scope, home: &Path, environment: &[(String, String)]) -> Vec<Reach> {
+    let programs: &[&str] = match scope {
+        Scope::Remote => &["gh", "git"],
+        Scope::Aws | Scope::Kubernetes | Scope::Docker => &[""],
+    };
+    programs
+        .iter()
+        .flat_map(|program| environment_reach(scope, program, home, environment))
+        .collect()
+}
+
 /// A directory a person named, as the sandbox will be told it, or `None` where it is refused.
 ///
 /// The same judgement a variable's value gets: absolute, no `..`, not the home or above it, not
@@ -1184,6 +1199,74 @@ mod tests {
                 [PathBuf::from(expected)],
                 "{program}"
             );
+        }
+    }
+
+    /// SANDBOX-16, SANDBOX-26: a scope asked for by name has no program to key on, so it follows
+    /// the variables of every program the scope has, and of no other scope. The regression it
+    /// rejects is a request that follows nothing, or only `gh`'s variables for `remote`.
+    #[test]
+    fn a_requested_scope_follows_the_variables_of_every_program_it_has() {
+        let everything = the_environment(&[
+            ("GH_CONFIG_DIR", "/home/a-person/a"),
+            ("GIT_CONFIG_GLOBAL", "/home/a-person/b"),
+            ("AWS_CONFIG_FILE", "/home/a-person/c"),
+            ("AWS_SHARED_CREDENTIALS_FILE", "/home/a-person/c2"),
+            ("KUBECONFIG", "/home/a-person/d"),
+            ("DOCKER_CONFIG", "/home/a-person/e"),
+        ]);
+        for (scope, expected) in [
+            (Scope::Remote, vec!["/home/a-person/a", "/home/a-person/b"]),
+            (Scope::Aws, vec!["/home/a-person/c", "/home/a-person/c2"]),
+            (Scope::Kubernetes, vec!["/home/a-person/d"]),
+            (Scope::Docker, vec!["/home/a-person/e"]),
+        ] {
+            let found: Vec<PathBuf> = requested_reach(scope, Path::new(A_HOME), &everything)
+                .into_iter()
+                .map(|reach| reach.path)
+                .collect();
+            let expected: Vec<PathBuf> = expected.into_iter().map(PathBuf::from).collect();
+            assert_eq!(found, expected, "{scope:?}");
+        }
+        let xdg = the_environment(&[("XDG_CONFIG_HOME", "/home/a-person/xdg")]);
+        let found: Vec<PathBuf> = requested_reach(Scope::Remote, Path::new(A_HOME), &xdg)
+            .into_iter()
+            .map(|reach| reach.path)
+            .collect();
+        assert_eq!(
+            found,
+            [
+                PathBuf::from("/home/a-person/xdg/gh"),
+                PathBuf::from("/home/a-person/xdg/git/credentials")
+            ]
+        );
+    }
+
+    /// SANDBOX-26: a requested scope refuses a value as the tool's own does, so naming the scope
+    /// does not widen what a variable may point at.
+    #[cfg(unix)]
+    #[test]
+    fn a_requested_scope_refuses_the_values_a_carried_one_refuses() {
+        let refused = the_environment(&[
+            ("GH_CONFIG_DIR", "relative/gh"),
+            ("GIT_CONFIG_GLOBAL", "/home/a-person/.ssh/id_ed25519"),
+            ("AWS_CONFIG_FILE", "/home/a-person"),
+            ("DOCKER_CONFIG", "/home/a-person/../b"),
+            (
+                "KUBECONFIG",
+                "/home/a-person/.ssh/config:/home/a-person/kept",
+            ),
+        ]);
+        for scope in EVERY_SCOPE {
+            let found: Vec<PathBuf> = requested_reach(scope, Path::new(A_HOME), &refused)
+                .into_iter()
+                .map(|reach| reach.path)
+                .collect();
+            let expected: Vec<PathBuf> = match scope {
+                Scope::Kubernetes => vec![PathBuf::from("/home/a-person/kept")],
+                _ => Vec::new(),
+            };
+            assert_eq!(found, expected, "{scope:?}");
         }
     }
 

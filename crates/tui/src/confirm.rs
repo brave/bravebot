@@ -4203,6 +4203,7 @@ mod tests {
             network: bravebot_sandbox::network::Network::Open,
             filesystem: Default::default(),
             requested: Vec::new(),
+            requested_reaches: Vec::new(),
             carried: vec![
                 bravebot_agent::Carried {
                     program: "git".into(),
@@ -4268,6 +4269,7 @@ mod tests {
             network,
             filesystem: Default::default(),
             requested: Vec::new(),
+            requested_reaches: Vec::new(),
             carried: vec![bravebot_agent::Carried {
                 program: "git".into(),
                 toolchain: None,
@@ -4815,6 +4817,7 @@ mod tests {
                 "git".into(),
                 bravebot_sandbox::scope::Requested::Scope(bravebot_sandbox::scope::Scope::Aws),
             )],
+            requested_reaches: Vec::new(),
             carried: Vec::new(),
         });
         assert!(request.asks_for_scopes());
