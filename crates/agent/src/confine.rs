@@ -17,7 +17,7 @@ use crate::reach::{Grant, Reached};
 use bravebot_core::command::Step;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
-use bravebot_sandbox::base::{Prelude, base, run_base};
+use bravebot_sandbox::base::{Prelude, base, run_base, with_security_cache};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::rules::{Lists, Rules};
@@ -35,6 +35,9 @@ pub struct Confinement {
     home: Option<PathBuf>,
     roots: Vec<PathBuf>,
     scratch: Option<PathBuf>,
+    /// The per-user cache directory the platform names, resolved by the host on macOS, where the
+    /// keychain lookup of `gh` and `git` writes under it.
+    user_cache: Option<PathBuf>,
     /// What the session decided about the network for the stages it starts.
     network: Network,
     /// How much of the machine a step reads (SANDBOX-22). `Off` never reaches a confinement: a turn
@@ -62,13 +65,19 @@ impl Confinement {
     /// is the account's profile directory, which is what `~` means and what no row reaches.
     pub fn here(roots: Vec<PathBuf>, scratch: Option<&Path>, home: Option<&Path>) -> Option<Self> {
         let prelude = Prelude::current()?;
-        Some(Self::new(
+        let confinement = Self::new(
             prelude,
             canonical(&temporary_directory()),
             home,
             roots,
             scratch,
-        ))
+        );
+        #[cfg(target_os = "macos")]
+        let confinement = Self {
+            user_cache: bravebot_sandbox::macos::user_cache_directory(),
+            ..confinement
+        };
+        Some(confinement)
     }
 
     /// A confinement against a prelude and directories given, so the rows are decided by code every
@@ -86,6 +95,7 @@ impl Confinement {
             home: home.map(canonical),
             roots: roots.iter().map(|root| canonical(root)).collect(),
             scratch: scratch.map(canonical),
+            user_cache: None,
             network: Network::Open,
             mode: SandboxMode::Standard,
             grants: Vec::new(),
@@ -435,6 +445,12 @@ impl Confinement {
             base(self.prelude, &self.temporary, None, self.home.as_deref())
         }
         .allow_git_directory_writes();
+        if self.prelude == Prelude::MacOs
+            && self.reads_the_machine()
+            && let Some(cache) = &self.user_cache
+        {
+            policy = with_security_cache(policy, cache);
+        }
         if !self.egress(step) {
             policy = policy.without_network_egress();
         }
@@ -1812,6 +1828,40 @@ mod tests {
             );
             assert!(!confined.describe(&[]).reads_the_machine);
         }
+    }
+
+    /// The regression it rejects: the Security framework's cache directory left unwritable on
+    /// macOS, which is `gh` and `osxkeychain` failing with the keychain file readable, or the row
+    /// reaching a Linux stage or a session that reads only what it was given.
+    #[test]
+    fn the_security_cache_is_written_by_a_macos_stage_that_reads_the_machine_only() {
+        let cache = PathBuf::from("/private/var/folders/ab/cdef/C");
+        let written = |prelude: Prelude, home: Option<&Path>, mode: SandboxMode| {
+            let mut confined = Confinement::new(
+                prelude,
+                PathBuf::from("/tmp"),
+                home,
+                vec![PathBuf::from("/work/project")],
+                None,
+            )
+            .with_mode(mode);
+            confined.user_cache = Some(cache.clone());
+            confined
+                .policy(
+                    &step("/usr/bin/gh", &["auth", "status"]),
+                    Path::new("/work"),
+                    &[],
+                )
+                .writable
+                .iter()
+                .any(|row| row.path == cache.join("mds"))
+        };
+        let home = Path::new("/Users/someone");
+
+        assert!(written(Prelude::MacOs, Some(home), SandboxMode::Standard));
+        assert!(!written(Prelude::Linux, Some(home), SandboxMode::Standard));
+        assert!(!written(Prelude::MacOs, Some(home), SandboxMode::Strict));
+        assert!(!written(Prelude::MacOs, None, SandboxMode::Standard));
     }
 
     /// The list a toolchain brings follows the binary the step resolved to, so a `cargo` stage

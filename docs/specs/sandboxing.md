@@ -420,8 +420,9 @@ not built.
 
 A stage of `run` on Linux and macOS starts from the **run base**: it reads the whole machine
 except a fixed table of credential locations, and the only paths it writes are the temporary
-directory the session resolved as it opened and, where the platform has one as a file, the null
-device. The table is code, the same for every stage, and no value, argument vector, printed output
+directory the session resolved as it opened, where the platform has one as a file, the null
+device, and on macOS the `mds` directory in the account's per-user cache directory (below). The
+table is code, the same for every stage, and no value, argument vector, printed output
 or configuration file adds to it or removes from it. In the home directory it holds the program's own state
 directory `~/.bravebot`, where the gateway keys, the premium token and the server list are, and then `~/.ssh`,
 `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud` and `~/.gnupg`; on macOS also
@@ -431,7 +432,15 @@ and `~/Library/Safari`; on Linux also `~/.local/share/keyrings`, `~/.password-st
 `~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/chromium` and `~/.mozilla`. Three
 kinds of file in `~/.ssh` hold no secret and are read: `config`, `known_hosts` and the default
 public keys (`id_rsa.pub`, `id_dsa.pub`, `id_ecdsa.pub`, `id_ecdsa_sk.pub`, `id_ed25519.pub`,
-`id_ed25519_sk.pub`). The files a program reads by name to do what it was started for, which are
+`id_ed25519_sk.pub`). On macOS the file `~/Library/Keychains/login.keychain-db` is also read, with
+the directory around it and every other file in it still refused, because `gh` and git's
+`osxkeychain` helper keep their tokens in that keychain and open its database file themselves.
+Opening a keychain also makes the Security framework write its framework database, which is the
+`mds` directory under the per-user cache directory that `confstr` names for the account
+(`_CS_DARWIN_USER_CACHE_DIR`, resolved by the host with its links followed and handed in by the
+caller), and that directory is written by a stage that reads the machine and by no other. Without
+the read row, `gh` reports a failed login and `osxkeychain` fails with `-67674`; with only the read
+row they still do. The files a program reads by name to do what it was started for, which are
 `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml` and
 `~/.pypirc`, are not in the table: the network is where they could leave, and the plan decides that
 ([SANDBOX-3](#SANDBOX-3)). A path is refused by where it leads, so a link from a readable directory
@@ -475,6 +484,16 @@ directory, so a base naming that directory, or naming the configuration director
 spelling sits in, hands both to a program whose plan named neither, which is the whole of what
 confining a program was for.
 
+The login keychain file is the one credential location the base reads, and what that costs is
+that a stage can read a database holding every password the account keeps there. Its items are
+encrypted under the login password, and the file can leave the machine wherever egress is open, so
+it is open to an offline guess of that password. The system service that holds the keychain was
+already reachable from every stage (the known costs below), and a lookup through it now finds the
+database where before it found a refusal. Which items such a lookup returns, and which raise the
+system's own prompt, is the platform's and is not tested here. The `mds` write lets a stage change
+the framework's cache files, which are rebuilt on demand. The read row names the file and not the
+directory so that `aws-vault.keychain-db` and every other keychain file stay refused.
+
 `verified-by: bravebot_sandbox::base::the_base_reaches_no_credential`
 `verified-by: bravebot_sandbox::base::the_only_rows_under_a_home_directory_are_the_git_configuration`
 `verified-by: bravebot_sandbox::base::the_git_configuration_is_read_and_never_written`
@@ -497,6 +516,11 @@ confining a program was for.
 `verified-by: bravebot_sandbox::base::the_run_base_lifts_the_ssh_files_that_hold_no_secret_and_only_those`
 `verified-by: bravebot_sandbox::base::the_run_base_leaves_the_token_files_readable`
 `verified-by: bravebot_sandbox::base::the_run_base_writes_only_the_temporary_directory_and_the_null_device`
+`verified-by: bravebot_sandbox::base::the_run_base_on_macos_reads_the_login_keychain_file_and_no_other_keychain_file`
+`verified-by: bravebot_sandbox::base::the_security_cache_row_is_the_one_directory_under_the_user_cache`
+`verified-by: bravebot_agent::confine::the_security_cache_is_written_by_a_macos_stage_that_reads_the_machine_only`
+`verified-by: bravebot_sandbox::macos::a_stage_under_the_run_base_writes_the_security_cache_and_no_other_cache`
+`verified-by: bravebot_sandbox::macos::the_user_cache_directory_is_an_existing_path_with_its_links_followed`
 `verified-by: bravebot_sandbox::base::the_run_base_on_windows_is_the_keyed_base`
 `verified-by: bravebot_sandbox::base::the_run_base_without_a_home_refuses_only_the_machine_wide_keychains`
 `verified-by: bravebot_sandbox::macos::a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest`
@@ -1656,14 +1680,15 @@ put it there or can take it away.
 | is anything else, a build or a test in the same pipeline included | none of it |
 
 A stage reaches its own row and no other: a `docker` stage reaches neither the remote scope nor
-`~/.aws`, and no row reaches a private key, `~/.ssh` as a directory, or the keychain database on
-disk. The remote scope is `~/.ssh/config` and `~/.ssh/known_hosts` to read with `known_hosts` also
+`~/.aws`, and no row reaches a private key or `~/.ssh` as a directory, and the keychain database on disk is
+reached only as the one login file the base reads ([SANDBOX-12](#SANDBOX-12)). The remote scope is `~/.ssh/config` and `~/.ssh/known_hosts` to read with `known_hosts` also
 to write, that write row naming a file rather than a directory so that an account with no
 `known_hosts` gets one rather than a push that fails ([SANDBOX-11](#SANDBOX-11)), the public key at
 each name ssh looks for by default, `~/.gitconfig`, and the stores an https helper reads:
 `~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`. The login keychain
-is in no row and is reached through the system service that holds it, whatever scope a stage
-carries (the last section's list of what has to exist first). The agent socket `$SSH_AUTH_SOCK`
+file is read by the base whatever scope a stage carries ([SANDBOX-12](#SANDBOX-12)), and the
+system service that holds it is reached whatever scope a stage carries (the last section's list of
+what has to exist first). The agent socket `$SSH_AUTH_SOCK`
 names is a write row for a stage that carries the remote scope and for no other
 ([SANDBOX-18](#SANDBOX-18)), and on macOS it is reached only while the profile leaves egress open. On macOS, where the backend creates
 nothing, the file is made by ssh, which can do so only into a `~/.ssh` already there, so an account
@@ -1800,7 +1825,9 @@ reported as what it is.
   it in the plan is not settled.
 - Seatbelt profiles here allow every `mach-lookup`, so the keychain service is reachable from every
   stage and not only from one carrying the remote scope. A profile holding the keychain to that
-  scope has to name the service instead, the same step the socket above needs.
+  scope has to name the service instead, the same step the socket above needs. Since the base reads
+  the login keychain file, a stage can now complete a lookup there, where before the refused file
+  failed it.
 - The cold path of a macOS developer shim has not been exercised. With the lookup cache the shims
   keep empty, a shim asks `xcodebuild`, which refuses every invocation until the Xcode licence
   is accepted, confined or not, so a machine in that state cannot show whether that path starts,
