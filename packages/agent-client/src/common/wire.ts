@@ -154,6 +154,23 @@ export function decodeUpdate(value: unknown): ViewUpdate {
   }
 }
 
+/**
+ * Whether the runtime promises exact action targets: question numbers that last the session, a
+ * cancel that names its turn, and a trust answer taken once (RPCVIEW-6). Absent, an older runtime
+ * numbers questions per turn and cancels whatever is running, and the client claims no more.
+ */
+export function readActionTargets(info: unknown): boolean {
+  if (!isObject(info) || !isObject(info.capabilities)) return false
+  const targets = info.capabilities.actionTargets
+  return (
+    isObject(targets) &&
+    targets.version === 1 &&
+    targets.questionIds === 'session' &&
+    targets.cancel === 'expected_turn' &&
+    targets.trust === 'once'
+  )
+}
+
 /** The capability the runtime advertises, or null when it is absent or is not version 1 of this contract. */
 export function readSessionViewCapability(info: unknown): SessionViewCapability | null {
   if (!isObject(info) || !isObject(info.capabilities)) return null

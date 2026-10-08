@@ -136,3 +136,64 @@ test('an unreadable line is reported by length and its text is not echoed', () =
   assert.equal(reports.length, 1)
   assert.equal(reports[0]!.includes('SECRET-PROMPT-CONTENT'), false)
 })
+
+test('a bridge refusal has no effect and a lost connection may have had one', async () => {
+  const { connection, written } = harness()
+  const refused = connection.request('turn.send')
+  connection.receive(JSON.stringify({ id: written[0]!.id, error: { code: 'turn_in_flight', message: 'busy' } }) + '\n')
+  await assert.rejects(refused, (error: RpcError) => error.outcome === 'rejected')
+  const lost = connection.request('turn.send')
+  connection.transportClosed('eof')
+  await assert.rejects(lost, (error: RpcError) => error.outcome === 'unknown')
+})
+
+test('a write that fails leaves its outcome unknown', async () => {
+  const connection = new RpcConnection(
+    { write: () => { throw new Error('broken pipe') } },
+    { onEvent: () => undefined, onClosed: () => undefined },
+  )
+  await assert.rejects(connection.request('a'), (error: RpcError) => error.code === 'write_failed' && error.outcome === 'unknown')
+})
+
+test('requests waiting for an answer, and one request, are bounded', async () => {
+  const { connection, written } = harness()
+  const waiting = Array.from({ length: 256 }, () => connection.request('agent.info'))
+  await assert.rejects(connection.request('agent.info'), (error: RpcError) => error.code === 'request_limit' && error.outcome === 'rejected')
+  assert.equal(written.length, 256, 'the refused request was not written')
+  await assert.rejects(
+    harness().connection.request('turn.send', { prompt: 'x'.repeat(8 * 1024 * 1024) }),
+    (error: RpcError) => error.code === 'frame_limit' && error.outcome === 'rejected',
+  )
+  connection.transportClosed('done')
+  await Promise.allSettled(waiting)
+})
+
+test('parameters that cannot be written fail the request instead of throwing at the call', async () => {
+  const { connection, written } = harness()
+  const circular: Record<string, unknown> = {}
+  circular.self = circular
+  await assert.rejects(connection.request('turn.send', circular), (error: RpcError) => error.code === 'bad_request' && error.outcome === 'rejected')
+  await assert.rejects(connection.request('turn.send', { n: 10n }), (error: RpcError) => error.code === 'bad_request')
+  assert.equal(written.length, 0)
+})
+
+test('cancel and close are not held back by the limit on waiting requests', async () => {
+  const { connection, written } = harness()
+  const waiting = Array.from({ length: 256 }, () => connection.request('agent.info'))
+  const control = connection.request('turn.cancel', {}, undefined, { control: true })
+  assert.equal(written.length, 257, 'the control request was written')
+  connection.transportClosed('done')
+  await Promise.allSettled([...waiting, control])
+})
+
+test('the bridge reporting its own bug may have acted, and any other refusal had no effect', async () => {
+  const { connection, written } = harness()
+  const bug = connection.request('turn.send')
+  const refusal = connection.request('turn.send')
+  connection.receive(
+    JSON.stringify({ id: written[0]!.id, error: { code: 'internal', message: 'a bug' } }) + '\n' +
+      JSON.stringify({ id: written[1]!.id, error: { code: 'turn_in_flight', message: 'busy' } }) + '\n',
+  )
+  await assert.rejects(bug, (error: RpcError) => error.outcome === 'unknown')
+  await assert.rejects(refusal, (error: RpcError) => error.outcome === 'rejected')
+})

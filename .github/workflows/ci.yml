@@ -81,6 +81,11 @@ jobs:
       - name: Test
         run: cargo test --all --locked
 
+      # The same test again with its output, to put the number of workflows skipped for want of a
+      # tool in the log.
+      - name: Report the everyday workflows under the sandbox default
+        run: cargo test -p bravebot-agent --test usability --locked -- --nocapture
+
       # A runner starts with no ~/.bravebot, so anything in its session store now is a record a
       # test saved into the person's home instead of the profile `in_isolated_profile` makes.
       - name: Check the tests left the session store empty
@@ -121,6 +126,11 @@ jobs:
 
       - name: Test
         run: cargo test --all --locked
+
+      # The same test again with its output, to put the number of workflows skipped for want of a
+      # tool in the log.
+      - name: Report the everyday workflows under the sandbox default
+        run: cargo test -p bravebot-agent --test usability --locked -- --nocapture
 
       - name: Check the tests left the session store empty
         run: |
@@ -169,10 +179,40 @@ jobs:
       # ring compiles C for whichever target it is built for, so the C half needs a cross compiler
       # even though the Rust half needs none. Nothing is linked: clippy stops before that, which is
       # what makes a Windows host unnecessary.
+      - name: Find the week of the apt cache
+        id: apt-week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      # The downloaded packages are kept for a week, so a run that finds them skips the download
+      # from the runner image's mirror, which is the step that has stalled.
+      - name: Cache the cross compiler packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bravebot-apt/*.deb
+          key: apt-mingw-${{ runner.os }}-${{ steps.apt-week.outputs.week }}
+
       - name: Install the cross compiler ring builds with
+        # Each attempt is killed after 3 minutes, since a stalled apt mirror connection otherwise
+        # holds the job until the 6 hour default. One attempt and up to three retries fit in the step limit.
+        # The first two attempts use the runner image's mirror list. The last two use
+        # archive.ubuntu.com, so one slow mirror cannot fail every attempt.
+        # Only the win32 compiler is installed: ring compiles C and links nothing, and the
+        # gcc-mingw-w64-x86-64 package adds the posix compiler and its runtime on top of it.
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64
+          archives="$HOME/.cache/bravebot-apt"
+          mkdir -p "$archives"
+          for attempt in 1 2 3 4; do
+            if [ "$attempt" -ge 3 ]; then
+              sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|' /etc/apt/sources.list.d/*.sources
+            fi
+            if sudo timeout 180 sh -c "apt-get update && apt-get install -y --no-install-recommends -o Dir::Cache::archives=$archives gcc-mingw-w64-x86-64-win32"; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed or timed out" >&2
+            sleep 5
+          done
+          exit 1
 
       - name: Clippy
         # --locked where the two sibling clippy jobs do without it: they each run a locked
@@ -455,9 +495,17 @@ jobs:
           key: leo-${{ runner.os }}-${{ steps.leo.outputs.commit }}-${{ hashFiles('ui/scripts/patch-leo-types.mjs') }}
 
       - name: Install desktop test dependencies
+        # Retried with a per-attempt limit for the reason given on the Windows lint job's apt step.
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64
+          for attempt in 1 2 3 4; do
+            if sudo timeout 180 sh -c 'apt-get update && apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64'; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed or timed out" >&2
+            sleep 5
+          done
+          exit 1
 
       - name: Build and test the desktop UI
         run: make check-ui-build UI_INSTALL="ui/scripts/ci-install.sh $HOME/.cache/bravebot-leo"

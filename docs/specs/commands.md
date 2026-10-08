@@ -25,7 +25,8 @@ conversation never sees, and where its answer is drawn is [watching.md](watching
 `/manifest` starts the other kind of run, which is [manifest.md](manifest.md)'s. The `!` prompt is
 a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has no other spec to
 belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12. `/init` starts an ordinary turn, but the words that turn is given and
-when it is refused are CMD-13.
+when it is refused are CMD-13. `/request` shows the request a turn built, which is
+[TRACE-9](trace.md#TRACE-9)'s.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -147,7 +148,9 @@ by asking what to clear.
 That a command may go on to start a request of its own is a separate thing: `/compact` sends a
 conversation to be summarised, which [compaction.md](compaction.md) governs, `/btw` sends a copy of
 the conversation with a question on the end of it, which [watching.md](watching.md) governs, and
-`/model` reaches the network to list models. None of them sends the typed line.
+`/model` reaches the network to list models. `/plan <task>` starts a turn, and what that turn is sent
+is the task after the word, which [permission-modes.md](permission-modes.md) governs. None of them sends
+the typed line.
 
 `verified-by: bravebot_tui::app::typing_the_status_command_reports_rather_than_prompting`
 `verified-by: bravebot_tui::app::typing_the_cost_command_reports_rather_than_prompting`
@@ -264,7 +267,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/advisor` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches only what the session keeps | `/cost`; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
@@ -272,7 +275,7 @@ it stays where it was. The exception is a line of the same command already waiti
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
 were typed. A command that changes something, `/rename`, `/issue`, `/pr`, `/forget-trust`,
-`/theme <name>`, `/effort <level>` or `/advisor`, is carried out as it is typed only when nothing is waiting, and otherwise waits
+`/theme <name>`, `/effort <level>`, `/advisor` or `/style`, is carried out as it is typed only when nothing is waiting, and otherwise waits
 behind what is, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, and `/forget-trust` ahead of a waiting `/cd` would forget the directory
 `/cd` leaves. A command carried out as it is typed comes off the box and is not remembered, as at
@@ -327,6 +330,9 @@ does not read:
   ([ADVISOR-9](tools/advisor.md#ADVISOR-9)). A turn is offered its advisor, or none, when it
   begins and does not read the choice again, so one named mid-turn is the next turn's. The bare word
   opens no picker, so it is carried out too.
+- **`/style`.** It picks the words that open a later turn's system prompt
+  ([INSTR-12](instructions.md#INSTR-12)). A turn reads the pick when it begins, so one made mid-turn
+  is the next turn's. It opens no picker, so every form is carried out.
 
 - **`/copy`.** It reads the transcript and writes to the clipboard, which a sweep with the mouse
   may do at any time. Mid-turn the latest reply may be what the running turn said on its way to a
@@ -350,6 +356,14 @@ back to be edited, so a command recorded there would cost a person the prompt th
 waiting command is held in the queue, and taking back what is waiting gives it back to the box like
 any other line. What a command carried out mid-turn says is held under the turn until the turn has
 been folded in.
+
+While work runs the commands are offered as at rest ([INPUT-9](terminal-input.md#INPUT-9)), each row
+marked with the column above: `now` for a command that is carried out as it is typed, `queued` for
+one that waits, and `now/queued` for one that is carried out or waits by what follows the word and
+by what is already waiting; a `now` row reads `queued` while a line of the same command waits
+(above). During a compaction or an aside every row reads `queued`. Tab, or Enter
+on a half-typed word, takes the highlighted row and queues nothing; Enter on a whole command is
+carried out or queued as above.
 
 `verified-by: bravebot_tui::app::a_command_typed_while_a_turn_runs_is_not_sent_as_a_prompt`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
@@ -382,6 +396,12 @@ been folded in.
 `verified-by: bravebot_tui::app::a_queued_command_is_not_what_the_turn_took`
 `verified-by: bravebot_tui::app::a_queued_command_comes_back_to_the_box`
 `verified-by: bravebot_tui::app::copy_typed_mid_turn_takes_the_reply_without_waiting`
+`verified-by: bravebot_tui::render::each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs`
+`verified-by: bravebot_tui::render::every_row_is_queued_during_an_aside`
+`verified-by: bravebot_tui::render::a_row_reads_queued_while_a_line_of_its_command_waits`
+`verified-by: bravebot_tui::render::the_rows_carry_no_label_when_nothing_is_running`
+`verified-by: bravebot_tui::app::enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs`
+`verified-by: bravebot_tui::app::a_whole_command_is_still_carried_out_or_queued_while_a_turn_runs`
 
 ## What a slash word is offered
 
@@ -401,9 +421,10 @@ name typed in full sends the line, unless the arrows moved onto another row firs
 is told that a prompt naming a skill as `/name` is the person asking for it, and it loads that
 skill the way it loads any other. The arrows walk down the commands and on into the skills.
 
-Nothing is offered in shell mode, while a turn runs, or after the word of a command line, which is
-CMD-3 and CMD-5 holding for skills as they hold for commands. A skill whose name a command claims,
-or whose name holds a space or a control character, is never a row.
+Nothing is offered in shell mode, while work runs (the commands alone are, CMD-8), or after the
+word of a command line, which is CMD-3 and CMD-5 holding for skills as they hold for commands. A
+skill whose name a command claims, or whose name holds a space or a control character, is never a
+row.
 
 **Why.** A person who knows which skill a task wants should be able to say so without hoping the
 planner picks it from its description, and the name is easier to take from a list than to
@@ -422,7 +443,7 @@ would read them on every letter.
 `verified-by: bravebot_tui::app::the_arrows_walk_from_the_commands_onto_the_skills`
 `verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
 `verified-by: bravebot_tui::app::no_skill_is_offered_in_a_command_line_or_inside_a_command`
-`verified-by: bravebot_tui::app::nothing_is_offered_for_completion_while_a_turn_runs`
+`verified-by: bravebot_tui::app::a_slash_offers_every_command_and_no_skill_while_a_turn_runs`
 `verified-by: bravebot_tui::skills::the_word_being_typed_is_the_last_one_on_the_line`
 `verified-by: bravebot_tui::skills::nothing_is_offered_inside_a_command_line`
 `verified-by: bravebot_tui::skills::what_matches_is_every_name_starting_with_the_word_in_name_order`
@@ -632,6 +653,49 @@ decide, so the command only says which one the person meant.
 `verified-by: bravebot_tui::sessions::resume_by_id_reads_the_record_named_and_refuses_what_it_cannot_continue`
 `verified-by: bravebot_tui::sessions::resume_refuses_a_record_a_running_background_session_holds`
 `verified-by: bravebot_tui::sessions::resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory`
+
+<a id="CMD-15"></a>
+### CMD-15: `/request` opens the last request built, and takes no argument
+
+`/request` opens a read-only view of the last request a turn built for the planner, which
+[TRACE-9](trace.md#TRACE-9) states. It takes no argument, so `/request` followed by words is a
+prompt (CMD-2). It reads what the session already holds in memory, so it is carried out as it is
+typed while a turn runs (CMD-8), and it starts no turn and sends nothing. It is a command, so only a
+line a person typed reaches it (CMD-1).
+
+**Why.** The view answers what the planner was just sent, which is most worth asking while a turn is
+running.
+
+`verified-by: bravebot_tui::app::the_request_command_opens_the_view_and_starts_no_turn`
+`verified-by: bravebot_tui::app::words_after_the_request_command_make_a_prompt`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::remote_confirm::the_request_a_turn_built_travels_to_the_thread_that_draws_it`
+
+<a id="CMD-16"></a>
+### CMD-16: `/recap` asks for a short account of the session, in the way `/btw` asks a question
+
+`/recap` takes no argument, so `/recap` followed by words is a prompt (CMD-2). It sends a copy of the
+conversation with a fixed question on the end, written in this program and never read from the line,
+and the exchange is untouched afterwards, as for `/btw` ([watching.md](watching.md)). The request
+offers no tools and is made through no processor, because the exchange is what the planner was
+already shown. The answer is cut to 400 characters, ending in an ellipsis where it was cut, before
+it is drawn and before it is offered to the record, so a model that ignores the length it was asked
+for cannot exceed it. It is answered and recorded as an aside is: a row in the mode Ctrl-L opens, and
+written down only where the exchange had met nothing untrusted ([SESSION-20](sessions.md#SESSION-20)). It is
+not a turn. Typed during a turn it waits for the turn to end (CMD-8).
+
+**Why.** A person returning to a long session needs to know where it stands, and reading the
+transcript back to find out is the cost the command removes. Sending it as a prompt would put the
+question and the account into the conversation the planner reads for the rest of the session.
+
+`verified-by: bravebot_tui::app::the_recap_command_is_a_recap_and_not_a_prompt`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_recap_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_agent::turn::a_recap_is_cut_to_its_limit_and_leaves_the_conversation_alone`
+`verified-by: bravebot_agent::aside::a_recap_longer_than_the_limit_is_cut_to_it`
+`verified-by: bravebot_agent::aside::a_recap_within_the_limit_is_not_cut`
+`verified-by: bravebot_agent::aside::the_recap_limit_counts_characters_rather_than_bytes`
+`verified-by: bravebot_agent::aside::a_recap_asks_its_own_question_with_a_limit_and_leaves_the_exchange_alone`
 
 ## Known costs
 

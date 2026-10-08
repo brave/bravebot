@@ -13,7 +13,7 @@
     {"start": "send", "call": "send", "session": "a", "args": {"text": "too soon"}},
     {"expectRequest": "s", "method": "turn.send", "params": {"session": "s1", "prompt": "too soon"}},
     {"send": [{"id": "$s", "error": {"code": "bad_request", "message": "send trust.reply first"}}]},
-    {"await": "send", "error": {"name": "RpcError", "code": "bad_request"}},
+    {"await": "send", "error": {"name": "RpcError", "code": "bad_request", "outcome": "rejected"}},
     {"expectView": "a", "sequence": 0, "status": "awaiting_trust", "rows": []}
   ]
 }

@@ -12,6 +12,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 |---|---|---|
 | `/status` | | Report this session, what it may touch, and what it has spent |
 | `/cost` | | Show what each turn of this session has spent |
+| `/request` | | Show the last request sent to the model, and where each part of it came from |
 | `/model` | | Choose which model to think with |
 | `/theme` | `[name]` | Choose which theme paints the interface |
 | `/effort` | `[level]` | Choose how hard to think before answering |
@@ -20,12 +21,15 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
+| `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
+| `/recap` | | Recap where this session stands, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
 | `/branch` | `[<name>]` | Copy this session and carry on in the copy, keeping the original to return to |
 | `/resume` | `[<id>]` | Pick up another session of this directory, by id or from a list |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
+| `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
@@ -35,6 +39,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
 | `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
+| `/plan` | `[task]` | Enter plan mode, and start on a task if you give one |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
@@ -80,8 +85,8 @@ Reports everything the session knows about itself:
   Typed while a turn runs, these two lines say the running turn holds them and show them once it
   ends, since the turn can add to both as it goes;
 - what a [`/loop`](#loop-interval-prompt) is repeating and when the next tick is due, where one is
-  running, or what a [`/goal`](#goal-condition) is working towards and how many rounds it has
-  spent.
+  running, or what a [`/goal`](#goal-condition) is working towards, how many rounds it has
+  spent, how long it has been set and what the session has spent since.
 
 The last three are the ones nothing else on your screen tells you. A vouched command is the one that
 stops appearing, and what happens next without anybody typing anything cannot be read off the
@@ -89,6 +94,27 @@ transcript.
 
 The endpoint host and the key id are left out, though `bravebot doctor` prints both. A status panel
 is the thing people paste into an issue or a screenshot.
+
+## `/request`
+
+Opens a read-only view of the last request built for the model: the system prompt in the pieces it was
+put together from, each message, and each tool result as the model saw it. Every part is headed with
+where its words came from:
+
+| Label | Words from |
+|---|---|
+| `typed` | what you typed |
+| `trusted file <path>` | a file you named or vouched for |
+| `tool result (trusted)` | a result the kernel let the model read |
+| `ref:N` | content the model was not shown. You see the reference token it saw, never the content |
+| `driver` | a sentence bravebot wrote |
+| `planner` | the model's own earlier words |
+| `unrecorded` | nothing recorded it, as for a message restored from a saved session |
+
+The view is read from the request that was sent, not rebuilt from the transcript, so it holds nothing
+the model did not. It writes nothing to disk, and an incognito session is unchanged. Typed while a
+turn runs it answers at once; It is the transcript scroller, so it scrolls and closes as that does. The view is of the main conversation, not of a
+delegate's. It takes no argument: `/request` followed by words is a prompt.
 
 ## `/cost`
 
@@ -156,6 +182,20 @@ advisor's tokens and is counted in the turn's.
 
 Typed while a turn runs with nothing waiting, it is taken at once and the next turn is the first
 to use it.
+
+## `/style [name | off]`
+
+Sets how the planner answers, from the next turn on. Three styles ship with bravebot: `concise`
+leads with the result and leaves out preamble and recap, `explanatory` adds short `Insight` notes on
+why the code is the way it is, and `proactive` starts work and decides routine questions itself,
+saying what it assumed. `/style` alone says which is in force and lists the names, and `/style off`
+clears the pick.
+
+A style stands where [`--system-prompt`](cli.md#--system-prompt-prompt-and---append-system-prompt-prompt) stands: it replaces the
+opening of the system prompt and nothing after it. If you also gave `--system-prompt`, that is used
+and the style is not. A style grants nothing: writes are still put to you where they would have been,
+and plan mode still refuses them. The pick lasts for the session and is not written down. Styles
+cannot yet be read from files.
 
 ## `/effort [level]`
 
@@ -241,6 +281,32 @@ It removes every answer kept about the path, including one given about a directo
 and made again there. In an incognito session it changes nothing, since nothing is written there
 either, and it names the file so you can remove it yourself. See
 [Remembering the answer](../security/trust.md#remembering-the-answer).
+
+## `/reach`
+
+Gives one command a place or a credential it needs, and remembers that, so the next plan for the
+command carries it and the same refusal is not met in every session.
+
+```
+/reach docker -- docker build .             # docker's credential directory, for this session
+/reach ~/cache write always -- make check   # make may read and write ~/cache, in every session
+/reach                                      # list what is remembered, numbered
+/reach remove 2                             # take the second one away
+```
+
+The first word is a credential scope (`remote`, `aws`, `kubernetes` or `docker`) or a directory.
+A directory is read, and written only with `write`. It lasts this session, and a resumed one,
+unless you add `always`. Each program of the line gets it, on its own: a grant for `git push` is not
+one for `git pull`, and a grant for one `make` is not one for another. A program started with a
+`NAME=value` in front of it gets none.
+
+The reach is shown with the command in the plan you are asked to approve, with the day you
+allowed it. A directory must exist and is refused if it is your home or above it, `~/.ssh` or
+inside it, and it is checked again each time it is used. A credential scope is never writable. What
+a program printed when it was refused is never read for a path.
+
+Typed while a turn runs, it waits for the turn to end. In an incognito session it reads what is
+there and adds nothing, and says so. The record is `reach.jsonl` in `~/.bravebot`.
 
 ## `/loop [interval] <prompt>`
 
@@ -362,6 +428,10 @@ judged against it, so you can ask something unrelated or work by hand without lo
 `/goal resume` arms the same condition with the rounds it had spent, and `/status` and the panel say
 it is paused. A check already out when you pause is not acted on. `/goal clear`, `/clear` and `/loop`
 still end a paused goal, and it is not written down either.
+
+**The report carries the cost.** `/goal` and `/status` say how long the goal has been set and the
+tokens the session has spent since, and a goal that is met, cannot be met or gives up says the same
+as it ends. Tokens are counted as each turn ends, so a turn still running is not in the figure yet.
 
 **Setting a goal sends nothing.** A condition is not a prompt, so the session sits idle until you
 ask for something; what a goal does is keep that work going. Nothing here writes a first prompt for
@@ -543,6 +613,19 @@ directory, or a directory added with `/add-dir`, is kept: `/cd` out of it first.
 **The list is held in memory.** After `/clear` it starts empty and the earlier checkouts stay on disk,
 and `--resume` brings none back.
 
+## `/plan [task]`
+
+Sets [plan mode](../security/permissions.md#answering-in-advance-modes), as the mode key does when it
+reaches planning. With a task it also starts a turn on that task, which runs in plan mode.
+
+```
+/plan fix the auth bug
+```
+
+The turn is sent the task and not the line, so it never sees `/plan`. Bare `/plan` sets the mode and
+sends nothing. There is no command for bypassing every check. Typed while a turn runs it waits for
+the turn to end, and the turn in flight keeps the mode it began with.
+
 ## `/manifest <task>`
 
 Plans one task in full, shows you the plan, then runs it with nothing re-planned.
@@ -686,6 +769,14 @@ summariser's closing instruction and goes nowhere else, and the audit trail reco
 given and its length, not the words. The **request** is shortened, never the record: the replaced messages go to an
 archive that the transcript still reads and the session record still stores. See
 [Sessions](../using/sessions.md#long-conversations).
+
+## `/recap`
+
+Recaps where the session stands: what you are trying to do, how far the work has got, and what is
+next, in at most 400 characters. It is a [`/btw`](#btw-question) with a fixed question: a copy of the
+conversation goes out, no tools are offered, and neither the question nor the answer joins the
+conversation. The answer is cut to 400 characters if the model writes more, and it opens in the same
+mode as a `/btw` answer. `/recap` takes no argument: a line with words after it is a prompt.
 
 ## `/btw <question>`
 
@@ -898,7 +989,7 @@ nothing else done to it. A leading `~` is expanded only as a whole first segment
 own name begins with a tilde is not a home-relative path. Nothing shortens it, splits it, or asks the
 planner what it meant. The one exception is the marker for a picture you pasted or a file you dropped
 beside the line. A command that cannot carry it gets words in place of a picture and the file's name in
-place of a drop. `/btw`, `/manifest` and `/loop` send their argument, so a marker stays in
+place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, so a marker stays in
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/copy`,
@@ -907,7 +998,7 @@ what the session keeps for itself, so they are carried out as you type them, ahe
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. The exception is a line of the same command already waiting, which they wait behind, so
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/issue`, `/pr`,
-`/forget-trust`, `/theme <name>`, `/effort <level>` and `/advisor` change only what the session keeps, and are carried out as you
+`/forget-trust`, `/theme <name>`, `/effort <level>`, `/advisor` and `/style` change only what the session keeps, and are carried out as you
 type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
 waiting `/clear` names the new session. What they say is drawn under the turn and joins the
 transcript once the turn has ended. `/theme` and `/effort` alone open a picker, so they wait.

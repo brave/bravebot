@@ -364,6 +364,7 @@ nobody asks about spends a person's CPU on nothing.
 `verified-by: bravebot_lsp::server::a_server_is_started_once_and_reused`
 `verified-by: bravebot_lsp::server::no_server_starts_until_a_request_needs_one`
 `verified-by: bravebot_lsp::server::a_server_that_ignores_shutdown_is_killed`
+`verified-by: bravebot_lsp::server::a_server_that_ignores_shutdown_does_not_outlive_its_set`
 `verified-by: bravebot_lsp::server::dropping_the_set_stops_every_server`
 `verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
 `verified-by: bravebot_agent::lsp::a_turn_that_is_handed_no_set_starts_a_server_of_its_own`

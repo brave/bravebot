@@ -23,7 +23,6 @@ pub mod confirm;
 pub mod dropped;
 pub mod editor;
 pub mod effort_prompt;
-pub mod entries;
 pub mod goals;
 pub mod hidden;
 pub mod history;

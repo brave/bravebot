@@ -174,27 +174,18 @@ draft that got one shows it and a draft that did not is unchanged.
 ### Step 7: the user decides what gets posted
 
 The table from step 5 is what the user chooses from. Ask which drafts to post, post those and no
-others, and never post one whose clause already has an open issue:
+others, and never post one whose clause already has an issue, open or closed.
 
-```bash
-gh issue list --repo OWNER/REPO --state open --search "CLAUSE-N in:title"
-gh issue create --repo OWNER/REPO --title "TITLE" --label FIRST --label SECOND --body-file BODY_FILE
-```
+Hand each chosen draft to the [issue-poster](../../agents/issue-poster.md) definition, which
+searches the backlog for the clause id, applies the labels and posts. Give it the title, the body
+file, the labels the draft names, and this instruction: the issue is a finding nobody has read, so
+apply no `importance`, `urgency` or `size`. Those are the [triage-issues skill](../triage-issues/SKILL.md)'s
+to judge, and guessing at them here would put a finding nobody has read into somebody's queue.
 
 Where the table said a title needs shortening, rewrite it before posting rather than posting a
-title GitHub will refuse. Keep the defect and the cost, and say the clause id first;
-[labelling-issues.md](../../../docs/development/labelling-issues.md) is what a title carries.
+title GitHub will refuse. Keep the defect and the cost, and say the clause id first.
 
-Apply every label the draft names and none it does not. A divergence carries two, because which
-clause it breaks and what it is in the code that ships today are different questions: `spec-mismatch`
-with `bug` where the code attempts the behaviour and gets it wrong, and `spec-mismatch` with
-`enhancement` where nothing attempts it, since a clause nobody built breaks nothing. A clause
-nothing pins carries `spec-coverage` alone: the behaviour is right, so it is neither.
-
-`importance`, `urgency` and `size` are the [triage-issues skill](../triage-issues/SKILL.md)'s to
-judge, and guessing at them here would put a finding nobody has read into somebody's queue.
-
-`gh` is deliberately not in this skill's `allowed-tools`, so every one of those calls asks
+`gh` is deliberately not in this skill's `allowed-tools`, so every call the poster makes asks
 first. That is the gate, not a nuisance to work around.
 
 ### Step 8: say what happened

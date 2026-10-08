@@ -1,8 +1,9 @@
 #!/usr/bin/env sh
 #
-# Installs the newest bravebot release for this platform.
+# Installs the newest bravebot release for this platform, or the one named by the version given.
 #
 #   curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | sh -s 1.2.3
 #   curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 #
 # The checksum check is not optional: without it a network-fetched executable would run on the
@@ -82,6 +83,25 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
+# Three decimal numbers joined by dots, and nothing else. The version becomes part of a URL, so it is
+# held to this shape rather than to "does not look dangerous": a dot-dot, a slash or a host in it
+# is refused here, before any request, and what is left can only name a tag under REPO.
+is_version() {
+  case "$1" in
+    "" | *[!0-9.]* | .* | *. | *..*) return 1 ;;
+  esac
+  # With no empty field possible, two dots is exactly three numbers.
+  case "$1" in
+    *.*.*) ;;
+    *) return 1 ;;
+  esac
+  rest="${1#*.}"
+  case "${rest#*.}" in
+    *.*) return 1 ;;
+  esac
+  return 0
+}
+
 # The digest and nothing else: sixty-four hex digits, no filename beside them. A checksum file of
 # any other shape is a release published wrong, and installing anyway would make the one signal
 # that distinguishes a bad download from a good one meaningless.
@@ -134,6 +154,15 @@ verify_code_signature() {
 }
 
 main() {
+  [ "$#" -le 1 ] || fail "usage: install.sh [version]"
+  # Checked first, so an argument that is refused costs no request and writes nothing.
+  TAG=""
+  if [ "$#" -eq 1 ]; then
+    requested="${1#v}"
+    is_version "$requested" || fail "not a version: expected three numbers such as 1.2.3 (a leading v is allowed)"
+    TAG="v${requested}"
+  fi
+
   need_cmd curl
   need_cmd mktemp
   need_cmd chmod
@@ -183,8 +212,10 @@ main() {
   fi
   INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 
-  TAG="$(curl -fsSL "$API_URL" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-  [ -n "$TAG" ] || fail "unable to resolve the latest release tag from $API_URL"
+  if [ -z "$TAG" ]; then
+    TAG="$(curl -fsSL "$API_URL" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    [ -n "$TAG" ] || fail "unable to resolve the latest release tag from $API_URL"
+  fi
 
   BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
   TMP_DIR="$(mktemp -d)"
@@ -194,7 +225,8 @@ main() {
   SHA_PATH="${TMP_DIR}/${ASSET_NAME}.sha256"
 
   echo "Downloading ${ASSET_NAME} ${TAG}..."
-  curl -fsSL "${BASE_URL}/${ASSET_NAME}" -o "$BIN_PATH"
+  curl -fsSL "${BASE_URL}/${ASSET_NAME}" -o "$BIN_PATH" ||
+    fail "unable to download ${ASSET_NAME} for ${TAG}; check that this release exists for your platform"
   curl -fsSL "${BASE_URL}/${ASSET_NAME}.sha256" -o "$SHA_PATH"
 
   EXPECTED="$(tr -d '[:space:]' < "$SHA_PATH")"
@@ -291,5 +323,5 @@ main() {
 
 # Sourced with BRAVEBOT_INSTALL_SH_TEST=1, this file installs nothing, so a test can call main itself.
 if [ "${BRAVEBOT_INSTALL_SH_TEST:-0}" != "1" ]; then
-  main
+  main "$@"
 fi

@@ -111,6 +111,9 @@ fn run(
     hosting: Option<crate::host::Hosting>,
 ) -> ExitCode {
     let hosted_as = hosting.as_ref().map(|hosting| hosting.id.clone());
+    let interrupted = hosting
+        .as_ref()
+        .is_some_and(|hosting| hosting.after_an_interruption);
     // Refused rather than read. The lines this reads are the person's own prompts, and a pipe has
     // nothing vouching for what it carries: CLI-3 quarantines piped bytes for exactly that reason,
     // so a session taking its prompts from one would be taking instruction from whatever fed it,
@@ -285,20 +288,40 @@ fn run(
     // Matched after that question, because its answer decides whether the checkout's definitions
     // are in the set, and before any server is reached, so a name matching nothing starts nothing
     // (ADDRESS-5).
-    let agent = match agent
-        .map(|name| {
-            let definitions = bravebot_agent::agents::resolved(
-                &workspace,
-                home.as_deref(),
-                trust.clone(),
-                permissions.clone(),
-                &mut RecordingSink::new(),
-            );
-            bravebot_tui::app::definition_named(&config, &definitions, &name)
-        })
+    // The `agent` setting stands in where `--agent` named nothing, and a name it gives that matches
+    // nothing is said and the session goes on without one (ADDRESS-13).
+    // A session resumed from a record that names a definition is left as it was before the
+    // setting existed: it does not take the setting's, which the record outranks.
+    let recorded = resumed
+        .as_ref()
+        .is_some_and(|record| record.agent.is_some());
+    let configured = settings.agent().filter(|_| !recorded);
+    let by_setting = agent.is_none() && configured.is_some();
+    let wanted = agent.or_else(|| configured.map(str::to_string));
+    let definitions = wanted.as_ref().map(|_| {
+        bravebot_agent::agents::resolved(
+            &workspace,
+            home.as_deref(),
+            trust.clone(),
+            permissions.clone(),
+            &mut RecordingSink::new(),
+        )
+    });
+    let agent = match wanted
+        .as_deref()
+        .zip(definitions.as_ref())
+        .map(|(name, definitions)| bravebot_tui::app::definition_named(&config, definitions, name))
         .transpose()
     {
         Ok(agent) => agent,
+        Err(bravebot_tui::app::Unusable::Missing(why)) if by_setting => {
+            asking.say(&t!(
+                cli_agent_setting_gone,
+                definition = wanted.as_deref().unwrap_or_default()
+            ));
+            asking.say(&why);
+            None
+        }
         Err(refused) => return fail(Ending::Argument, refused.into_message()),
     };
     // With the definition's model, because the opening line named the session's before the name
@@ -313,6 +336,12 @@ fn run(
             None => t!(cli_plain_working_under, definition = &agent.name),
         };
         asking.say(&t!(cli_notice, notice = notice));
+        if by_setting {
+            asking.say(&t!(
+                cli_notice,
+                notice = t!(session_working_under_by_setting)
+            ));
+        }
     }
 
     // After that question, and put on the same two streams every other question here is. Held for
@@ -410,11 +439,17 @@ fn run(
         complained: None,
         home,
         profile,
-        conversation: match &resumed {
-            Some(record) => {
-                bravebot_agent::conversation::Conversation::restored(record.conversation.clone())
+        conversation: {
+            let mut conversation = match &resumed {
+                Some(record) => bravebot_agent::conversation::Conversation::restored(
+                    record.conversation.clone(),
+                ),
+                None => bravebot_agent::conversation::Conversation::new(),
+            };
+            if interrupted {
+                conversation.note_unfinished_turn();
             }
-            None => bravebot_agent::conversation::Conversation::new(),
+            conversation
         },
         trust,
         programs: match &resumed {
@@ -710,6 +745,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_output_cap(self.output_cap)
             .with_deadlines(self.deadlines)
             .with_confined_runs(true)
+            .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
             .with_auto_vetting(self.auto_vetting)
             .already_asked_about(self.asked_about.clone())
             .already_exposed(self.exposed.clone())
@@ -1616,6 +1652,44 @@ mod tests {
         }
     }
 
+    /// BG-13: a hosted session that waits for a prompt for as long as it is allowed to leaves the
+    /// loop, as a session whose input ended does, and what is recorded for it is `stopped`. The
+    /// first prompt is a turn like any other, so the time counts from the prompt after it.
+    #[test]
+    fn a_hosted_session_idle_for_its_time_ends_and_is_recorded_stopped() {
+        use crate::host::{Hosting, Shared};
+        use bravebot_session::jobs::{Roster, State};
+        use std::time::Duration;
+
+        const ID: &str = "11111111-1111-4111-8111-111111111111";
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("plain-idle-{}", std::process::id()));
+        let roster = Roster::at(root.clone());
+        let job = crate::host::entry(&roster, ID, Some("fix the build"));
+        let shared = Shared::ending_when_idle_for(
+            Roster::at(root),
+            job,
+            Some("fix the build".to_string()),
+            Duration::from_millis(200),
+        );
+        let hosting = Hosting::of(&shared);
+
+        let (ended, ends) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut asking = Prompting::watched(hosting.input, Vec::new(), hosting.watch);
+            let mut turns = Canned { said: Vec::new() };
+            lines(&mut asking, &mut Vec::new(), &mut turns, &mut Vec::new());
+            let _ = ended.send(());
+        });
+        ends.recv_timeout(Duration::from_secs(20))
+            .expect("the session never left its loop");
+
+        shared.finish();
+        let seen = roster.get(ID).expect("the entry is there");
+        assert_eq!(seen.job.state, State::Stopped);
+    }
+
     /// Drive a whole session over a script, and read back what each stream carried.
     fn session_over(script: &str, said: Vec<Said>) -> (String, String) {
         let mut reply = Vec::new();
@@ -2250,11 +2324,20 @@ mod tests {
         let unconfined = program(&request).join("\n");
         request.confined = Some(bravebot_agent::Confined {
             directories: vec!["/work".into(), "/var/scratch/session".into()],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
             carried: vec![bravebot_agent::Carried {
                 program: "docker".into(),
                 toolchain: None,
                 scope: Some(bravebot_sandbox::scope::Scope::Docker),
+                reaches: vec![bravebot_sandbox::scope::Reach {
+                    variable: "DOCKER_CONFIG",
+                    path: "/home/someone/docker-work".into(),
+                }],
+                network: false,
+                remembered: Vec::new(),
             }],
+            reads_the_machine: false,
         });
 
         let confined = program(&request).join("\n");
@@ -2268,6 +2351,12 @@ mod tests {
         assert!(confined.contains("/var/scratch/session"), "{confined}");
         assert!(
             confined.contains("docker also reads your docker credentials in ~/.docker"),
+            "{confined}"
+        );
+        assert!(
+            confined.contains(
+                "docker also reads /home/someone/docker-work, where your DOCKER_CONFIG points"
+            ),
             "{confined}"
         );
         assert!(
@@ -2418,9 +2507,9 @@ mod tests {
     fn a_server_question_is_held_as_its_own_kind_and_read_as_the_foreground_reads_it() {
         use bravebot_agent::servers::{Answer, Asker, Question};
 
-        let declaration = bravebot_config::mcp::Declaration::Http {
-            url: "https://news.example/mcp".to_string(),
-        };
+        let declaration =
+            bravebot_config::mcp::Declaration::http("https://news.example/mcp".to_string())
+                .expect("declaration");
         for (typed, expected) in [
             (&b"1\n"[..], Answer::Once),
             (b"2\n", Answer::Project),

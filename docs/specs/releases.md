@@ -240,6 +240,12 @@ the install prints the version it fetched rather than where it fetched it from. 
 is handed to update with is one fixed line for the same reason, which [updates.md](updates.md)
 sets out.
 
+The one input install.sh accepts is a version: three decimal numbers with an optional leading `v`,
+composed into a tag under that fixed repository, and refused before any request when it is
+anything else. It chooses a release, never a host or a path, and every check in
+[RELEASE-9](#RELEASE-9), [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) runs unchanged
+against it. `crates/cli/tests/installer_signature.rs` pins which URLs each argument reaches.
+
 `verified-by: by-construction (install.sh states the repository as a literal, and the npm installer composes both URLs from one constant; npm/tests/postinstall.test.mjs calls that origin with an environment set against it, holds the installer to that one URL, and fails on any reach into the environment beyond the two values that choose whether to download and for which architecture. make check-npm runs it)`
 
 <a id="RELEASE-14"></a>

@@ -139,6 +139,29 @@ impl Bridge {
             "session.mode" => self.set_permission_mode(request),
             "session.rewind" => self.rewind_session(request),
             "turn.send" => self.send_turn(request),
+            "mentions.offer" => {
+                let open = self
+                    .open
+                    .get(&request.string("session")?)
+                    .ok_or_else(Failure::no_such_session)?;
+                let cursor = request.param("cursor").as_u64().unwrap_or(0);
+                Ok(crate::mentions::offer(
+                    &open.project,
+                    &request.string("line")?,
+                    usize::try_from(cursor).unwrap_or(usize::MAX),
+                ))
+            }
+            "mentions.named" => {
+                let open = self
+                    .open
+                    .get(&request.string("session")?)
+                    .ok_or_else(Failure::no_such_session)?;
+                let settings =
+                    crate::settings::layers(Some(&open.project), self.settings.as_deref());
+                let workspace = session_workspace(open, &settings)?;
+                let files = crate::mentions::named(&workspace, &request.string("prompt")?)?;
+                Ok(json!({ "files": files }))
+            }
             "turn.cancel" => self.cancel_turn(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
@@ -217,7 +240,7 @@ impl Bridge {
     /// it.
     fn info(&self) -> Value {
         json!({
-            "capabilities": { "sessionView": crate::view::capability() },
+            "capabilities": { "sessionView": crate::view::capability(), "actionTargets": crate::view::action_targets() },
             "build": crate::agent_build(),
             "version": env!("CARGO_PKG_VERSION"),
             "defaultModel": crate::settings::config(None, self.settings.as_deref()).ok().map(|config| config.default_model),
@@ -891,6 +914,26 @@ impl Bridge {
         // too.
         let addressing = named.or_else(|| open.definition.clone());
 
+        // The layers the configuration below comes from, read here rather than in the worker so
+        // what they say is what stood when the turn was asked for. Three answers come off them:
+        // the workspace the turn reads through, what a commit message or a pull request this turn
+        // writes may carry (BACKEND-30), and the caps a search this turn makes runs under
+        // (SEARCH-9).
+        let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+        let workspace = session_workspace(open, &settings)?;
+        // The files the prompt names with `@` (NAME-9), read out of the prompt here rather than
+        // taken from the front end, and each one surveyed by the read the turn will make, so a
+        // name that would end the turn refuses the send before anything starts. A prompt nobody
+        // typed names nothing, the same line the terminal draws.
+        let mut files = files;
+        if composed.is_none() {
+            for named in crate::mentions::named(&workspace, &prompt)? {
+                if !files.contains(&named) {
+                    files.push(named);
+                }
+            }
+        }
+
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
         // A model the machine-level layer refuses is not requested, whichever service would have
@@ -899,15 +942,12 @@ impl Bridge {
         if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
             return Err(Failure::bad_request(refused));
         }
-        // The same layers the configuration above came from, read here rather than in the worker
-        // so what they say is what stood when the turn was asked for. Two answers come off them:
-        // what a commit message or a pull request this turn writes may carry (BACKEND-30), and
-        // the caps a search this turn makes runs under (SEARCH-9).
-        let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let auto_vetting = open.auto_vetting;
+        let sandbox =
+            bravebot_config::sandbox::for_a_window(&settings, &bravebot_config::Managed::load());
         // Read once, here, and carried to the worker: the mode the planner is told and the mode its
         // prompts are answered in are then the same one, whatever the window chooses while the turn
         // runs (MODE-8).
@@ -918,40 +958,10 @@ impl Bridge {
             .mcp_requested()
             .map(|(file, alias)| (file.to_path_buf(), alias.to_string()))
             .collect();
-        let mut workspace = turn_workspace(
-            open.project.clone(),
-            &settings,
-            &bravebot_config::Managed::load(),
-        )
-        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
-
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
         let watches = Arc::clone(&open.watches);
-        let (turn_number, directories, scratch) = state
-            .lock()
-            .map(|s| {
-                (
-                    s.turns + 1,
-                    s.directories.clone(),
-                    s.scratch.path().map(Path::to_path_buf),
-                )
-            })
-            .unwrap_or((1, Vec::new(), None));
-        // The session's own directory outside the project, made as the session opened. Set by the
-        // code that holds it, so a turn cannot widen its own reach (TRUST-14).
-        workspace.open_scratch(scratch);
-
-        // A workspace is built per turn and opens the project only, so the directories a
-        // resumed session had open have to be opened again here. The rules about them came back
-        // with the trust map, and a rule about a directory nothing can open refuses every path
-        // under it for escaping the workspace — with nothing on screen to say why. One that has
-        // since moved or been deleted cannot be reopened and is left closed: the refusal it
-        // causes is the one that was already happening, and this protocol has no way to say so
-        // outside a turn.
-        for directory in &directories {
-            let _ = workspace.add_directory(&directory.display().to_string());
-        }
+        let turn_number = state.lock().map(|s| s.turns + 1).unwrap_or(1);
 
         // A fresh token and a fresh channel per turn. Reusing either could cancel a turn
         // before it started, or deliver yesterday's answer to today's question.
@@ -965,6 +975,7 @@ impl Bridge {
             answers: answers_tx,
             pending: Arc::clone(&pending),
             turn: turn_number,
+            run: false,
             finished: Arc::clone(&finished),
         };
 
@@ -1006,6 +1017,7 @@ impl Bridge {
                 output_cap,
                 deadlines,
                 auto_vetting,
+                sandbox,
                 permission_mode,
                 mcp_requested,
                 workspace,
@@ -1093,36 +1105,24 @@ impl Bridge {
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
+        let sandbox =
+            bravebot_config::sandbox::for_a_window(&settings, &bravebot_config::Managed::load());
         // Read when the run is accepted and kept to its end, as a turn keeps its own (MODE-8).
         let permission_mode = open.permission_mode;
-        let mut workspace = turn_workspace(
-            open.project.clone(),
-            &settings,
-            &bravebot_config::Managed::load(),
-        )
-        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+        let workspace = session_workspace(open, &settings)?;
 
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
-        let (run, turns, directories, scratch) = state
+        let (run, turns) = state
             .lock()
             .map(|mut s| {
                 // A run writes files as a turn does, so the same coverage gap applies.
                 s.rewind
                     .record_gap(bravebot_agent::rewind::CoverageGap::Desktop);
                 s.runs += 1;
-                (
-                    s.runs,
-                    s.turns,
-                    s.directories.clone(),
-                    s.scratch.path().map(Path::to_path_buf),
-                )
+                (s.runs, s.turns)
             })
-            .unwrap_or((1, 0, Vec::new(), None));
-        workspace.open_scratch(scratch);
-        for directory in &directories {
-            let _ = workspace.add_directory(&directory.display().to_string());
-        }
+            .unwrap_or((1, 0));
 
         let cancel = Cancel::new();
         let (answers_tx, answers_rx) = mpsc::channel();
@@ -1134,6 +1134,7 @@ impl Bridge {
             pending: Arc::clone(&pending),
             // The session's last turn. A run is not a turn and takes no number of its own.
             turn: turns,
+            run: true,
             finished: Arc::clone(&finished),
         };
 
@@ -1159,6 +1160,7 @@ impl Bridge {
                 attribution,
                 output_cap,
                 deadlines,
+                sandbox,
                 model,
                 permission_mode,
                 workspace,
@@ -1312,10 +1314,35 @@ impl Bridge {
     /// Cancellation never sends an approval or authorises a write.
     fn cancel_turn(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
+        // The turn the caller meant to stop (RPCVIEW-6). Absent, the request means whatever is
+        // running, as it always has. Present, it stops that turn and no other.
+        let expected = match request.params.get("turn") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .ok_or_else(|| Failure::bad_request("`turn` must be a number"))?,
+            ),
+        };
         let open = self
             .open
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
+        if let Some(expected) = expected {
+            let running = open.running.as_ref().filter(|running| {
+                !running.is_finished() && !running.run && running.turn as u64 == expected
+            });
+            let Some(running) = running else {
+                // An old cancel for a turn that is over reaches a later turn as nothing at all, and
+                // does not stop the watches either.
+                return Ok(json!({ "cancelled": false }));
+            };
+            running.cancel.cancel();
+            if let Ok(mut watches) = open.watches.lock() {
+                watches.stop_firing();
+            }
+            return Ok(json!({ "cancelled": true }));
+        }
         if let Some(running) = &open.running {
             running.cancel.cancel();
         }
@@ -1429,6 +1456,14 @@ impl Bridge {
             .open
             .get_mut(&handle)
             .ok_or_else(Failure::no_such_session)?;
+        // The question is answered once (RPCVIEW-6). A repeat is refused before the session's
+        // state is touched, so it cannot replace the trust map, or hold up a cancel behind the lock.
+        if open.answered_trust {
+            return Err(Failure::new(
+                ErrorCode::NoSuchRequest,
+                "the trust question is not waiting for an answer",
+            ));
+        }
         // Kept only where the question offered it, so an answer the window was never shown the
         // record for, or one given where it may not be kept, writes nothing (TRUST-23).
         if remember && open.keeping.is_none() {
@@ -1832,6 +1867,41 @@ pub fn turn_workspace(
         .with_reads_kept_inside(inside))
 }
 
+/// The workspace a turn in this session reads through, as the session stands now.
+///
+/// A workspace is built per turn and opens the project only, so the directories a resumed session
+/// had open are opened again here. The rules about them came back with the trust map, and a rule
+/// about a directory nothing can open refuses every path under it for escaping the workspace, with
+/// nothing on screen to say why. One that has since moved or been deleted cannot be reopened and
+/// is left closed: the refusal it causes is the one that was already happening, and this protocol
+/// has no way to say so outside a turn.
+///
+/// The session's own directory outside the project, made as the session opened, is set by the
+/// code that holds it, so a turn cannot widen its own reach (TRUST-14).
+fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Failure> {
+    let mut workspace = turn_workspace(
+        open.project.clone(),
+        settings,
+        &bravebot_config::Managed::load(),
+    )
+    .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+    let (directories, scratch) = open
+        .state
+        .lock()
+        .map(|s| {
+            (
+                s.directories.clone(),
+                s.scratch.path().map(Path::to_path_buf),
+            )
+        })
+        .unwrap_or((Vec::new(), None));
+    workspace.open_scratch(scratch);
+    for directory in &directories {
+        let _ = workspace.add_directory(&directory.display().to_string());
+    }
+    Ok(workspace)
+}
+
 /// Everything a worker needs to run one turn.
 ///
 /// A struct rather than a dozen arguments, because the list was the kind that grows one
@@ -1852,6 +1922,8 @@ struct Work {
     deadlines: bravebot_agent::exec::Deadlines,
     /// The session's, settled when it opened.
     auto_vetting: bool,
+    /// How far the programs this turn runs may reach, from the settings and the managed file.
+    sandbox: bravebot_sandbox::SandboxMode,
     /// The session's as it stood when the turn was accepted.
     permission_mode: PermissionMode,
     /// Each MCP server the settings request, with the file that requested it.
@@ -1963,6 +2035,7 @@ fn work(work: Work) {
         output_cap,
         deadlines,
         auto_vetting,
+        sandbox,
         permission_mode,
         mcp_requested,
         watches,
@@ -1992,8 +2065,14 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
-    let mut confirmer =
-        BridgeConfirmer::new(emitter.clone(), &session, pending, answers, cancel.clone());
+    let mut confirmer = BridgeConfirmer::new(
+        emitter.clone(),
+        &session,
+        pending,
+        answers,
+        Arc::clone(&state.question_ids),
+        cancel.clone(),
+    );
 
     // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
     // Here rather than when the session opened, so that the questions about them come after the
@@ -2031,6 +2110,7 @@ fn work(work: Work) {
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
+        .with_sandbox_mode(sandbox)
         .with_auto_vetting(auto_vetting)
         .with_permission_mode(permission_mode)
         // The rules the session opened under, and not the files as they are now (PERM-12).
@@ -3097,6 +3177,7 @@ mod watch_tests {
             answers,
             pending: Arc::new(Mutex::new(None)),
             turn: 1,
+            run: false,
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let mut bridge = Bridge::new(Box::new(|_| {}));
@@ -3172,6 +3253,10 @@ mod watch_tests {
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_tests;
+
+#[cfg(test)]
+#[path = "targets_tests.rs"]
+mod targets_tests;
 
 #[cfg(test)]
 #[path = "../tests/retention/worker.rs"]

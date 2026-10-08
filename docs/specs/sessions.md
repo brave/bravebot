@@ -6,6 +6,9 @@ governs:
   - crates/session/src/sessions.rs
   - crates/session/src/import.rs
   - crates/cli/src/session_import.rs
+  - crates/session/src/search.rs
+  - crates/cli/src/session_search.rs
+  - crates/tui/src/resume.rs
   - crates/tui/src/state.rs
   - crates/tui/src/history.rs
   - crates/session/src/store.rs
@@ -208,6 +211,8 @@ format that could not read the previous one would be paid for in exactly the thi
 `verified-by: bravebot_tui::persist::an_appended_prompt_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::a_cancelled_prompt_is_removed_from_the_stored_history`
 `verified-by: bravebot_tui::persist::the_stored_history_is_capped`
+`verified-by: bravebot_tui::persist::a_history_grown_by_appending_is_capped_when_read`
+`verified-by: bravebot_session::store::the_entry_count_is_capped_on_read`
 `verified-by: bravebot_tui::persist::a_multiline_prompt_survives_a_round_trip_on_disk`
 `verified-by: bravebot_tui::persist::saving_replaces_what_was_stored`
 `verified-by: bravebot_tui::history::consecutive_duplicates_are_collapsed`
@@ -668,7 +673,8 @@ whether or not it is ever read.
 <a id="SESSION-20"></a>
 ### SESSION-20: a question asked beside the work is recorded, and comes back into the view alone
 
-`/btw` asks something over a copy of the conversation and puts neither half into it. Both halves
+`/btw` asks something over a copy of the conversation and puts neither half into it, and so does
+`/recap`, with a fixed question that [commands.md](commands.md) gives. Both halves
 are written into the record, and a resume puts them back into the mode Ctrl-L opens, which
 [watching.md](watching.md) governs. Nothing reads them into a conversation, so a resumed session
 carries on from the exchange it had and not from the questions asked beside it.
@@ -1158,8 +1164,79 @@ second copy a no-op without a field in the record that every earlier build would
 `verified-by: bravebot_cli::running::a_claude_code_session_is_copied_once_and_only_when_asked`
 `verified-by: bravebot_ui_bridge::fork::a_fork_never_moves_copied_words_into_the_request`
 
+<a id="SESSION-33"></a>
+### SESSION-33: past sessions are searched by what was said in them
+
+The resume picker narrows its list by what a session's record says as well as by its title, branch
+and links ([SESSION-3](#SESSION-3)). The words searched are the ones a resumed transcript draws: the
+prompts a person typed, the planner's replies, and the line announcing each call the planner made,
+which names the path, command, address or pattern it was about. A tool result, a file a prompt
+attached, a note the agent composed and a reference the quarantine holds are not drawn, so they are
+not searched ([SESSION-2](#SESSION-2)). A line announcing a call is the one the transcript draws,
+so a command the transcript hides is not searchable either. The trail holds no words and is not
+read.
+
+A record is searched only when it was written by this program's terminal or desktop front end, or
+by a build that did not yet record one. An imported session ([SESSION-32](#SESSION-32)) holds
+another program's words, also after it was resumed here, and a record naming a front end this
+build does not know could hold anything, so neither is searched, and neither is shown.
+
+A match ignores case and runs of white space. The row of a session found by what was said shows,
+under its title and age, the first line that holds the text, cut around the match to the width of a
+row. Control characters and the characters that reorder or hide text are removed from that line, as
+they are from every line before it is compared. Enter resumes the session as it does for any row.
+The records are read the first time a character is typed, not when the picker opens.
+
+`since:<n>h`, `since:<n>d` and `since:<n>w` are fixed words the driver parses, not text the model or
+a record can supply. They keep the sessions last written within that many hours, days or weeks, and
+the rest of what was typed is the text to find. Until the word is complete it is typed text.
+
+`bravebot sessions search [workspace:<dir>] [since:<n>h|d|w] <text>` runs the same search for a
+script. It prints one line per session, newest first: the full id, two spaces, and the title with
+control characters removed, and nothing else. `workspace:` names the directory whose sessions are
+searched and defaults to the current one; the picker lists one workspace and has no such word. A
+session matches when its title or its words hold the text; with only a `since:` word, every session
+inside it matches. No match prints nothing on stdout and exits 1; arguments it cannot read exit 2.
+
+**Why.** A session is remembered by something said in the middle of it far more often than by the
+first thing asked, which is all its title holds. Searching only what the transcript already shows
+means the search can never surface a byte the person was not shown, which is the property that
+keeps a record from becoming a way to read quarantined content. The filters are fixed words for the
+same reason: the driver may carry text it did not write but does not decide from it.
+
+`verified-by: bravebot_session::search::a_typed_prompt_and_the_planners_reply_are_found`
+`verified-by: bravebot_session::search::a_match_ignores_case_and_runs_of_white_space`
+`verified-by: bravebot_session::search::the_path_a_call_named_is_found`
+`verified-by: bravebot_session::search::a_tool_result_is_not_searched`
+`verified-by: bravebot_session::search::a_file_attached_to_a_prompt_is_not_searched`
+`verified-by: bravebot_session::search::an_imported_session_is_not_searched`
+`verified-by: bravebot_session::search::a_line_is_cleaned_of_what_a_terminal_would_act_on`
+`verified-by: bravebot_session::search::a_shown_match_is_cut_around_the_words_and_no_wider_than_a_row`
+`verified-by: bravebot_session::search::a_since_word_is_a_window_and_leaves_the_rest_as_the_phrase`
+`verified-by: bravebot_session::search::a_malformed_since_word_is_refused_rather_than_ignored`
+`verified-by: bravebot_session::search::a_plain_query_keeps_a_since_word_as_text`
+`verified-by: bravebot_session::search::the_corpus_reads_a_projects_records_and_nothing_else_in_its_directory`
+`verified-by: bravebot_tui::resume::typing_words_said_in_a_session_finds_it_and_enter_resumes_it`
+`verified-by: bravebot_tui::resume::a_session_whose_words_do_not_hold_the_phrase_is_left_out`
+`verified-by: bravebot_tui::resume::a_since_word_keeps_only_the_sessions_written_within_it`
+`verified-by: bravebot_tui::resume::a_since_word_not_yet_finished_is_typed_text`
+`verified-by: bravebot_tui::resume::what_the_sessions_say_is_not_read_until_a_phrase_is_typed`
+`verified-by: bravebot_tui::resume::a_found_session_shows_the_line_that_matched_and_a_title_match_shows_none`
+`verified-by: bravebot_cli::session_search::the_words_say_where_to_look_how_far_back_and_for_what`
+`verified-by: bravebot_cli::session_search::a_muddled_request_is_refused_rather_than_guessed_at`
+`verified-by: bravebot_cli::session_search::a_title_or_a_line_said_matches_and_a_session_with_neither_does_not`
+`verified-by: bravebot_cli::session_search::a_row_is_the_id_and_a_title_with_nothing_a_terminal_would_act_on`
+`verified-by: bravebot_cli::running::sessions_search_prints_the_ids_and_titles_of_the_sessions_that_said_it`
+
 ## Known costs
 
+- **The first character typed reads every record.** Each record in the directory is parsed in full
+  and its lines are held in memory for as long as the picker is open, so the first keystroke pauses
+  for a long list of long sessions. Indexing would avoid it, at the cost of a second file that has
+  to agree with the record.
+- **Search is a substring match over the lines the transcript draws.** A word in a tool's result, a
+  file's body or the second line of a multi-line command is not found, and neither is anything in
+  an imported session. A phrase is not matched across two lines.
 - **Two working directories can share a session store.** The directory name is derived by mapping
   every character outside a small set to `-`, which is lossy, so `/a/b`, `/a-b` and `/a b` all
   reduce to the same name. Nothing re-checks afterwards: the listing reads every record in that

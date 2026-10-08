@@ -287,8 +287,9 @@ pub(crate) fn checkout_candidates(candidates: &crate::workspace::Candidates) -> 
         ));
     }
     note.push_str(
-        " The checkout's status could not be read, so a file a program wrote there other than by a \
-         redirection is not named.",
+        " It does not name a file a program wrote there other than by a redirection: \
+         apply_checkout asks the checkout's status for those, and gets an answer only where the \
+         session trusts the whole checkout.",
     );
     note
 }
@@ -498,6 +499,9 @@ pub fn run(
     // parent's would have.
     profile: Option<&std::path::Path>,
     model: Option<&str>,
+    // The spawning turn's level, which a delegate keeps where its definition names none
+    // (DELEGATE-27).
+    effort: Option<bravebot_aichat::protocol::Effort>,
     // The spawning turn's, since a delegate is that turn's work done elsewhere.
     permission_mode: crate::PermissionMode,
     // The spawning turn's as well, and it travels with the mode because the two are read together.
@@ -525,6 +529,9 @@ pub fn run(
     // The spawning turn's too: a delegate's programs are held to what the person's are, or the
     // confinement is a thing to avoid by delegating.
     confine_runs: bool,
+    // And its mode, for the same reason: a delegate no looser than the turn that spawned it
+    // (SANDBOX-22).
+    sandbox: bravebot_sandbox::SandboxMode,
     // The servers the spawning turn reached. A delegate is offered the tools of the ones its spec
     // holds a grant for, on the lists that turn already settled (SERVERS-9).
     mcp: Option<&crate::mcp::Session>,
@@ -595,6 +602,14 @@ pub fn run(
         .as_ref()
         .map(|(_, resolved)| resolved.clone())
         .or_else(|| model.map(str::to_string));
+    // The definition's level where its file named one, and the spawning turn's where it named
+    // none, so `/effort` reaches delegates (DELEGATE-27). The word was settled against the five
+    // levels when the file was read, so one naming no level is already absent here.
+    let delegate_effort = seeded
+        .spec
+        .effort()
+        .and_then(bravebot_aichat::protocol::Effort::named)
+        .or(effort);
 
     // The mode is the spawning turn's, and inherited rather than chosen: a delegate is that turn's
     // own work done elsewhere, so a session that is planning must not have writes happening inside
@@ -605,6 +620,7 @@ pub fn run(
         .with_profile(profile.map(std::path::Path::to_path_buf))
         .remembering(seeded.remembering.clone())
         .with_model(delegate_model)
+        .with_effort(delegate_effort)
         .with_permissions(seeded.permissions.clone())
         .with_permission_mode(permission_mode)
         .with_auto_vetting(auto_vetting)
@@ -616,6 +632,7 @@ pub fn run(
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(confine_runs)
+        .with_sandbox_mode(sandbox)
         .with_mcp(mcp.cloned())
         .stoppable_by(seeded.stop.clone());
 
@@ -1053,6 +1070,9 @@ mod tests {
             ),
             "{note}"
         );
-        assert!(note.ends_with("is not named."), "{note}");
+        assert!(
+            note.contains("apply_checkout asks the checkout's status"),
+            "{note}"
+        );
     }
 }

@@ -79,7 +79,7 @@ the grant, on the same footing as the configuration that picks the model and the
 A workspace `AGENTS.md` and a project's skill directories are labelled as workspace content, so
 TRUST decides. Each skill directory is checked for trust **before it is enumerated at all**,
 because a directory name is content too. Which directories those are, and in what order, is
-[INSTR-12](instructions.md#INSTR-12).
+[INSTR-13](instructions.md#INSTR-13).
 
 `verified-by: bravebot_agent::skills::a_skill_in_an_untrusted_project_is_not_named_to_the_planner`
 `verified-by: bravebot_agent::skills::a_skill_the_trust_map_distrusts_stops_being_offered`

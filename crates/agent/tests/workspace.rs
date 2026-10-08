@@ -2003,6 +2003,89 @@ fn the_cap_keeps_two_thousand_characters_of_a_multi_byte_line() {
     );
 }
 
+/// The line cap and the line limit leave a page of long lines at a million characters, which is one
+/// read filling the context and being paid for again on every later round. The page also ends at
+/// a size, on a whole line, with the offset that continues from there.
+#[test]
+fn a_page_of_long_lines_ends_at_the_size_cap_on_a_whole_line() {
+    let scratch = Scratch::new("read-size-cap");
+    // 999 characters and a newline: exactly 1000 per line, so a budget of 100,000 holds 100 of
+    // them and the 101st is the first that does not fit.
+    let lines: Vec<String> = (1..=300)
+        .map(|n| format!("{n:04}{}", "x".repeat(995)))
+        .collect();
+    std::fs::write(scratch.path.join("a.txt"), lines.join("\n") + "\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let page = workspace.page("a.txt", 1, usize::MAX).expect("read");
+
+    assert_eq!(
+        page.lines.len(),
+        100,
+        "the page did not end at the size cap"
+    );
+    assert_eq!(
+        page.lines,
+        lines[..100],
+        "the last line was cut, not left out"
+    );
+    assert_eq!(page.total_lines, 300);
+    assert_eq!(page.next_line(), Some(101), "no way to reach the rest");
+    assert_eq!(page.long_lines, 0);
+    let single = workspace.page("a.txt", 1, 1).expect("one line");
+    assert_eq!(
+        page.change_token, single.change_token,
+        "a page cut by size carries a different token from the whole file's"
+    );
+}
+
+/// The reported offset has to return the lines the cut left out, with none repeated and none
+/// skipped, or following the pages loses text.
+#[test]
+fn paging_by_the_reported_offset_reads_a_file_cut_by_size_whole() {
+    let scratch = Scratch::new("read-size-cap-follow");
+    let lines: Vec<String> = (1..=300)
+        .map(|n| format!("{n:04}{}", "x".repeat(995)))
+        .collect();
+    std::fs::write(scratch.path.join("a.txt"), lines.join("\n") + "\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut gathered: Vec<String> = Vec::new();
+    let mut offset = 1;
+    loop {
+        let page = workspace.page("a.txt", offset, usize::MAX).expect("read");
+        assert_eq!(page.first_line, offset);
+        gathered.extend(page.lines.iter().cloned());
+        match page.next_line() {
+            Some(next) => offset = next,
+            None => break,
+        }
+    }
+
+    assert_eq!(gathered, lines);
+}
+
+/// The size is a count of characters, as the line cap is, so a page of Japanese holds as many
+/// characters as a page of English. A count of bytes would fit a third as many lines.
+#[test]
+fn the_size_cap_counts_characters_of_a_multi_byte_page() {
+    let scratch = Scratch::new("read-size-cap-multibyte");
+    // 900 characters and a newline: 901 per line, so 110 fit in 100,000 and 111 do not.
+    let line: String = "あ".repeat(900);
+    let body: String = (0..200).map(|_| format!("{line}\n")).collect();
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let page = workspace.page("a.txt", 1, usize::MAX).expect("read");
+
+    assert_eq!(
+        page.lines.len(),
+        110,
+        "the size cap did not count characters"
+    );
+    assert_eq!(page.next_line(), Some(111));
+}
+
 /// Reading past the end is not an error, but it must not look like an empty file.
 #[test]
 fn an_offset_past_the_end_returns_nothing_and_says_the_length() {
@@ -4585,6 +4668,153 @@ fn a_search_says_when_its_include_selected_no_files() {
         "the file was read and the count must say so"
     );
     assert_eq!(found.searched, 1);
+}
+
+/// A search aimed at `directory` under `permissions`, for the tests that name a path other than the
+/// root.
+fn search_at(
+    workspace: &Workspace,
+    permissions: bravebot_core::permissions::Permissions,
+    directory: &str,
+    include: Option<&str>,
+) -> Result<bravebot_agent::workspace::Matches, WorkspaceError> {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_permissions(permissions);
+    let found = workspace.grep(
+        &mut policy,
+        std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+        &Labelled::trusted(directory.to_string()),
+        include.map(|g| Labelled::trusted(g.to_string())).as_ref(),
+        true,
+        1,
+    )?;
+    let proof = policy.authorise_content_release("test", "matches");
+    Ok(found.declassify(&proof))
+}
+
+/// SEARCH-11: `directory` may name one file. Aiming at the file's parent with an `include` for its
+/// name is the call this replaces, and it fails for a planner that tries the file first. The
+/// sibling and the nested file hold the needle too, so a walk of the parent, or of the whole tree,
+/// shows up as extra matches; the `include` selects nothing in the named file, so a search that
+/// still consulted it would find nothing.
+#[test]
+fn a_search_may_name_one_file_as_its_target() {
+    let scratch = Scratch::new("grep-one-file");
+    std::fs::create_dir_all(scratch.path.join("src/inner")).unwrap();
+    std::fs::write(scratch.path.join("src/a.rs"), "one needle\nnothing\n").unwrap();
+    std::fs::write(scratch.path.join("src/b.rs"), "another needle\n").unwrap();
+    std::fs::write(scratch.path.join("src/inner/c.rs"), "deep needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let found = search_at(&workspace, denying(&[]), "src/a.rs", Some("*.py")).expect("grep");
+
+    let hits: Vec<(&str, usize, &str)> = found
+        .matches
+        .iter()
+        .map(|m| (m.path.as_str(), m.line, m.text.as_str()))
+        .collect();
+    assert_eq!(hits, [("src/a.rs", 1, "one needle")]);
+    assert_eq!(found.considered, 1);
+    assert_eq!(found.searched, 1);
+    assert!(!found.withheld);
+    assert!(!found.unvisited);
+}
+
+/// SEARCH-5 for a file target: a file that holds the needle but has no match in it is a search that
+/// read something, and one that was never opened is not. A target with no needle must read as the
+/// first.
+#[test]
+fn a_search_of_a_named_file_without_the_pattern_reports_that_it_was_read() {
+    let scratch = Scratch::new("grep-one-file-absent");
+    std::fs::write(scratch.path.join("a.rs"), "nothing here\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let found = search_at(&workspace, denying(&[]), "a.rs", None).expect("grep");
+
+    assert!(found.matches.is_empty());
+    assert_eq!(found.considered, 1);
+    assert_eq!(found.searched, 1);
+}
+
+/// A rule covers a file whether the call named it or a walk reached it. A named target is read
+/// without a walk, so a check that lived only in the walk would let the call quote the line back.
+/// The result says a rule is the reason, as for a walk a rule emptied (SEARCH-5).
+#[test]
+fn a_search_of_a_named_file_a_deny_rule_covers_reads_nothing() {
+    let scratch = Scratch::new("grep-one-file-denied");
+    std::fs::write(scratch.path.join(".env"), "SECRET=needle\n").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let found = search_at(&workspace, denying(&["Read(./.env)"]), ".env", None).expect("grep");
+
+    assert!(found.matches.is_empty(), "a denied file was quoted back");
+    assert_eq!(found.considered, 0, "a denied file was opened");
+    assert!(
+        found.withheld,
+        "the rule emptied the search and the result does not say so"
+    );
+
+    let found = search_at(&workspace, denying(&["Read(./.env)"]), "notes.md", None).expect("grep");
+    assert_eq!(found.matches.len(), 1, "a rule on another file was applied");
+    assert!(!found.withheld);
+}
+
+/// A name that lands on a covered file is the file (PERM-7): a link inside the workspace to a
+/// denied file must not be a way to search it.
+#[cfg(unix)]
+#[test]
+fn a_search_of_a_link_to_a_denied_file_reads_nothing() {
+    let scratch = Scratch::new("grep-one-file-denied-link");
+    std::fs::write(scratch.path.join(".env"), "SECRET=needle\n").unwrap();
+    std::os::unix::fs::symlink(scratch.path.join(".env"), scratch.path.join("alias.txt")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let found = search_at(&workspace, denying(&["Read(./.env)"]), "alias.txt", None).expect("grep");
+
+    assert!(found.matches.is_empty(), "a denied file was quoted back");
+    assert_eq!(found.considered, 0);
+    assert!(found.withheld);
+}
+
+/// A file outside the workspace is refused as a directory outside it is, however it is named:
+/// absolute, climbing out, or through a link inside the tree.
+#[cfg(unix)]
+#[test]
+fn a_search_cannot_name_a_file_outside_the_workspace() {
+    let scratch = Scratch::new("grep-one-file-outside");
+    let outside = scratch
+        .path
+        .parent()
+        .unwrap()
+        .join("bravebot-grep-outside-target.txt");
+    std::fs::write(&outside, "outside needle\n").unwrap();
+    std::os::unix::fs::symlink(&outside, scratch.path.join("link.txt")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for named in [
+        outside.to_string_lossy().into_owned(),
+        "../bravebot-grep-outside-target.txt".to_string(),
+        "link.txt".to_string(),
+    ] {
+        let refused = search_at(&workspace, denying(&[]), &named, None);
+        assert!(
+            matches!(
+                refused,
+                Err(WorkspaceError::Escapes { .. } | WorkspaceError::Invalid { .. })
+            ),
+            "{named} was searched: {:?}",
+            refused.map(|found| found.matches.len())
+        );
+    }
+    let _ = std::fs::remove_file(&outside);
 }
 
 /// Brace groups are the spelling everybody writes. Matched literally they select nothing,
@@ -7902,7 +8132,8 @@ fn a_checkouts_candidate_is_read_with_its_paths_label_and_nothing_else_is_read()
     std::fs::write(made.root().join("src/new.rs"), "fn new() {}\n").unwrap();
     info.record_typed("src/new.rs");
 
-    let read = |id: &str, path: &str| workspace.read_checkout_file(&policy, id, path);
+    let read =
+        |id: &str, path: &str| workspace.read_checkout_file(&policy, id, path, &Default::default());
     assert_eq!(
         read("c1", "src/new.rs").expect("a candidate").label(),
         Label::trusted_private(),
@@ -7947,7 +8178,7 @@ fn a_checkouts_candidate_is_read_with_its_paths_label_and_nothing_else_is_read()
     info.record_typed("docs/denied.md");
     assert_eq!(
         workspace
-            .read_checkout_file(&denying_it, "c1", "docs/denied.md")
+            .read_checkout_file(&denying_it, "c1", "docs/denied.md", &Default::default())
             .unwrap_err(),
         CheckoutRead::Denied
     );
@@ -8230,6 +8461,98 @@ fn read_git_in_a_checkout_is_answered_without_reading_its_dot_git() {
     assert!(log.contains("first"), "{log}");
 }
 
+/// CHECKOUT-13. The status over a session's checkout lists the files a program wrote there, which
+/// no tool recorded, and the ones it deleted apart from the rest, without reading `<checkout>/.git`.
+#[test]
+fn a_checkouts_status_lists_what_changed_there_and_what_was_deleted() {
+    let (_scratch, state, workspace) = repository_with_a_state_directory(
+        "checkout-status-lists",
+        &[
+            ("README", "hello\n"),
+            ("gone.txt", "bye\n"),
+            ("same.txt", "s\n"),
+        ],
+    );
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    made.checkout().unwrap().mark_worked_in();
+    std::fs::write(made.root().join(".git"), "gitdir: /nowhere/at/all\n").unwrap();
+
+    let clean = workspace.checkout_status(&mut policy, "c1").expect("clean");
+    assert_eq!(
+        (clean.changed.len(), clean.removed.len(), clean.complete),
+        (0, 0, true),
+        "a fresh checkout listed something: {clean:?}"
+    );
+
+    std::fs::write(made.root().join("README"), "changed\n").unwrap();
+    std::fs::write(made.root().join("new.txt"), "x\n").unwrap();
+    std::fs::remove_file(made.root().join("gone.txt")).unwrap();
+    let listed = workspace
+        .checkout_status(&mut policy, "c1")
+        .expect("listed");
+    assert_eq!(listed.changed, ["README", "new.txt"]);
+    assert_eq!(listed.removed, ["gone.txt"]);
+    assert!(listed.complete, "{listed:?}");
+    assert!(
+        workspace.checkout_status(&mut policy, "c9").is_err(),
+        "a checkout the session keeps nothing for had a status"
+    );
+}
+
+/// CHECKOUT-13. No status is read in a checkout where one path in it is distrusted, since a status
+/// reads every file; a file a rule withholds is not listed and the listing says it is not whole;
+/// and a directory of new files git did not open says the same.
+#[test]
+fn a_checkouts_status_is_declined_where_a_path_is_distrusted_and_says_what_it_left_out() {
+    use bravebot_agent::git::Declined;
+    let (_scratch, state, workspace) = repository_with_a_state_directory(
+        "checkout-status-gaps",
+        &[("README", "hello\n"), ("secret.txt", "s\n")],
+    );
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    made.checkout().unwrap().mark_worked_in();
+
+    std::fs::write(made.root().join("README"), "changed\n").unwrap();
+    std::fs::write(made.root().join("secret.txt"), "changed\n").unwrap();
+    std::fs::create_dir_all(made.root().join("fresh")).unwrap();
+    std::fs::write(made.root().join("fresh/a.txt"), "a\n").unwrap();
+    let rule = format!("Read(/{}/secret.txt)", made.root().display());
+    let mut denying_sink = RecordingSink::new();
+    let root = made.root().to_string_lossy().into_owned();
+    let mut denying = checkout_policy(&workspace, &mut denying_sink, &[".", &root], &[&rule]);
+    let listed = workspace
+        .checkout_status(&mut denying, "c1")
+        .expect("listed");
+    assert_eq!(
+        listed.changed,
+        ["README", "fresh/a.txt"],
+        "a withheld file was listed, or a file in a directory of new files was not"
+    );
+    assert!(
+        !listed.complete,
+        "a listing that left files out said it was whole"
+    );
+
+    assert!(authority.publish(
+        &format!("{}/README", made.checkout().unwrap().key()),
+        Integrity::Untrusted
+    ));
+    assert_eq!(
+        workspace.checkout_status(&mut policy, "c1").unwrap_err(),
+        Declined::UntrustedTree,
+        "a status was read over a checkout with a distrusted file"
+    );
+}
+
 /// CHECKOUT-12. The checkout's `HEAD` and index are the entry's, not the common directory's: a
 /// commit made in the working directory after the checkout is not in the checkout's history or its
 /// status.
@@ -8402,6 +8725,42 @@ fn a_workspace_taking_the_records_checkouts_back_lists_them_with_their_candidate
         .checkout_for(&policy, &state.path, d1())
         .expect("a checkout after the resume");
     assert_eq!(third.checkout().unwrap().id(), "c3");
+}
+
+/// CHECKOUT-16. Where nothing is removed, the checkouts to name are the ones under the working
+/// directory's key that no record lists and this session does not keep. A session's own checkout
+/// is not among them whether or not a record lists it yet.
+///
+/// The failure this rejects is naming a checkout the session made and has not yet recorded, which
+/// would tell a person to delete a directory a delegate is working in.
+#[test]
+fn a_checkout_the_session_keeps_is_not_named_as_one_no_record_lists() {
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-unlisted-named", &[("README", "hello\n")]);
+    let beside = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    for _ in 0..3 {
+        workspace
+            .checkout_for(&policy, &state.path, d1())
+            .expect("a checkout");
+    }
+    let named = |one: &Workspace, listed: &'static str| -> Vec<String> {
+        one.unlisted_checkouts(&state.path, &|id| id == listed)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    };
+
+    assert_eq!(named(&workspace, "c1"), Vec::<String>::new());
+    assert_eq!(named(&beside, "c1"), ["c2", "c3"]);
+    assert!(
+        beside
+            .unlisted_checkouts(&state.path, &|_| false)
+            .iter()
+            .all(|(id, path)| path.ends_with(id) && path.join("README").exists()),
+        "naming one changed it"
+    );
 }
 
 /// CHECKOUT-16. A sweep run beside a session leaves the checkouts that session made and the ones

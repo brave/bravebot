@@ -506,9 +506,19 @@ impl Drop for Server {
         // Asked to stop, then killed if it did not. LSP-8: a server must not outlive the agent.
         let _ = self.request_shutdown();
         let deadline = Instant::now() + SHUTDOWN_GRACE;
+        let language = (
+            "language",
+            bravebot_diag::Field::word(self.language.as_str()),
+        );
         loop {
             match self.child.try_wait() {
-                Ok(Some(_)) => return,
+                Ok(Some(_)) => {
+                    bravebot_diag::info(
+                        "lsp.exit",
+                        &[language, ("how", bravebot_diag::Field::word("shutdown"))],
+                    );
+                    return;
+                }
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(20));
                 }
@@ -517,6 +527,10 @@ impl Drop for Server {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        bravebot_diag::info(
+            "lsp.exit",
+            &[language, ("how", bravebot_diag::Field::word("killed"))],
+        );
     }
 }
 
@@ -535,6 +549,35 @@ impl Server {
     ///
     /// LSP-6: a missing binary is reported as missing rather than as an empty answer.
     pub fn launch(
+        language: Language,
+        resolved: &Path,
+        root: &Path,
+        cache: &Path,
+        withheld: &[String],
+    ) -> LspResult<Self> {
+        let launched = Self::start(language, resolved, root, cache, withheld);
+        let language_word = ("language", bravebot_diag::Field::word(language.as_str()));
+        match &launched {
+            Ok(_) => bravebot_diag::info(
+                "lsp.launch",
+                &[language_word, ("outcome", bravebot_diag::Field::word("ok"))],
+            ),
+            Err(error) => {
+                let kind = match error {
+                    LspError::NoBinary { .. } => "no_binary",
+                    LspError::Start { .. } => "start",
+                    _ => "other",
+                };
+                bravebot_diag::error(
+                    "lsp.launch",
+                    &[language_word, ("kind", bravebot_diag::Field::word(kind))],
+                );
+            }
+        }
+        launched
+    }
+
+    fn start(
         language: Language,
         resolved: &Path,
         root: &Path,
@@ -1225,6 +1268,104 @@ mod tests {
 
     fn root() -> PathBuf {
         PathBuf::from("/workspace")
+    }
+
+    /// Serialises the tests that read the process-wide diagnostic log.
+    static DIAG_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Launches Rust's server from `program` with the diagnostic log at `level`, drops what came
+    /// of it, and returns what the log held and whether the launch worked.
+    fn logged_launch(level: bravebot_diag::Level, program: &Path) -> (String, bool) {
+        let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().expect("a scratch directory");
+        let dir = tmp.path().to_path_buf();
+        bravebot_diag::configure(level, Some(dir.join("logs")));
+        let launched = Server::launch(Language::Rust, program, &dir, &dir.join("cache"), &[]);
+        let worked = launched.is_ok();
+        drop(launched);
+        bravebot_diag::configure(bravebot_diag::Level::Error, None);
+        let log = std::fs::read_dir(dir.join("logs"))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+                    .collect()
+            })
+            .unwrap_or_default();
+        (log, worked)
+    }
+
+    /// A language server that answers `initialize` and, when `orderly`, `shutdown` and `exit`.
+    /// Reads a chunk at a time because the framing leaves no newline for `read` to stop at.
+    #[cfg(unix)]
+    fn fake_language_server(dir: &Path, orderly: bool) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let ends = if orderly {
+            r#"*'"method":"shutdown"'*) reply "$id" 'null' ;;
+    *'"method":"exit"'*) exit 0 ;;"#
+        } else {
+            ""
+        };
+        let script = format!(
+            r#"#!/bin/sh
+reply() {{
+  body="{{\"jsonrpc\":\"2.0\",\"id\":$1,\"result\":$2}}"
+  printf 'Content-Length: %d\r\n\r\n%s' "${{#body}}" "$body"
+}}
+while :; do
+  chunk=$(dd bs=65536 count=1 2>/dev/null)
+  [ -n "$chunk" ] || exit 0
+  id=$(printf '%s' "$chunk" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$chunk" in
+    *'"method":"initialize"'*) reply "$id" '{{"capabilities":{{}}}}' ;;
+    {ends}
+  esac
+done
+"#
+        );
+        let path = dir.join(if orderly { "orderly.sh" } else { "stubborn.sh" });
+        std::fs::write(&path, script).expect("write the script");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    /// A server that is not installed is the first thing asked about in a bug report, so the log
+    /// says which language and that the binary was missing, and not the path that was tried.
+    #[test]
+    fn a_missing_server_binary_is_written_to_the_diagnostic_log() {
+        let (log, worked) = logged_launch(
+            bravebot_diag::Level::Error,
+            Path::new("/nonexistent/secret-dir/rust-analyzer"),
+        );
+
+        assert!(!worked);
+        assert!(
+            log.contains("ERROR lsp.launch language=Rust kind=no_binary"),
+            "{log}"
+        );
+        assert!(!log.contains("secret-dir"), "{log}");
+    }
+
+    /// A server that started and one that was stopped are both facts a bug report wants: that it
+    /// came up, and whether it left when asked or had to be killed.
+    #[cfg(unix)]
+    #[test]
+    fn a_servers_launch_and_exit_are_written_to_the_diagnostic_log() {
+        let tmp = tempfile::tempdir().expect("a scratch directory");
+        for (orderly, how) in [(true, "shutdown"), (false, "killed")] {
+            let script = fake_language_server(tmp.path(), orderly);
+            let (log, worked) = logged_launch(bravebot_diag::Level::Info, &script);
+
+            assert!(worked, "the fake server did not start: {log}");
+            assert!(
+                log.contains("INFO lsp.launch language=Rust outcome=ok"),
+                "{log}"
+            );
+            assert!(
+                log.contains(&format!("INFO lsp.exit language=Rust how={how}")),
+                "orderly={orderly}: {log}"
+            );
+        }
     }
 
     /// LSP-5: nothing starts until a person says so, and a refusal is not a failure of the tool.
@@ -2405,6 +2546,111 @@ done
             },
         )
         .expect("the server answers");
+    }
+
+    /// A language server that answers a definition and then reads nothing more, so `shutdown` and
+    /// `exit` both go unanswered. It records its process id before anything else.
+    #[cfg(unix)]
+    const IGNORING_SHUTDOWN_SERVER: &str = r#"#!/bin/sh
+here=$(dirname "$0")
+echo $$ > "$here/pid"
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r _blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"rustAnalyzer/cachePriming","value":{"kind":"end"}}}'
+      ;;
+    *'"textDocument/definition"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[]}"
+      while :; do sleep 1; done
+      ;;
+  esac
+done
+"#;
+
+    #[cfg(unix)]
+    const IGNORES_SHUTDOWN: &str = "bravebot-lsp-ignores-shutdown";
+
+    #[cfg(unix)]
+    fn the_server_that_ignores_shutdown(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(IGNORES_SHUTDOWN).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn a_process_is_running(pid: u32) -> bool {
+        std::process::Command::new("sh")
+            .args(["-c", &format!("kill -0 {pid}")])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    /// LSP-8: a server that answers neither `shutdown` nor `exit` is gone once its set is dropped,
+    /// and dropping the set does not wait on it.
+    ///
+    /// Driven against a process that is still running when the set goes, because the clause is
+    /// about a process that outlives the agent. A watchdog ends the process after ten seconds so
+    /// that an implementation which waits on it fails here rather than hanging the run.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_that_ignores_shutdown_does_not_outlive_its_set() {
+        let (_launching, scratch, workspace, file) =
+            a_workspace_with_a_reporting_server(IGNORES_SHUTDOWN);
+        std::fs::write(scratch.join("server"), IGNORING_SHUTDOWN_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            workspace,
+            None,
+            the_server_that_ignores_shutdown,
+            false,
+            Vec::new,
+        );
+
+        a_definition_in(&mut servers, &file);
+        let pid: u32 = std::fs::read_to_string(scratch.join("pid"))
+            .expect("the server records its process id before it answers anything")
+            .trim()
+            .parse()
+            .expect("a process id");
+        assert!(
+            a_process_is_running(pid),
+            "the server was not running when its set was dropped"
+        );
+
+        let (finished, waiting) = std::sync::mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            if waiting
+                .recv_timeout(Duration::from_secs(10))
+                .is_err_and(|error| error == std::sync::mpsc::RecvTimeoutError::Timeout)
+            {
+                let _ = std::process::Command::new("sh")
+                    .args(["-c", &format!("kill -9 {pid}")])
+                    .status();
+            }
+        });
+        let started = Instant::now();
+        drop(servers);
+        let took = started.elapsed();
+        let _ = finished.send(());
+        watchdog.join().expect("the watchdog");
+
+        assert!(
+            took < Duration::from_secs(5),
+            "dropping the set waited {took:?} on a server that ignores shutdown"
+        );
+        assert!(
+            !a_process_is_running(pid),
+            "a server that ignored shutdown outlived the set that started it"
+        );
     }
 
     /// LSP-10: an incognito session keeps no index under `~/.bravebot`, and what it does instead

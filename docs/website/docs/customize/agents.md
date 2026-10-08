@@ -67,6 +67,7 @@ does not ask whether to trust the checkout, so it reads only the definitions in
 | `description` | yes | what the planner decides from, so say *when* to use it rather than what it does |
 | `kind` | yes | `reader`, `checker` or `worker` |
 | `model` | no | the model this delegate runs on (`haiku`, `sonnet`, `opus`, or an explicit model identifier); absent or `inherit` means the spawning turn's |
+| `effort` | no | how hard that model is asked to think (`low`, `medium`, `high`, `xhigh` or `max`); absent, empty or `inherit` means the spawning turn's level |
 | `tools` | no | fewer tools than the kind's; absent means the kind's own |
 | `skills` | no | the [skills](skills.md) this delegate is offered, out of the ones the turn found; absent means all of them, and an empty line none |
 | `mcpServers` | no | the [MCP servers](mcp-servers.md) a `worker` calls, by alias, out of the ones the turn may; absent means all of them unless `tools` is written, and an empty line none |
@@ -87,6 +88,21 @@ on reading thousands of lines of logs, while a refactoring worker can select a s
 model needs a sign-in you have not made, the delegate does not run and says so, rather than falling
 back to the turn's model, so an intended cost control cannot be silently bypassed. A delegate
 answered by a different model than the one named says so, so a misspelt name is not silent.
+
+**`effort` chooses how hard that model is asked to think.** It takes the same five words as
+[`/effort`](configuration.md#choosing-how-hard-to-think): `low`, `medium`, `high`, `xhigh`
+and `max`. A checker that greps logs can ask for `low` while a worker doing a refactor asks for
+`high`, whatever the session is set to. Where `effort` is omitted the delegate asks for the level
+the turn that spawned it runs at, so a level you chose with `/effort` reaches your delegates. The key
+reaches a delegate the planner spawns; running a definition yourself with `/agent` or `@` is a turn of
+your own and keeps the session's level, as it keeps the session's model choice. A word
+naming none of the five levels leaves the definition loading without one, and the turn says so:
+
+```
+~/.bravebot/agents/eager.md asks for effort highest, which is none of low, medium, high, xhigh, max, so its delegate keeps the effort of the turn that spawns it
+```
+
+A model that does not read a level has the field refused and the request made again without it, as it is for the level a session asks for. `inherit`, or no line at all, means the level of the turn that spawned the delegate.
 
 **`kind` picks what the delegate may do, and your file never describes it.** A `reader` reads,
 lists and searches; a `checker` also runs programs and asks a language server; a `worker` also
@@ -261,7 +277,7 @@ replaces yours, which is the same "most specific wins" the trust map uses for pa
 directory resolve by file name, so which is live is the same on every machine.
 
 **It wins about what the definition is for, and never about what it may do.** The project's file
-takes over the description, the body, the model, the skills, the rounds and the memory, the rounds
+takes over the description, the body, the model, the effort, the skills, the rounds and the memory, the rounds
 held to the ceiling of the kind it is loaded as. The kind is the narrower of the two, and the `tools` and `mcpServers`
 lists are met name by name, so a checkout you vouched for cannot turn a `reader` you wrote into a
 `worker`, and cannot hand back a tool or a server your own lines took away. A checkout is met the

@@ -639,20 +639,15 @@ def post(args, poster=None):
     filed_path = work / "filed.json"
     filed = read_json(filed_path) or {}
 
-    wanted = sorted({label for d in drafts for label in d["labels"]})
-    try:
-        missing = [label for label in wanted if label not in poster.existing_labels(args.repo)]
-    except RuntimeError as problem:
-        print(f"could not read the labels of {args.repo}: {problem}", file=sys.stderr)
-        return 2
-    if missing:
-        print(f"{args.repo} has no label {', '.join(missing)}. Nothing was posted; creating one is", file=sys.stderr)
-        print("a person's call:", file=sys.stderr)
-        for label in missing:
-            print(f"  gh label create {label} --repo {args.repo} --description ... --color ...", file=sys.stderr)
-        return 2
-    if args.assignee and not poster.assignable(args.repo, args.assignee):
-        print(f"{args.repo} would not take {args.assignee} as an assignee. Nothing was posted.", file=sys.stderr)
+    why = poster.helper.refusal(
+        args.repo,
+        {label for d in drafts for label in d["labels"]},
+        args.assignee,
+        have=poster.existing_labels,
+        can_assign=poster.assignable,
+    )
+    if why:
+        print("\n".join(why), file=sys.stderr)
         return 2
 
     posted, held, left = 0, 0, []

@@ -20,6 +20,7 @@ impl Run {
         match message {
             ToMain::Spent(spent) => self.retained = Some(spent),
             ToMain::PromptRecorded(_) => {}
+            ToMain::RequestBuilt(view) => session.set_last_request(*view),
             ToMain::Written(written) => session.set_written(written),
             ToMain::Phase(phase) => session.set_phase(phase),
             ToMain::Narration(text) => session.narrate(text),
@@ -30,6 +31,8 @@ impl Run {
             ToMain::Finished(activity) => session.finish_activity(activity),
             ToMain::CheckStarted(checking) => session.checking(checking),
             ToMain::CheckFinished => session.checked(),
+            ToMain::HookStarted(moment, program) => session.hook_running(moment, program),
+            ToMain::HookFinished => session.hook_over(),
             ToMain::Quarantined(shown) => session.show(shown),
             ToMain::Returned(returned) => session.returned(returned),
             ToMain::Landed(landing) => session.landed(landing),

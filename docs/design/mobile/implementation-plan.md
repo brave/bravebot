@@ -1,6 +1,6 @@
 # Mobile prototype implementation plan
 
-Status: the first Rust session-view block and the stdio TypeScript client's session lifecycle are implemented. Approval replies, the local client program and the remaining stage 1–2a evidence are outstanding, so stages 1–2a are incomplete. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
+Status: stages 1–2a are complete: the Rust session view and the stdio TypeScript client in `packages/agent-client`, tested against a real `bravebot-rpc`. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
 
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
@@ -55,13 +55,16 @@ Never cut authentication, scope checks, labels, complete approval details, exact
 
 The first Rust block is complete: negotiated fresh-session view, typed row/status updates,
 existing approval semantics, and real stdio tests. The TypeScript package now has the session
-lifecycle: capability refusal, framing and correlation fixtures, view application, trust, send,
-cancel and close, tested against a real `bravebot-rpc` (see
-[the implemented client](client-contract.md#implemented-typescript-client)). Approval replies, the
-local client program and the remaining evidence are outstanding, so stages 1–2a are incomplete. No
-native or listener work is included.
+lifecycle (capability refusal, framing and correlation fixtures, view application, trust, send,
+cancel and close) and approval replies for `confirm`, `run`, `fetch` and `ask`, tested against a
+real `bravebot-rpc` (see
+[the implemented client](client-contract.md#implemented-typescript-client)). The local client
+program, composed-workflow and save-failure evidence, and the record of the U1 investigation
+complete stages 1–2a. No native or listener work is included.
 
 ### 1. Define the common client and fixtures
+
+Status: complete.
 
 Create `packages/agent-client/` as a standalone TypeScript package with its own build and test commands, dependency-free wire types, and a thin typed interface. Keep the Node adapter separate. Review `ui/src/main/bridge.ts` for reusable framing/correlation logic, without importing Electron or migrating desktop callers in this stage. Put portable scenario fixtures in `packages/agent-client/test-fixtures/` and a Node test program in `packages/agent-client/scripts/`.
 
@@ -72,6 +75,8 @@ Map every initial operation to existing bridge behavior or a named addition. Imp
 Done when the interface and fixtures define the small baseline, its Rust view has a real stdio caller, and legacy callers retain their protocol. No socket framework or local Rust engine in the TypeScript client is required. Inventory existing tests so stage 2 adds binding/client evidence rather than duplicating agent tests.
 
 ### 2a. Validate the TypeScript client locally
+
+Status: complete on the local host. Run `make check-agent-client`.
 
 Drive the real `bravebot-rpc` process through the new adapter, with isolated home/project files and a controlled model backend. Reuse patterns from existing bridge process tests. Demonstrate a turn, explicit trust, supported approval/denial, cancellation, and truthful effects.
 
@@ -92,6 +97,8 @@ Build a minimal React Native screen and narrow platform native module reaching t
 Done when the actual native/Rust path consumes the same Rust view as stdio and demonstrates its supported denial/cancellation and labelled-display semantics, and runtime loss reports interruption/uncertainty without replaying effects. Record the tool list, platform, distribution method, and whether the backend was a stub. A stub proof does not establish real credential support or store eligibility. Show “This device.” Model inference may still use a remote service. Keep the exercise bounded; full on-device capability does not block the remote track.
 
 ### 3a. Add exact bridge action targets
+
+Status: implemented in the bridge and the TypeScript client (RPCVIEW-6). Question numbers come from a counter the session owns, `turn.cancel` accepts the turn it is for, `trust.reply` is taken once, and `capabilities.actionTargets` advertises all three. The TypeScript client names its turn when the runtime advertises it, and claims nothing for a runtime that does not. Stage 2b is deferred, so the Android bridge code it would have ported is not a constraint here.
 
 Use session-wide non-reused question IDs qualified by runtime/session, expected-turn cancellation, and a one-use awaiting-startup-trust state. A separate wire token is unnecessary unless an ambiguity remains. Reject repeated trust replies before acquiring the running state lock so they cannot overwrite trust or delay cancellation. Validate targets and apply decisions atomically with pending-state transitions. Update existing callers and capability negotiation explicitly; do not silently claim older clients have stronger protection.
 

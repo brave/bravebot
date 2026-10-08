@@ -1,4 +1,8 @@
-//! Workspace entries offered while a file reference is being typed.
+//! Naming a file with `@` in a prompt: what is offered while the name is typed, what Enter does
+//! with it, and which files a sent line names.
+//!
+//! One implementation for every front end. The terminal calls it directly, and the desktop's
+//! bridge calls it for the window, so the two cannot disagree about what a line names.
 //!
 //! # What an `@` reference means
 //!
@@ -9,14 +13,16 @@
 //!
 //! So this list exists to make that choice an informed one. It is drawn from the directory itself
 //! rather than from anything a model said, it is shown to the person typing, and the file it names
-//! becomes context only once they press Enter on the line. The keystroke is the grant, the same way
-//! it is for a prompt recalled out of history.
+//! becomes context only once they send the line. Sending is the grant, the same way it is for a
+//! prompt recalled out of history.
 //!
-//! Nothing here is a decision derived from untrusted content. Filenames are content, and this
-//! walks the directory to show them to a person, which is the release
-//! [`bravebot_core::policy::Policy::names_for_display`] already makes for the same reason: the user owns
-//! the workspace, and an interface that will not tell them which files are in it has protected
-//! them from nothing. No name reaches a model from here.
+//! Nothing here is a decision derived from untrusted content, and nothing here reads a file's
+//! contents. Filenames are content, and this walks the directory to show them to a person, which
+//! is the release `bravebot_core::policy::Policy::names_for_display` already makes for the same
+//! reason: the user owns the workspace, and an interface that will not tell them which files are in
+//! it has protected them from nothing. No name reaches a model from here. This crate links neither
+//! `bravebot-core` nor `bravebot-agent`, so none of it runs inside the driver.
+#![forbid(unsafe_code)]
 
 use std::path::Path;
 
@@ -24,7 +30,7 @@ use std::path::Path;
 ///
 /// A directory of ten thousand files would otherwise be a list nobody can read and a redraw for
 /// every keystroke. Narrowing is what finds a file; the cap only bounds the first look.
-const MAX_ENTRIES: usize = 40;
+pub const MAX_ENTRIES: usize = 40;
 
 /// One thing in the workspace that a reference could name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +92,7 @@ pub fn matching(root: &Path, typed: &str) -> Vec<Entry> {
             // Decided from the name alone, without asking what the entry is. A worktree's `.git`
             // is a regular file holding a pointer to the real one, and a `node_modules` a person
             // symlinked elsewhere is a symlink, so a type test would offer both of them back.
-            if bravebot_agent::workspace::is_ignored_directory(&name) {
+            if bravebot_filetype::is_ignored_directory(&name) {
                 return None;
             }
             let is_directory = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -121,13 +127,59 @@ pub fn matching(root: &Path, typed: &str) -> Vec<Entry> {
 ///
 /// `None` unless the last word begins with `@`, so a reference already finished by a space is left
 /// alone and an ordinary prompt offers nothing. That is what closes the list.
-pub fn typed_reference(line: &str) -> Option<&str> {
-    let last = line.split_whitespace().next_back()?;
+///
+/// The path comes back unescaped, so a `\ ` the person typed to keep a space in the name is a plain
+/// space here, the way [`matching`] and [`names_a_file`] expect it.
+pub fn typed_reference(line: &str) -> Option<String> {
+    let (start, end) = word_spans(line).pop()?;
     // Only while it is still being typed: a space after a reference means the user moved on.
-    if line.ends_with(char::is_whitespace) {
+    if end != line.len() {
         return None;
     }
-    last.strip_prefix('@')
+    line[start..end].strip_prefix('@').map(unescape)
+}
+
+/// Where each word of a line begins and ends.
+///
+/// Words end at whitespace, except that a space written after a backslash belongs to the word, so
+/// `@My\ Documents/a.md` is one. A backslash anywhere else is an ordinary character, which keeps a
+/// sentence containing one from naming a path.
+fn word_spans(line: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = None;
+    let mut chars = line.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        if c.is_whitespace() {
+            if let Some(begun) = start.take() {
+                spans.push((begun, at));
+            }
+            continue;
+        }
+        start.get_or_insert(at);
+        if c == '\\' && chars.next_if(|&(_, next)| next == ' ').is_some() {
+            continue;
+        }
+    }
+    if let Some(begun) = start {
+        spans.push((begun, line.len()));
+    }
+    spans
+}
+
+/// Where the last word of the line begins, which is where a completed reference is written.
+pub fn last_word_starts_at(line: &str) -> usize {
+    word_spans(line)
+        .pop()
+        .map_or(line.len(), |(start, _)| start)
+}
+
+/// A path as it is written in a line: each space behind a backslash, so it stays in the word.
+pub fn escape(path: &str) -> String {
+    path.replace(' ', "\\ ")
+}
+
+fn unescape(written: &str) -> String {
+    written.replace("\\ ", " ")
 }
 
 /// Whether what has been typed already names a file in the workspace.
@@ -161,11 +213,32 @@ pub fn names_a_file(root: &Path, typed: &str) -> bool {
 /// This is what becomes a turn's context. A trailing slash is dropped, since a directory is a place
 /// to type through rather than a file to read, and one named anyway is not a file to include.
 pub fn referenced(line: &str) -> Vec<String> {
-    line.split_whitespace()
-        .filter_map(|word| word.strip_prefix('@'))
+    word_spans(line)
+        .into_iter()
+        .filter_map(|(start, end)| line[start..end].strip_prefix('@'))
+        .map(unescape)
         .filter(|path| !path.is_empty() && !path.ends_with('/'))
-        .map(str::to_string)
         .collect()
+}
+
+/// Whether Enter on a half-typed reference completes it rather than sending the line.
+///
+/// `offered` is what [`matching`] returned for `typed`, and `cursor` is the row the person moved to,
+/// clamped to the list as it is drawn. A name the person finished typing is a finished sentence,
+/// whatever the list happens to be highlighting: `@test` names a file of its own while a `tests/`
+/// beside it sorts above. Walking the list with the arrows is a choice among the rows and still
+/// wins, which is why this asks about the untouched cursor.
+///
+/// Asked of the workspace through [`names_a_file`] rather than of `offered`, which is capped for
+/// display: forty directories sharing the prefix sort above the file and cut it from the list, and
+/// scanning the list would then complete a finished name away into a directory nobody chose.
+pub fn enter_completes(root: &Path, typed: &str, offered: &[Entry], cursor: usize) -> bool {
+    if cursor == 0 && names_a_file(root, typed) {
+        return false;
+    }
+    offered
+        .get(cursor.min(offered.len().saturating_sub(1)))
+        .is_some_and(|entry| typed != entry.path)
 }
 
 #[cfg(test)]
@@ -175,12 +248,16 @@ mod tests {
     /// A scratch workspace, removed with the test.
     struct Scratch {
         path: std::path::PathBuf,
+        _held: tempfile::TempDir,
     }
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            let path = crate::testutil::scratch_dir(&format!("bravebot-entries-{name}"));
-            let _ = std::fs::remove_dir_all(&path);
+            let held = tempfile::Builder::new()
+                .prefix(&format!("bravebot-mentions-{name}-"))
+                .tempdir()
+                .expect("scratch");
+            let path = held.path().to_path_buf();
             std::fs::create_dir_all(path.join("crates/tui")).expect("create");
             std::fs::create_dir_all(path.join("target")).expect("create");
             std::fs::create_dir_all(path.join(".git")).expect("create");
@@ -194,13 +271,7 @@ mod tests {
             // real one.
             std::fs::write(path.join("crates/tui/.git"), "gitdir: /elsewhere\n").expect("write");
             std::fs::write(path.join("crates/tui/lib.rs"), "").expect("write");
-            Self { path }
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
+            Self { path, _held: held }
         }
     }
 
@@ -282,8 +353,8 @@ mod tests {
     /// user moved on.
     #[test]
     fn what_counts_as_a_reference_being_typed() {
-        assert_eq!(typed_reference("look at @Car"), Some("Car"));
-        assert_eq!(typed_reference("@"), Some(""));
+        assert_eq!(typed_reference("look at @Car").as_deref(), Some("Car"));
+        assert_eq!(typed_reference("@").as_deref(), Some(""));
         assert_eq!(typed_reference("@Cargo.toml "), None, "finished by a space");
         assert_eq!(typed_reference("an ordinary prompt"), None);
         assert_eq!(typed_reference(""), None);
@@ -372,5 +443,90 @@ mod tests {
     #[test]
     fn a_bare_at_sign_names_nothing() {
         assert!(referenced("what does @ do").is_empty());
+    }
+
+    /// A backslash before a space keeps the space in the name, in what is being typed and in what
+    /// is sent, and only there: a backslash anywhere else ends nothing and starts nothing.
+    #[test]
+    fn a_backslash_before_a_space_continues_a_reference() {
+        assert_eq!(
+            typed_reference(r"read @My\ Documents/no").as_deref(),
+            Some("My Documents/no")
+        );
+        assert_eq!(
+            typed_reference(r"read @My\ ").as_deref(),
+            Some("My "),
+            "an escaped space at the end is still being typed"
+        );
+        assert_eq!(
+            typed_reference(r"read @My\ Documents/notes.md ").as_deref(),
+            None,
+            "an unescaped space finishes it"
+        );
+        assert_eq!(
+            referenced(r"compare @My\ Documents/a.md with @b.md"),
+            vec!["My Documents/a.md".to_string(), "b.md".to_string()]
+        );
+        assert!(referenced(r"@My\ Documents/").is_empty(), "a directory");
+        // Ordinary prose with a backslash names nothing.
+        assert!(referenced(r"a path like C:\dir\ and more").is_empty());
+        assert_eq!(referenced(r"see @a\b.md now"), vec![r"a\b.md".to_string()]);
+        assert_eq!(typed_reference(r"C:\ and so on"), None);
+    }
+
+    /// The escaped form of a path with a space reads back as the same path.
+    #[test]
+    fn an_escaped_path_reads_back_unchanged() {
+        for path in ["a b/c d.md", r"odd\ name.md", "plain.md", r"back\slash.md"] {
+            let line = format!("@{}", escape(path));
+            assert_eq!(referenced(&line), vec![path.to_string()], "{line}");
+            assert_eq!(typed_reference(&line).as_deref(), Some(path), "{line}");
+        }
+    }
+
+    /// A name with a space is offered, found as finished, and is the word a completion replaces.
+    #[test]
+    fn a_name_with_a_space_is_listed_and_finished() {
+        let scratch = Scratch::new("space");
+        std::fs::create_dir_all(scratch.path.join("My Documents")).expect("create");
+        std::fs::write(scratch.path.join("My Documents/notes.md"), "").expect("write");
+        assert_eq!(
+            paths(&matching(&scratch.path, "My Documents/")),
+            vec!["My Documents/notes.md"]
+        );
+        assert!(names_a_file(&scratch.path, "My Documents/notes.md"));
+        assert_eq!(last_word_starts_at(r"read @My\ Doc"), 5);
+    }
+
+    /// Enter completes a half-typed name, sends a finished one even where the list highlights a
+    /// directory above it, and still completes to a row the person moved the cursor to.
+    #[test]
+    fn what_enter_does_with_a_half_typed_or_finished_name() {
+        let scratch = Scratch::new("enter");
+        let half = matching(&scratch.path, "Make");
+        assert!(
+            enter_completes(&scratch.path, "Make", &half, 0),
+            "half typed"
+        );
+
+        std::fs::create_dir_all(scratch.path.join("Makefiles")).expect("create");
+        let finished = matching(&scratch.path, "Makefile");
+        assert_eq!(paths(&finished), vec!["Makefiles/", "Makefile"]);
+        assert!(
+            !enter_completes(&scratch.path, "Makefile", &finished, 0),
+            "a finished name was completed away into the directory above it"
+        );
+        assert!(
+            !enter_completes(&scratch.path, "Makefile", &finished, 1),
+            "the row the cursor is on is what was typed"
+        );
+        assert!(
+            enter_completes(&scratch.path, "Makefile", &[finished[0].clone()], 5),
+            "a cursor past the end of the list chooses its last row"
+        );
+        assert!(
+            !enter_completes(&scratch.path, "zz", &[], 0),
+            "nothing offered"
+        );
     }
 }

@@ -333,6 +333,43 @@ fn a_stored_value_is_kept_and_never_shown() {
     assert!(said.contains("no stored value"), "{said}");
 }
 
+/// SERVERS-15: the settings page has no field for a server's bounds, so changing the connector it
+/// edits leaves the ones the person declared where they were.
+#[test]
+fn editing_a_connector_keeps_the_bounds_its_declaration_gave() {
+    let scratch = Scratch::new("bridge-connectors-timeouts");
+    std::fs::write(
+        scratch.home().join(".bravebot/mcp.json"),
+        r#"{"servers": {"calc": {"transport": "http", "url": "http://localhost/mcp",
+            "startup_timeout_secs": 7, "tool_timeout_secs": 300}}}"#,
+    )
+    .expect("a declaration");
+    let mut front = FrontEnd::start(&scratch.home());
+
+    let form = remote("calc", "http://localhost/moved");
+    let shown = front.call("connectors.preview", form.clone());
+    assert_eq!(shown["exists"], true);
+    front.call(
+        "connectors.connect",
+        with(
+            with(form, "fingerprint", shown["fingerprint"].clone()),
+            "replace",
+            json!(true),
+        ),
+    );
+
+    let declared = scratch.file("mcp.json");
+    assert!(declared.contains("http://localhost/moved"), "{declared}");
+    assert!(
+        declared.contains("\"startup_timeout_secs\": 7"),
+        "{declared}"
+    );
+    assert!(
+        declared.contains("\"tool_timeout_secs\": 300"),
+        "{declared}"
+    );
+}
+
 /// A name or a form the declarations cannot hold is refused before anything is written.
 #[test]
 fn a_form_the_declarations_cannot_hold_is_refused() {

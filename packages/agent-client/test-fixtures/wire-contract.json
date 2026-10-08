@@ -1,4 +1,10 @@
 {
+  "actionTargets": {
+    "cancel": "expected_turn",
+    "questionIds": "session",
+    "trust": "once",
+    "version": 1
+  },
   "capability": {
     "approvals": [
       "confirm",

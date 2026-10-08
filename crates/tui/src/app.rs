@@ -95,6 +95,12 @@ const ADVISOR_COMMAND: &str = "/advisor";
 /// The word after `/advisor` that drops the session's own choice.
 const ADVISOR_OFF: &str = "off";
 
+/// The line that lists the output styles, picks one by name, or clears the pick.
+const STYLE_COMMAND: &str = "/style";
+
+/// The word after `/style` that clears the session's pick.
+const STYLE_OFF: &str = "off";
+
 /// The line that opens the panel of preferences about the interface itself.
 const CONFIG_COMMAND: &str = "/config";
 
@@ -111,6 +117,9 @@ const CD_COMMAND: &str = "/cd";
 /// directory, so the next session begun there is asked (TRUST-24).
 const FORGET_TRUST_COMMAND: &str = "/forget-trust";
 
+/// The line that lists, adds and removes the reach remembered for commands (SANDBOX-23).
+const REACH_COMMAND: &str = "/reach";
+
 /// The line that reports what this session is and what it may touch.
 const STATUS_COMMAND: &str = "/status";
 
@@ -121,6 +130,9 @@ const STATUS_COMMAND: &str = "/status";
 /// on the fiftieth turn, and the breakdown is asked for when one figure looks wrong rather than
 /// every time somebody checks which directory they are in.
 const COST_COMMAND: &str = "/cost";
+
+/// The line that opens a read-only view of the last request built for the planner.
+const REQUEST_COMMAND: &str = "/request";
 
 /// The line that summarises the conversation so far, in place of sending all of it.
 const COMPACT_COMMAND: &str = "/compact";
@@ -143,6 +155,12 @@ const PR_COMMAND: &str = "/pr";
 
 /// The line that asks a question beside the work, taking the question as its argument.
 const BTW_COMMAND: &str = "/btw";
+
+/// The line that recaps the session so far, taking no argument.
+const RECAP_COMMAND: &str = "/recap";
+
+/// What the aside row shows as the question a recap asked.
+const RECAP_LABEL: &str = "/recap";
 
 /// The line that repeats a prompt, taking the prompt and any interval as its argument.
 const LOOP_COMMAND: &str = "/loop";
@@ -218,6 +236,12 @@ const MEMORY_COMMAND: &str = "/memory";
 /// project` stays a prompt (CMD-2). See [`crate::init_command`] and CMD-13.
 const INIT_COMMAND: &str = "/init";
 
+/// The line that sets plan mode, and with a task starts a turn on it.
+///
+/// The same endorsement as the key that cycles to plan mode (MODE-12): it only narrows what is
+/// permitted. There is no word for bypassing, which MODE-5 leaves to the command line.
+const PLAN_COMMAND: &str = "/plan";
+
 /// One command, and what it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Command {
@@ -259,7 +283,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 34] {
+pub fn commands() -> [Command; 39] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -322,6 +346,12 @@ pub fn commands() -> [Command; 34] {
             mid_turn: MidTurn::Changes,
         },
         Command {
+            name: STYLE_COMMAND,
+            argument: "[name | off]",
+            description: t!(command_style),
+            mid_turn: MidTurn::Changes,
+        },
+        Command {
             name: COMPACT_COMMAND,
             argument: "[focus]",
             description: t!(command_compact),
@@ -331,6 +361,12 @@ pub fn commands() -> [Command; 34] {
             name: BTW_COMMAND,
             argument: "<question>",
             description: t!(command_btw),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: RECAP_COMMAND,
+            argument: "",
+            description: t!(command_recap),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -356,6 +392,12 @@ pub fn commands() -> [Command; 34] {
             argument: "",
             description: t!(command_forget_trust),
             mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: REACH_COMMAND,
+            argument: "[<where> -- <command>]",
+            description: t!(command_reach),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: LOOP_COMMAND,
@@ -412,6 +454,12 @@ pub fn commands() -> [Command; 34] {
             mid_turn: MidTurn::Waits,
         },
         Command {
+            name: PLAN_COMMAND,
+            argument: "[task]",
+            description: t!(command_plan),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
             name: MANIFEST_COMMAND,
             argument: "<task>",
             description: t!(command_manifest),
@@ -445,6 +493,12 @@ pub fn commands() -> [Command; 34] {
             name: COPY_COMMAND,
             argument: "[n]",
             description: t!(command_copy),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: REQUEST_COMMAND,
+            argument: "",
+            description: t!(command_request),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -561,7 +615,7 @@ fn runs_while_working(line: &str) -> bool {
 /// `/loop 5m check the deploy` would find no loop to stop, and the loop would start after it. And a
 /// command that changes something waits behind any line at all, so it lands where it was typed:
 /// `/rename` ahead of a waiting `/clear` would name the session being left.
-fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
+pub(crate) fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
     let changes = row_typed(line).is_some_and(|command| {
         matches!(command.mid_turn, MidTurn::Changes | MidTurn::RunsWhenNamed)
     });
@@ -605,6 +659,8 @@ pub enum Action {
     /// Say which model the planner may consult, take one by name, or drop the choice. Empty says.
     /// Needs the configuration to resolve the name against, which the loop owns.
     Advisor(String),
+    /// Say which output style is in force, take one by name, or clear the pick. Empty says.
+    Style(String),
     /// Ask how the box should edit. Needs the terminal, so the loop runs it.
     ChooseEditing,
     /// Open another directory. Needs the workspace and the trust map, which the loop owns.
@@ -629,6 +685,8 @@ pub enum Action {
         Vec<crate::state::AttachedImage>,
         Vec<crate::state::Attached>,
     ),
+    /// Recap the session so far, over a copy of the conversation, in the way an aside is answered.
+    Recap,
     /// Plan this task in full and then walk it. Needs the workspace, the trust map and the
     /// network, which the loop owns, and gives the conversation nothing back.
     ///
@@ -663,6 +721,9 @@ pub enum Action {
     Link(bravebot_session::sessions::Link, String),
     /// Report what this session is. Needs the workspace and the trust map, which the loop owns.
     Status,
+    /// List, add or remove the reach remembered for commands. Carries the argument unparsed, since
+    /// what it says back goes in the transcript, and needs the session's id and working directory.
+    Reach(String),
     /// Withdraw the remembered answer about the working directory. Needs the workspace, which the
     /// loop owns, and leaves this session's map as it is.
     ForgetTrust,
@@ -944,6 +1005,7 @@ fn status_report(
         checkouts: &checkouts,
         model: session.model(),
         agent: session.standing_definition(),
+        agent_by_setting: session.standing_is_by_setting(),
         effort: session.effort(),
         model_reads_effort: session.model_reads_effort(),
         served_model: session.served_model(),
@@ -958,6 +1020,7 @@ fn status_report(
         auto_vetting: session.auto_vetting(),
         turns: session.turns,
         tokens: session.tokens,
+        tokens_in_flight: session.running_tokens(),
         timing: session.timing_total(),
         cached: session.cached(),
         trust: rules.map_or(&empty_trust, |(trust, _)| trust),
@@ -1037,6 +1100,9 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         }
         Action::Advisor(word) => {
             session.answer_while_working(|session| set_advisor(session, beside.config, &word));
+        }
+        Action::Style(word) => {
+            session.answer_while_working(|session| set_style(session, &word));
         }
         Action::CopyReply(text) => session.answer_while_working(|session| {
             copy_reply(session, &text, crate::clipboard::copy);
@@ -1257,7 +1323,11 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             session.toggle_scroller_help();
             Action::Redraw
         }
-        KeyCode::Char('v') if !ctrl && session.status != Status::Working => Action::Show,
+        KeyCode::Char('v')
+            if !ctrl && session.status != Status::Working && !session.viewing_request() =>
+        {
+            Action::Show
+        }
 
         _ => Action::None,
     }
@@ -1731,7 +1801,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 enum Carries {
     /// Everything a prompt carries, because what answers the line is a turn.
     ///
-    /// `/loop` and `/agent`. A tick is an ordinary turn, so its first one carries the pictures and
+    /// `/loop`, `/agent` and `/plan`. A tick is an ordinary turn, so its first one carries the pictures and
     /// the files the person named exactly as the prompt they typed them into would have, and an
     /// addressed run is a turn of the session's own.
     Everything,
@@ -1750,7 +1820,7 @@ enum Carries {
 
 /// What the line is, read off the line: both callers have one and neither knows any more than that.
 fn carries(line: &str) -> Carries {
-    if [LOOP_COMMAND, AGENT_COMMAND]
+    if [LOOP_COMMAND, AGENT_COMMAND, PLAN_COMMAND]
         .iter()
         .any(|command| argument_to(line, command).is_some())
     {
@@ -1830,6 +1900,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(word) = argument_to(line, ADVISOR_COMMAND) {
         return Action::Advisor(word.to_string());
     }
+    if let Some(word) = argument_to(line, STYLE_COMMAND) {
+        return Action::Style(word.to_string());
+    }
     if line.trim() == CONFIG_COMMAND {
         return Action::ChooseEditing;
     }
@@ -1839,8 +1912,15 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if line.trim() == FORGET_TRUST_COMMAND {
         return Action::ForgetTrust;
     }
+    if let Some(argument) = argument_to(line, REACH_COMMAND) {
+        return Action::Reach(argument.to_string());
+    }
     if line.trim() == COST_COMMAND {
         session.report_spend();
+        return Action::Redraw;
+    }
+    if line.trim() == REQUEST_COMMAND {
+        session.show_request();
         return Action::Redraw;
     }
     // What the summary must keep is typed by the person and goes to the summariser as it was
@@ -1852,6 +1932,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // conversation and the copy is thrown away, so nothing about it joins the exchange.
     if let Some(question) = argument_to(line, BTW_COMMAND) {
         return Action::Aside(question.to_string(), pasted, attached);
+    }
+    // Nothing the person types reaches the question: it is the driver's own sentence, so the line
+    // is the command and the argument, if any, is not read.
+    if line.trim() == RECAP_COMMAND {
+        return Action::Recap;
     }
     if line.trim() == CLEAR_COMMAND {
         return Action::Clear;
@@ -1919,6 +2004,16 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // anything back from it.
     if let Some(task) = argument_to(line, MANIFEST_COMMAND) {
         return Action::Manifest(task.to_string(), pasted, attached);
+    }
+    // The task is the prompt, as it is for `/agent`; the remainder of the line is sent and the typed
+    // line is not (CMD-4). The mode is set before the turn begins, so the turn reads plan mode
+    // (MODE-8).
+    if let Some(task) = argument_to(line, PLAN_COMMAND) {
+        session.enter_plan_mode();
+        if task.is_empty() {
+            return Action::Redraw;
+        }
+        return Action::Submit(session.start_planned(task, pasted, attached));
     }
     // A turn the driver writes the prompt of. Nothing the person typed after the word reaches it:
     // the word takes no argument, so a line with one was never this command.
@@ -2112,44 +2207,57 @@ impl Unusable {
     }
 }
 
-/// What a session or a run is to work under, once the name typed on the command line and the name
-/// its record carries have been weighed.
+/// What a session or a run is to work under, once the name typed on the command line, the name
+/// its record carries and the name the person's settings carry have been weighed.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Settled<T> {
-    /// Neither source named a definition.
+    /// No source named a definition.
     Nothing,
     /// The session works under `name`, which `work` accepted as `found`, and its record says so.
-    Under { name: String, found: T },
+    /// `by_setting` is true where the `agent` setting is what named it.
+    Under {
+        name: String,
+        found: T,
+        by_setting: bool,
+    },
     /// The record's definition no longer exists. The session goes on without it, says so, and
     /// stops recording the name.
     Gone { name: String, why: String },
+    /// The `agent` setting names a definition that does not exist. The session goes on without
+    /// one, says so, and records nothing.
+    SettingGone { name: String, why: String },
 }
 
 /// Decide which definition a session or run works under, the one policy every front end shares
-/// (ADDRESS-3).
+/// (ADDRESS-3, ADDRESS-13).
 ///
-/// A name typed on this command line wins and ends the session when `work` finds nothing for it. A
-/// recorded name is the person's own earlier `--agent`, so one that matches nothing now is
-/// reported as [`Settled::Gone`] for the caller to say in its own way, and one whose model is
-/// refused or needs a sign-in ends the session too, because going on would substitute the
-/// planner's model for the one the definition asked for (ADDRESS-11, CLI-9). `work` is given the
-/// name to try and is called at most once.
+/// A name typed on this command line wins and ends the session when `work` finds nothing for it.
+/// A recorded name is next. It is the person's own earlier `--agent`, so one that matches nothing
+/// now is reported as [`Settled::Gone`] for the caller to say in its own way, and one whose model
+/// is refused or needs a sign-in ends the session too, because going on would substitute the
+/// planner's model for the one the definition asked for (ADDRESS-11, CLI-9). The `agent` setting
+/// is last and is a default, so one that matches nothing is [`Settled::SettingGone`] and does not
+/// end a session that never asked for it, while one whose model is refused ends it for the reason
+/// a recorded name does. `work` is given the name to try and is called at most once.
 pub fn settle_definition<T>(
     typed: Option<&str>,
     recorded: Option<&str>,
+    configured: Option<&str>,
     work: impl FnOnce(&str) -> Result<T, Unusable>,
 ) -> Result<Settled<T>, String> {
-    match (typed, recorded) {
-        (Some(name), _) => work(name)
+    match (typed, recorded, configured) {
+        (Some(name), _, _) => work(name)
             .map(|found| Settled::Under {
                 name: name.to_string(),
                 found,
+                by_setting: false,
             })
             .map_err(Unusable::into_message),
-        (None, Some(name)) => match work(name) {
+        (None, Some(name), _) => match work(name) {
             Ok(found) => Ok(Settled::Under {
                 name: name.to_string(),
                 found,
+                by_setting: false,
             }),
             Err(Unusable::Missing(why)) => Ok(Settled::Gone {
                 name: name.to_string(),
@@ -2157,7 +2265,19 @@ pub fn settle_definition<T>(
             }),
             Err(refused) => Err(refused.into_message()),
         },
-        (None, None) => Ok(Settled::Nothing),
+        (None, None, Some(name)) => match work(name) {
+            Ok(found) => Ok(Settled::Under {
+                name: name.to_string(),
+                found,
+                by_setting: true,
+            }),
+            Err(Unusable::Missing(why)) => Ok(Settled::SettingGone {
+                name: name.to_string(),
+                why,
+            }),
+            Err(refused) => Err(refused.into_message()),
+        },
+        (None, None, None) => Ok(Settled::Nothing),
     }
 }
 
@@ -2651,6 +2771,13 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         && session.queue_command()
     {
         return queued(session, key);
+    }
+
+    // After the arms that recognise a whole command, as at rest: Enter on a half-typed word takes
+    // the highlighted row rather than queueing "/mod" as a prompt.
+    if key.code == KeyCode::Enter && session.completion_would_change_the_line() {
+        session.accept_completion();
+        return Action::Redraw;
     }
 
     // After the arm that starts a line, so Shift-Enter still writes a paragraph, and before the
@@ -3814,6 +3941,7 @@ fn event_loop(
         &mut stored,
         named.as_deref(),
         recorded.as_deref(),
+        settings.agent(),
     ) {
         return Ok(Ended::Refused(refused));
     }
@@ -4036,6 +4164,10 @@ fn event_loop(
                 set_advisor(&mut session, config, &word);
                 needs_draw = true;
             }
+            Action::Style(word) => {
+                set_style(&mut session, &word);
+                needs_draw = true;
+            }
             Action::ChooseEditing => {
                 choose_editing(terminal, &mut session);
                 needs_draw = true;
@@ -4180,6 +4312,24 @@ fn event_loop(
                 ));
                 needs_draw = true;
             }
+            Action::Reach(argument) => {
+                let home = bravebot_agent::home::directory();
+                let profile = bravebot_agent::home::profile();
+                session.note(match home.as_deref() {
+                    Some(home) => bravebot_agent::reach::command(
+                        &bravebot_agent::reach::Typed {
+                            home,
+                            profile: profile.as_deref(),
+                            session: stored.id(),
+                            directory: workspace.root(),
+                            today: &bravebot_agent::reach::today(),
+                        },
+                        &argument,
+                    ),
+                    None => t!(reach_refused_no_home).to_string(),
+                });
+                needs_draw = true;
+            }
             Action::ListCheckouts => {
                 let mut branches = std::collections::BTreeMap::new();
                 session.report_checkouts(&workspace.session_checkouts(), |checkout| {
@@ -4190,6 +4340,9 @@ fn event_loop(
                         })
                         .pushed(&checkout.id)
                 });
+                session.report_unlisted_checkouts(&bravebot_session::sessions::unlisted_checkouts(
+                    &workspace,
+                ));
                 needs_draw = true;
             }
             Action::ListMemories => {
@@ -4308,8 +4461,13 @@ fn event_loop(
                 stored.append_audit(session.turns, &events);
                 needs_draw = true;
             }
-            Action::Aside(question, pasted, attached) => {
-                if question.is_empty() {
+            action @ (Action::Aside(..) | Action::Recap) => {
+                let recap = action == Action::Recap;
+                let (question, pasted, attached) = match action {
+                    Action::Aside(question, pasted, attached) => (question, pasted, attached),
+                    _ => (String::new(), Vec::new(), Vec::new()),
+                };
+                if question.is_empty() && !recap {
                     session.note(t!(btw_needs_a_question));
                 } else {
                     // The snapshot holds the spend and the timing as they were before the turn,
@@ -4323,6 +4481,7 @@ fn event_loop(
                         &conversation,
                         &mut answers.trust,
                         &question,
+                        recap,
                         &pasted,
                         &attached,
                         &workspace,
@@ -5533,6 +5692,40 @@ fn set_advisor(session: &mut Session, config: &Config, word: &str) {
     }
 }
 
+/// Say which output style is in force, take one by name, or clear the pick.
+///
+/// Only the styles this build ships are offered, so a name is looked up and never read from the
+/// line into the prompt. The pick lasts for the session and is not recorded.
+fn set_style(session: &mut Session, word: &str) {
+    let word = word.trim();
+    let styles = bravebot_agent::styles::BUILT_IN
+        .iter()
+        .map(|style| style.name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if word.is_empty() {
+        let note = match session.style() {
+            Some(style) => t!(session_style_in_force, style = style.name, styles = styles),
+            None => t!(session_style_none, styles = styles).to_string(),
+        };
+        session.note(note);
+    } else if word == STYLE_OFF {
+        session.choose_style(None);
+        session.note(t!(session_style_cleared));
+    } else if let Some(style) = bravebot_agent::styles::named(word) {
+        session.choose_style(Some(style));
+        // `--system-prompt` was given for this run and has the opening, so the pick is held and
+        // says it does not show.
+        if session.system_prompts().replacing.is_some() {
+            session.note(t!(session_style_set_but_replaced, style = style.name));
+        } else {
+            session.note(t!(session_style_set, style = style.name));
+        }
+    } else {
+        session.note(t!(session_style_unknown, style = word, styles = styles));
+    }
+}
+
 /// What the session says about the level now in force.
 fn said_of(effort: Option<bravebot_aichat::protocol::Effort>) -> String {
     match effort {
@@ -6187,6 +6380,9 @@ fn handle_after_clear(
 /// Work the session under the definition [`settle_definition`] settles on, writing the name into
 /// its record, or say why it cannot start.
 ///
+/// The `agent` setting is the last source (ADDRESS-13). A name it gives that matches nothing is
+/// said in the transcript and the session goes on without one.
+///
 /// A name typed on this command line that matches nothing ends the session before it begins. A
 /// recorded name that matches nothing is said in the transcript, with the definition named and
 /// that the narrowing is gone, and the session goes on without it and without recording it: the
@@ -6202,12 +6398,25 @@ fn settle_under(
     stored: &mut bravebot_session::sessions::Handle,
     typed: Option<&str>,
     recorded: Option<&str>,
+    configured: Option<&str>,
 ) -> Result<(), String> {
-    match settle_definition(typed, recorded, |name| {
+    match settle_definition(typed, recorded, configured, |name| {
         work_under(session, config, workspace, home, trust, permissions, name)
     })? {
         Settled::Nothing => {}
-        Settled::Under { name, .. } => stored.set_agent(Some(name)),
+        Settled::Under {
+            name, by_setting, ..
+        } => {
+            if by_setting {
+                session.note(t!(session_working_under_by_setting));
+                session.standing_chosen_by_setting();
+            }
+            stored.set_agent(Some(name));
+        }
+        Settled::SettingGone { name, why } => {
+            session.note(t!(session_agent_setting_gone, definition = name.as_str()));
+            session.note(why);
+        }
         Settled::Gone { name, why } => {
             session.note(t!(
                 session_recorded_definition_gone,
@@ -6729,6 +6938,7 @@ fn aside_animated(
     conversation: &Conversation,
     trust: &mut TrustStore,
     question: &str,
+    recap: bool,
     pasted: &[crate::state::AttachedImage],
     attached: &[crate::state::Attached],
     workspace: &Workspace,
@@ -6750,17 +6960,21 @@ fn aside_animated(
     // The pictures go with the question, in the order the markers in it number them, the way they go
     // with a prompt: somebody asking about a screenshot beside the work is asking about the thing
     // they pasted, and pasting.md PASTE-2 is the whole of why it may be looked at.
-    let asking = bravebot_agent::aside::Question::about(
-        conversation,
-        question,
-        pasted
-            .iter()
-            .map(|image| PastedImage {
-                media_type: image.media_type,
-                bytes: image.bytes.clone(),
-            })
-            .collect(),
-    );
+    let asking = if recap {
+        bravebot_agent::aside::Question::recap(conversation)
+    } else {
+        bravebot_agent::aside::Question::about(
+            conversation,
+            question,
+            pasted
+                .iter()
+                .map(|image| PastedImage {
+                    media_type: image.media_type,
+                    bytes: image.bytes.clone(),
+                })
+                .collect(),
+        )
+    };
     // The files dropped onto the line, as paths to read rather than as bytes: the read itself is the
     // worker's, so that it lands in the same trail as the request it travels in. Only what is carried
     // as bytes reaches here, since `crate::state::without_text_files` settled the rest to their names
@@ -6775,7 +6989,11 @@ fn aside_animated(
             crate::dropped::Kind::Text => None,
         })
         .collect();
-    let asked = question.to_string();
+    let asked = if recap {
+        RECAP_LABEL.to_string()
+    } else {
+        question.to_string()
+    };
 
     session.begin_aside();
 
@@ -7008,7 +7226,8 @@ fn manifest_animated(
         .with_attribution(attribution.clone())
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
-        .with_confined_runs(true);
+        .with_confined_runs(true)
+        .with_sandbox_mode(bravebot_config::sandbox::in_force().mode);
     // In the order the markers in the task number them, for the reason a turn's are: a planner
     // reading "[Image #2]" has to be able to count to the picture that answers it.
     for image in pasted {
@@ -7662,6 +7881,7 @@ fn run_turn_animated(
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
+        .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
         // Whether a check that finds nothing answers in the person's place. Read off the session
         // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
         // began with.
@@ -7683,8 +7903,12 @@ fn run_turn_animated(
     for file in files_named_in(prompt, wrote) {
         task = task.with_file(file);
     }
+    if session.take_init_prompt() || wrote == Wrote::TheDriver {
+        task = task.written_by_the_driver();
+    }
     task = with_submitted_attachments(task, session);
     task = with_session_advisor(task, session);
+    task = with_session_style(task, session);
     // The worker shares file decisions so errors cannot return the pre-write map.
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
@@ -8026,6 +8250,9 @@ fn run_turn_animated(
                 crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
                 crate::remote_confirm::ToMain::Spent(spent) => session.progressed(spent),
                 crate::remote_confirm::ToMain::PromptRecorded(at) => session.prompt_recorded(at),
+                crate::remote_confirm::ToMain::RequestBuilt(view) => {
+                    session.set_last_request(*view)
+                }
                 crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
                 crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
                 crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
@@ -8042,6 +8269,10 @@ fn run_turn_animated(
                 crate::remote_confirm::ToMain::Job(event) => session.job(event),
                 crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
                 crate::remote_confirm::ToMain::CheckFinished => session.checked(),
+                crate::remote_confirm::ToMain::HookStarted(moment, program) => {
+                    session.hook_running(moment, program)
+                }
+                crate::remote_confirm::ToMain::HookFinished => session.hook_over(),
                 crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
                 crate::remote_confirm::ToMain::Printed(output) => session.command_printed(output),
                 crate::remote_confirm::ToMain::Returned(returned) => session.returned(returned),
@@ -8208,6 +8439,11 @@ fn finish_turn(
     }
 }
 
+/// The output style `/style` chose, carried on the turn so it opens the system prompt (CLI-19).
+fn with_session_style(task: Task, session: &Session) -> Task {
+    task.with_style(session.style())
+}
+
 /// The model `/advisor` named, carried on the turn so the planner is offered it (ADVISOR-9).
 ///
 /// `None` where the session named none, which leaves the turn to the `advisorModel` setting.
@@ -8297,6 +8533,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         ToMain::Move(_) => Reply::Move(Decision::Reject),
         ToMain::Ask(_) => Reply::Ask(Vec::new()),
         ToMain::PromptRecorded(_)
+        | ToMain::RequestBuilt(_)
         | ToMain::Todos(_)
         | ToMain::Written(_)
         | ToMain::Spent(_)
@@ -8311,6 +8548,8 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         | ToMain::Job(_)
         | ToMain::CheckStarted(_)
         | ToMain::CheckFinished
+        | ToMain::HookStarted(..)
+        | ToMain::HookFinished
         | ToMain::Quarantined(_)
         | ToMain::Printed(_)
         | ToMain::Returned(_)
@@ -8468,7 +8707,7 @@ fn will_look_again(session: &Session, wrote: Wrote) -> bool {
 /// endorsement nobody gave.
 fn files_named_in(prompt: &str, wrote: Wrote) -> Vec<String> {
     match wrote {
-        Wrote::ThePerson => crate::entries::referenced(prompt),
+        Wrote::ThePerson => bravebot_mentions::referenced(prompt),
         Wrote::TheDriver => Vec::new(),
     }
 }
@@ -14134,17 +14373,137 @@ mod tests {
         assert!(!session.shortcuts, "the list did not go down again");
     }
 
-    /// A line being composed mid-turn is one Enter queues, and finishing it is machinery for
-    /// something about to be sent. The list is not, which is why it is the one thing offered there.
-    #[test]
-    fn nothing_is_offered_for_completion_while_a_turn_runs() {
-        let mut session = Session::new("none");
-        type_line(&mut session, "anything");
-        session.submit().expect("the prompt is sent");
+    fn type_without_sending_while_working(session: &mut Session, line: &str) {
+        for c in line.chars() {
+            handle_key_while_working(session, key(KeyCode::Char(c)));
+        }
+    }
 
-        handle_key_while_working(&mut session, key(KeyCode::Char('/')));
+    /// Rejects: the old rule that a running turn offers nothing, which left a person to remember
+    /// the word of a command that CMD-8 would have carried out or queued. Also rejects offering the
+    /// skills, which are not read while work runs.
+    #[test]
+    fn a_slash_offers_every_command_and_no_skill_while_a_turn_runs() {
+        let mut session = a_turn_running_on("anything");
+
+        type_without_sending_while_working(&mut session, "/");
         session.settle_skills(|| panic!("skills were read for a line the turn will queue"));
+
+        match session.offered() {
+            crate::state::Offered::Slash { commands, skills } => {
+                assert_eq!(commands, completions("/"), "not the rows offered at rest");
+                assert!(skills.is_empty(), "skills were offered mid-turn");
+            }
+            other => panic!("expected the commands, got {other:?}"),
+        }
+    }
+
+    /// Rejects: offering a command for a word that is not the whole line, which is a prompt
+    /// (CMD-2), for a word nothing starts with, or files, which a line queued mid-turn does not
+    /// reach for.
+    #[test]
+    fn nothing_is_offered_while_a_turn_runs_for_a_prompt_an_unknown_word_or_a_file() {
+        for typed in ["fix /ef", "/zzz", "@"] {
+            let mut session = a_turn_running_on("anything");
+            type_without_sending_while_working(&mut session, typed);
+            assert_eq!(
+                session.offered(),
+                crate::state::Offered::Nothing,
+                "{typed} was offered something while a turn ran"
+            );
+        }
+    }
+
+    /// Rejects: a line armed as a shell command line being offered command words while work runs,
+    /// since there `/ef` is a path to a program (CMD-3).
+    #[test]
+    fn nothing_is_offered_in_shell_mode_while_work_runs() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        session.shell = true;
+
+        type_without_sending_while_working(&mut session, "/ef");
+
         assert_eq!(session.offered(), crate::state::Offered::Nothing);
+    }
+
+    /// Rejects: a mid-turn Tab that is dropped, or one that leaves the line short of the name.
+    #[test]
+    fn tab_completes_a_half_typed_command_while_a_turn_runs() {
+        let mut session = a_turn_running_on("anything");
+        type_without_sending_while_working(&mut session, "/ef");
+
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Tab)),
+            Action::Redraw
+        );
+
+        assert_eq!(session.input(), "/effort ");
+        assert_eq!(session.commands_waiting().count(), 0, "Tab queued the line");
+    }
+
+    /// Rejects: Enter on a half-typed word queueing "/ef" as a prompt behind the turn, which is
+    /// what a person who sees the list and presses Enter on the row did not ask for.
+    #[test]
+    fn enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs() {
+        let mut session = a_turn_running_on("anything");
+        type_without_sending_while_working(&mut session, "/ef");
+
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+
+        assert_eq!(session.input(), "/effort ");
+        assert!(session.queued.is_empty(), "the half word was queued");
+        assert_eq!(session.commands_waiting().count(), 0);
+    }
+
+    /// Rejects: the completion arm sitting ahead of the whole-command arms, so that `/c` plus
+    /// Enter, or a command typed in full, are completed rather than carried out as CMD-8 says.
+    #[test]
+    fn a_whole_command_is_still_carried_out_or_queued_while_a_turn_runs() {
+        let mut session = a_turn_running_on("anything");
+        assert_eq!(type_while_working(&mut session, "/cost"), Action::Redraw);
+        assert!(
+            !session.said_while_working().is_empty(),
+            "/cost was completed, not carried out"
+        );
+        assert!(session.input().is_empty());
+
+        assert_eq!(type_while_working(&mut session, "/model"), Action::Redraw);
+        assert_eq!(session.commands_waiting().collect::<Vec<_>>(), ["/model"]);
+        assert!(session.input().is_empty(), "/model was completed again");
+    }
+
+    /// Rejects: the arrows being dropped mid-turn, so the row Enter completes could not be chosen.
+    #[test]
+    fn the_arrows_choose_the_row_while_a_turn_runs() {
+        let mut session = a_turn_running_on("anything");
+        type_without_sending_while_working(&mut session, "/e");
+        let first = session.highlighted_completion();
+
+        handle_key_while_working(&mut session, key(KeyCode::Down));
+        assert_ne!(session.highlighted_completion(), first, "Down did not move");
+
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_ne!(session.input(), "/e", "Enter did not take the row");
+        assert!(session.input().starts_with("/e"));
+    }
+
+    /// Rejects: a compaction or an aside, where `a_turn_is_running` is false, offering its
+    /// commands as a mid-turn arm would, when every one of them waits there.
+    #[test]
+    fn commands_are_offered_during_an_aside_as_well() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+
+        type_without_sending_while_working(&mut session, "/");
+
+        assert!(matches!(
+            session.offered(),
+            crate::state::Offered::Slash { .. }
+        ));
     }
 
     /// In shell mode a `?` is a glob for the shell to expand, so it is typed like any other
@@ -14675,6 +15034,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// `/request` opens the last request built, and nothing else: no turn starts and no prompt is
+    /// recorded.
+    #[test]
+    fn the_request_command_opens_the_view_and_starts_no_turn() {
+        let mut session = Session::new("none");
+        assert_eq!(enter_line(&mut session, "/request"), Action::Redraw);
+        assert!(!session.viewing_request(), "there was nothing to show yet");
+
+        session.set_last_request(bravebot_agent::request_view::RequestView {
+            model: "m".to_string(),
+            spans: Vec::new(),
+            tools: Vec::new(),
+        });
+        assert_eq!(enter_line(&mut session, "/request"), Action::Redraw);
+        assert!(session.viewing_request());
+        assert_eq!(session.turns, 0);
+    }
+
+    /// The word takes no argument, so words after it are a prompt, as for every other command
+    /// that takes none.
+    #[test]
+    fn words_after_the_request_command_make_a_prompt() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            enter_line(&mut session, "/request why"),
+            Action::Submit("/request why".to_string())
+        );
+    }
+
+    /// `v` writes the transcript to a file for a pager, and a request is not the transcript, so the
+    /// key does nothing here and the view cannot reach the disk.
+    #[test]
+    fn the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view() {
+        let mut session = Session::new("none");
+        session.set_last_request(bravebot_agent::request_view::RequestView {
+            model: "m".to_string(),
+            spans: Vec::new(),
+            tools: Vec::new(),
+        });
+        session.show_request();
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Char('v'))),
+            Action::None
+        );
+        session.close_scroller();
+        session.open_scroller();
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Char('v'))),
+            Action::Show,
+            "the key stopped working in the transcript"
+        );
+    }
+
     /// CMD-2: the word takes no argument, so words after it make a prompt and none of them reach
     /// the one the driver wrote.
     #[test]
@@ -14782,6 +15194,102 @@ mod tests {
                 "{line}"
             );
         }
+    }
+
+    /// The words `/style` takes: none lists, a name picks, `off` clears. The handler tells them apart.
+    #[test]
+    fn the_style_command_takes_a_name_or_nothing() {
+        for (line, word) in [
+            ("/style", ""),
+            ("/style concise", "concise"),
+            ("/style off", "off"),
+        ] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                dispatch_command(&mut session, commanded(line)),
+                Action::Style(word.to_string()),
+                "{line}"
+            );
+        }
+    }
+
+    /// A sentence that mentions the word, or a longer word, is said to the planner.
+    #[test]
+    fn a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt() {
+        for line in ["use a /style here", "/styles are useful"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line}"
+            );
+        }
+    }
+
+    /// A style is picked by a name this build ships. Each name reaches the next turn's task as its
+    /// own style, an unknown name is refused and leaves the held one, and `off` clears it.
+    #[test]
+    fn a_style_named_to_the_command_reaches_the_next_turn_and_only_a_known_name_does() {
+        let mut session = Session::new("none");
+        assert_eq!(with_session_style(Task::new("p"), &session).style, None);
+
+        set_style(&mut session, "concise");
+        assert_eq!(
+            with_session_style(Task::new("p"), &session)
+                .style
+                .map(|style| style.name),
+            Some("concise")
+        );
+
+        set_style(&mut session, "explanatory");
+        assert_eq!(session.style().map(|style| style.name), Some("explanatory"));
+
+        set_style(&mut session, "no-such-style");
+        assert_eq!(
+            session.style().map(|style| style.name),
+            Some("explanatory"),
+            "an unknown name replaced the style in force"
+        );
+
+        set_style(&mut session, "off");
+        assert_eq!(with_session_style(Task::new("p"), &session).style, None);
+    }
+
+    /// A run given `--system-prompt` keeps its own opening, so `/style` says the pick does not show
+    /// rather than reporting a style that no turn will carry.
+    #[test]
+    fn a_style_picked_under_a_replaced_opening_says_it_does_not_show() {
+        let words = bravebot_agent::turn::SystemPrompts {
+            replacing: Some("You are a reviewer.".to_string()),
+            appending: None,
+        };
+        let mut replaced = Session::new("none").with_system_prompts(words);
+        set_style(&mut replaced, "concise");
+        let mut plain = Session::new("none");
+        set_style(&mut plain, "concise");
+
+        let said = |session: &Session| {
+            session
+                .transcript
+                .iter()
+                .map(|entry| entry.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(
+            said(&replaced).contains("--system-prompt"),
+            "{}",
+            said(&replaced)
+        );
+        assert!(
+            !said(&plain).contains("--system-prompt"),
+            "{}",
+            said(&plain)
+        );
+        assert_eq!(replaced.style().map(|style| style.name), Some("concise"));
     }
 
     /// `/advisors` is not `/advisor`: the whole word must match.
@@ -15508,6 +16016,39 @@ mod tests {
         );
     }
 
+    /// `/recap` is the word alone, and carries nothing the person typed: the question is the
+    /// driver's own.
+    #[test]
+    fn the_recap_command_is_a_recap_and_not_a_prompt() {
+        let mut session = Session::new("none");
+        for c in RECAP_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Recap);
+    }
+
+    /// A sentence mentioning the word, or an argument after it, is said to the planner rather than
+    /// taken as a recap that ignores what follows.
+    #[test]
+    fn a_prompt_containing_the_recap_command_or_a_longer_word_is_still_a_prompt() {
+        for line in [
+            "what does /recap do",
+            "/recap the parser",
+            "/recaps are useful",
+        ] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line}"
+            );
+        }
+    }
+
     /// A sentence mentioning it is a thing to say to the planner, and the word this one claims is
     /// short enough that it will be said.
     #[test]
@@ -15702,6 +16243,81 @@ mod tests {
             session.looping().map(|running| running.prompt()),
             Some("check the deploy")
         );
+    }
+
+    /// The turn is sent the task and not the line, and it begins in plan mode (MODE-12). A wrong
+    /// implementation sends `/plan fix the auth bug`, or starts the turn before the mode is set.
+    #[test]
+    fn the_plan_command_sets_plan_mode_and_sends_only_its_task() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("none");
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+        for c in "/plan fix the auth bug".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("fix the auth bug".to_string())
+        );
+        assert_eq!(session.permission_mode(), PermissionMode::Plan);
+        assert_eq!(session.status, Status::Working);
+        assert_eq!(
+            session.transcript.last().expect("the task is said").text,
+            "fix the auth bug"
+        );
+    }
+
+    /// Without a task there is nothing to send, so the word sets the mode and the session stays
+    /// at rest. Typed from bypassing it narrows to planning.
+    #[test]
+    fn the_plan_command_without_a_task_sets_the_mode_and_sends_nothing() {
+        use bravebot_agent::PermissionMode;
+        for session in [
+            Session::new("none"),
+            Session::new("none").starting_in_bypass(),
+        ] {
+            let mut session = session;
+            assert_eq!(
+                dispatch_command(&mut session, commanded("/plan")),
+                Action::Redraw
+            );
+            assert_eq!(session.permission_mode(), PermissionMode::Plan);
+            assert_eq!(session.status, Status::Idle);
+            assert!(session.transcript.is_empty(), "something was said");
+        }
+    }
+
+    /// The word names plan mode, not the next rung: a session already planning stays there, and one
+    /// asking is not moved to accepting edits. A longer word is a prompt.
+    #[test]
+    fn the_plan_command_sets_plan_mode_rather_than_cycling_to_the_next() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("none");
+        for _ in 0..2 {
+            dispatch_command(&mut session, commanded("/plan"));
+            assert_eq!(session.permission_mode(), PermissionMode::Plan);
+        }
+
+        assert_eq!(command_typed("/planning the release"), None);
+    }
+
+    /// A turn keeps the mode it began with (MODE-8), so the word waits for the turn in flight
+    /// rather than changing the mode its confirmer was built with.
+    #[test]
+    fn the_plan_command_waits_for_the_turn_in_flight() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        for c in "/plan look at it".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
+        assert_eq!(session.queued.len(), 1, "the command did not wait");
+        assert_eq!(session.queued[0].prompt, "/plan look at it");
     }
 
     /// An interval with nothing after it is a loop somebody asked for and cannot have, so the
@@ -16829,6 +17445,7 @@ mod tests {
             &mut stored,
             Some("rule-reviewer"),
             None,
+            None,
         )
         .expect("the name is held");
         assert_eq!(stored.agent(), Some("rule-reviewer"));
@@ -16847,6 +17464,7 @@ mod tests {
             &mut resumed,
             None,
             Some("rule-reviewer"),
+            None,
         )
         .expect("the recorded name is held");
         assert_eq!(resumed_session.standing_definition(), Some(&standing()));
@@ -16884,6 +17502,7 @@ mod tests {
             &mut stored,
             None,
             Some("deleted-since"),
+            None,
         );
 
         assert_eq!(settled, Ok(()), "the session did not open");
@@ -16933,6 +17552,7 @@ mod tests {
             &mut stored,
             None,
             Some("rule-reviewer"),
+            None,
         );
 
         let refused = settled.expect_err("the session opened on the planner's model");
@@ -16971,6 +17591,7 @@ mod tests {
             &mut stored,
             Some("checker"),
             Some("rule-reviewer"),
+            None,
         )
         .expect("the typed name is held");
 
@@ -16981,6 +17602,152 @@ mod tests {
             "the session went on under the recorded definition"
         );
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-13. A session that typed and recorded no name works under the one the `agent`
+    /// setting names, says the setting chose it, and records the name so a resume follows the
+    /// session rather than whatever the setting says later.
+    #[test]
+    fn a_session_with_no_other_name_works_under_the_agent_setting() {
+        let home = a_home_with_a_definition("bravebot-setting-under-home", None);
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+
+        settle_under(
+            &mut session,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut stored,
+            None,
+            None,
+            Some("rule-reviewer"),
+        )
+        .expect("the setting's name is held");
+
+        assert_eq!(
+            session.standing_definition().map(|one| one.name.as_str()),
+            Some("rule-reviewer")
+        );
+        assert!(session.standing_is_by_setting());
+        assert_eq!(stored.agent(), Some("rule-reviewer"));
+        let said = said_in_the_transcript(&session).join("\n");
+        assert!(
+            said.contains(t!(session_working_under_by_setting)),
+            "{said}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-13. A name typed, or a name recorded, is not replaced by the setting, and a session
+    /// the command line chose does not say the setting did.
+    #[test]
+    fn the_agent_setting_does_not_replace_a_typed_or_recorded_name() {
+        let home = a_home_with_a_definition("bravebot-setting-outranked-home", None);
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+        for (typed, recorded, expected) in [
+            (Some("rule-reviewer"), None, "rule-reviewer"),
+            (None, Some("rule-reviewer"), "rule-reviewer"),
+        ] {
+            let mut stored = a_handle_for_test(&workspace);
+            let mut session = Session::new("none");
+            settle_under(
+                &mut session,
+                &mut config,
+                &workspace,
+                Some(&home),
+                &trust,
+                &Default::default(),
+                &mut stored,
+                typed,
+                recorded,
+                Some("another"),
+            )
+            .expect("the name is held");
+            assert_eq!(
+                session.standing_definition().map(|one| one.name.as_str()),
+                Some(expected)
+            );
+            assert!(!session.standing_is_by_setting());
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-13. A setting naming no definition is said and the session opens as the planner's:
+    /// the person did not type a name this time, so it does not end the session as a typed one does.
+    #[test]
+    fn an_agent_setting_naming_nothing_is_said_and_the_session_opens() {
+        let home = a_home_with_a_definition("bravebot-setting-missing-home", None);
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+
+        let settled = settle_under(
+            &mut session,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut stored,
+            None,
+            None,
+            Some("deleted-since"),
+        );
+
+        assert_eq!(settled, Ok(()), "the session did not open");
+        assert!(session.standing_definition().is_none());
+        assert_eq!(stored.agent(), None);
+        let said = said_in_the_transcript(&session).join("\n");
+        assert!(
+            said.contains("deleted-since") && said.contains("there is no definition called"),
+            "the loss was not said: {said}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// ADDRESS-13. Only a setting naming something unusable by its model ends a session, and a
+    /// setting that names nothing never does.
+    #[test]
+    fn the_agent_setting_is_survivable_where_a_typed_name_is_not() {
+        let missing =
+            |name: &str| -> Result<(), Unusable> { Err(Unusable::Missing(format!("no {name}"))) };
+        let refused = |name: &str| -> Result<(), Unusable> {
+            Err(Unusable::Refused(format!("{name} needs a sign-in")))
+        };
+        assert_eq!(
+            settle_definition(None, None, Some("set"), |_| Ok(())),
+            Ok(Settled::Under {
+                name: "set".to_string(),
+                found: (),
+                by_setting: true
+            })
+        );
+        assert_eq!(
+            settle_definition(None, None, Some("set"), missing),
+            Ok(Settled::SettingGone {
+                name: "set".to_string(),
+                why: "no set".to_string()
+            })
+        );
+        assert_eq!(
+            settle_definition(None, None, Some("set"), refused),
+            Err("set needs a sign-in".to_string())
+        );
+        assert_eq!(
+            settle_definition(Some("typed"), None, Some("set"), missing),
+            Err("no typed".to_string()),
+            "the setting's name was tried in place of a typed one"
+        );
     }
 
     /// ADDRESS-3, ADDRESS-11. The policy both front ends share: the typed name wins and a typed
@@ -17003,40 +17770,44 @@ mod tests {
         };
 
         assert_eq!(
-            settle_definition(Some("typed"), Some("recorded"), found),
+            settle_definition(Some("typed"), Some("recorded"), None, found),
             Ok(Settled::Under {
                 name: "typed".to_string(),
-                found: ()
+                found: (),
+                by_setting: false
             })
         );
         assert_eq!(tried.take(), ["typed"], "the recorded name was tried too");
 
         assert_eq!(
-            settle_definition(Some("typed"), Some("recorded"), missing),
+            settle_definition(Some("typed"), Some("recorded"), None, missing),
             Err("no typed".to_string()),
             "a typed name that matches nothing did not end the run"
         );
         assert_eq!(tried.take(), ["typed"]);
 
         assert_eq!(
-            settle_definition(None, Some("recorded"), missing),
+            settle_definition(None, Some("recorded"), None, missing),
             Ok(Settled::Gone {
                 name: "recorded".to_string(),
                 why: "no recorded".to_string()
             })
         );
         assert_eq!(
-            settle_definition(None, Some("recorded"), refused),
+            settle_definition(None, Some("recorded"), None, refused),
             Err("recorded needs a sign-in".to_string()),
             "a recorded definition that cannot be used was dropped"
         );
         assert_eq!(
-            settle_definition(Some("typed"), None, refused),
+            settle_definition(Some("typed"), None, None, refused),
             Err("typed needs a sign-in".to_string())
         );
         tried.take();
 
-        assert_eq!(settle_definition(None, None, found), Ok(Settled::Nothing));
+        assert_eq!(
+            settle_definition(None, None, None, found),
+            Ok(Settled::Nothing)
+        );
         assert!(
             tried.take().is_empty(),
             "a name was tried where none was given"
@@ -17062,6 +17833,7 @@ mod tests {
             &Default::default(),
             &mut stored,
             Some("rule-reviewer"),
+            None,
             None,
         )
         .expect("the name is held");
@@ -19242,7 +20014,9 @@ mod tests {
                 PANEL_COMMAND,
                 PR_COMMAND,
                 RENAME_COMMAND,
+                REQUEST_COMMAND,
                 STATUS_COMMAND,
+                STYLE_COMMAND,
                 THEME_COMMAND,
                 WATCH_COMMAND,
             ]
@@ -20076,6 +20850,54 @@ mod tests {
                 "{line} did not wait to be carried out"
             );
         }
+    }
+
+    /// `/reach` carries its argument whole to the loop, bare for the list, and a longer word is
+    /// not the command. The regressions it rejects: the argument cut at the first word, which drops
+    /// the command line the reach is for, and `/reachable` read as `/reach`.
+    #[test]
+    fn the_reach_command_carries_its_argument_unparsed() {
+        let mut session = Session::new("none");
+        for (line, argument) in [
+            ("/reach", ""),
+            ("/reach docker -- ls -la", "docker -- ls -la"),
+            (
+                "/reach ~/work write always -- make",
+                "~/work write always -- make",
+            ),
+            ("/reach remove 2", "remove 2"),
+        ] {
+            type_line(&mut session, line);
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Reach(argument.to_string()),
+                "{line}"
+            );
+        }
+        type_line(&mut session, "/reachable");
+        assert!(!matches!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Reach(_)
+        ));
+    }
+
+    /// `/reach` changes what the next plan carries, so typed mid-turn it waits behind what was typed
+    /// first and lands where it was typed, like the other commands that change something kept.
+    #[test]
+    fn the_reach_command_waits_for_the_turn_in_flight() {
+        let mut session = a_turn_running_on("first");
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(
+                &mut session,
+                "/reach docker -- ls",
+                key(KeyCode::Enter),
+                beside,
+            )
+        });
+
+        assert!(said_under_the_turn(&session).is_empty());
+        assert_eq!(waiting_prompts(&session), vec!["/reach docker -- ls"]);
     }
 
     /// A command that changes something waits behind whatever was typed before it, so it lands
@@ -24917,6 +25739,61 @@ mod tests {
                 .iter()
                 .any(|entry| entry.text == t!(loop_stopped)),
             "the ending was not announced"
+        );
+    }
+
+    /// Stopping the turn a watch's fire started ends that watch, and says so. The state method is
+    /// tested alone; this is the wiring, which is what a person's key press reaches.
+    #[test]
+    fn stopping_a_fires_turn_through_the_driver_ends_the_watch_that_fired() {
+        let mut session = Session::new("none");
+        let saw = |token: &str| bravebot_agent::watch::Looked::Saw(token.to_string());
+        session.arm_watch("notes.md", ".", saw("first"));
+        session
+            .watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
+                saw("second")
+            })
+            .expect("a fire");
+        assert!(session.watch_is_firing());
+        let asked = Asked {
+            name: "test-model".to_string(),
+            comparable: true,
+        };
+
+        fold_outcome(
+            &mut session,
+            Err(turn::TurnError::Cancelled { attempts: None }),
+            Trail::new(),
+            Carried {
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+            },
+            Occupied {
+                budget: 100_000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            asked,
+            Line {
+                text: "",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            &workspace_for_test(),
+        );
+
+        assert!(
+            session.watches().is_empty(),
+            "stopping a fire's turn left the watch that fired running"
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_stopped_with_its_turn, number = 1)),
+            "the watch ended in silence"
         );
     }
 

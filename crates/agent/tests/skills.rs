@@ -432,7 +432,7 @@ fn a_bravebot_skill_shadows_a_foreign_one_of_the_same_name() {
     }
 }
 
-/// INSTR-12 with the shadowing and the trust check meeting. A skill present under all three roots
+/// INSTR-13 with the shadowing and the trust check meeting. A skill present under all three roots
 /// with only `.bravebot/skills` vouched for is offered, and nothing says it was not loaded: a
 /// person can see it on the list, so a notice claiming otherwise is simply wrong.
 ///

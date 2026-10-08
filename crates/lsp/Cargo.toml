@@ -9,5 +9,9 @@ repository.workspace = true
 
 [dependencies]
 bravebot-core = { path = "../core" }
+bravebot-diag = { path = "../diag" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

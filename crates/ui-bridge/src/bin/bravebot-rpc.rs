@@ -57,6 +57,20 @@ fn main() {
         }
     }
 
+    // Before a session is assembled, so every turn this process runs reads one answer for the
+    // network its programs keep. Nothing in a window sets the flag; the person's settings, the
+    // file this was started on and the managed pin decide, as they do for the terminal. See
+    // SANDBOX-20.
+    let here = std::env::current_dir().ok();
+    let layers = bravebot_ui_bridge::settings::layers(here.as_deref(), settings.as_deref());
+    bravebot_config::settle_run_network_in(None, &layers);
+    // Likewise for the lists of paths a person wrote, so every stage a turn in this process starts
+    // holds one answer. See SANDBOX-25.
+    bravebot_config::settle_sandbox_filesystem_in(
+        &bravebot_sandbox::rules::Lists::default(),
+        &layers,
+    );
+
     // One writer behind a lock, so a line from an event and a line from a response cannot
     // interleave. Shared with the bridge, which emits events from whichever thread a turn
     // is running on.

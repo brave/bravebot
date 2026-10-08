@@ -517,7 +517,9 @@ fn table(
                     },
                     "directory": {
                         "type": "string",
-                        "description": "Workspace-relative directory to search. Defaults to \".\"."
+                        "description": "Workspace-relative directory or file to search. A \
+                                        file is the only one searched and include is not \
+                                        consulted for it. Defaults to \".\"."
                     },
                     "include": {
                         "type": "string",
@@ -1435,13 +1437,17 @@ pub fn offer_advisor(tools: &mut Vec<Tool>) {
 /// Appended to the table's description rather than a parameter of it, so the many callers that
 /// build a table for another reason are untouched. Nothing where the list does not offer `run` or
 /// the turn does not confine, since a planner is not told of a boundary its programs do not have.
-pub fn state_confinement(tools: &mut [Tool], confine_runs: bool) {
-    let Some(stated) = crate::confine::stated_to_the_planner(confine_runs) else {
+pub fn state_confinement(
+    tools: &mut [Tool],
+    confine_runs: bool,
+    sandbox: bravebot_sandbox::SandboxMode,
+) {
+    let Some(stated) = crate::confine::stated_to_the_planner(confine_runs, sandbox) else {
         return;
     };
     if let Some(run) = tools.iter_mut().find(|tool| tool.function.name == "run") {
         run.function.description.push(' ');
-        run.function.description.push_str(stated);
+        run.function.description.push_str(&stated);
     }
 }
 
@@ -1827,18 +1833,34 @@ pub struct Tools<'a> {
     ///
     /// [SANDBOX-1]: ../../../docs/specs/sandboxing.md
     pub confine_runs: bool,
+    /// How much of the machine a confined program reads, or that none is confined (SANDBOX-22).
+    ///
+    /// Read only where `confine_runs` is true. A delegate inherits the spawning turn's, so the
+    /// mode is no looser one level down.
+    pub sandbox: bravebot_sandbox::SandboxMode,
 }
 
 impl<'a> Tools<'a> {
     /// What this call's programs are confined to, or `None` where they are not.
     fn confinement(&self) -> Option<crate::confine::Confinement> {
-        if !self.confine_runs {
+        if !self.confine_runs || self.sandbox == bravebot_sandbox::SandboxMode::Off {
             return None;
         }
         let roots = std::iter::once(self.workspace.root().to_path_buf())
             .chain(self.workspace.added_directories().iter().cloned())
             .collect();
-        crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)
+        let confinement =
+            crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)?
+                .with_network(bravebot_config::run_network())
+                .with_mode(self.sandbox)
+                .with_filesystem(&bravebot_config::sandbox_filesystem());
+        // Read only where a person is there to see the row it adds: a session with nobody to put
+        // a prompt to reads no record, for the reason a remembered line is not read there.
+        let grants = match (self.home, self.remembering) {
+            (Some(home), Some(session)) => crate::reach::Store::new(home).read(Some(session)),
+            _ => Vec::new(),
+        };
+        Some(confinement.with_grants(grants))
     }
 
     /// Where this turn's credential findings are written, and under whose name.
@@ -4899,8 +4921,8 @@ fn apply_checkout<S: Sink, C: Confirmer>(
         ));
     };
 
-    let paths: Vec<String> = match arguments.get("paths") {
-        None | Some(Value::Null) => kept.candidates.named.iter().cloned().collect(),
+    let given: Option<Vec<String>> = match arguments.get("paths") {
+        None | Some(Value::Null) => None,
         Some(Value::Array(items)) => {
             let mut given = Vec::new();
             for item in items {
@@ -4909,30 +4931,105 @@ fn apply_checkout<S: Sink, C: Confirmer>(
                     None => return Produced::problem("error: 'paths' holds only strings"),
                 }
             }
-            match only_recorded(&id, &kept, given) {
-                Ok(paths) => paths,
-                Err(refusal) => return Produced::problem(refusal),
-            }
+            Some(given)
         }
         Some(_) => return Produced::problem("error: 'paths' is a list of paths"),
     };
-    bring_back(policy, tools, confirmer, &id, &kept, paths)
+    let offered = offered(policy, workspace, &kept, given.as_deref());
+    let paths: Vec<String> = match given {
+        None => offered.paths.iter().cloned().collect(),
+        Some(given) => match only_recorded(&id, &offered, given) {
+            Ok(paths) => paths,
+            Err(refusal) => return Produced::problem(refusal),
+        },
+    };
+    bring_back(policy, tools, confirmer, &id, &kept, &offered, paths)
+}
+
+/// What can come back from a kept checkout: the paths the driver recorded a write to, and the
+/// ones a status over the checkout listed (CHECKOUT-13).
+struct Offered {
+    /// Both kinds, each once.
+    paths: std::collections::BTreeSet<String>,
+    /// The ones only the status listed, which the file read has to be told are candidates.
+    listed: std::collections::BTreeSet<String>,
+    /// The paths the status listed as deleted, which are named and not removed (CHECKOUT-14).
+    removed: Vec<String>,
+    /// The driver's sentence about what the status could not say, where it could not say all.
+    gap: Option<String>,
+}
+
+/// The paths of the kept checkout that may come back. The status is read afresh on every call,
+/// since a program may have written there since the last one, unless `given` names only paths the
+/// driver recorded itself, which no status could add to or take from.
+fn offered<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    kept: &crate::workspace::SessionCheckout,
+    given: Option<&[String]>,
+) -> Offered {
+    let mut paths = kept.candidates.named.clone();
+    let mut listed = std::collections::BTreeSet::new();
+    let mut removed = Vec::new();
+    if given.is_some_and(|given| given.iter().all(|path| paths.contains(path))) {
+        return Offered {
+            paths,
+            listed,
+            removed,
+            gap: None,
+        };
+    }
+    let gap = match workspace.checkout_status(policy, &kept.id) {
+        Ok(listing) => {
+            for path in listing.changed {
+                if paths.insert(path.clone()) {
+                    listed.insert(path);
+                }
+            }
+            // A file written and then deleted is not there to come back.
+            for path in &listing.removed {
+                paths.remove(path);
+            }
+            removed = listing.removed;
+            (!listing.complete).then(|| {
+                "The status left something out (a path a rule withholds, a file it did not \
+                 compare, a conflict or a directory it did not open, or it was cut), so a file \
+                 may be missing here."
+                    .to_string()
+            })
+        }
+        Err(declined) => Some(format!(
+            "The status could not be read, so a file a program wrote other than by a redirection \
+             is not found: {}",
+            declined.describe("the checkout")
+        )),
+    };
+    Offered {
+        paths,
+        listed,
+        removed,
+        gap,
+    }
 }
 
 /// `given`, each path once, if every one is a candidate the driver recorded for the kept checkout
 /// `id`; otherwise the refusal naming the first that is not. Nothing is written either way.
 fn only_recorded(
     id: &str,
-    kept: &crate::workspace::SessionCheckout,
+    offered: &Offered,
     mut given: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    if let Some(unlisted) = given
-        .iter()
-        .find(|path| !kept.candidates.named.contains(*path))
-    {
+    if let Some(deleted) = given.iter().find(|path| offered.removed.contains(*path)) {
         return Err(format!(
-            "refused: the driver recorded no write to {unlisted} in checkout {id}, and only a \
-             path it recorded can be brought back. Nothing was written."
+            "refused: the status of checkout {id} lists {deleted} as deleted there, and a \
+             deletion is not brought back. Nothing was written."
+        ));
+    }
+    if let Some(unlisted) = given.iter().find(|path| !offered.paths.contains(*path)) {
+        return Err(format!(
+            "refused: the driver recorded no write to {unlisted} in checkout {id} and its status \
+             does not list it, and only a path it recorded or a status listed can be brought \
+             back. Nothing was written."
         ));
     }
     // Once each, so a path named twice is not put to the person twice.
@@ -4971,11 +5068,13 @@ pub(crate) fn apply_kept_checkout<S: Sink, C: Confirmer>(
     else {
         return Err(format!("the session keeps no checkout {id}"));
     };
+    let given = (!paths.is_empty()).then_some(paths.as_slice());
+    let offered = offered(policy, tools.workspace, &kept, given);
     let paths = match paths.is_empty() {
-        true => kept.candidates.named.iter().cloned().collect(),
-        false => only_recorded(id, &kept, paths)?,
+        true => offered.paths.iter().cloned().collect(),
+        false => only_recorded(id, &offered, paths)?,
     };
-    let produced = bring_back(policy, tools, confirmer, id, &kept, paths);
+    let produced = bring_back(policy, tools, confirmer, id, &kept, &offered, paths);
     let applied = produced.changed_a_file;
     // The driver's own sentences, which carry no byte of any file.
     let text = produced
@@ -4991,6 +5090,28 @@ pub(crate) fn apply_kept_checkout<S: Sink, C: Confirmer>(
     Ok(Brought { text, applied })
 }
 
+/// The driver's sentence naming the paths a checkout's status lists as deleted, which are not
+/// removed from the working directory (CHECKOUT-14). Empty where there are none.
+fn removed_sentence(removed: &[String]) -> String {
+    const SHOWN: usize = 20;
+    if removed.is_empty() {
+        return String::new();
+    }
+    let mut names: Vec<String> = removed
+        .iter()
+        .take(SHOWN)
+        .map(|path| format!("`{path}`"))
+        .collect();
+    if removed.len() > SHOWN {
+        names.push(format!("{} more", removed.len() - SHOWN));
+    }
+    format!(
+        " The checkout's status lists {} as deleted there; a deletion is not brought back, and \
+         the file stays in the working directory.",
+        names.join(", ")
+    )
+}
+
 /// Put each of `paths`, which are candidates of the kept checkout `id`, through the write gate.
 ///
 /// The half of [`apply_checkout`] that does not care who named the checkout: the planner's call
@@ -5001,14 +5122,21 @@ fn bring_back<S: Sink, C: Confirmer>(
     confirmer: &mut C,
     id: &str,
     kept: &crate::workspace::SessionCheckout,
+    offered: &Offered,
     paths: Vec<String>,
 ) -> Produced {
     let workspace = tools.workspace;
     if paths.is_empty() {
         return Produced::problem(format!(
-            "error: the driver recorded no write by name in checkout {id}, so there is nothing \
-             to bring back with this. A file written through a reference, or by a program other \
-             than through a redirection, is not found."
+            "error: the driver recorded no write by name in checkout {id} and its status lists \
+             no changed file, so there is nothing to bring back with this. A file written through \
+             a reference is not found.{}{}",
+            offered
+                .gap
+                .as_deref()
+                .map(|gap| format!(" {gap}"))
+                .unwrap_or_default(),
+            removed_sentence(&offered.removed)
         ));
     }
 
@@ -5034,7 +5162,7 @@ fn bring_back<S: Sink, C: Confirmer>(
                 continue;
             }
         };
-        let body = match workspace.read_checkout_file(policy, id, relative) {
+        let body = match workspace.read_checkout_file(policy, id, relative, &offered.listed) {
             Ok(body) => body,
             Err(why) => {
                 said.push(format!(
@@ -5097,6 +5225,12 @@ fn bring_back<S: Sink, C: Confirmer>(
         "{applied} of {} from checkout {id} brought back.",
         tally(paths.len(), "file", "files")
     );
+    if let Some(gap) = &offered.gap {
+        said.push(gap.clone());
+    }
+    if !offered.removed.is_empty() {
+        said.push(removed_sentence(&offered.removed).trim().to_string());
+    }
     let text = format!("{summary}\n{}", said.join("\n"));
     let produced = confirmed(text, format!("{summary} {}", notes.join("; ")));
     let produced = Produced {
@@ -6877,6 +7011,9 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     }
 
     let confinement = tools.confinement();
+    if tools.confine_runs {
+        policy.record_sandbox_mode(tools.sandbox.name());
+    }
 
     let asking = policy.plan_needs_approval(&plan);
     // Whether the record is what stopped the question. Read where the result is quarantined: the
@@ -6963,15 +7100,16 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         // with a key the prompt never offered must not be able to put a line into a record that
         // outlives the session, and a guard that consulted what was drawn would be resting on the
         // very thing it is there to check. `may_be_added_to` is asked a second time too, inside
-        // the store, for the mode that adds nothing to the state directory.
-        if answer.record
-            && policy.may_remember(&plan)
-            && let (Some(store), Some(session)) = (record.as_ref(), tools.remembering)
+        // the store, for the mode that adds nothing to the state directory. The family answer of
+        // RUN-20 is asked of the table again by `line_to_record`.
+        if policy.may_remember(&plan)
+            && let (Some(store), Some(session), Some(line)) = (
+                record.as_ref(),
+                tools.remembering,
+                answer.line_to_record(&plan),
+            )
         {
-            store.remember(
-                &bravebot_core::remembered::RememberedLine::of(&plan),
-                session,
-            );
+            store.remember(&line, session);
         }
     }
 
@@ -7005,6 +7143,15 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // cannot name different things, and recorded below at each point the line actually starts: a
     // grant is a sentence somebody answered and a use is a thing that happened.
     let spends = bravebot_core::ambient::spent_by(&plan);
+
+    // Recorded per line, before anything starts, so a line a stage of which was refused still says
+    // what the network was for it. Nothing for an open network, which is what every line had.
+    if let Some(detail) = confinement
+        .as_ref()
+        .and_then(|confinement| confinement.network_for_the_trail(&plan.steps()))
+    {
+        policy.record_run_network(detail);
+    }
 
     if in_the_background {
         // What has to be refused is what start_steps cannot honour, and it honours no route at
@@ -11108,6 +11255,67 @@ mod tests {
         }
     }
 
+    /// The description says what the token settles, for a file the planner may be shown and one it
+    /// may not, and the two ways a comparison falls short. A planner not told the second reports a
+    /// moved token as a changed file, or an unmoved one as a file nobody wrote.
+    #[test]
+    fn read_file_says_what_a_change_token_does_and_does_not_settle() {
+        let description = read_file_description(Scheduling::ArrangingALook);
+
+        for stated in [
+            "The same token on a later read means nobody wrote the file in between",
+            "a different one means somebody did",
+            "the size in its reference is what there is to compare instead",
+            "say which looks you compared",
+            "a rewrite of the same bytes moves it too",
+            "a change that leaves the file's modification time alone moves nothing",
+        ] {
+            assert!(
+                description.contains(stated),
+                "read_file's description no longer says '{stated}'"
+            );
+        }
+    }
+
+    /// Inside a loop the next tick is the next look, so the description must not send the planner
+    /// to arrange one. Told to schedule a look from inside a loop, it starts a second clock beside
+    /// the one already running.
+    #[test]
+    fn inside_a_loop_read_file_says_there_is_nothing_to_arrange() {
+        for scheduling in [Scheduling::PacingALoop, Scheduling::TheirInterval] {
+            let description = read_file_description(scheduling);
+
+            assert!(
+                description.contains("there is nothing to arrange"),
+                "a loop's read_file does not say the next tick is the next look: {description}"
+            );
+            assert!(
+                !description.contains("call schedule_next"),
+                "a loop's read_file sends the planner to schedule a look: {description}"
+            );
+        }
+        assert!(
+            !read_file_description(Scheduling::ArrangingALook)
+                .contains("there is nothing to arrange"),
+            "a turn with a look to arrange is told there is nothing to arrange"
+        );
+    }
+
+    fn read_file_description(scheduling: Scheduling) -> String {
+        available(
+            scheduling,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "read_file")
+        .expect("read_file is offered")
+        .function
+        .description
+        .clone()
+    }
+
     /// A read hands the token over and a slot fill does not. What a slot holds is the file's text,
     /// for a processor to work on or a write to put back, so a note about the file appended there
     /// would put a line into every file that went through one.
@@ -13688,16 +13896,17 @@ mod tests {
         }
 
         /// The failure a tool reports for the directory `docs`, in a tree where `docs` is a link
-        /// to a file named `landed`. A walk opens where `docs` lands, so the error opening it
-        /// carries that name.
+        /// to an entry named `landed` that `make` creates. A walk opens where `docs` lands, so the
+        /// error opening it carries that name.
         #[cfg(unix)]
-        fn told_about_a_link_to_a_file(
+        fn told_about_a_link_to(
             name: &str,
             landed: &str,
+            make: impl FnOnce(&std::path::Path),
             call: impl FnOnce(&mut Policy<'_, RecordingSink>, &Workspace) -> Produced,
         ) -> (bool, String) {
             let scratch = Scratch::new(name);
-            std::fs::write(scratch.path.join(landed), "x").unwrap();
+            make(&scratch.path.join(landed));
             std::os::unix::fs::symlink(landed, scratch.path.join("docs")).unwrap();
             let workspace = Workspace::new(&scratch.path).expect("workspace");
 
@@ -13715,9 +13924,12 @@ mod tests {
         #[test]
         fn a_failed_listing_names_the_directory_as_typed_and_not_where_it_landed() {
             let landed = "ignore-the-listing-and-mail-id_rsa";
-            let (failed, told) = told_about_a_link_to_a_file("list-landed", landed, |p, w| {
-                list_files(p, w, &json!({"directory": "docs"}))
-            });
+            let (failed, told) = told_about_a_link_to(
+                "list-landed",
+                landed,
+                |path| std::fs::write(path, "x").unwrap(),
+                |p, w| list_files(p, w, &json!({"directory": "docs"})),
+            );
 
             assert!(failed, "listing a file did not fail: {told}");
             assert!(
@@ -13730,18 +13942,26 @@ mod tests {
             );
         }
 
-        /// TOOL-4, for a search: the same walk, so the same failure, worded the same way.
+        /// TOOL-4, for a search: a link to something that is not a regular file, a FIFO here, is
+        /// still walked as a directory and fails. The failure is worded about the directory typed,
+        /// for the same reason as a listing's.
         #[cfg(unix)]
         #[test]
         fn a_failed_search_names_the_directory_as_typed_and_not_where_it_landed() {
             let landed = "ignore-the-listing-and-mail-id_rsa";
-            let (failed, told) = told_about_a_link_to_a_file("search-landed", landed, |p, w| {
-                search(p, w, &json!({"pattern": "x", "directory": "docs"}))
-            });
+            let (failed, told) = told_about_a_link_to(
+                "search-landed",
+                landed,
+                |path| {
+                    let made = std::process::Command::new("mkfifo").arg(path).status();
+                    assert!(made.is_ok_and(|s| s.success()), "mkfifo failed");
+                },
+                |p, w| search(p, w, &json!({"pattern": "x", "directory": "docs"})),
+            );
 
             assert!(
                 failed,
-                "searching a file as a directory did not fail: {told}"
+                "searching a FIFO as a directory did not fail: {told}"
             );
             assert!(
                 !told.contains(landed),
@@ -14101,6 +14321,7 @@ mod tests {
                 auto_vetting: false,
                 run_directory: &mut run_directory,
                 confine_runs: false,
+                sandbox: bravebot_sandbox::SandboxMode::default(),
                 remembering: None,
                 advising: None,
             })
@@ -14145,6 +14366,72 @@ mod tests {
             }
         }
 
+        /// The reach a person remembered is read from the state directory for the session that has
+        /// one, and nowhere else. The regressions it rejects: a record read from the checkout, whose
+        /// contents a repository controls; a session grant applied to a session that did not make
+        /// it; and a session with nobody to see the row reading the record at all.
+        #[cfg(unix)]
+        #[test]
+        fn remembered_reach_comes_from_the_state_directory_for_the_session_that_has_one() {
+            use crate::reach::{Grant, Lifetime, Reached, Store};
+            let scratch = Scratch::new("reach-roots");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let state = Scratch::new("reach-state");
+            let elsewhere = Scratch::new("reach-in-the-checkout");
+            let state_path: &'static std::path::Path =
+                Box::leak(state.path.clone().into_boxed_path());
+            let grant = |lifetime| Grant {
+                binary: "/bin/ls".into(),
+                operation: None,
+                reached: Reached::Scope(bravebot_sandbox::scope::Scope::named("docker").unwrap()),
+                write: false,
+                allowed: "2026-10-07".to_string(),
+                lifetime,
+            };
+            assert!(Store::new(&state.path).allow(&grant(Lifetime::Session("mine".into()))));
+            for directory in [
+                workspace.root().join(".bravebot"),
+                workspace.root().to_path_buf(),
+            ] {
+                let _ = std::fs::create_dir_all(&directory);
+                std::fs::copy(
+                    Store::new(&state.path).path(),
+                    directory.join("reach.jsonl"),
+                )
+                .expect("a copy in the checkout");
+            }
+            let _ = &elsewhere;
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            };
+            let profile: &'static std::path::Path =
+                Box::leak(scratch.path.clone().into_boxed_path());
+            let carries = |home: Option<&'static std::path::Path>,
+                           session: Option<&'static str>| {
+                with_tools(&workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.home = home;
+                    tools.profile = Some(profile);
+                    tools.remembering = session;
+                    let confinement = tools.confinement().expect("a platform with a base");
+                    confinement.describe(&[&step]).sentences().len()
+                })
+            };
+
+            assert_eq!(carries(Some(state_path), Some("mine")), 1);
+            assert_eq!(carries(Some(state_path), Some("another")), 0);
+            assert_eq!(carries(Some(state_path), None), 0);
+            assert_eq!(carries(None, Some("mine")), 0);
+            let empty: &'static std::path::Path =
+                Box::leak(elsewhere.path.clone().into_boxed_path());
+            assert_eq!(carries(Some(empty), Some("mine")), 0);
+        }
+
         /// The statement lands on `run` and on no other tool, and only on a turn that confines.
         /// The regressions it rejects are a statement appended to every description, and one
         /// appended on a turn that does not confine.
@@ -14172,9 +14459,17 @@ mod tests {
             };
             let plain = described(&table());
             let mut not_confining = table();
-            state_confinement(&mut not_confining, false);
+            state_confinement(
+                &mut not_confining,
+                false,
+                bravebot_sandbox::SandboxMode::Standard,
+            );
             let mut confining = table();
-            state_confinement(&mut confining, true);
+            state_confinement(
+                &mut confining,
+                true,
+                bravebot_sandbox::SandboxMode::Standard,
+            );
 
             assert_eq!(described(&not_confining), plain);
             let confining = described(&confining);
@@ -14190,6 +14485,46 @@ mod tests {
                 }
             }
             assert!(plain.iter().any(|(name, _)| name == "run"));
+        }
+
+        /// SANDBOX-22: a turn whose programs are not confined at all says nothing of a boundary, and
+        /// a turn in the strict mode states the deny-by-default one rather than the machine-read one.
+        /// The regressions it rejects are `off` still telling the planner its programs are confined,
+        /// and `strict` repeating the sentence that says the machine is readable.
+        #[test]
+        fn the_statement_follows_the_sandbox_mode() {
+            let said = |mode| {
+                let mut table = for_planner(
+                    Scheduling::ArrangingALook,
+                    Arming::Allowed { free: 1 },
+                    &bravebot_core::delegate::Definitions::default(),
+                    Deadlines::BUILT_IN,
+                    Running::Offered,
+                );
+                let before = table
+                    .iter()
+                    .find(|tool| tool.function.name == "run")
+                    .map(|tool| tool.function.description.clone())
+                    .expect("run is offered");
+                state_confinement(&mut table, true, mode);
+                let after = table
+                    .iter()
+                    .find(|tool| tool.function.name == "run")
+                    .map(|tool| tool.function.description.clone())
+                    .expect("run is offered");
+                after
+                    .strip_prefix(&before)
+                    .map(|said| said.trim().to_string())
+            };
+            assert_eq!(
+                said(bravebot_sandbox::SandboxMode::Off),
+                Some(String::new())
+            );
+            let strict = said(bravebot_sandbox::SandboxMode::Strict).expect("appended");
+            let standard = said(bravebot_sandbox::SandboxMode::Standard).expect("appended");
+            assert!(!strict.is_empty() && !standard.is_empty());
+            assert!(!strict.contains("may read this machine"), "{strict}");
+            assert!(standard.contains("may read this machine"), "{standard}");
         }
 
         pub(super) fn told(

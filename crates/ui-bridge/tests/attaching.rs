@@ -232,7 +232,8 @@ fn a_pasted_picture_is_still_in_the_conversation_after_the_session_is_reopened()
     let mut reopened = Window::with_settings(window.settings.clone());
     let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
     let session = opened["session"].as_str().unwrap().to_string();
-    reopened.call("trust.reply", json!({"session": session, "trusted": true}));
+    // The record carries the trust map its person answered with, so the reopened session asks no
+    // question and has none to answer.
     let done = reopened.turn(&session, "what was it?", json!({}));
     server.join().unwrap();
 

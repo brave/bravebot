@@ -28,7 +28,9 @@ rebases, and pushes over only the head it fetched. Spend tokens on the conflicts
    workflow or manifest was resolved. A clean rebase, or a resolved file no rule names (`ui/`,
    website, prose), runs nothing and leaves the checks to CI. Pass make targets to run those
    instead; do not widen it to `check-all-local`, which CI repeats.
-5. `python3 agents/skills/rebase/rebase.py push <pr>`
+5. `python3 agents/skills/rebase/rebase.py push <pr>`. When GitHub refuses the push because ssh
+   offered a key without access, it retries once with each other key `ssh-add -L` lists and reports
+   the one that worked. With no usable key it prints GitHub's refusal.
 
 Report the old and new head, one line per resolved conflict on how both sides were kept, and which
 checks ran.

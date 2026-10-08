@@ -21,6 +21,7 @@
  - Added the session's name to the terminal's title, so several open sessions can be told apart. A `terminalTitle` setting of `false` turns it off. ([#1220](https://github.com/brave/bravebot/issues/1220))
  - Added to `/checkouts` each kept checkout's size on disk and whether its commit is pushed. ([#1235](https://github.com/brave/bravebot/issues/1235))
  - Added a `context` count to `search`, which returns the lines around each match so it reads without a second call. ([#1468](https://github.com/brave/bravebot/issues/1468))
+ - Added searching one named file with `search`, by naming it as `directory`, so a search no longer needs its parent directory and an `include`. ([#1470](https://github.com/brave/bravebot/issues/1470))
  - Added `stop` to `schedule_next`, so a self-paced loop that has finished ends without one more tick. ([#1467](https://github.com/brave/bravebot/issues/1467))
  - Added `mcp_servers` to `spawn_agent`, which lists the MCP servers a worker keeps, so a worker sent to fix a bug need not hold your mail. ([#1236](https://github.com/brave/bravebot/issues/1236))
  - Added `ls`, `cat`, `sort`, `uniq`, `diff`, `stat` and `du` to the programs a line may run unasked when it only reads paths you vouched for. A call that writes (`sort -o`, `uniq IN OUT`) or follows a link (`ls -L`, `diff -r`) still asks. ([#1466](https://github.com/brave/bravebot/issues/1466))
@@ -28,6 +29,7 @@
  - Added to the desktop app's permissions list when each remembered answer was given.
  - Added the program a bare command name resolves to in the question `bravebot mcp add`, `approve` and `enable` ask, so you see which one a yes would start.
  - Added to the audit trail how each delegate ended and why, each checkout made and removed, the permission mode a turn began in, and who answered each approval. ([#1358](https://github.com/brave/bravebot/issues/1358))
+ - Added `bravebot doctor --sandbox-check`, which runs everyday git, gh, cargo, npm, make and shell work under the sandbox on your machine and prints, for each workflow, whether it passed, was skipped for want of a tool, or failed with the setting that would lift it. ([#1750](https://github.com/brave/bravebot/issues/1750))
  - Changed the desktop app's sessions to Chats, with a search box and filter in the sidebar, a project and branch on each row, and a Settings view with General and Agent pages that replaces the Agent settings dialog and the appearance picker. Plan first now sits in the Agent menu beside the model picker.
  - Changed a desktop bot to be defined by a file in `~/.bravebot/agents/`, and every turn of its conversations to be addressed to it. A bot made earlier gets one on its first turn, and its old notes are treated as untrusted.
  - Changed the desktop app to open a session only in a folder you picked or that it already lists. ([#1195](https://github.com/brave/bravebot/issues/1195))

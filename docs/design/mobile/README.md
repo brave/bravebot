@@ -1,6 +1,6 @@
 # Mobile agent and remote-control prototypes
 
-Status: the first Rust session-view block and the stdio TypeScript client's session lifecycle are implemented. Approval replies, the local client program and the remaining stage 1–2a evidence are outstanding, so stages 1–2a are incomplete. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
+Status: stages 1–2a are complete: the Rust session view and the stdio TypeScript client in `packages/agent-client`, tested against a real `bravebot-rpc`. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
 
 Start with the [executive summary](executive-summary.md). It is written to stand alone for readers who need the goal, design choices, implementation sequence, and prototype limits.
 
@@ -14,11 +14,11 @@ On-device agent execution means the Rust agent runs on the phone. Model inferenc
 
 For remote sessions, users can leave the desktop, read progress on the phone, send a follow-up, answer a permission request, or stop work. The host retains execution and state while the phone connection may disappear.
 
-The first deliverable remains a TypeScript client interface and client on the local host machine driving a real RPC process. Run a bounded React Native embedded proof through a platform native module as a parallel track; it does not gate host development. The Android Rust/JNI work on `android-shell` provides an existing foundation for embedded integration; iOS needs its own native binding. Develop the persistent host and remote-control track, and connect the same mobile screens through the remote adapter. Remote control is the first substantial end-to-end prototype; the early embedded exercise tests the shared interface and native integration without requiring full on-device capability.
+The first deliverable, a TypeScript client interface and client on the local host machine driving a real RPC process, is implemented in `packages/agent-client`. Run a bounded React Native embedded proof through a platform native module as a parallel track; it does not gate host development. The Android Rust/JNI work on `android-shell` provides an existing foundation for embedded integration; iOS needs its own native binding. Develop the persistent host and remote-control track, and connect the same mobile screens through the remote adapter. Remote control is the first substantial end-to-end prototype; the early embedded exercise tests the shared interface and native integration without requiring full on-device capability.
 
 ## Delivery rule
 
-Start stages 1 and 2a now: define the thin client interface and shared Rust view, expose that view as an additive RPC capability, and prove the client against the real process. Later-stage questions do not block that deliverable. The plan sets security boundaries and milestone evidence; it is not intended to settle every implementation detail in advance.
+Stages 1 and 2a defined the thin client interface and the shared Rust view, exposed that view as an additive RPC capability, and proved the client against the real process. Later-stage questions did not block that deliverable and still do not block stage 3a. The plan sets security boundaries and milestone evidence; it is not intended to settle every implementation detail in advance.
 
 This is intentionally a high-level plan, not an exhaustive specification of every edge case or behavior. Implementation will reveal gaps, platform limits, and better choices. Some discoveries will require implementation and behavior changes not described here. Resolve them as they arise and update the affected design, specs, and tests. The acceptance checks are a starting set; extend them for risks found during implementation.
 
