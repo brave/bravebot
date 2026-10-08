@@ -1113,8 +1113,8 @@ record is keyed on the file the stage's program resolved to and its operation wo
 argument, unless that is an option), so a grant made for `git push` is not one for `git pull` or
 `git -C dir push`, and one made for `/usr/bin/make` is not one for another `make` earlier on the
 path. It lasts the session that made it, a `--resume` of it included, or every session with
-`always`, and `/reach` alone lists the grants in force and `/reach remove <n>` removes the one
-numbered. A grant is attached when the plan is composed ([SANDBOX-18](#SANDBOX-18)): its rows are
+`always`, and is in force only in the workspace root it was typed in (below). `/reach` alone lists
+the grants in force there and `/reach remove <n>` removes the one numbered. A grant is attached when the plan is composed ([SANDBOX-18](#SANDBOX-18)): its rows are
 in the stage's profile, the plan the person endorses names it with the day it was allowed, and the
 failure line ([SANDBOX-19](#SANDBOX-19)) names a remembered scope as it names any other.
 
@@ -1131,6 +1131,18 @@ process environment, and nothing else. In particular:
 - A stage that starts with an option (`sh -c ...`, `git -C dir push`) has no operation to key on,
   so `/reach` refuses the line, and a grant for a command given no arguments covers it only while
   it is given none. Otherwise a grant made for one script would follow every script.
+- A grant is for the workspace root it was typed in, and the record keeps that root with the
+  identity of the directory there (its creation time and inode, as the kept answer of
+  [TRUST-23](trust-map.md#TRUST-23) does). It is read only where the session's workspace root is
+  that directory, so a row typed in one checkout is not in force after `/cd` into another or in a
+  new session started there, and `always` means always in that directory. A different directory
+  made at the same path is not the one the row was typed in, and a directory whose identity cannot
+  be read takes no row. The one exception is a credential scope for a program the table above
+  already gives that scope to (`git` and `gh` for the remote scope, `aws`, `kubectl`, `docker`),
+  which is for every checkout because that tool's configuration directory is the same in all of
+  them; no second list of programs is kept. A scope typed for any other program
+  (`/reach aws -- make check`) is bound like a directory. A line with no root that is not such a
+  scope grants nothing.
 - The record is `reach.jsonl` in the state directory. A checkout's files are not read for it, a
   session grant is read only by the session whose id it carries, and a line that is not a grant
   this build understands grants nothing.
@@ -1169,6 +1181,11 @@ the planner chose in front of a person to approve, and none is decided here.
 `verified-by: bravebot_agent::reach::remove_takes_away_the_row_the_list_numbers`
 `verified-by: bravebot_agent::reach::another_sessions_grant_is_not_listed`
 `verified-by: bravebot_agent::reach::a_session_with_no_profile_grants_nothing`
+`verified-by: bravebot_agent::reach::a_directory_row_is_in_force_only_in_the_checkout_it_was_typed_in`
+`verified-by: bravebot_agent::reach::a_scope_for_a_program_the_table_names_is_in_force_in_every_checkout`
+`verified-by: bravebot_agent::reach::a_scope_for_a_program_the_table_does_not_name_is_bound_to_the_checkout`
+`verified-by: bravebot_agent::reach::a_row_bound_to_another_directory_at_the_same_path_is_dropped`
+`verified-by: bravebot_agent::reach::remove_reaches_only_the_rows_of_this_checkout`
 `verified-by: bravebot_agent::confine::a_remembered_scope_reaches_the_command_it_was_made_for_and_no_other`
 `verified-by: bravebot_agent::confine::a_remembered_directory_is_read_and_written_only_where_the_grant_says`
 `verified-by: bravebot_agent::confine::a_remembered_reach_is_withheld_where_the_step_or_the_machine_has_changed`

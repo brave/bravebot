@@ -296,7 +296,11 @@ command carries it and the same refusal is not met in every session.
 
 The first word is a credential scope (`remote`, `aws`, `kubernetes` or `docker`) or a directory.
 A directory is read, and written only with `write`. It lasts this session, and a resumed one,
-unless you add `always`. Each program of the line gets it, on its own: a grant for `git push` is not
+unless you add `always`. It is for the directory you typed it in, the workspace root, and applies
+only there: after `/cd` into another checkout, or in a new session started in one, the row is not
+in force, and `always` means always in that directory. The exception is a credential scope for a
+program that scope belongs to (`git` and `gh` for `remote`, `aws`, `kubectl`, `docker`), which
+applies everywhere. `/reach aws -- make check` is not that, so it is for this directory. Each program of the line gets it, on its own: a grant for `git push` is not
 one for `git pull`, and a grant for one `make` is not one for another. A program started with a
 `NAME=value` in front of it gets none.
 
