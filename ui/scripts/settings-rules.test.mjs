@@ -31,7 +31,7 @@ function load(path) {
 }
 
 const { Row, RulesBanner } = load('src/renderer/components/Transcript.tsx')
-const { RulesInForce } = load('src/renderer/components/Permissions.tsx')
+const { RulesInForce, FilesystemRules } = load('src/renderer/components/Permissions.tsx')
 const t = load('src/renderer/transcript.ts')
 
 const NONE = { deny: [], ask: [], allow: [], unreadable: [], proposed: [], directories: [] }
@@ -147,4 +147,56 @@ test('a plan in a conversation with no such rule says nothing about rules', () =
     const markup = render(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false })
     assert.ok(!markup.includes('Permission rules are not applied'), markup)
   }
+})
+
+const FS = [
+  { key: 'denyRead', path: '~/.config/gh', file: '/home/someone/.bravebot/settings.json', pinned: false, refused: null },
+  { key: 'allowWrite', path: '~/notes', file: null, pinned: false, refused: null },
+  { key: 'denyWrite', path: '.env', file: '/p/.bravebot/settings.json', pinned: true, refused: null },
+  { key: 'denyRead', path: '../secrets', file: '/home/someone/.bravebot/settings.json', pinned: false, refused: 'it climbs out of the directory it is read from' },
+]
+
+// SANDBOX-25: the window shows the four lists and edits nothing.
+test('the filesystem lists are shown read only, each entry with who wrote it and why one is not in force', () => {
+  const markup = render(RulesInForce, { rules: rules({ filesystem: FS }) })
+
+  assert.ok(!markup.includes('No permission rules are in force'), 'paths in force are rules in force')
+  for (const path of ['~/.config/gh', '~/notes', '.env', '../secrets']) assert.ok(markup.includes(`<code>${path}</code>`), path)
+  assert.ok(markup.includes('/home/someone/.bravebot/settings.json'), 'the file that wrote an entry is named')
+  assert.ok(markup.includes('Command line'), 'an entry with no file came from the command line')
+  assert.ok(markup.includes('Set by your administrator'), 'a pinned entry says who pinned it')
+  assert.ok(markup.includes('Not in force: it climbs out of the directory it is read from'), markup)
+  assert.ok(!markup.includes('<button'), 'a path is changed in its file, so there is nothing to press')
+})
+
+test('a project file’s allowance is said to be ignored, and an older bridge says nothing', () => {
+  const markup = render(FilesystemRules, {
+    rules: rules({ filesystemIgnored: [{ key: 'allowWrite', file: '/p/.bravebot/settings.json' }] }),
+  })
+  assert.ok(markup.includes('allowWrite in /p/.bravebot/settings.json is not obeyed'), markup)
+
+  for (const absent of [NONE, null, rules({ filesystem: [] })]) {
+    assert.equal(render(FilesystemRules, { rules: absent }), '', 'nothing to show is no section')
+  }
+})
+
+test('a refused path or an ignored allowance is something the banner says is not in force', () => {
+  assert.equal(t.notInForce(rules({ filesystem: [FS[0], FS[1], FS[2]] })), false)
+  assert.equal(t.notInForce(rules({ filesystem: FS })), true)
+  assert.equal(t.notInForce(rules({ filesystemIgnored: [{ key: 'allowRead', file: '/f' }] })), true)
+
+  const markup = render(RulesBanner, {
+    rules: rules({ filesystem: FS, filesystemIgnored: [{ key: 'allowRead', file: '/p/.bravebot/settings.json' }] }),
+  })
+  assert.ok(markup.includes('2 permission settings are not in force'), markup)
+  assert.ok(markup.includes('<code>../secrets</code>'), markup)
+  assert.ok(markup.includes('is not started'), markup)
+})
+
+test('a path a settings file wrote is drawn as text and never as markup', () => {
+  const forged = '<img src="https://example.com/x.png">'
+  const markup = render(FilesystemRules, {
+    rules: rules({ filesystem: [{ key: 'denyRead', path: forged, file: forged, pinned: false, refused: forged }] }),
+  })
+  assert.ok(!markup.includes('<img'), markup)
 })

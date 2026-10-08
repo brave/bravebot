@@ -426,6 +426,10 @@ doctor-settings-sandbox-filesystem-ignored =
     sandbox.filesystem.{ $key } dans { $path } n'est pas suivi : une copie de travail peut refuser un accès, jamais en ajouter, donc il est lu seulement dans ~/.bravebot/settings.json, le fichier nommé par --settings et le fichier géré
 doctor-settings-sandbox-misshapen =
     sandbox.filesystem.{ $key } dans { $path } n'est pas une liste de chaînes, donc il est lu comme absent
+doctor-settings-sandbox-hosts-ignored =
+    sandbox.network.{ $key } dans { $path } n'est pas suivi : une copie de travail peut refuser un hôte, jamais en autoriser un, donc il est lu seulement dans ~/.bravebot/settings.json, le fichier nommé par --settings et le fichier géré
+doctor-settings-sandbox-hosts-misshapen =
+    sandbox.network.{ $key } dans { $path } n'est pas une liste de chaînes (onUnlisted : ask ou refuse), donc il est lu comme absent
 doctor-managed-sandbox-misshapen =
     sandbox.filesystem.{ $key } dans { $path } n'est pas une liste de chaînes, donc il n'impose rien
 doctor-managed-sandbox-unread =
@@ -1299,6 +1303,8 @@ reach-access-reads = lit
 reach-access-writes = lit et écrit
 reach-lifetime-session = pour cette session
 reach-lifetime-always = toujours
+reach-lifetime-session-in = pour cette session dans { $workspace }
+reach-lifetime-always-in = toujours dans { $workspace }
 reach-added = retenu : { $command } { $access } aussi { $entry }, { $lifetime }. Le prochain plan pour cette commande affichera cette ligne.
 reach-removed = oublié : { $command } ne { $access } plus aussi { $entry }
 reach-refused-entry = { $entry } n'est ni une portée d'identifiants (remote, aws, kubernetes, docker) ni un répertoire accessible. Ce doit être un chemin absolu ou commençant par ~/, existant, et ni votre répertoire personnel, ni ~/.ssh, ni un répertoire qui les contient.
@@ -1306,6 +1312,7 @@ reach-refused-write = une portée d'identifiants est en lecture seule. Seul un r
 reach-refused-line = cette ligne de commande ne peut pas être exécutée telle quelle, il n'y a donc rien pour quoi retenir l'accès
 reach-refused-assignment = une commande précédée de NOM=valeur ne reçoit aucun accès retenu
 reach-refused-option = une commande qui commence par une option, comme `sh -c ...` ou `git -C dir push`, ne peut pas recevoir d'accès retenu. Nommez d'abord l'opération, comme dans `git push`.
+reach-refused-workspace = ce répertoire ne peut pas être distingué d'un autre créé au même chemin, l'accès retenu pour cette commande ne peut donc pas lui être lié
 reach-refused-incognito = cette session n'ajoute rien à ~/.bravebot, rien n'a donc été retenu
 reach-refused-no-home = cette session n'a pas de répertoire personnel pour juger un accès
 reach-refused-number = aucun accès n'est numéroté { $number }

@@ -845,6 +845,10 @@ Linux a directory holding a path you refused writes to cannot have new entries m
 and on Windows a command the refusal would reach is not started, since neither can narrow a write
 grant.
 
+The desktop app shows the lists in the conversation's permissions view, each entry with the file
+that wrote it, and says in the notice above the conversation when an entry is not in force. It does
+not edit them: change the settings file, and the next conversation reads it.
+
 ### `run.maxOutput`
 
 ```json

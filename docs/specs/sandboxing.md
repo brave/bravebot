@@ -17,6 +17,7 @@ governs:
   - crates/sandbox/src/scope.rs
   - crates/sandbox/src/mode.rs
   - crates/config/src/sandbox.rs
+  - crates/config/src/sandbox_network.rs
   - crates/agent/src/confine.rs
   - crates/agent/src/reach.rs
 documented-by: docs/website/docs/security/security.md
@@ -1112,8 +1113,8 @@ record is keyed on the file the stage's program resolved to and its operation wo
 argument, unless that is an option), so a grant made for `git push` is not one for `git pull` or
 `git -C dir push`, and one made for `/usr/bin/make` is not one for another `make` earlier on the
 path. It lasts the session that made it, a `--resume` of it included, or every session with
-`always`, and `/reach` alone lists the grants in force and `/reach remove <n>` removes the one
-numbered. A grant is attached when the plan is composed ([SANDBOX-18](#SANDBOX-18)): its rows are
+`always`, and is in force only in the workspace root it was typed in (below). `/reach` alone lists
+the grants in force there and `/reach remove <n>` removes the one numbered. A grant is attached when the plan is composed ([SANDBOX-18](#SANDBOX-18)): its rows are
 in the stage's profile, the plan the person endorses names it with the day it was allowed, and the
 failure line ([SANDBOX-19](#SANDBOX-19)) names a remembered scope as it names any other.
 
@@ -1130,6 +1131,18 @@ process environment, and nothing else. In particular:
 - A stage that starts with an option (`sh -c ...`, `git -C dir push`) has no operation to key on,
   so `/reach` refuses the line, and a grant for a command given no arguments covers it only while
   it is given none. Otherwise a grant made for one script would follow every script.
+- A grant is for the workspace root it was typed in, and the record keeps that root with the
+  identity of the directory there (its creation time and inode, as the kept answer of
+  [TRUST-23](trust-map.md#TRUST-23) does). It is read only where the session's workspace root is
+  that directory, so a row typed in one checkout is not in force after `/cd` into another or in a
+  new session started there, and `always` means always in that directory. A different directory
+  made at the same path is not the one the row was typed in, and a directory whose identity cannot
+  be read takes no row. The one exception is a credential scope for a program the table above
+  already gives that scope to (`git` and `gh` for the remote scope, `aws`, `kubectl`, `docker`),
+  which is for every checkout because that tool's configuration directory is the same in all of
+  them; no second list of programs is kept. A scope typed for any other program
+  (`/reach aws -- make check`) is bound like a directory. A line with no root that is not such a
+  scope grants nothing.
 - The record is `reach.jsonl` in the state directory. A checkout's files are not read for it, a
   session grant is read only by the session whose id it carries, and a line that is not a grant
   this build understands grants nothing.
@@ -1168,6 +1181,11 @@ the planner chose in front of a person to approve, and none is decided here.
 `verified-by: bravebot_agent::reach::remove_takes_away_the_row_the_list_numbers`
 `verified-by: bravebot_agent::reach::another_sessions_grant_is_not_listed`
 `verified-by: bravebot_agent::reach::a_session_with_no_profile_grants_nothing`
+`verified-by: bravebot_agent::reach::a_directory_row_is_in_force_only_in_the_checkout_it_was_typed_in`
+`verified-by: bravebot_agent::reach::a_scope_for_a_program_the_table_names_is_in_force_in_every_checkout`
+`verified-by: bravebot_agent::reach::a_scope_for_a_program_the_table_does_not_name_is_bound_to_the_checkout`
+`verified-by: bravebot_agent::reach::a_row_bound_to_another_directory_at_the_same_path_is_dropped`
+`verified-by: bravebot_agent::reach::remove_reaches_only_the_rows_of_this_checkout`
 `verified-by: bravebot_agent::confine::a_remembered_scope_reaches_the_command_it_was_made_for_and_no_other`
 `verified-by: bravebot_agent::confine::a_remembered_directory_is_read_and_written_only_where_the_grant_says`
 `verified-by: bravebot_agent::confine::a_remembered_reach_is_withheld_where_the_step_or_the_machine_has_changed`
@@ -1218,11 +1236,20 @@ Letting a person name the hosts a program may reach keeps the build and removes 
 path to the rest. Deciding from the request line alone keeps the proxy from being a second reader
 of content, and a fixed refusal keeps a name the program chose out of a sentence the planner reads.
 
-Half built. The list, its defaults and the proxy are written and tested, and nothing starts a
-proxy for a session. Unbuilt: the `sandbox.network.allowedHosts`, `deniedHosts` and `onUnlisted`
-settings and the layers each may be read from, policy rows that allow only the proxy's port, the
-environment injection in `confine.rs`, the prompt for an unlisted host, the trace record and the
-`/status` line, and refusing the stage with the SANDBOX-19 sentence naming the setting.
+The list is named by `sandbox.network.allowedHosts`, `deniedHosts` and `onUnlisted` (`ask` or
+`refuse`). `deniedHosts` and `onUnlisted: refuse` only take reach away, so any layer may write them.
+`allowedHosts` and `onUnlisted: ask` give it back, so they are read from the person's own settings,
+the file `--settings` names outside the workspace and nothing a clone brings, as the allowances of
+`sandbox.filesystem` are; a project or local layer's is named by `doctor` and not read. A key that
+is not there is no list. A list that is set, even an empty one, is one, and a layer whose list was
+not read does not make one. A value that is not a list of strings, or an `onUnlisted` that is
+neither word, is reported and read as absent.
+
+Half built. The list, its defaults, the proxy and the settings that carry the list through the
+layers are written and tested, and nothing starts a proxy for a session. Unbuilt: the managed layer
+pinning the keys, policy rows that allow only the proxy's port, the environment injection in
+`confine.rs`, the prompt for an unlisted host, the trace record and the `/status` line, and refusing
+the stage with the SANDBOX-19 sentence naming the setting.
 
 `verified-by: bravebot_sandbox::hosts::an_exact_entry_covers_that_name_and_no_other`
 `verified-by: bravebot_sandbox::hosts::a_wildcard_covers_names_below_the_domain_and_not_the_domain`
@@ -1240,6 +1267,12 @@ environment injection in `confine.rs`, the prompt for an unlisted host, the trac
 `verified-by: bravebot_sandbox::proxy::every_decision_is_recorded_with_the_host_and_the_rule_that_decided_it`
 `verified-by: bravebot_sandbox::proxy::the_environment_points_every_proxy_variable_at_the_loopback_port`
 `verified-by: bravebot_sandbox::proxy::dropping_the_proxy_stops_it_listening`
+`verified-by: bravebot_config::settings::no_allowed_hosts_is_no_list_and_an_empty_one_is_a_list`
+`verified-by: bravebot_config::settings::the_home_layer_may_write_every_host_key`
+`verified-by: bravebot_config::settings::a_checkout_may_deny_a_host_and_never_allow_one`
+`verified-by: bravebot_config::settings::a_checkouts_list_alone_does_not_start_filtering`
+`verified-by: bravebot_config::settings::a_named_file_may_list_hosts_only_outside_the_workspace`
+`verified-by: bravebot_config::settings::a_misshapen_host_key_is_reported_and_not_read`
 
 <a id="SANDBOX-25"></a>
 ### SANDBOX-25: a person may add to and take from what a stage reads and writes, with four lists of paths
@@ -1300,6 +1333,14 @@ opening screen says only that the person's rules are in force. The run prompt sa
 and the sentence a failed step carries says them. None of them names a path, since a glob's matches
 are the machine's and a path is the person's.
 
+The desktop window shows the four lists and edits nothing: the permissions view lists each entry
+under the list it is in with the file that wrote it, or the command line, and an entry that is not
+in force with the sentence `doctor` gives; the notice above a conversation counts an entry that is
+not in force and an allowance a project file wrote, as it does a permission rule. It names paths
+where the terminal's `/status` does not, since it is the person's own settings it is showing back
+and `doctor` does the same. The person edits the settings file, and a change applies to the next
+conversation. A command that adds an allowance from a session is not built.
+
 **Why.** The lists are how a person changes what a stage reads and writes without `/add-dir`, the
 only other way to move that reach, which also marks the directory trusted
 ([TRUST-9](trust-map.md#TRUST-9)). Without them, a person with a file the program should not change,
@@ -1354,6 +1395,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_cli::running::doctor_names_each_filesystem_rule_with_where_it_came_from`
 `verified-by: bravebot_cli::running::a_denied_write_reaches_the_programs_a_run_starts`
 `verified-by: bravebot_ui_bridge::sandbox_filesystem::a_denied_write_in_the_settings_reaches_the_programs_a_window_runs`
+`verified-by: bravebot_ui_bridge::rules::the_filesystem_lists_are_reported_with_the_file_and_what_became_of_each`
 
 ## Programs a person asked for
 

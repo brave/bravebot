@@ -508,6 +508,10 @@ doctor-settings-sandbox-filesystem-ignored =
     sandbox.filesystem.{ $key } in { $path } is not obeyed: a checkout can refuse reach and never add it, so it is read from ~/.bravebot/settings.json, the file --settings names and the managed file only
 doctor-settings-sandbox-misshapen =
     sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it is read as absent
+doctor-settings-sandbox-hosts-ignored =
+    sandbox.network.{ $key } in { $path } is not obeyed: a checkout can refuse a host and never allow one, so it is read from ~/.bravebot/settings.json, the file --settings names and the managed file only
+doctor-settings-sandbox-hosts-misshapen =
+    sandbox.network.{ $key } in { $path } is not a list of strings (onUnlisted: ask or refuse), so it is read as absent
 doctor-managed-sandbox-misshapen =
     sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it pins nothing
 doctor-managed-sandbox-unread =
@@ -1497,6 +1501,8 @@ reach-access-reads = reads
 reach-access-writes = reads and writes
 reach-lifetime-session = for this session
 reach-lifetime-always = always
+reach-lifetime-session-in = for this session in { $workspace }
+reach-lifetime-always-in = always in { $workspace }
 reach-added = remembered: { $command } also { $access } { $entry }, { $lifetime }. The next plan for it shows this row.
 reach-removed = forgotten: { $command } no longer also { $access } { $entry }
 reach-refused-entry = { $entry } is not a credential scope (remote, aws, kubernetes, docker) or a directory that can be reached. It must be an absolute path or start with ~/, exist, and not be your home directory, ~/.ssh, or a directory above them.
@@ -1504,6 +1510,7 @@ reach-refused-write = a credential scope is read only. Only a directory can be w
 reach-refused-line = that command line cannot be run as written, so there is nothing to remember the reach for
 reach-refused-assignment = a command with NAME=value in front of it carries no remembered reach
 reach-refused-option = a command that starts with an option, such as `sh -c ...` or `git -C dir push`, cannot carry a remembered reach. Name the operation first, as in `git push`.
+reach-refused-workspace = this directory cannot be told apart from another made at the same path, so a reach for this command cannot be tied to it
 reach-refused-incognito = this session adds nothing to ~/.bravebot, so nothing was remembered
 reach-refused-no-home = this session has no home directory to judge a reach against
 reach-refused-number = no reach is numbered { $number }

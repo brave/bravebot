@@ -16110,6 +16110,18 @@ fn one_confined_run_keeping_state(
 ) -> (bravebot_agent::RunRequest, String) {
     let scratch = Scratch::new(name);
     let workspace = Workspace::new(&scratch.path).expect("workspace");
+    one_confined_run_keeping_state_in(&workspace, command, state, profile, session)
+}
+
+/// [`one_confined_run_keeping_state`] in a workspace the caller made, so that a row can be typed in
+/// it first.
+fn one_confined_run_keeping_state_in(
+    workspace: &Workspace,
+    command: &str,
+    state: &std::path::Path,
+    profile: &std::path::Path,
+    session: &str,
+) -> (bravebot_agent::RunRequest, String) {
     let (endpoint, received) = serve_sequence(vec![
         tool_request("run", &format!(r#"{{"command":"{command}"}}"#)),
         reply_with("done"),
@@ -16122,7 +16134,7 @@ fn one_confined_run_keeping_state(
     turn::resume(
         &config,
         &egress,
-        &workspace,
+        workspace,
         &Task::new("run it")
             .with_confined_runs(true)
             .with_home(Some(state.to_path_buf()))
@@ -16173,7 +16185,7 @@ fn a_refused_run_whose_stderr_names_a_path_adds_no_row() {
 
     let store = bravebot_agent::reach::Store::new(&state.path);
     assert!(!store.path().exists(), "a refusal left a record");
-    assert!(store.read(Some("s")).is_empty());
+    assert!(store.read(Some("s"), std::path::Path::new("/")).is_empty());
     assert!(!told.contains("/elsewhere"), "{told}");
     for request in [&first, &second] {
         let confined = request.confined.as_ref().expect("a confined plan");
@@ -16196,6 +16208,8 @@ fn a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only() 
     }
     let state = Scratch::new("reach-plan-state");
     let profile = Scratch::new("reach-plan-profile");
+    let checkout = Scratch::new("reach-plan-checkout");
+    let checkout = Workspace::new(&checkout.path).expect("workspace");
     let command = "false";
     let plan = bravebot_agent::cmdline::compile(
         command,
@@ -16210,7 +16224,7 @@ fn a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only() 
             home: &state.path,
             profile: Some(&profile.path),
             session: "mine",
-            directory: &profile.path,
+            directory: checkout.root(),
             today: "2026-10-07",
         },
         &format!("docker -- {command}"),
@@ -16218,26 +16232,28 @@ fn a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only() 
     assert!(said.contains("docker"), "{said}");
     assert_eq!(
         bravebot_agent::reach::Store::new(&state.path)
-            .read(Some("mine"))
+            .read(Some("mine"), checkout.root())
             .iter()
             .filter(|grant| grant.covers(step))
             .count(),
         1
     );
 
-    let (mine, told) = one_confined_run_keeping_state(
-        "reach-plan-mine",
-        command,
-        &state.path,
-        &profile.path,
-        "mine",
-    );
-    let (other, other_told) = one_confined_run_keeping_state(
-        "reach-plan-other",
+    let (mine, told) =
+        one_confined_run_keeping_state_in(&checkout, command, &state.path, &profile.path, "mine");
+    let (other, other_told) = one_confined_run_keeping_state_in(
+        &checkout,
         command,
         &state.path,
         &profile.path,
         "another",
+    );
+    let (moved, moved_told) = one_confined_run_keeping_state(
+        "reach-plan-moved",
+        command,
+        &state.path,
+        &profile.path,
+        "mine",
     );
 
     let sentences = mine.confined.as_ref().expect("confined").sentences();
@@ -16255,6 +16271,19 @@ fn a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only() 
     assert!(
         other_told.contains("credential scopes: none"),
         "{other_told}"
+    );
+    assert!(
+        moved
+            .confined
+            .as_ref()
+            .expect("confined")
+            .sentences()
+            .is_empty(),
+        "the session's row followed it into another checkout"
+    );
+    assert!(
+        moved_told.contains("credential scopes: none"),
+        "{moved_told}"
     );
 }
 
