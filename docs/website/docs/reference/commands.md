@@ -21,6 +21,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
+| `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/recap` | | Recap where this session stands, without putting it in the conversation |
@@ -181,6 +182,20 @@ advisor's tokens and is counted in the turn's.
 
 Typed while a turn runs with nothing waiting, it is taken at once and the next turn is the first
 to use it.
+
+## `/style [name | off]`
+
+Sets how the planner answers, from the next turn on. Three styles ship with bravebot: `concise`
+leads with the result and leaves out preamble and recap, `explanatory` adds short `Insight` notes on
+why the code is the way it is, and `proactive` starts work and decides routine questions itself,
+saying what it assumed. `/style` alone says which is in force and lists the names, and `/style off`
+clears the pick.
+
+A style stands where [`--system-prompt`](cli.md#--system-prompt-prompt-and---append-system-prompt-prompt) stands: it replaces the
+opening of the system prompt and nothing after it. If you also gave `--system-prompt`, that is used
+and the style is not. A style grants nothing: writes are still put to you where they would have been,
+and plan mode still refuses them. The pick lasts for the session and is not written down. Styles
+cannot yet be read from files.
 
 ## `/effort [level]`
 
@@ -983,7 +998,7 @@ what the session keeps for itself, so they are carried out as you type them, ahe
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. The exception is a line of the same command already waiting, which they wait behind, so
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/issue`, `/pr`,
-`/forget-trust`, `/theme <name>`, `/effort <level>` and `/advisor` change only what the session keeps, and are carried out as you
+`/forget-trust`, `/theme <name>`, `/effort <level>`, `/advisor` and `/style` change only what the session keeps, and are carried out as you
 type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
 waiting `/clear` names the new session. What they say is drawn under the turn and joins the
 transcript once the turn has ended. `/theme` and `/effort` alone open a picker, so they wait.

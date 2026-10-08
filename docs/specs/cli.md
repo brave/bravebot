@@ -1081,7 +1081,7 @@ remove it.
 **Known costs.** `--append-system-prompt "$(cat notes.md)"` gives the file's bytes the authority of
 the person who typed the flag, whatever the file holds and whoever wrote it. Content that should not
 have that authority is passed as piped input (CLI-3), which is quarantined. There is no settings
-key, no slash command, no tool and no `--system-prompt-file`, so words a checkout always wants are
+key, no slash command that takes words (`/style` picks a built-in one, [INSTR-12](instructions.md#INSTR-12)), no tool and no `--system-prompt-file`, so words a checkout always wants are
 written in its `AGENTS.md`. `auth` is refused as well as the commands that read no words at all,
 because no part of `auth` would use them.
 

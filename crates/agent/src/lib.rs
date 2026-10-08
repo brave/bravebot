@@ -50,6 +50,7 @@ pub mod servers;
 pub mod shared;
 pub mod shell;
 pub mod skills;
+pub mod styles;
 pub mod subscription;
 #[cfg(test)]
 mod testutil;
