@@ -1353,7 +1353,7 @@ input-history-none-here = nothing sent this session  ·  { $chord } for earlier 
 input-history-search = { $chord } to search
 input-history-scope = { $chord } this project
 resume-heading = Resume session
-resume-search-placeholder = Search…
+resume-search-placeholder = Search titles and what was said… (since:7d for recent)
 resume-keys = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc for a new session
 resume-from-pr = for pull request { $pull_request }
 resume-keys-within = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc to stay in this session
@@ -2986,7 +2986,7 @@ doctor-direnv-missing = not found on PATH; see https://direnv.net/ or run `brew 
 
 status-undecided = not decided
 
-sessions-usage = sessions takes --json, stop and a session's id, or import and a tool's name
+sessions-usage = sessions takes --json, stop and a session's id, import and a tool's name, or search and some text
 sessions-none = No background sessions.
 sessions-no-home = There is no state directory to find background sessions in.
 sessions-missing = No background session { $id }.
@@ -3007,6 +3007,8 @@ sessions-import-there = "{ $title }" is already here, and was left as it was.
 sessions-import-missing = No Claude Code session here begins with { $id }.
 sessions-import-ambiguous = More than one Claude Code session here begins with { $id }.
 sessions-import-failed = Could not write "{ $title }": { $problem }
+sessions-search-usage = sessions search takes some text to find, and may add since:<n>h, since:<n>d or since:<n>w, and workspace:<directory> if it is not this one
+sessions-search-none = No session matches.
 sessions-state-working = working
 sessions-state-idle = idle
 sessions-state-stopped = stopped

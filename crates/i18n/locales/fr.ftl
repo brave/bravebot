@@ -1167,7 +1167,7 @@ input-history-none-here = rien envoyé dans cette session  ·  { $chord } pour l
 input-history-search = { $chord } pour rechercher
 input-history-scope = { $chord } ce projet
 resume-heading = Reprendre une session
-resume-search-placeholder = Rechercher…
+resume-search-placeholder = Rechercher dans les titres et les échanges… (since:7d pour les récentes)
 resume-keys =
     ↑↓ pour choisir  ·  Entrée pour reprendre  ·  tapez pour rechercher  ·  Échap pour une
     nouvelle session
@@ -2590,7 +2590,7 @@ doctor-direnv-ok = disponible dans le PATH
 doctor-direnv-missing = introuvable dans le PATH ; consultez https://direnv.net/ ou lancez `brew install direnv`
 
 status-undecided = non décidé
-sessions-usage = sessions accepte --json, stop et l'identifiant d'une session, ou import et le nom d'un outil
+sessions-usage = sessions accepte --json, stop et l'identifiant d'une session, import et le nom d'un outil, ou search et un texte
 sessions-none = Aucune session en arrière-plan.
 sessions-no-home = Il n'y a pas de répertoire d'état où chercher des sessions en arrière-plan.
 sessions-missing = Aucune session en arrière-plan { $id }.
@@ -2611,6 +2611,8 @@ sessions-import-there = « { $title } » est déjà ici, et a été laissée tel
 sessions-import-missing = Aucune session Claude Code ici ne commence par { $id }.
 sessions-import-ambiguous = Plusieurs sessions Claude Code ici commencent par { $id }.
 sessions-import-failed = Impossible d'écrire « { $title } » : { $problem }
+sessions-search-usage = sessions search accepte le texte à trouver, et peut y ajouter since:<n>h, since:<n>d ou since:<n>w, et workspace:<répertoire> s'il ne s'agit pas de celui-ci
+sessions-search-none = Aucune session ne correspond.
 sessions-state-working = au travail
 sessions-state-idle = inactive
 sessions-state-stopped = arrêtée

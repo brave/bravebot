@@ -7287,6 +7287,105 @@ fn a_claude_code_session_is_copied_once_and_only_when_asked() {
     assert!(said(&output).1.contains("No Claude Code session"));
 }
 
+/// SESSION-33: a script finds past sessions by what was said in them and gets ids and titles back.
+/// A tool result and an imported session are not searched, `since:` limits by age, `workspace:`
+/// names the directory, and no match exits 1 with nothing on stdout.
+#[test]
+fn sessions_search_prints_the_ids_and_titles_of_the_sessions_that_said_it() {
+    let home = Scratch::new("sessions-search");
+    let work = home.path.join("work");
+    std::fs::create_dir_all(&work).expect("create the workspace");
+    let work = work.canonicalize().expect("canonical workspace");
+    let project = work.to_str().expect("utf-8");
+    let key: String = project
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' => c,
+            _ => '-',
+        })
+        .collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock")
+        .as_secs();
+    let record = |id: &str, title: &str, updated: u64, front: &str, messages: serde_json::Value| {
+        serde_json::json!({
+            "id": id, "directory": project, "title": title, "updated": updated,
+            "front": front,
+            "conversation": {"messages": messages, "context": "trusted"},
+        })
+        .to_string()
+    };
+    let typed = |text: &str| serde_json::json!([{"role": "user", "content": text}]);
+    let read_a_file = serde_json::json!([
+        {"role": "user", "content": "read it"},
+        {"role": "tool", "tool_call_id": "c1", "content": "PASSWORD-IN-A-FILE"},
+    ]);
+    let day = 86_400;
+    let mut home = home;
+    for (id, body) in [
+        (
+            "recent",
+            record(
+                "recent",
+                "Tidy the docs",
+                now - day,
+                "terminal",
+                typed("move the ledger rounding"),
+            ),
+        ),
+        (
+            "older",
+            record(
+                "older",
+                "Fix the build",
+                now - 9 * day,
+                "desktop",
+                typed("the Ledger Rounding flakes"),
+            ),
+        ),
+        (
+            "result",
+            record("result", "Read a file", now - day, "terminal", read_a_file),
+        ),
+        (
+            "copied",
+            record(
+                "copied",
+                "Copied one",
+                now - day,
+                "claude-code",
+                typed("ledger rounding too"),
+            ),
+        ),
+    ] {
+        home = home.with_file(&format!(".bravebot/sessions/{key}/{id}.json"), &body);
+    }
+    let search = |words: &[&str]| {
+        let mut arguments = vec!["sessions", "search"];
+        arguments.extend_from_slice(words);
+        bravebot(&home.path, &[], &arguments)
+    };
+    let workspace = format!("workspace:{project}");
+
+    let output = search(&[&workspace, "LEDGER", "rounding"]);
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{err}");
+    assert_eq!(out, "recent  Tidy the docs\nolder  Fix the build\n");
+
+    let (out, _) = said(&search(&[&workspace, "since:7d", "ledger"]));
+    assert_eq!(out, "recent  Tidy the docs\n");
+
+    let output = search(&[&workspace, "PASSWORD-IN-A-FILE"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(said(&output).0, "");
+    assert!(said(&output).1.contains("No session matches"));
+
+    let output = search(&[&workspace, "since:3m", "ledger"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(said(&output).1.contains("sessions search takes"));
+}
+
 /// BG-2: `--bg` cannot start with a flag that would not reach the session it starts, with bypass,
 /// or from anything but a terminal, and each refusal leaves nothing in the roster.
 #[test]
