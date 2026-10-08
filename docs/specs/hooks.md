@@ -276,10 +276,9 @@ on one moment are two pairs, one after the other. It is a transient status and n
 leaves no line behind, and a hook that went well is still said nothing about (HOOK-7). Nothing the
 hook printed is part of it (HOOK-6), and nothing branches on it.
 
-**Why.** A hook holds the turn open, and until now nothing on screen said so: HOOK-7 gives that as
-the reason for the bound, but a person is told only once the hook has ended, so a formatter running
-for twenty seconds after a write looked like a slow model. Naming the program lets a person see
-whose command it is.
+**Why.** A hook holds the turn open, and without this a person is told only once it has ended, so a
+formatter running for twenty seconds after a write looks like a slow model. Naming the program lets
+a person see whose command it is.
 
 It is its own pair of reporter calls rather than a phase, because a phase has no end: the next phase
 announcement is what replaces one, and a hook that runs after the last round has none to follow it.
