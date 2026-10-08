@@ -304,16 +304,7 @@ fn filesystem_line(settled: Option<&bravebot_config::Filesystem>) -> Option<Line
 
 /// Why an entry of one of the filesystem lists is not in force, in the words `doctor` uses.
 pub fn filesystem_reason(reason: bravebot_sandbox::rules::Reason) -> &'static str {
-    use bravebot_sandbox::rules::Reason;
-    match reason {
-        Reason::NoHome => t!(sandbox_rule_no_home),
-        Reason::Climbs => t!(sandbox_rule_climbs),
-        Reason::GlobOnAWrite => t!(sandbox_rule_glob_on_a_write),
-        Reason::ConfinesNothing => t!(sandbox_rule_confines_nothing),
-        Reason::PrivateKey => t!(sandbox_rule_private_key),
-        Reason::TooBroad => t!(sandbox_rule_too_broad),
-        Reason::Overridden => t!(sandbox_rule_overridden),
-    }
+    bravebot_agent::permissions::filesystem_reason(reason)
 }
 
 /// Who closed the network for the programs `run` starts, in the words `/status` and `doctor` share.

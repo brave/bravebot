@@ -1333,6 +1333,14 @@ opening screen says only that the person's rules are in force. The run prompt sa
 and the sentence a failed step carries says them. None of them names a path, since a glob's matches
 are the machine's and a path is the person's.
 
+The desktop window shows the four lists and edits nothing: the permissions view lists each entry
+under the list it is in with the file that wrote it, or the command line, and an entry that is not
+in force with the sentence `doctor` gives; the notice above a conversation counts an entry that is
+not in force and an allowance a project file wrote, as it does a permission rule. It names paths
+where the terminal's `/status` does not, since it is the person's own settings it is showing back
+and `doctor` does the same. The person edits the settings file, and a change applies to the next
+conversation. A command that adds an allowance from a session is not built.
+
 **Why.** The lists are how a person changes what a stage reads and writes without `/add-dir`, the
 only other way to move that reach, which also marks the directory trusted
 ([TRUST-9](trust-map.md#TRUST-9)). Without them, a person with a file the program should not change,
@@ -1387,6 +1395,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_cli::running::doctor_names_each_filesystem_rule_with_where_it_came_from`
 `verified-by: bravebot_cli::running::a_denied_write_reaches_the_programs_a_run_starts`
 `verified-by: bravebot_ui_bridge::sandbox_filesystem::a_denied_write_in_the_settings_reaches_the_programs_a_window_runs`
+`verified-by: bravebot_ui_bridge::rules::the_filesystem_lists_are_reported_with_the_file_and_what_became_of_each`
 
 ## Programs a person asked for
 
