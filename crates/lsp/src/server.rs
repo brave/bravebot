@@ -1274,8 +1274,8 @@ mod tests {
     /// says which language and that the binary was missing, and not the path that was tried.
     #[test]
     fn a_missing_server_binary_is_written_to_the_diagnostic_log() {
-        let dir = std::env::temp_dir().join(format!("bravebot-lsp-log-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().expect("a scratch directory");
+        let dir = tmp.path().to_path_buf();
         bravebot_diag::configure(bravebot_diag::Level::Error, Some(dir.join("logs")));
 
         let launched = Server::launch(
@@ -1290,7 +1290,6 @@ mod tests {
             .flatten()
             .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
             .collect();
-        let _ = std::fs::remove_dir_all(&dir);
         bravebot_diag::configure(bravebot_diag::Level::Error, None);
 
         assert!(matches!(launched, Err(LspError::NoBinary { .. })));

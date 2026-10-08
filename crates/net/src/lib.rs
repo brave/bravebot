@@ -1288,8 +1288,8 @@ mod tests {
             );
         });
 
-        let dir = std::env::temp_dir().join(format!("bravebot-net-log-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().expect("a scratch directory");
+        let dir = tmp.path().to_path_buf();
         bravebot_diag::configure(bravebot_diag::Level::Error, Some(dir.clone()));
 
         let mut routing = bravebot_core::policy::Routing::new();
@@ -1321,7 +1321,6 @@ mod tests {
             .flatten()
             .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
             .collect();
-        let _ = std::fs::remove_dir_all(&dir);
         bravebot_diag::configure(bravebot_diag::Level::Error, None);
 
         assert!(log.contains("ERROR net.fetch"), "{log}");

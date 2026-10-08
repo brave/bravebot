@@ -11,3 +11,6 @@ repository.workspace = true
 bravebot-core = { path = "../core" }
 bravebot-diag = { path = "../diag" }
 ureq = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

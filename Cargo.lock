@@ -233,6 +233,9 @@ version = "0.14.0"
 [[package]]
 name = "bravebot-diag"
 version = "0.14.0"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "bravebot-filetype"
@@ -250,6 +253,7 @@ dependencies = [
  "bravebot-diag",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -279,6 +283,7 @@ version = "0.14.0"
 dependencies = [
  "bravebot-core",
  "bravebot-diag",
+ "tempfile",
  "ureq",
 ]
 

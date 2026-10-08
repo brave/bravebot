@@ -325,14 +325,8 @@ pub fn debug(event: &'static str, fields: &[(&'static str, Field)]) {
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "bravebot-diag-{tag}-{}-{}",
-            std::process::id(),
-            now_millis()
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        dir
+    fn scratch() -> tempfile::TempDir {
+        tempfile::tempdir().expect("a scratch directory")
     }
 
     fn only_file(dir: &Path) -> PathBuf {
@@ -376,7 +370,8 @@ mod tests {
     /// Only the lines at or under the level asked for are written.
     #[test]
     fn a_line_above_the_level_is_not_written() {
-        let dir = scratch("level");
+        let tmp = scratch();
+        let dir = tmp.path().to_path_buf();
         let mut log = Log::new(Level::Info, Some(dir.clone()));
         log.record(Level::Debug, "too.detailed", &[]);
         log.record(Level::Info, "step", &[]);
@@ -385,18 +380,19 @@ mod tests {
         assert!(!text.contains("too.detailed"));
         assert!(text.contains("INFO step"));
         assert!(text.contains("ERROR failure"));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A run that never fails leaves no file, since at the default level the file is made by the
     /// first error and not by starting.
     #[test]
     fn no_file_is_made_until_a_line_is_written() {
-        let dir = scratch("lazy");
-        let mut log = Log::new(Level::Error, Some(dir.clone()));
+        let tmp = scratch();
+        let dir = tmp.path().to_path_buf();
+        let logs = dir.join("logs");
+        let mut log = Log::new(Level::Error, Some(logs.clone()));
         log.record(Level::Info, "step", &[]);
         log.record(Level::Debug, "detail", &[]);
-        assert!(!dir.exists(), "a log directory was made for nothing");
+        assert!(!logs.exists(), "a log directory was made for nothing");
     }
 
     /// With no directory (incognito, or no home) nothing is written anywhere.
@@ -413,7 +409,8 @@ mod tests {
     #[test]
     fn the_log_and_its_directory_are_private() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = scratch("mode");
+        let tmp = scratch();
+        let dir = tmp.path().to_path_buf();
         let mut log = Log::new(Level::Error, Some(dir.join("logs")));
         log.record(Level::Error, "failure", &[]);
         let logs = dir.join("logs");
@@ -421,14 +418,14 @@ mod tests {
         let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&file), 0o600);
         assert_eq!(mode(&logs), 0o700);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Old logs go, so the directory does not grow without bound, but a file this crate did not
     /// make is not its to delete.
     #[test]
     fn retention_keeps_the_newest_and_leaves_foreign_files() {
-        let dir = scratch("keep");
+        let tmp = scratch();
+        let dir = tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
         for day in 1..=14 {
             fs::write(dir.join(format!("202601{day:02}T000000Z-1.log")), "old").unwrap();
@@ -449,14 +446,14 @@ mod tests {
         assert!(ours.contains(&"20260114T000000Z-1.log".to_string()));
         assert!(dir.join("notes.txt").exists());
         assert!(dir.join("20260101T000000Z.log").exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A clock set behind the older files would sort the new one first, and pruning it would lose
     /// the log of the run that is writing it.
     #[test]
     fn the_file_being_written_survives_retention_when_the_clock_is_behind() {
-        let dir = scratch("behind");
+        let tmp = scratch();
+        let dir = tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
         for day in 1..=KEEP {
             fs::write(dir.join(format!("20990101T0000{day:02}Z-1.log")), "future").unwrap();
@@ -471,7 +468,6 @@ mod tests {
         assert!(text.contains("ERROR failure"), "the new log was pruned");
         let count = fs::read_dir(&dir).unwrap().count();
         assert_eq!(count, KEEP);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     /// An underscore is a legal host character, and a service named with one is the host a person
