@@ -18673,6 +18673,49 @@ mod tests {
         );
     }
 
+    /// A command word typed in full is still the start of a longer skill name, so the skill is
+    /// listed beneath the command. Enter on the untouched cursor runs the command, and the arrow
+    /// onto the skill row takes the skill.
+    #[test]
+    fn a_command_word_typed_in_full_still_offers_the_skills_extending_it() {
+        let held = || {
+            vec![crate::skills::Skill {
+                name: "pr-fix".to_string(),
+                description: "what pr-fix is for".to_string(),
+                argument_hint: None,
+                source: bravebot_agent::skills::Source::Home,
+            }]
+        };
+        let mut session = Session::new("none");
+        for c in "/pr".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+            session.settle_skills(held);
+        }
+
+        let crate::state::Offered::Slash { commands, skills } = session.offered() else {
+            panic!("nothing was offered");
+        };
+        assert_eq!(
+            commands.iter().map(|c| c.name).collect::<Vec<_>>(),
+            [PR_COMMAND]
+        );
+        assert_eq!(skill_names(&skills), ["pr-fix"]);
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Link(bravebot_session::sessions::Link::PullRequest, String::new()),
+            "Enter on the command ran it"
+        );
+
+        let mut session = Session::new("none");
+        for c in "/pr".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+            session.settle_skills(held);
+        }
+        handle_key(&mut session, key(KeyCode::Down));
+        assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
+        assert_eq!(session.input(), "/pr-fix ");
+    }
+
     /// Mid-sentence a command is a prompt, so only skills are offered there. Taking one writes its
     /// name over the half-typed word, and the line is then sent as the sentence it is.
     #[test]
