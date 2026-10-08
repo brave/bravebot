@@ -1503,6 +1503,25 @@ mod tests {
         assert!(reads(&make, path) && !writes(&make, path));
         assert!(reads(&cargo, path) && writes(&cargo, path));
         assert!(!reads(&ls, path) && !writes(&ls, path));
+
+        let (make_step, cargo_step, ls_step) = (
+            step("/usr/bin/make", &[]),
+            step("/usr/bin/cargo", &[]),
+            step("/bin/ls", &[]),
+        );
+        let said = confined.describe(&[&make_step]).sentences();
+        // cargo's own toolchain sentence comes first; the remembered one is the last.
+        let wrote = confined.describe(&[&cargo_step]).sentences();
+        assert_eq!(said.len(), 1, "{said:?}");
+        let (read, write) = (&said[0], wrote.last().expect("a sentence"));
+        for sentence in [read, write] {
+            assert!(sentence.contains(path), "{sentence}");
+            assert!(sentence.contains("2026-10-07"), "{sentence}");
+        }
+        assert!(read.contains("make also reads "), "{said:?}");
+        assert!(!read.contains("writes"), "{said:?}");
+        assert!(write.contains("cargo also reads and writes "), "{wrote:?}");
+        assert!(confined.describe(&[&ls_step]).sentences().is_empty());
     }
 
     /// A step with an assignment, a session with no home and a directory that has since become a
