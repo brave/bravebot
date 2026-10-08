@@ -278,7 +278,7 @@ pub fn compact<S: Sink>(
     // below adds to it. A summariser with a tool would be a second planner, and a second planner
     // is a second thing to reason about rather than a shorter conversation.
     // The model this runs on: the `summaryModel` setting where it names one, and the session's own
-    // otherwise (COMPACT-14). A configured model with no sign-in refuses the compaction and leaves
+    // otherwise (COMPACT-15). A configured model with no sign-in refuses the compaction and leaves
     // the conversation whole, which is this module's answer to every other refusal too.
     let model = side_request_model(chat.config, chat.egress, chat.model)?;
     let model = model.as_ref();
@@ -338,7 +338,7 @@ mod tests {
         }
     }
 
-    /// COMPACT-14, GOAL-19: the setting names the model, and nothing named leaves the session's own
+    /// COMPACT-15, GOAL-19: the setting names the model, and nothing named leaves the session's own
     /// in place. Both arms are checked against the same configuration, so a resolver that returned
     /// one of them always would fail on the other.
     #[test]
@@ -374,7 +374,7 @@ mod tests {
         }
     }
 
-    /// COMPACT-14: a tier word in the setting resolves to the model that word names, so the key
+    /// COMPACT-15: a tier word in the setting resolves to the model that word names, so the key
     /// takes the spellings `model` takes. Left as the word, the request would carry a name no
     /// service has heard of.
     #[test]
@@ -405,7 +405,7 @@ mod tests {
         assert_eq!(resolved, "haiku-arn", "the tier word did not resolve");
     }
 
-    /// COMPACT-14, GOAL-19: a configured summary model the machine has no sign-in for is reported
+    /// COMPACT-15, GOAL-19: a configured summary model the machine has no sign-in for is reported
     /// rather than quietly replaced by the session's model, which would spend the rate the person
     /// named the key to avoid.
     #[test]

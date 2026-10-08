@@ -202,7 +202,7 @@ impl BackendError {
     }
 
     /// Whether the service answered with a status it uses to say the body is not one it will take
-    /// (COMPACT-15).
+    /// (COMPACT-14).
     ///
     /// Decided from the status alone, never from what the reply wrote. The same statuses cover a
     /// field the service dislikes as readily as a prompt too long, so this says only that the request
