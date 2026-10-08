@@ -488,8 +488,8 @@ The login keychain file is the one credential location the base reads, and what 
 that a stage can read a database holding every password the account keeps there. Its items are
 encrypted under the login password, and the file can leave the machine wherever egress is open, so
 it is open to an offline guess of that password. The system service that holds the keychain was
-already reachable from every stage (the known costs below), and a lookup through it now finds the
-database where before it found a refusal. Which items such a lookup returns, and which raise the
+already reachable from every stage (the known costs below), and because the base reads the login
+keychain file, a lookup through it can reach that database. Which items such a lookup returns, and which raise the
 system's own prompt, is the platform's and is not tested here. The `mds` write lets a stage change
 the framework's cache files, which are rebuilt on demand. The read row names the file and not the
 directory so that `aws-vault.keychain-db` and every other keychain file stay refused.
@@ -1826,8 +1826,8 @@ reported as what it is.
 - Seatbelt profiles here allow every `mach-lookup`, so the keychain service is reachable from every
   stage and not only from one carrying the remote scope. A profile holding the keychain to that
   scope has to name the service instead, the same step the socket above needs. Since the base reads
-  the login keychain file, a stage can now complete a lookup there, where before the refused file
-  failed it.
+  the login keychain file, a lookup through that service from any stage can reach the login
+  keychain's database.
 - The cold path of a macOS developer shim has not been exercised. With the lookup cache the shims
   keep empty, a shim asks `xcodebuild`, which refuses every invocation until the Xcode licence
   is accepted, confined or not, so a machine in that state cannot show whether that path starts,
