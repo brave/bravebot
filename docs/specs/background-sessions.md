@@ -21,8 +21,9 @@ The roster, `bravebot sessions`, `bravebot sessions stop`, `bravebot --bg`, `bra
 `bravebot reply` are built, and the session a background process runs is the session in lines. A
 clause that is built whole names its tests. A clause with a part still to build reads
 `verified-by: none` until all of it lands, and the parts not built are: the supervisor and restarts
-([BG-12](#BG-12)), the idle stop ([BG-13](#BG-13)), starting an `interrupted` session again from
-`attach` or `reply`, `/bg` and `/detach`, and the checkout ([BG-14](#BG-14)). A question from an
+([BG-12](#BG-12)), starting an `interrupted` session again from `attach` or `reply`, `/bg`, and the
+checkout ([BG-14](#BG-14)). The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
+no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built. A question from an
 MCP server that has to be started is held like any other, and is drawn as a foreground session
 draws it. A `stopped` session is started again from `attach` or `reply` by a terminal, resuming the
 record the process wrote after each turn, and `--resume` and `--continue` refuse a record a running
@@ -93,8 +94,9 @@ the whole of what they asked for.
 <a id="BG-3"></a>
 ### BG-3: the supervisor moves process state and decides nothing from content
 
-The supervisor starts a session's process, stops it, restarts it ([BG-12](#BG-12)), stops it when it
-has been idle ([BG-13](#BG-13)), and writes the roster. It reads no conversation, no record, no
+The supervisor starts a session's process, stops it, restarts it ([BG-12](#BG-12)), and writes the
+roster. A process that has been idle ([BG-13](#BG-13)) ends itself, because it is the one that knows
+whether a terminal is attached, and the supervisor sees only that it ended. It reads no conversation, no record, no
 prompt, no reply and no tool result. It makes no model request and holds no credential: a session's
 process reads its own, as a foreground one does. It branches only on process facts (whether the
 process is alive, how it exited, when it last did anything) and on the roster's own fields.
@@ -245,7 +247,8 @@ is started again in the mode every session opens in and attached to.
 
 One terminal is attached at a time. A second `attach` is refused and names the session. Closing the
 terminal, losing its connection or typing `/detach` ends the attachment and nothing
-else: a turn that is running keeps running, and a held prompt stays held.
+else: a turn that is running keeps running, and a held prompt stays held. The line `/detach` is not
+sent to the session.
 
 The channel between the terminal and the process is local to the machine. It is restricted to the
 person's account and carries content with the label it was released under, so the terminal marks
@@ -316,7 +319,13 @@ to repeat. The person who comes back sees the state and decides.
 ### BG-13: an idle session is stopped after an hour and wakes on the next reply
 
 A process with no turn running, no held prompt, no attached terminal, no loop and no watch for an
-hour is stopped, and its state is `stopped`. A reply or an attach starts it again from the record.
+hour ends, and its state is `stopped`. The hour starts when the process last began waiting for a
+prompt or when the last terminal left, whichever is later. A reply or an attach starts it again from
+the record.
+
+A reply or an attach that reaches the process once it has ended its wait is refused, so a prompt is
+never taken by a process that will not read it. Asked again once the session is `stopped`, it starts
+the session again.
 
 A loop or a watch does not survive its process, so a session holding one is not idle.
 
@@ -324,7 +333,16 @@ A loop or a watch does not survive its process, so a session holding one is not 
 and memory for as long as the machine is on. Stopping a session with a loop would silently end the
 loop.
 
-`verified-by: none`
+`verified-by: bravebot_cli::host::an_idle_session_ends_and_refuses_what_it_would_not_read`
+`verified-by: bravebot_cli::host::the_end_of_an_idle_session_is_the_end_of_its_input`
+`verified-by: bravebot_cli::host::a_held_question_does_not_run_out_the_idle_time`
+`verified-by: bravebot_cli::host::the_idle_time_starts_when_the_terminal_leaves`
+`verified-by: bravebot_cli::host::a_terminal_that_went_away_does_not_hold_the_session_open`
+`verified-by: bravebot_cli::host::a_reply_that_was_taken_is_read_even_after_the_time_is_up`
+`verified-by: bravebot_cli::host::the_idle_time_is_counted_from_the_prompt_being_asked_for`
+`verified-by: bravebot_cli::plain::a_hosted_session_idle_for_its_time_ends_and_is_recorded_stopped`
+`verified-by: bravebot_cli::running::a_reply_from_a_terminal_starts_a_stopped_session_with_it`
+`verified-by: bravebot_cli::running::an_attach_from_a_terminal_starts_a_stopped_session`
 
 <a id="BG-14"></a>
 ### BG-14: a background session in a git repository works in a checkout of its own

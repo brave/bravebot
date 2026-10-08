@@ -1616,6 +1616,44 @@ mod tests {
         }
     }
 
+    /// BG-13: a hosted session that waits for a prompt for as long as it is allowed to leaves the
+    /// loop, as a session whose input ended does, and what is recorded for it is `stopped`. The
+    /// first prompt is a turn like any other, so the time counts from the prompt after it.
+    #[test]
+    fn a_hosted_session_idle_for_its_time_ends_and_is_recorded_stopped() {
+        use crate::host::{Hosting, Shared};
+        use bravebot_session::jobs::{Roster, State};
+        use std::time::Duration;
+
+        const ID: &str = "11111111-1111-4111-8111-111111111111";
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("plain-idle-{}", std::process::id()));
+        let roster = Roster::at(root.clone());
+        let job = crate::host::entry(&roster, ID, Some("fix the build"));
+        let shared = Shared::ending_when_idle_for(
+            Roster::at(root),
+            job,
+            Some("fix the build".to_string()),
+            Duration::from_millis(200),
+        );
+        let hosting = Hosting::of(&shared);
+
+        let (ended, ends) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut asking = Prompting::watched(hosting.input, Vec::new(), hosting.watch);
+            let mut turns = Canned { said: Vec::new() };
+            lines(&mut asking, &mut Vec::new(), &mut turns, &mut Vec::new());
+            let _ = ended.send(());
+        });
+        ends.recv_timeout(Duration::from_secs(20))
+            .expect("the session never left its loop");
+
+        shared.finish();
+        let seen = roster.get(ID).expect("the entry is there");
+        assert_eq!(seen.job.state, State::Stopped);
+    }
+
     /// Drive a whole session over a script, and read back what each stream carried.
     fn session_over(script: &str, said: Vec<Said>) -> (String, String) {
         let mut reply = Vec::new();
