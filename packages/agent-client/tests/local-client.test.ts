@@ -84,7 +84,7 @@ test('the program prints released text with control characters escaped, so it ca
   assert.ok(payloads.some((payload) => JSON.stringify(payload).includes(JSON.stringify('\u{e0041}').slice(1, -1))), 'the tag character survives a round trip')
 })
 
-test('the program declines a user question and the planner receives no answer', async () => {
+test('the program declines a user question, and the planner is told it was declined and given no option', async () => {
   const made = await rig({
     'plan:ask': [
       { tool: { name: 'ask_user', arguments: { questions: [{ header: 'Approach', question: 'Which approach?', options: [{ label: 'Alpha' }, { label: 'Beta' }] }] } } },
@@ -95,6 +95,13 @@ test('the program declines a user question and the planner receives no answer', 
   assert.equal(result.code, 0, result.err)
   assert.match(result.out, /declining the question/)
   assert.equal(made.stub.requests.length, 2, 'the planner was asked once more after the question')
+  // The option labels also appear in the planner's own tool call, so only the tool result is read.
+  const results = (JSON.parse(made.stub.requests[1]!) as { messages: { role: string; content: string }[] }).messages
+    .filter((message) => message.role === 'tool')
+    .map((message) => message.content)
+  assert.equal(results.length, 1)
+  assert.match(results[0]!, /declined to answer/)
+  assert.doesNotMatch(results[0]!, /Alpha|Beta/, 'an option was chosen for the planner')
 })
 
 test('the program escapes what the bridge says about itself and its errors, not only released payloads', async () => {

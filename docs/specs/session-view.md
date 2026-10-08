@@ -130,8 +130,12 @@ field. A sequence that is not the next one, a malformed update, or the end of th
 that view at its last received state; it claims no recovery. It reports a close as a detached view
 with worker termination and save success unknown. A failed close keeps the session registered for
 view updates and connection-loss reporting, unless the bridge reports that the session is gone. Sessions open only in configured workspace ids, and a
-request unanswered past its deadline ends the connection with its outcome unknown. Startup trust is
-sent only when a caller asks. No export of the package reaches raw dispatch or the connection, so these
+request unanswered past its deadline ends the connection with its outcome unknown. A failed request
+reports whether it was rejected, meaning refused with no effect, or unknown, meaning it may have
+reached the bridge: a lost connection, a failed write, a deadline, or an internal bridge error. At
+most 256 requests wait for an answer, with cancel and close exempt so a caller can always stop work,
+and one request is at most 8 MiB; a request beyond either limit is refused before it is written.
+Startup trust is sent only when a caller asks. No export of the package reaches raw dispatch or the connection, so these
 rules hold for every caller. The client holds released payloads as received and branches on none of
 them. Rust still decides every transition and every answer. Replies go to the displayed question:
 the method comes from the pending kind Rust supplied, a stale request is refused without sending, a
