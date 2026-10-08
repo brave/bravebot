@@ -68,7 +68,7 @@ export type StagedPaste = Omit<StagedDrop, 'skipped'>
 /** Write a pasted picture's marker into `draft` at `caret`, numbered from the counter drops share. */
 export function stagePaste(staging: Staging, picture: PastedPicture, draft: string, caret: number): StagedPaste {
   const made = staging.made + 1
-  const marker = `[Image #${made}]`
+  const marker = `[${picture.noun} #${made}]`
   return { staging: { made, staged: [...staging.staged, { marker, via: 'paste', picture }] }, ...writtenAt(draft, caret, [marker]) }
 }
 

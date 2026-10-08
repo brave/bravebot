@@ -768,6 +768,24 @@ A note is built from the terminal's catalogs (`bravebot_i18n::sizes`), in `en-US
 machine's language, because the desktop window is in English only. `bravebot-rpc` chooses that
 locale when it starts (LOCALE-7); the terminal keeps choosing from the environment.
 
+#### `pastes.check`
+
+```json
+{ "id": 10, "method": "pastes.check", "params": { "bytes": 482113 } }
+→ { "ok": true, "media": "image/png", "noun": "Image" }
+
+{ "id": 11, "method": "pastes.check", "params": { "bytes": 20971520 } }
+→ { "ok": false, "note": "that picture is 20.0 MB, and a paste carries at most 10.0 MB" }
+```
+
+Whether a pasted picture of `bytes` may be staged (PASTE-11), held to the cap `turn.send` holds
+`images` to and the terminal's clipboard reader stages by. When it fits, `media` is the type a
+picture re-encoded as PNG is named by in `images` and `noun` is the word its marker uses. When it
+does not, `note` is the terminal's note for it, in `en-US` as `drops.classify`'s notes are, and the
+window shows it as it stands. `bytes` that is not a whole number is `bad_request`. The app's main
+process calls it when it stages a paste, once for the picture as it came off the clipboard and
+again once it is re-encoded, and the renderer cannot.
+
 #### `confirm.reply`
 
 ```json
@@ -1199,8 +1217,8 @@ the directory was made.
 - MCP configuration (declaring, approving ahead of time, enabling and forgetting), subscription
   import and skills authoring have no dedicated UI. `bravebot mcp` in a terminal does the first.
 - File browsing, previews and attachments are Electron IPC features, not RPC methods. `@`
-  completion is `mentions.offer` and `mentions.named`, and what a dropped file is comes from
-  `drops.classify`.
+  completion is `mentions.offer` and `mentions.named`, what a dropped file is comes from
+  `drops.classify`, and whether a paste fits from `pastes.check`.
 - One `bravebot-rpc` process has one client. There is no multi-client transport.
 
 ---

@@ -312,9 +312,15 @@ trusted, inside the composer. When the clipboard holds a picture, the picture wi
 beside it, as in [PASTE-7](#PASTE-7): the browser's own paste is cancelled and the main process is
 asked to stage what is on the clipboard. A paste of text alone is left to the browser. The main
 process reads the operating system's clipboard itself, decodes the picture and writes it out again
-as PNG, so the type is always `image/png` and comes from this side's literal, never from the
-content ([PASTE-3](#PASTE-3)). A picture over the 10 MB cap is refused with a note giving its size
-and the limit, and nothing is staged. An empty clipboard stages nothing. The bytes stay in the main
+as PNG, so the type is always `image/png`, never something the content claims
+([PASTE-3](#PASTE-3)). The main process asks the bridge's `pastes.check` about the picture's
+size, as it came off the clipboard and again once re-encoded. The bridge holds it to the 10 MB cap
+`turn.send` and the terminal's clipboard reader hold a paste to, and answers with that type and the
+noun the terminal writes, or with the terminal's note for a picture too large, built from the same
+catalog message in `en-US` because the window is in English only. The window holds no cap, type or
+wording of its own. A picture over the cap is refused with that note, which gives its size and the
+limit, and nothing is staged. An empty
+clipboard stages nothing, and so does a bridge that does not answer. The bytes stay in the main
 process against an opaque grant bound to the session, and the page is told the grant and a small
 drawing of the picture. A page that dispatches its own paste event, whatever it puts in it, has
 nothing staged, and the page has no call that reaches the clipboard read.
@@ -336,7 +342,9 @@ its own turn when the running one ends, as a dropped file does
 running turn. And Plan is off while a picture is staged, where the terminal's `/manifest`
 carries one to the planner (PASTE-6): the bridge's `manifest.run` takes a task and no pictures.
 
-`verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/pastes.test.mjs pins the shared counter, the markers, and the main process's grants, its re-encode, its cap and its stripping of a window's images, and ui/scripts/drive-paste.mjs pastes from the real clipboard into the real app and bridge against a stub model and asserts a page-dispatched paste stages nothing; make check-ui runs the test)`
+`verified-by: bravebot_ui_bridge::attaching::a_window_asks_the_bridge_whether_a_paste_fits_and_is_told_the_terminals_note`
+`verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
+`verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/pastes.test.mjs pins the shared counter, the markers, and the main process's grants, its re-encode, its stripping of a window's images, and its use of the answer, type, noun and note a stub bridge gives with values the agent does not use, and fails if any file under ui/src says a size in megabytes; ui/scripts/drive-paste.mjs pastes from the real clipboard into the real app and bridge against a stub model, asserts an oversized picture is refused with the bridge's note, and asserts a page-dispatched paste stages nothing; make check-ui runs the tests)`
 
 ## Known costs
 

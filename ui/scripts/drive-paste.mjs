@@ -184,13 +184,13 @@ try {
   assert.equal(await composer.inputValue(), 'Compare [Image #1] [Image #2] ', 'an untrusted paste event stages nothing')
   assert.equal(await pastedChips.count(), 1)
 
-  // ---- a picture over 10 MiB is refused with its size and the limit ---------------------------
+  // ---- a picture over 10 MiB is refused with the bridge's note, its size and the limit ----------
   await copy(await picture(2000, null, true))
   await composer.focus()
   await menuPaste()
   const note = page.locator('[data-test="status-toast"]').filter({ hasText: 'Too large to paste' })
   await note.waitFor()
-  assert.match(await note.innerText(), /That picture is 1\d\.\d MB, and a paste carries at most 10\.0 MB\./)
+  assert.match(await note.innerText(), /^that picture is 1\d\.\d MB, and a paste carries at most 10\.0 MB$/m)
   assert.equal(await pastedChips.count(), 1, 'nothing was staged')
   assert.equal(await composer.inputValue(), 'Compare [Image #1] [Image #2] ')
   await page.screenshot({ path: join(output, 'paste-too-large.png') })
@@ -265,7 +265,7 @@ try {
   assert.equal(urls(userPart(resumed, 'Compare [Image #1] [Image #2]')).length, 2, 'the reopened conversation still carries both pictures')
   await page.screenshot({ path: join(output, 'paste-reopened.png') })
 
-  console.log(`PASS: a trusted paste stages a marker and a chip numbered with drops, a forged paste does nothing, an oversized one says so, and the send carries the picture as PNG data. Screenshots in ${output}/paste-*.png`)
+  console.log(`PASS: a trusted paste stages a marker and a chip numbered with drops, a forged paste does nothing, an oversized one is refused with the bridge's note, and the send carries the picture as PNG data. Screenshots in ${output}/paste-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'paste-failure.png') }).catch(() => undefined)
   throw error

@@ -40,8 +40,8 @@ context in one of four ways, each ending in an explicit send:
 - A picture a person pasted into the composer. The preload acts only on a paste event the
   browser marks trusted, inside the composer, and asks the main process to stage what is on the
   clipboard. The main process reads the operating system's clipboard itself, writes the picture
-  out again as PNG, refuses one over 10 MiB, and keeps the bytes against an opaque grant id bound
-  to the session. The page is told the id and a small drawing, never the bytes, and a page that
+  out again as PNG, refuses one the bridge says is over the cap (`pastes.check`, 10 MiB) with the bridge's note, and keeps
+  the bytes against an opaque grant id bound to the session. The page is told the id and a small drawing, never the bytes, and a page that
   dispatches its own paste event has nothing staged (PASTE-11 in `docs/specs/pasting.md`).
 
 The main process strips raw `files`, `dropped`, `attachments` and `images` from renderer turn requests

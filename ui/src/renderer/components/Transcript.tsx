@@ -37,7 +37,7 @@ import { pointForPrompt, undoRow } from '../rewind'
 import { showToast } from '../toasts'
 import { EMPTY_STAGING, named, stageDrop, stagePaste, withoutMarker, type Staging } from '../staging'
 import type { Drop } from '../../shared/drops'
-import { tooLargeNote, type Paste } from '../../shared/pastes'
+import type { Paste } from '../../shared/pastes'
 
 interface Live {
   model: string | null
@@ -467,7 +467,7 @@ export function Transcript({
   const pasted = useEvent((paste: Paste) => {
     if (!live || paste.session !== live.handle) return
     if (paste.outcome.kind === 'too-large') {
-      showToast('Too large to paste', tooLargeNote(paste.outcome.size, paste.outcome.limit), 'note')
+      showToast('Too large to paste', paste.outcome.note, 'note')
       return
     }
     restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))

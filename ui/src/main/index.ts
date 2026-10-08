@@ -941,7 +941,10 @@ app.whenReady().then(() => {
   // crossed from the window, which says only which session the composer belongs to.
   ipcMain.handle('bravebot:pastes:stage', async (event, session: unknown) => {
     if (!window || event.senderFrame !== window.webContents.mainFrame) return null
-    return stagePaste(session, await clipboardPng())
+    return stagePaste(session, await clipboardPng(), async (bytes) => {
+      if (!bridge) throw new Error('the agent is not running')
+      return bridge.request('pastes.check', { bytes })
+    })
   })
   ipcMain.handle('bravebot:files:choose-attachments', (_event, session: unknown) => {
     if (!window || typeof session !== 'string') throw new Error('No active project.')

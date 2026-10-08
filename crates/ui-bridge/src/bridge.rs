@@ -163,6 +163,7 @@ impl Bridge {
                 Ok(json!({ "files": files }))
             }
             "drops.classify" => crate::attached::classified(request),
+            "pastes.check" => crate::attached::paste_check(request),
             "turn.cancel" => self.cancel_turn(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {

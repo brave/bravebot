@@ -418,3 +418,33 @@ fn a_dropped_file_is_classified_by_the_terminals_rules() {
         assert_eq!(refused.code, ErrorCode::BadRequest);
     }
 }
+
+/// The window asks the bridge about each pasted picture's size, so the cap, the type it names a
+/// picture by, the marker's noun and the note for one too large are the bridge's, and the window
+/// holds none of its own (PASTE-11). The note is the terminal's.
+#[test]
+fn a_window_asks_the_bridge_whether_a_paste_fits_and_is_told_the_terminals_note() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("paste-check");
+    let mut window = Window::with_settings(project.join("no-settings.json"));
+    let cap = bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES as u64;
+    assert_eq!(cap, 10 * 1024 * 1024);
+    let fits = window.call("pastes.check", json!({"bytes": cap}));
+    assert_eq!(fits["ok"], true);
+    let media = fits["media"].as_str().unwrap();
+    assert!(
+        bravebot_agent::turn::PASTED_IMAGE_MEDIA.contains(&media),
+        "{media} is not a type turn.send takes"
+    );
+    assert_eq!(fits["noun"], "Image");
+    assert_eq!(
+        window.call("pastes.check", json!({"bytes": cap * 2})),
+        json!({"ok": false, "note": "that picture is 20.0 MB, and a paste carries at most 10.0 MB"})
+    );
+    for params in [json!({}), json!({"bytes": "big"}), json!({"bytes": -1})] {
+        let refused = window.dispatch("pastes.check", params).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest);
+    }
+}
