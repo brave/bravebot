@@ -289,7 +289,7 @@ impl LandlockSandbox {
         }
 
         // A refusal is made by listing: Landlock grants a directory with everything beneath it.
-        let enumerated = !policy.unreadable.is_empty();
+        let enumerated = !policy.unreadable.is_empty() || !policy.unwritable.is_empty();
         let readable = policy.readable_by_enumeration();
         let writable = policy.writable_by_enumeration();
 
@@ -1064,6 +1064,64 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&temporary_directory);
+    }
+
+    /// The regression it rejects: a refusal of writes that Landlock cannot express and the
+    /// backend therefore drops, which leaves a file the person kept read-only writable inside a
+    /// directory the session may write. The file is still read, and its neighbours are still
+    /// written.
+    #[test]
+    fn a_stage_is_refused_a_write_the_policy_refuses_and_keeps_the_rest() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let work = crate::testutil::scratch_dir("bravebot-landlock-unwritable");
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(work.join("sub")).expect("the scratch directory is creatable");
+        std::fs::write(work.join(".env"), CONTENTS).expect("the file is writable");
+        std::fs::write(work.join("sub/other"), CONTENTS).expect("the file is writable");
+        let policy = crate::base::run_base(
+            Prelude::Linux,
+            &a_temporary_directory("bravebot-landlock-unwritable-tmp"),
+            None,
+        )
+        .allow_write(&work)
+        .deny_write(work.join(".env"))
+        .nameable_under(&sandbox.capabilities())
+        .policy;
+        let run = |program: &str, args: &[String]| {
+            let mut child = sandbox
+                .spawn(
+                    program,
+                    args,
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn");
+            child.wait().expect("should wait").code()
+        };
+        // An append opens for writing, which is the right a refusal withholds; `touch` on a file
+        // that is there changes only its times, which Landlock does not govern.
+        let append = |path: &Path| {
+            run(
+                "/bin/sh",
+                &[
+                    "-c".to_string(),
+                    "echo more >> \"$0\"".to_string(),
+                    path.display().to_string(),
+                ],
+            )
+        };
+
+        assert_ne!(append(&work.join(".env")), Some(0));
+        assert_eq!(append(&work.join("sub/other")), Some(0));
+        assert_eq!(
+            run("/usr/bin/cat", &[work.join(".env").display().to_string()]),
+            Some(0),
+            "a refusal of writes took the read with it"
+        );
+        let _ = std::fs::remove_dir_all(&work);
     }
 
     /// The refusal before the spawn leaves a window: a path can go away between the check

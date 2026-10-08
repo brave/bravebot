@@ -177,7 +177,9 @@ and whether it was chosen or defaulted, where the state directory is or that the
 TLS handshake is validated against and what a request is routed through, the
 confinement available on this platform, whether the network is closed for confined programs and
 which layer closed it ([SANDBOX-20](sandboxing.md#SANDBOX-20)), the sandbox mode in force and the file
-or flag that chose it ([SANDBOX-22](sandboxing.md#SANDBOX-22)), and the state of any imported subscription. Each AWS
+or flag that chose it ([SANDBOX-22](sandboxing.md#SANDBOX-22)), each entry of the four filesystem lists
+with the file or flag that wrote it and each that is not in force with why
+([SANDBOX-25](sandboxing.md#SANDBOX-25)), and the state of any imported subscription. Each AWS
 account gets its profile and a line saying whether the AWS CLI gives it a credential a request can
 be signed with. Where it does not, the line says why: a session that is signed out names `bravebot
 auth login bedrock`, and a profile the CLI does not have, a CLI that is not installed and an answer

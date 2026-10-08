@@ -175,6 +175,8 @@ pub fn lines(confinement: &str, tier: &str, width: u16, available: u16) -> Vec<L
             bravebot_config::run_network(),
             bravebot_config::sandbox::in_force().mode,
         ),
+        bravebot_config::settled_sandbox_filesystem()
+            .is_some_and(|settled| !settled.lists.is_empty()),
         width,
         available,
     )
@@ -193,12 +195,14 @@ fn network_shown(
 }
 
 /// [`lines`] for a session whose programs have `network`, which is named under the tier where it is
-/// not open. Said here and not only in `/status` because it changes what a command can do, and a
-/// session that closed it should not have to be asked.
+/// not open, and which says where the person wrote filesystem rules. Said here and not only in
+/// `/status` because each changes what a command can do, and a session that set one should not have
+/// to be asked.
 pub fn lines_with_network(
     confinement: &str,
     tier: &str,
     network: bravebot_sandbox::network::Network,
+    filesystem_rules: bool,
     width: u16,
     available: u16,
 ) -> Vec<Line<'static>> {
@@ -229,6 +233,15 @@ pub fn lines_with_network(
             Span::raw(INDENT),
             Span::styled(
                 t!(opening_network_closed).to_string(),
+                Style::default().fg(theme::muted()),
+            ),
+        ]));
+    }
+    if filesystem_rules {
+        lines.push(Line::from(vec![
+            Span::raw(INDENT),
+            Span::styled(
+                t!(opening_filesystem_rules).to_string(),
                 Style::default().fg(theme::muted()),
             ),
         ]));
@@ -316,17 +329,46 @@ mod tests {
         assert!(all.contains("Ask a question"), "{all}");
     }
 
+    /// A session with filesystem rules of the person's own says so, and one with none says nothing.
+    #[test]
+    fn filesystem_rules_are_named_on_the_opening_screen_and_none_is_not() {
+        use bravebot_sandbox::network::Network;
+        let drawn = |rules| {
+            lines_with_network(
+                "kernel-enforced",
+                "premium available",
+                Network::Open,
+                rules,
+                WIDE,
+                24,
+            )
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+        };
+        assert!(drawn(true).contains(t!(opening_filesystem_rules)));
+        assert!(!drawn(false).contains("filesystem"), "{}", drawn(false));
+    }
+
     /// A session that closed the network says so on the screen it opens on, and one that did not
     /// says nothing, as the screen never did.
     #[test]
     fn a_closed_network_is_named_on_the_opening_screen_and_an_open_one_is_not() {
         use bravebot_sandbox::network::Network;
         let drawn = |network| {
-            lines_with_network("kernel-enforced", "premium available", network, WIDE, 24)
-                .iter()
-                .map(|line| line.to_string())
-                .collect::<Vec<_>>()
-                .join("\n")
+            lines_with_network(
+                "kernel-enforced",
+                "premium available",
+                network,
+                false,
+                WIDE,
+                24,
+            )
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
         };
         assert!(drawn(Network::Closed).contains(t!(opening_network_closed)));
         assert!(

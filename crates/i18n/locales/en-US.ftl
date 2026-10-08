@@ -108,6 +108,14 @@ cli-option-settings = Read this settings file for this run, above the ones found
 cli-option-run-network =
     Whether programs `run` starts may reach the network. closed denies it to every one except a package
     manager's fetch, git or gh with a remote operation, curl, ssh and a stage with a remote scope
+cli-option-sandbox-allow-read =
+    Let programs `run` starts read this path or glob, lifting a refusal of it. Settings: sandbox.filesystem.allowRead (repeatable)
+cli-option-sandbox-deny-read =
+    Refuse programs `run` starts reading this path or glob. Settings: sandbox.filesystem.denyRead (repeatable)
+cli-option-sandbox-allow-write =
+    Let programs `run` starts write this path, which they may read too. Settings: sandbox.filesystem.allowWrite (repeatable)
+cli-option-sandbox-deny-write =
+    Refuse programs `run` starts writing this path, a session directory included. Settings: sandbox.filesystem.denyWrite (repeatable)
 cli-option-agent = Address every turn to this definition, as /agent does for one
 cli-option-system-prompt =
     Replace the opening sentence of the planner's system prompt for every turn. The rest of it stays
@@ -152,6 +160,8 @@ cli-settings-needs-a-path = --settings requires a path to a settings file
 cli-settings-not-a-file = --settings names no file: { $path }
 cli-run-network-needs-a-word = --run-network requires open or closed
 cli-run-network-unknown = --run-network takes open or closed, not { $word }
+# The flag is one of the four --sandbox-* flags, as typed.
+cli-sandbox-flag-needs-a-path = { $flag } requires a path
 cli-agent-needs-a-name = --agent requires the name of a definition
 # The command is the first argument, one of this program's own subcommands.
 cli-agent-not-for-a-command =
@@ -479,6 +489,27 @@ doctor-settings-network-unreadable =
     run.network in { $path } is neither open nor closed, so it is read as absent
 doctor-managed-network-unreadable =
     run.network in { $path } is neither open nor closed, so the network is closed
+doctor-sandbox-filesystem = sandbox filesystem
+# The key is allowRead, denyRead, allowWrite or denyWrite, the path is as written, and the source is
+# the file that wrote it or the command line.
+doctor-sandbox-filesystem-entry = { $key } { $path } ({ $source })
+doctor-sandbox-filesystem-refused = { $key } { $path } is not in force: { $reason } ({ $source })
+doctor-sandbox-filesystem-source-flag = a command-line flag
+doctor-settings-sandbox-filesystem-ignored =
+    sandbox.filesystem.{ $key } in { $path } is not obeyed: a checkout can refuse reach and never add it, so it is read from ~/.bravebot/settings.json, the file --settings names and the managed file only
+doctor-settings-sandbox-misshapen =
+    sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it is read as absent
+doctor-managed-sandbox-misshapen =
+    sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it pins nothing
+doctor-managed-sandbox-unread =
+    sandbox.filesystem.{ $key } { $path } is not read: { $managed } pins that list
+sandbox-rule-no-home = it starts with ~ and this session names no home directory
+sandbox-rule-climbs = it climbs out of the directory it is read from, or holds .. where it cannot be judged
+sandbox-rule-glob-on-a-write = a wildcard applies to reads and not to writes
+sandbox-rule-confines-nothing = a write row over the home directory or the whole filesystem confines nothing
+sandbox-rule-private-key = no list adds reach to ~/.ssh, where a private key is
+sandbox-rule-too-broad = its wildcard looked at more of the disk than a pattern may, so what it names is not known
+sandbox-rule-overridden = another entry decides that path: a refusal at the same path, or one the managed file wrote
 # An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
 # the reason the vetting line gives: a rule that looks like configuration and does nothing is the
 # one worth saying out loud.
@@ -1464,6 +1495,7 @@ reach-refused-option = a command that starts with an option, such as `sh -c ...`
 reach-refused-incognito = this session adds nothing to ~/.bravebot, so nothing was remembered
 reach-refused-no-home = this session has no home directory to judge a reach against
 reach-refused-number = no reach is numbered { $number }
+run-filesystem-rules = your own filesystem rules apply to these programs: { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 # Said above the list of what a line reaches that nothing here holds: no credential is handed
 # over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
 # only where a line reaches one, so the list is never empty and never noise. The line above is
@@ -1808,6 +1840,11 @@ status-network-by-settings = closed by run.network in { $path }
 status-network-by-a-setting = closed by run.network in a settings file
 status-network-pinned = pinned closed by { $path } and not changeable by a flag or a settings file
 status-network-pinned-by-policy = pinned closed by the managed settings and not changeable by a flag or a settings file
+# Said only where one of the four sandbox.filesystem lists has an entry. The note names the files.
+status-sandbox-filesystem = Filesystem rules
+status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
+status-sandbox-filesystem-files = from { $files }
+status-sandbox-filesystem-flags = the command line
 status-this-session = This session
 # Where a session's wall clock went. Four figures, because the whole is unactionable: a session
 # that took an hour on the model, an hour on subprocesses, and an hour waiting for its user to
@@ -2791,6 +2828,7 @@ agent-checkout-not-applied =
 # such boundary. /status carries the second half of that, which there is no room for here.
 opening-confinement = confinement available: { $level }
 opening-network-closed = network closed
+opening-filesystem-rules = filesystem rules in force
 opening-invitation = Ask a question about this workspace.
 
 
