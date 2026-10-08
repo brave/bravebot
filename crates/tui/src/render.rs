@@ -7028,6 +7028,34 @@ mod tests {
         );
     }
 
+    /// The caret is drawn on the invitation's first character, the cell the first typed character
+    /// will take. Drawn on the prompt character or nowhere, the empty box would show no caret on
+    /// the place a person is about to type.
+    #[test]
+    fn the_caret_sits_on_the_first_character_of_the_invitation() {
+        const WIDTH: u16 = 90;
+
+        let session = Session::new("none");
+        let screen = rendered_at(&session, WIDTH, 24);
+        let invited = screen[..screen
+            .find("Ask Brave Bot")
+            .expect("the invitation was not drawn")]
+            .chars()
+            .count();
+
+        let (column, row, under) = caret_cell(&session, WIDTH, 24).expect("no caret was drawn");
+
+        assert_eq!(
+            under, "A",
+            "the caret is not on the invitation's first character"
+        );
+        assert_eq!(
+            (usize::from(row) * usize::from(WIDTH)) + usize::from(column),
+            invited,
+            "the caret is not where the invitation begins"
+        );
+    }
+
     /// It stands in for the line rather than being part of it, so the first character typed takes
     /// its place. Left drawn, it would read as text the person now has to delete.
     #[test]

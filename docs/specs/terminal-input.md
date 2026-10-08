@@ -577,6 +577,7 @@ for the first time needs to know is that they may simply ask.
 
 `verified-by: bravebot_tui::render::an_empty_box_says_what_it_is_for`
 `verified-by: bravebot_tui::render::the_invitation_stands_where_the_first_character_will`
+`verified-by: bravebot_tui::render::the_caret_sits_on_the_first_character_of_the_invitation`
 `verified-by: bravebot_tui::render::the_invitation_goes_the_moment_anything_is_typed`
 `verified-by: bravebot_tui::render::the_invitation_comes_back_when_the_line_does_not`
 `verified-by: bravebot_tui::render::the_invitation_is_not_offered_where_the_line_is_a_command`
