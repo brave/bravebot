@@ -6,7 +6,7 @@
 //! a quarantined reference are not drawn, so none is searched or shown (SESSION-2).
 
 use crate::sessions::{self, Front};
-use bravebot_agent::conversation::{Conversation, Said, Snapshot};
+use bravebot_agent::conversation::{Composed, Conversation, Said, Snapshot};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -177,7 +177,14 @@ pub fn lines_of(record: &str) -> Vec<String> {
         None => true,
         Some(word) => word == Front::Terminal.recorded() || word == Front::Desktop.recorded(),
     };
-    if !ours {
+    // A resume re-stamps the front end, so a copied message is told by its own tag.
+    let copied = searched
+        .conversation
+        .archive
+        .iter()
+        .chain(&searched.conversation.messages)
+        .any(|stored| stored.composed == Some(Composed::Imported));
+    if !ours || copied {
         return Vec::new();
     }
     Conversation::restored(searched.conversation)
@@ -242,7 +249,7 @@ fn collapse(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bravebot_agent::conversation::{Composed, Stored};
+    use bravebot_agent::conversation::Stored;
     use bravebot_aichat::protocol::{Message, ToolCallRequest, ToolCallRequestFunction};
 
     fn record(front: Option<&str>, messages: Vec<Stored>) -> String {
@@ -350,7 +357,9 @@ mod tests {
             source: None,
         };
         let plain = said("deploy to the staging cluster");
-        assert!(lines_of(&record(Some("claude-code"), vec![imported])).is_empty());
+        assert!(lines_of(&record(Some("claude-code"), vec![imported.clone()])).is_empty());
+        // Resumed here, the record is stamped terminal but still holds the copied words.
+        assert!(lines_of(&record(Some("terminal"), vec![said("mine"), imported])).is_empty());
         assert!(lines_of(&record(Some("claude-code"), vec![plain.clone()])).is_empty());
         assert!(lines_of(&record(Some("some-new-front"), vec![plain])).is_empty());
     }

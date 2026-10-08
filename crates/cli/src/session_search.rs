@@ -62,15 +62,21 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
 }
 
 /// Every argument that is not a `workspace:` word is text for the query, so a phrase may be quoted
-/// whole or left as separate words.
+/// whole or left as separate words. After `--` every argument is text, so a word may begin with `-`.
 fn read(words: &[String]) -> Option<Request> {
     let mut workspace = None;
     let mut rest = Vec::new();
+    let mut literal = false;
     for word in words {
+        if literal {
+            rest.push(word.as_str());
+            continue;
+        }
         match word.strip_prefix("workspace:") {
             Some("") => return None,
             Some(_) if workspace.is_some() => return None,
             Some(path) => workspace = Some(PathBuf::from(path)),
+            None if word == "--" => literal = true,
             None if word.starts_with('-') => return None,
             None => rest.push(word.as_str()),
         }
@@ -158,6 +164,14 @@ mod tests {
         ] {
             assert_eq!(read(&words(muddled)), None, "{muddled}");
         }
+    }
+
+    #[test]
+    fn words_after_a_double_dash_are_text_even_if_they_begin_with_a_dash() {
+        let request = read(&words("workspace:/w -- -v --all")).expect("a request");
+        assert_eq!(request.query.phrase(), "-v --all");
+        assert_eq!(request.workspace, Some(PathBuf::from("/w")));
+        assert_eq!(read(&words("--")), None);
     }
 
     #[test]

@@ -136,7 +136,11 @@ impl Picker {
     /// sessions written within it.
     pub fn matching(&self) -> Vec<&Summary> {
         let query = self.query();
-        let needle = query.phrase().to_string();
+        let needle = if query.has_window() {
+            query.phrase().to_string()
+        } else {
+            self.search.to_lowercase()
+        };
         let links = |session: &'_ Summary| {
             [session.issue.as_deref(), session.pull_request.as_deref()]
                 .into_iter()

@@ -1176,8 +1176,8 @@ read.
 
 A record is searched only when it was written by this program's terminal or desktop front end, or
 by a build that did not yet record one. An imported session ([SESSION-32](#SESSION-32)) holds
-another program's words and a record naming a front end this build does not know could hold
-anything, so neither is searched, and neither is shown.
+another program's words, also after it was resumed here, and a record naming a front end this
+build does not know could hold anything, so neither is searched, and neither is shown.
 
 A match ignores case and runs of white space. The row of a session found by what was said shows,
 under its title and age, the first line that holds the text, cut around the match to the width of a
