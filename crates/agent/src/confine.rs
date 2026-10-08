@@ -21,7 +21,7 @@ use bravebot_sandbox::base::{Prelude, base, run_base};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::rules::{Lists, Rules};
-use bravebot_sandbox::scope::{Reach, Scope, environment_reach};
+use bravebot_sandbox::scope::{Reach, Requested, Scope, environment_reach};
 use bravebot_sandbox::toolchain::Toolchain;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -45,6 +45,9 @@ pub struct Confinement {
     grants: Vec<Grant>,
     /// The person's own filesystem lists, resolved against this session's directories.
     filesystem: Rules,
+    /// What the planner asked this one line to add to every stage that has no assignment in front
+    /// of it, from the fixed menu. Empty for every line that asked for nothing.
+    requested: Vec<Requested>,
     /// The program a test has the platform fail to confine, which no machine's real mechanism does
     /// on demand.
     #[cfg(test)]
@@ -87,6 +90,7 @@ impl Confinement {
             mode: SandboxMode::Standard,
             grants: Vec::new(),
             filesystem: Rules::none(),
+            requested: Vec::new(),
             #[cfg(test)]
             unconfinable: None,
         }
@@ -142,9 +146,17 @@ impl Confinement {
             return None;
         }
         if Toolchain::of(&step.resolved).is_some_and(|toolchain| toolchain.fetches(&step.resolved))
+            || self
+                .requested_for(step)
+                .iter()
+                .any(|request| matches!(request, Requested::Toolchain(_)))
         {
             Some("a toolchain that fetches")
         } else if Scope::of(&step.resolved, &step.args, &step.environment).is_some()
+            || self
+                .requested_for(step)
+                .iter()
+                .any(|request| matches!(request, Requested::Scope(_)))
             || self
                 .granted(step)
                 .any(|grant| matches!(grant.reached, Reached::Scope(_)))
@@ -206,6 +218,82 @@ impl Confinement {
     pub fn with_grants(mut self, grants: Vec<Grant>) -> Self {
         self.grants = grants;
         self
+    }
+
+    /// This confinement with what the planner asked one line to add to its stages, deduplicated and
+    /// kept in the menu's order so the prompt, the trail and the failure sentence name them alike.
+    #[must_use]
+    pub fn with_requested(mut self, requested: &[Requested]) -> Self {
+        let mut kept: Vec<Requested> = Vec::new();
+        for request in requested {
+            if !kept.contains(request) {
+                kept.push(*request);
+            }
+        }
+        kept.sort_by_key(|request| {
+            Requested::MENU
+                .iter()
+                .position(|name| *name == request.name())
+        });
+        self.requested = kept;
+        self
+    }
+
+    /// Whether a request can be applied: the rows of both kinds are under the account's home.
+    pub fn accepts_requests(&self) -> bool {
+        self.home.is_some()
+    }
+
+    /// What the planner asked for, in the menu's order.
+    pub fn requested(&self) -> &[Requested] {
+        &self.requested
+    }
+
+    /// What the planner's request adds to `step`: nothing for a step with an assignment in front of
+    /// it, for the reason an assignment removes a scope ([`Scope::of`]), and nothing where the
+    /// session names no home, since both kinds of row are under it.
+    fn requested_for(&self, step: &Step) -> &[Requested] {
+        match self.home.is_some() && step.environment.is_empty() {
+            true => &self.requested,
+            false => &[],
+        }
+    }
+
+    /// What the trail records of a request for one run: each stage by its place in the line and the
+    /// names added to it, which are menu words and nothing the plan chose. `None` where the line
+    /// asked for nothing.
+    pub fn requested_for_the_trail(&self, steps: &[&Step]) -> Option<String> {
+        if self.requested.is_empty() {
+            return None;
+        }
+        let named: Vec<String> = steps
+            .iter()
+            .enumerate()
+            .map(|(at, step)| {
+                let added = self.requested_for(step);
+                match added.is_empty() {
+                    true => format!("stage {} (nothing)", at + 1),
+                    false => format!(
+                        "stage {} ({})",
+                        at + 1,
+                        added
+                            .iter()
+                            .map(|r| r.name())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                }
+            })
+            .collect();
+        Some(format!(
+            "the planner asked for {} for this run, added to {}",
+            self.requested
+                .iter()
+                .map(|r| r.name())
+                .collect::<Vec<_>>()
+                .join(", "),
+            named.join(", ")
+        ))
     }
 
     /// The grants that attach to `step`, where this confinement can judge a reach at all.
@@ -271,6 +359,14 @@ impl Confinement {
                 .collect(),
             network: self.network,
             filesystem: self.filesystem.counts(),
+            requested: steps
+                .iter()
+                .flat_map(|step| {
+                    self.requested_for(step)
+                        .iter()
+                        .map(|request| (step.program.clone(), *request))
+                })
+                .collect(),
             carried: steps
                 .iter()
                 .filter_map(|step| {
@@ -364,6 +460,20 @@ impl Confinement {
                     policy = policy.allow_write(socket);
                 }
             }
+            // The fixed rows of what the planner asked for and not the places a variable names,
+            // which are keyed on the program and a script wrapping `gh` is not `gh`.
+            for request in self.requested_for(step) {
+                policy = match *request {
+                    Requested::Toolchain(toolchain) => toolchain.grant(policy, self.prelude, home),
+                    Requested::Scope(scope) => {
+                        let policy = scope.grant(policy, home);
+                        match variable(environment, "SSH_AUTH_SOCK") {
+                            Some(socket) if scope == Scope::Remote => policy.allow_write(socket),
+                            _ => policy,
+                        }
+                    }
+                };
+            }
             for grant in self.granted(step) {
                 policy = match &grant.reached {
                     Reached::Scope(scope) => scope.grant(policy, home),
@@ -430,6 +540,12 @@ impl Confinement {
                     scopes.insert(remembered.name());
                 }
             }
+            for request in self.requested_for(step) {
+                match request {
+                    Requested::Scope(scope) => scopes.insert(scope.name()),
+                    Requested::Toolchain(toolchain) => toolchains.insert(toolchain.name()),
+                };
+            }
         }
         let named = |names: std::collections::BTreeSet<&str>| match names.is_empty() {
             true => "none".to_string(),
@@ -470,13 +586,24 @@ impl Confinement {
              they reached only what a toolchain list or credential scope added for the steps \
              that named one (toolchain lists: {}; credential scopes: {}). Any other path is \
              refused by the operating system as `Operation not permitted` or `Permission \
-             denied`. Network: {}.{}",
+             denied`. Network: {}.{}{}",
             directories.join(", "),
             named(toolchains),
             named(scopes),
             network,
             rules,
+            self.menu_sentence(),
         )
+    }
+
+    /// The sentence naming what a line may ask for, or nothing where this mode accepts no request.
+    ///
+    /// The same words follow every failure of the line, the exit code not among its inputs.
+    fn menu_sentence(&self) -> String {
+        match self.mode == SandboxMode::Strict && self.accepts_requests() {
+            true => format!(" {}", requests_menu_sentence()),
+            false => String::new(),
+        }
     }
 
     /// What `command` is started as under this confinement, or the reason it cannot be.
@@ -690,6 +817,16 @@ pub fn stated_to_the_planner(confine_runs: bool, mode: SandboxMode) -> Option<St
     )
 }
 
+/// The sentence that names the menu, for the planner, and the person is asked about every time.
+fn requests_menu_sentence() -> String {
+    format!(
+        "A line that needs more can ask for it with `run`'s `scopes` argument, by name from this \
+         list: {}. The person is asked about the line every time, and no answer to it is \
+         remembered.",
+        bravebot_sandbox::scope::Requested::MENU.join(", ")
+    )
+}
+
 fn stated(
     confine_runs: bool,
     prelude: Option<Prelude>,
@@ -737,6 +874,10 @@ fn stated(
              access of the person's own account."
         }
     });
+    if prelude.is_some() && listed {
+        said.push(' ');
+        said.push_str(&requests_menu_sentence());
+    }
     if prelude.is_some() && network.is_closed() {
         said.push_str(
             " The network is closed: a program has no network access unless it is a package \
@@ -1210,6 +1351,187 @@ mod tests {
                 "{written:?}"
             );
         }
+    }
+
+    /// SANDBOX-26: a requested scope lifts its own directory on a stage that names nothing, and no
+    /// other. The control is the same stage with no request, which refuses all three; the
+    /// regression it rejects is a request that lifts every credential, or none.
+    #[test]
+    fn a_requested_scope_lifts_its_own_directory_for_a_stage_that_names_none() {
+        let script = step("/bin/sh", &["-c", "aws s3 ls"]);
+        let base = confinement(&["/work/project"]).with_mode(SandboxMode::Strict);
+        let control = base.policy(&script, Path::new("/work/project"), &[]);
+        for directory in [".aws", ".kube", ".docker"] {
+            assert!(!reads(&control, &format!("{HOME}/{directory}")));
+        }
+        for (scope, own) in [
+            (Scope::Aws, ".aws"),
+            (Scope::Kubernetes, ".kube"),
+            (Scope::Docker, ".docker"),
+        ] {
+            let asked = base
+                .clone()
+                .with_requested(&[Requested::Scope(scope)])
+                .policy(&script, Path::new("/work/project"), &[]);
+            for directory in [".aws", ".kube", ".docker"] {
+                assert_eq!(
+                    reads(&asked, &format!("{HOME}/{directory}")),
+                    directory == own,
+                    "{scope:?} and {directory}"
+                );
+            }
+        }
+    }
+
+    /// SANDBOX-26: a requested toolchain brings its caches, written, which the stage did not have.
+    #[test]
+    fn a_requested_toolchain_brings_its_caches() {
+        let script = step("/bin/sh", &["-c", "cargo build"]);
+        let registry = format!("{HOME}/.cargo/registry");
+        let base = confinement(&["/work/project"]).with_mode(SandboxMode::Strict);
+        assert!(!writes(
+            &base.policy(&script, Path::new("/work/project"), &[]),
+            &registry
+        ));
+        let asked = base
+            .with_requested(&[Requested::Toolchain(Toolchain::Cargo)])
+            .policy(&script, Path::new("/work/project"), &[]);
+        assert!(writes(&asked, &registry));
+    }
+
+    /// SANDBOX-26: a stage with a `NAME=value` in front of it gets no requested scope, as it gets
+    /// no carried one (SANDBOX-16): a value written there can name a file the scope would then
+    /// open. The other stage of the same line gets it, so the refusal is per stage.
+    #[test]
+    fn a_stage_with_an_assignment_gets_no_requested_scope() {
+        let mut assigned = step("/bin/sh", &["-c", "aws s3 ls"]);
+        assigned.environment = vec![("A".to_string(), "b".to_string())];
+        let plain = step("/bin/sh", &["-c", "aws s3 ls"]);
+        let asked = confinement(&["/work/project"])
+            .with_mode(SandboxMode::Strict)
+            .with_requested(&[Requested::Scope(Scope::Aws)]);
+        let credentials = format!("{HOME}/.aws");
+
+        assert!(!reads(
+            &asked.policy(&assigned, Path::new("/work/project"), &[]),
+            &credentials
+        ));
+        assert!(reads(
+            &asked.policy(&plain, Path::new("/work/project"), &[]),
+            &credentials
+        ));
+        assert_eq!(
+            asked.requested_for_the_trail(&[&plain, &assigned]),
+            Some(
+                "the planner asked for aws for this run, added to stage 1 (aws), \
+                 stage 2 (nothing)"
+                    .to_string()
+            )
+        );
+    }
+
+    /// SANDBOX-26: a requested scope keeps a closed network for its stage, as a carried one does,
+    /// a requested toolchain keeps it as one that fetches, and the trail names the stage and the
+    /// fixed reason. The control is the same stage with no request, which has no network.
+    #[test]
+    fn a_requested_scope_or_toolchain_keeps_a_closed_network_for_its_stage() {
+        let script = step("/bin/sh", &["-c", "gh pr list"]);
+        let other = step("/bin/ls", &[]);
+        let closed = confinement(&["/work/project"])
+            .with_mode(SandboxMode::Strict)
+            .with_network(Network::Closed);
+        assert!(!closed.egress(&script));
+
+        let scoped = closed
+            .clone()
+            .with_requested(&[Requested::Scope(Scope::Remote)]);
+        assert!(scoped.egress(&script));
+        assert_eq!(
+            scoped.network_for_the_trail(&[&script]),
+            Some(
+                "the network was closed for this run except for stage 1 (a credential scope)"
+                    .to_string()
+            )
+        );
+
+        let built = closed.with_requested(&[Requested::Toolchain(Toolchain::Cargo)]);
+        assert!(built.egress(&script));
+        assert_eq!(
+            built.network_for_the_trail(&[&script, &other]),
+            Some(
+                "the network was closed for this run except for stage 1 (a toolchain that fetches), \
+                 stage 2 (a toolchain that fetches)"
+                    .to_string()
+            )
+        );
+    }
+
+    /// SANDBOX-26: names are kept once and in the menu's order whatever order the planner wrote
+    /// them, so the prompt and the trail read the same for the same request.
+    #[test]
+    fn a_request_is_kept_once_in_the_menus_order() {
+        let asked = confinement(&["/work/project"]).with_requested(&[
+            Requested::Toolchain(Toolchain::Cargo),
+            Requested::Scope(Scope::Aws),
+            Requested::Toolchain(Toolchain::Cargo),
+            Requested::Scope(Scope::Remote),
+        ]);
+        let names: Vec<_> = asked.requested().iter().map(|r| r.name()).collect();
+        assert_eq!(names, ["remote", "aws", "cargo"]);
+    }
+
+    /// SANDBOX-26: the prompt says what each stage is lent, and by whom it was asked for.
+    #[test]
+    fn the_description_names_each_requested_scope_and_the_stage_it_is_for() {
+        let script = step("/bin/sh", &["-c", "aws s3 ls"]);
+        let described = confinement(&["/work/project"])
+            .with_mode(SandboxMode::Strict)
+            .with_requested(&[Requested::Scope(Scope::Aws)])
+            .describe(&[&script]);
+        assert_eq!(
+            described.requested,
+            [("sh".to_string(), Requested::Scope(Scope::Aws))]
+        );
+        assert!(
+            described
+                .sentences()
+                .iter()
+                .any(|sentence| sentence.contains("aws") && sentence.contains("sh")),
+            "{:?}",
+            described.sentences()
+        );
+    }
+
+    /// SANDBOX-19, SANDBOX-26: the failure sentence of a strict session names the menu, and is
+    /// built from the confinement and the steps alone, so it is the same words for exit 1 and exit
+    /// 2. A session that accepts no request does not name one.
+    #[test]
+    fn the_failure_sentence_names_the_menu_only_where_a_request_is_accepted() {
+        let script = step("/bin/sh", &["-c", "false"]);
+        let strict = confinement(&["/work/project"]).with_mode(SandboxMode::Strict);
+        let line = strict.profile(&[&script]);
+        for name in Requested::MENU {
+            assert!(line.contains(name), "{name} missing from {line}");
+        }
+        assert_eq!(line, strict.profile(&[&script]));
+
+        let standard = reading_confinement(Prelude::MacOs, &["/work/project"]);
+        let said = standard.profile(&[&script]);
+        assert!(!said.contains("scopes` argument"), "{said}");
+        assert!(!said.contains("kubernetes, docker, cargo"), "{said}");
+    }
+
+    /// SANDBOX-26: the planner is told of the argument and its menu only where it will be honoured.
+    #[test]
+    fn the_planner_is_told_of_the_menu_only_in_strict() {
+        let told = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode);
+        let strict = told(SandboxMode::Strict).expect("strict says something");
+        assert!(strict.contains("`scopes`"), "{strict}");
+        for name in Requested::MENU {
+            assert!(strict.contains(name), "{name} missing from {strict}");
+        }
+        assert!(!told(SandboxMode::Standard).unwrap().contains("`scopes`"));
+        assert_eq!(told(SandboxMode::Off), None);
     }
 
     /// A tool's own scope lifts its own directory and no other, and a stage that names none keeps

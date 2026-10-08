@@ -859,7 +859,10 @@ directories the programs could read and write, that beyond those they reached on
 toolchain list or credential scope added for the steps that named one, the toolchain lists the plan
 brought by name and the credential scopes it brought by name, or `none`, and whether the network
 was open or closed and, if closed, the reasons that kept it for the steps that had one
-([SANDBOX-20](#SANDBOX-20)). A result whose steps all
+([SANDBOX-20](#SANDBOX-20)). Under the mode `strict`, where the session has a profile directory, the description and this
+sentence also name the menu a `run` call may ask from ([SANDBOX-26](#SANDBOX-26)); in every other
+mode they name none, since none is accepted. The sentence is the same words for exit 1 and exit 2.
+A result whose steps all
 exited zero carries no such sentence. The sentence is composed from the same two decisions the policy is
 ([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
 
@@ -888,6 +891,9 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::turn::a_failed_job_on_a_confining_turn_says_what_it_ran_under`
 `verified-by: bravebot_agent::tools::the_statement_follows_the_sandbox_mode`
 `verified-by: bravebot_agent::confine::a_strict_stage_does_not_read_the_machine`
+`verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_only_where_a_request_is_accepted`
+`verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_only_in_strict`
+`verified-by: bravebot_agent::turn::the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu`
 
 <a id="SANDBOX-20"></a>
 ### SANDBOX-20: a session may close the network, and a stage keeps it only for a reason it carries
@@ -1396,6 +1402,64 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_cli::running::a_denied_write_reaches_the_programs_a_run_starts`
 `verified-by: bravebot_ui_bridge::sandbox_filesystem::a_denied_write_in_the_settings_reaches_the_programs_a_window_runs`
 `verified-by: bravebot_ui_bridge::rules::the_filesystem_lists_are_reported_with_the_file_and_what_became_of_each`
+
+<a id="SANDBOX-26"></a>
+### SANDBOX-26: a `run` call may ask for a credential scope or a toolchain list by name, and the person is asked every time
+
+`run` takes an optional `scopes`: an array of names from the fixed menu `remote`, `aws`,
+`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven` and `gradle`. It is for the line
+whose argv shows no operation to key a scope on ([SANDBOX-16](#SANDBOX-16)), a script that runs
+`gh` or `cargo` inside it. Each name is the scope or toolchain list of the same name, with the rows,
+the egress under a closed network ([SANDBOX-20](#SANDBOX-20)) and the ssh agent socket that scope
+has when a stage's argv names it, and it is added to every stage of the line that has no `NAME=value`
+in front of it. A name outside the menu, compared exactly, is an error and nothing runs: `root`,
+`Remote` and the empty string are not requests for less.
+
+- Asked about every time. A line that asks is put to a person before any vouched entry, remembered
+  line or rule is read ([RUN-5](tools/run.md#RUN-5)), and the prompt shows the names and the stage
+  each was added to. It offers no `a` or `r`, records no entry and vouches for no program, since an
+  entry is a program, its arguments and a tree, and holds none of what the line was lent.
+- What it prints is not trusted on a vouch's account: a line that asked for a scope has its output
+  quarantined as an unvouched line's is ([RUN-4](tools/run.md#RUN-4)).
+- Refused, with one sentence that does not say which setting withheld it, in a session whose mode is
+  not `strict` ([SANDBOX-22](#SANDBOX-22)), which already reads the machine or has no profile, with
+  no profile directory, and in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)).
+  A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
+  approves it, as it approves any run.
+- A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
+  carried one. A person's deny rules still beat the rows it adds ([SANDBOX-25](#SANDBOX-25)).
+- The trail records the names and the stage each was added to under `requested_scopes`, built from
+  menu words and stage numbers and nothing the plan chose. The desktop sends the names as
+  `requestedScopes`, since it draws no confinement, and offers no standing answer for such a line.
+- A delegate's `run` has the same argument, the same refusals and the same question.
+
+**Why.** Scopes follow the operation an argv names, so a script that shells out to `gh` reaches
+nothing, fails, and leaves the planner with a refusal it cannot tell from a fault. The remedy is to
+let it say what it needs, and to put that to the person in the plan they read, since a name the
+planner chose is a credential lent to a program a checkout may have written. Asking every time and
+trusting no output is what keeps a name from becoming a standing allowance that the person approved
+for a different line.
+
+`verified-by: bravebot_sandbox::scope::a_request_is_a_word_of_the_menu_and_nothing_near_it`
+`verified-by: bravebot_sandbox::scope::the_menu_is_every_scope_and_every_toolchain`
+`verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::a_remembered_line_that_asks_for_a_scope_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::a_requested_scope_leaves_a_trail`
+`verified-by: bravebot_agent::confine::a_requested_scope_lifts_its_own_directory_for_a_stage_that_names_none`
+`verified-by: bravebot_agent::confine::a_requested_toolchain_brings_its_caches`
+`verified-by: bravebot_agent::confine::a_stage_with_an_assignment_gets_no_requested_scope`
+`verified-by: bravebot_agent::confine::a_requested_scope_or_toolchain_keeps_a_closed_network_for_its_stage`
+`verified-by: bravebot_agent::confine::a_request_is_kept_once_in_the_menus_order`
+`verified-by: bravebot_agent::confine::the_description_names_each_requested_scope_and_the_stage_it_is_for`
+`verified-by: bravebot_agent::confine::a_strict_stage_that_asked_for_a_scope_reads_that_credential_only`
+`verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
+`verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
+`verified-by: bravebot_agent::turn::a_standing_answer_to_a_request_remembers_nothing`
+`verified-by: bravebot_agent::turn::scopes_are_refused_under_standard_and_under_off`
+`verified-by: bravebot_agent::turn::scopes_are_refused_in_a_workspace_the_person_declined_to_trust`
+`verified-by: bravebot_agent::turn::scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given`
+`verified-by: bravebot_agent::turn::a_scope_outside_the_menu_is_an_error`
+`verified-by: bravebot_ui_bridge::wire::a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent`
 
 ## Programs a person asked for
 

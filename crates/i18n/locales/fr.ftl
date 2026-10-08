@@ -1297,6 +1297,7 @@ run-carries-docker = { $program } lit aussi vos identifiants docker dans ~/.dock
 run-carries-reach = { $program } lit aussi { $path }, où pointe votre { $variable }
 run-network-closed = le réseau est fermé aux programmes que cette session lance, sauf à ceux ci-dessous
 run-keeps-network = { $program } atteint aussi le réseau
+run-carries-requested = { $sentence } (demandé par le planificateur pour cette ligne)
 run-carries-remembered = { $sentence } (retenu pour cette commande, autorisé le { $date })
 run-carries-remembered-read = { $program } lit aussi { $path } (retenu pour cette commande, autorisé le { $date })
 run-carries-remembered-write = { $program } lit et écrit aussi { $path } (retenu pour cette commande, autorisé le { $date })
@@ -1343,6 +1344,8 @@ run-write-not-remembered =
     une ligne nommant un fichier à écrire est soumise à chaque fois, celle-ci ne peut donc pas être retenue
 run-stdin-not-remembered =
     une ligne alimentée par une référence est soumise à chaque fois, celle-ci ne peut donc pas être retenue
+run-scopes-not-remembered =
+    une ligne pour laquelle le planificateur a demandé une portée d'identifiants ou une chaîne d'outils est soumise à chaque fois, celle-ci ne peut donc pas être retenue
 run-remember-explained =
     r : ne plus rien demander pour cette ligne exacte, dans ce répertoire, à partir de maintenant
 run-remember-where = elle est écrite ici, et supprimer la ligne est le chemin du retour :

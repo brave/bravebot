@@ -214,6 +214,10 @@ write nothing and read only paths the user vouched for. Never a property of the 
 worked out for itself, never a declaration by a stage, never anything derived from what a program
 printed.
 
+A line whose call asks for a credential scope or a toolchain list ([SANDBOX-26](../sandboxing.md#SANDBOX-26))
+is asked about whatever answers the same line without the request: a vouched entry and a
+remembered line hold the program, its arguments and a tree, and not what the line was lent.
+
 **Why.** An unprompted write is worse than an unwanted prompt, so nothing that could be wrong about
 a write may answer the question. The middle two are the same authority the first road has, exercised
 about a line the person read and recorded where they can read it back, and both grant strictly less
@@ -230,6 +234,7 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_does_not_ask`
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
+`verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
 
 <a id="RUN-6"></a>
 ### RUN-6: private input asks every time, whatever is vouched for

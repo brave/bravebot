@@ -1173,6 +1173,9 @@ fn draw_run(
         if request.feeds_a_reference() {
             why.push(t!(run_stdin_not_remembered));
         }
+        if request.asks_for_scopes() {
+            why.push(t!(run_scopes_not_remembered));
+        }
         for reason in why {
             lines.push(Line::from(Span::styled(
                 format!("  {reason}"),
@@ -4199,6 +4202,7 @@ mod tests {
             ],
             network: bravebot_sandbox::network::Network::Open,
             filesystem: Default::default(),
+            requested: Vec::new(),
             carried: vec![
                 bravebot_agent::Carried {
                     program: "git".into(),
@@ -4263,6 +4267,7 @@ mod tests {
             directories: vec!["/home/someone/project".into()],
             network,
             filesystem: Default::default(),
+            requested: Vec::new(),
             carried: vec![bravebot_agent::Carried {
                 program: "git".into(),
                 toolchain: None,

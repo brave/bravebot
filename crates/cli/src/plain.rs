@@ -2326,6 +2326,7 @@ mod tests {
             directories: vec!["/work".into(), "/var/scratch/session".into()],
             network: bravebot_sandbox::network::Network::Open,
             filesystem: Default::default(),
+            requested: Vec::new(),
             carried: vec![bravebot_agent::Carried {
                 program: "docker".into(),
                 toolchain: None,

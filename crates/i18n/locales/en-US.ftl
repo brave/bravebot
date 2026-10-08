@@ -1496,6 +1496,7 @@ run-network-closed = the network is closed for programs this session starts, exc
 run-keeps-network = { $program } also reaches the network
 # Said for reach a person attached to a command with /reach. The date is the day they allowed it,
 # so the row is never a surprise: the reach is on the screen every time the command is asked about.
+run-carries-requested = { $sentence } (asked for by the planner for this line)
 run-carries-remembered = { $sentence } (remembered for this command, allowed { $date })
 run-carries-remembered-read = { $program } also reads { $path } (remembered for this command, allowed { $date })
 run-carries-remembered-write = { $program } also reads and writes { $path } (remembered for this command, allowed { $date })
@@ -1546,6 +1547,8 @@ run-write-not-remembered =
     a line naming a file to write is asked about every time, so this one cannot be remembered
 run-stdin-not-remembered =
     a line fed a reference is asked about every time, so this one cannot be remembered
+run-scopes-not-remembered =
+    a line the planner asked to carry a credential scope or a toolchain list is asked about every time, so this one cannot be remembered
 run-remember-explained = r: stop asking about this exact line, in this directory, from now on
 run-remember-where = it is written down here, and deleting the line is the way back:
 run-remember-only-asking = it stops the asking only: what it prints stays quarantined

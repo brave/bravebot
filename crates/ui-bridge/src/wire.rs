@@ -443,6 +443,10 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         "writes": request.plan.writes,
         "stdin": request.stdin,
         "releasesPrivate": request.releases_private(),
+        // The credential scopes and toolchain lists the planner asked this line to be lent, by
+        // their menu names. A front end that draws nothing for them would approve a grant it
+        // never showed, and must also offer no standing answer for such a line.
+        "requestedScopes": request.requested_scopes(),
         // What the line reaches that nothing here holds: a container daemon, a tool already
         // logged in, the ssh agent, a machine's metadata service. Nothing is handed over when one
         // is used and nobody can refuse it, so the only thing available is that whoever grants it

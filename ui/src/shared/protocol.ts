@@ -690,6 +690,13 @@ export interface RunRequest {
    */
   releasesPrivate: boolean
   /**
+   * Credential scopes and toolchain lists the planner asked this line to be lent, by name.
+   *
+   * Asked about every time: a front end that offers a standing answer for a line with any of
+   * these would record a grant it did not show. Empty for nearly every command.
+   */
+  requestedScopes?: string[]
+  /**
    * Access the command reaches that nothing in the agent holds.
    *
    * A container daemon, a tool that is already logged in, the ssh agent, the metadata service
