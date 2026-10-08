@@ -116,6 +116,9 @@ cli-option-sandbox-allow-write =
     Let programs `run` starts write this path, which they may read too. Settings: sandbox.filesystem.allowWrite (repeatable)
 cli-option-sandbox-deny-write =
     Refuse programs `run` starts writing this path, a session directory included. Settings: sandbox.filesystem.denyWrite (repeatable)
+cli-option-log-level =
+    How much of a failure's shape is written to the diagnostic log: error (the default), info or debug.
+    Hosts, statuses and counts only, never content; an incognito session writes none
 cli-option-agent = Address every turn to this definition, as /agent does for one
 cli-option-system-prompt =
     Replace the opening sentence of the planner's system prompt for every turn. The rest of it stays
@@ -162,6 +165,8 @@ cli-run-network-needs-a-word = --run-network requires open or closed
 cli-run-network-unknown = --run-network takes open or closed, not { $word }
 # The flag is one of the four --sandbox-* flags, as typed.
 cli-sandbox-flag-needs-a-path = { $flag } requires a path
+cli-log-level-needs-a-word = --log-level requires error, info or debug
+cli-log-level-unknown = --log-level takes error, info or debug, not { $word }
 cli-agent-needs-a-name = --agent requires the name of a definition
 # The command is the first argument, one of this program's own subcommands.
 cli-agent-not-for-a-command =
@@ -560,6 +565,9 @@ doctor-subscription =
 # Which variable answered as well as where the directory is: more than one can name a profile
 # directory, and the one that won is what somebody has to change to put the directory elsewhere.
 doctor-state-directory = state directory { $path }, from { $variable }
+# Where the diagnostic log goes, so a person filing a bug knows what to attach and where to look.
+# The session writes nothing there when incognito, which `doctor` cannot know to say.
+doctor-state-directory-logs = diagnostic logs { $path }
 # What this program asks for as each file is created is a mode no other account can read. Where the
 # platform is not told that, the files carry whatever the profile directory grants them instead. A
 # prompt history holds every path, branch name and pasted fragment somebody has typed, so which of

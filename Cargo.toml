@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/agent", "crates/bedrock", "crates/browser", "crates/i18n", "crates/session", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files"]
+members = ["crates/agent", "crates/bedrock", "crates/browser", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files"]
 
 [workspace.package]
 version = "0.14.0"

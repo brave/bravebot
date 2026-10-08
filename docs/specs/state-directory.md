@@ -13,6 +13,7 @@ governs:
   - crates/tui/src/update.rs
   - crates/session/src/sessions.rs
   - crates/skus/src/store.rs
+  - crates/diag/src/lib.rs
   - crates/lsp/src/server.rs
   - crates/ui-bridge/src/store.rs
   - install.sh
@@ -32,6 +33,7 @@ instructions, an imported subscription, the command lines somebody asked to be r
 session, the reach somebody remembered for a command, the command lines a shell hook recorded for the terminal still open ([shell-integration.md](shell-integration.md)), the permission rules somebody granted a checkout and the answers to the startup question
 somebody asked to be kept all live here, and so does the record of the definitions' memories a
 session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5)).
+The diagnostic logs, `logs/`, are written there too ([diagnostic-log.md](diagnostic-log.md)).
 [definition-memory.md](definition-memory.md) proposes one more, which nothing yet builds: the
 definition a desktop bot is made as. [checkouts.md](checkouts.md) proposes another, which nothing
 yet builds either: the checkouts delegates are given, `checkouts/`, which hold a project's files

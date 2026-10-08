@@ -9349,3 +9349,131 @@ fn an_incognito_shell_records_nothing_and_asks_incognito() {
         "the line that turned it on was recorded: {given:?}"
     );
 }
+
+/// A gateway on loopback that lists one model and refuses every chat request with a body naming a
+/// secret, so a log that kept what the server said would keep it.
+fn a_gateway_refusing_with_a_secret() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            let reply = if request.starts_with("GET") {
+                http(
+                    200,
+                    r#"{"data": [{"id": "reasons-only", "context_length": 262144}]}"#,
+                )
+            } else {
+                http(401, r#"{"error": "SERVER-SECRET-BODY"}"#)
+            };
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    port
+}
+
+/// A run against the refusing gateway, with the flags a test adds, and the home it ran in.
+fn a_run_the_gateway_refuses(name: &str, flags: &[&str]) -> (Scratch, u16) {
+    let port = a_gateway_refusing_with_a_secret();
+    let scratch = Scratch::new(name).with_settings(&format!(
+        r#"{{"provider": {{"openrouter": {{"env": ["OPENROUTER_API_KEY"],
+            "options": {{"baseURL": "http://127.0.0.1:{port}/api/v1"}}}}}},
+            "model": "openrouter/reasons-only"}}"#
+    ));
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("OPENROUTER_API_KEY", "placeholder-variable-key"));
+    let mut arguments = flags.to_vec();
+    arguments.extend(["-p", "say something"]);
+    let _ = bravebot(&scratch.path, &environment, &arguments);
+    (scratch, port)
+}
+
+fn logs_of(scratch: &Scratch) -> Vec<PathBuf> {
+    std::fs::read_dir(scratch.path.join(".bravebot").join("logs"))
+        .map(|entries| entries.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default()
+}
+
+/// DIAG-1, DIAG-2: a failed request leaves its host and status in a private file under the state
+/// directory, and nothing the server said or the run sent.
+#[test]
+fn a_failed_request_leaves_its_host_and_status_and_no_content_in_the_log() {
+    let (scratch, port) = a_run_the_gateway_refuses("cli-running-log-written", &[]);
+
+    let logs = logs_of(&scratch);
+    assert_eq!(logs.len(), 1, "expected one log: {logs:?}");
+    let text = std::fs::read_to_string(&logs[0]).expect("read the log");
+    assert!(text.contains(&format!("host=127.0.0.1:{port}")), "{text}");
+    assert!(text.contains("status=401"), "{text}");
+    for kept in [
+        "SERVER-SECRET-BODY",
+        "placeholder-variable-key",
+        "say something",
+        "/api/v1",
+    ] {
+        assert!(!text.contains(kept), "{kept} reached the log: {text}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode(&logs[0]), 0o600);
+        assert_eq!(mode(logs[0].parent().expect("directory")), 0o700);
+    }
+}
+
+/// DIAG-4: the same failure in an incognito session leaves no log, and no directory for one.
+#[test]
+fn an_incognito_session_writes_no_log() {
+    let (scratch, _) = a_run_the_gateway_refuses("cli-running-log-incognito", &["--incognito"]);
+    assert!(
+        !scratch.path.join(".bravebot").join("logs").exists(),
+        "an incognito session left a log behind"
+    );
+}
+
+/// DIAG-3: a word that is not a level is refused as an argument, not read as the default.
+#[test]
+fn a_log_level_that_is_not_one_is_refused() {
+    let scratch = Scratch::new("cli-running-log-level-refused");
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--log-level", "trace", "-p", "x"],
+    );
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("--log-level"), "{stderr}");
+    assert!(!scratch.path.join(".bravebot").join("logs").exists());
+}
+
+/// DIAG-5: `doctor` names the directory the logs are in.
+#[test]
+fn doctor_names_the_log_directory() {
+    let scratch = Scratch::new("cli-running-log-doctor");
+    let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["doctor"]);
+    let (stdout, _) = said(&output);
+    let expected = scratch.path.join(".bravebot").join("logs");
+    assert!(
+        stdout.contains(&expected.display().to_string()),
+        "doctor does not name {}: {stdout}",
+        expected.display()
+    );
+}

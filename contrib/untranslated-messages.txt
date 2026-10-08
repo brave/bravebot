@@ -12,6 +12,9 @@ fr:attach-stopping
 fr:bg-interrupted-needs-a-terminal
 fr:bg-interrupted-not-repeated
 fr:cli-doctor-sandbox-takes-nothing-else
+fr:cli-log-level-needs-a-word
+fr:cli-log-level-unknown
+fr:cli-option-log-level
 fr:cli-usage-doctor-sandbox
 fr:doctor-sandbox-at
 fr:doctor-sandbox-because
@@ -35,4 +38,5 @@ fr:doctor-sandbox-passed
 fr:doctor-sandbox-skipped
 fr:doctor-sandbox-temporary
 fr:doctor-sandbox-total
+fr:doctor-state-directory-logs
 fr:reply-stopping

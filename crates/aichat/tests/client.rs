@@ -2012,6 +2012,68 @@ fn a_retry_goes_through_the_gate_again() {
     assert_eq!(checks, 2, "each attempt must be checked on its own");
 }
 
+/// Serialises the tests that read the process-wide diagnostic log.
+static DIAG_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A retry is a decision worth reading after the fact, so each of the two loops that make one
+/// leaves the attempt it is and the wait before it, and nothing of the request. The backoffs
+/// differ per loop so one loop's line cannot stand in for the other's.
+#[test]
+fn a_retry_is_written_to_the_diagnostic_log() {
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().join("logs")));
+
+    for (streaming, base_ms) in [(false, 7), (true, 11)] {
+        let reply = if streaming {
+            Attempt::Frames(vec![
+                frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+                frame("[DONE]"),
+            ])
+        } else {
+            Attempt::Json(REPLY.into())
+        };
+        let (endpoint, _received) = serve_attempts(vec![Attempt::Dropped, reply]);
+        let config = config_for(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+        let mut client =
+            AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(base_ms));
+        let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("a private prompt")]);
+        if streaming {
+            client
+                .complete_streaming(&mut policy, &request, |_| {})
+                .expect("the second attempt succeeds");
+        } else {
+            client
+                .complete(&mut policy, &request)
+                .expect("the second attempt succeeds");
+        }
+    }
+
+    let log: String = std::fs::read_dir(dir.path().join("logs"))
+        .expect("a retry makes the log")
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+    bravebot_diag::configure(bravebot_diag::Level::Error, None);
+
+    for line in [
+        "INFO aichat.retry attempt=2 backoff_ms=7",
+        "INFO aichat.retry attempt=2 backoff_ms=11",
+    ] {
+        assert!(log.contains(line), "missing {line:?} in {log}");
+    }
+    assert!(!log.contains("a private prompt"), "{log}");
+}
+
 /// The listing is a plain GET on the base host. It carries no signature and no credential: the
 /// endpoint requires neither, and spending a subscription credential to read a public list would
 /// be spending one for nothing.
