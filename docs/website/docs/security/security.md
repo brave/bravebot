@@ -156,6 +156,16 @@ Confinement bounds a process started to run code Brave Bot did not write, so a s
 none of those is inside no such boundary, and the level is what your machine offers rather than
 something holding the session back.
 
+**Sandbox modes.** The programs the agent runs start under one of three modes. `standard` is the one
+above and is the default. `strict` reads nothing on the machine beyond what the program's binary
+needs, the session's directories and the credential scope its command names. `off` starts programs
+with no profile. Choose one with `--sandbox <mode>` or with `{"sandbox": {"mode": "strict"}}` in
+`~/.bravebot/settings.json`. A repository's `.bravebot/settings.json` can ask for `strict` and
+nothing looser, so a checkout cannot unconfine whoever opens it. A managed file that pins a mode is a
+floor: a flag or a setting looser than it stops the session from starting, and `bravebot doctor`
+says which files disagree. The desktop app reads `off` as `standard`. When the mode is not
+`standard`, the opening screen and `/status` say so.
+
 Where confinement is used, it **fails closed**: if it cannot be established the process does not run,
 rather than running unconfined. A profile starts denying everything and grants accumulate onto it, and
 a policy that would confine nothing is rejected rather than applied, and a write grant on the root

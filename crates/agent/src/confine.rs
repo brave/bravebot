@@ -14,6 +14,7 @@
 use crate::confirm::{Carried, Confined};
 use crate::exec::ExecError;
 use bravebot_core::command::Step;
+use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base, run_base};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
@@ -34,6 +35,10 @@ pub struct Confinement {
     scratch: Option<PathBuf>,
     /// What the session decided about the network for the stages it starts.
     network: Network,
+    /// How much of the machine a step reads (SANDBOX-22). `Off` never reaches a confinement: a turn
+    /// in that mode builds none ([`Confinement::here`] is not asked), so the rows below are the
+    /// two modes that confine.
+    mode: SandboxMode,
     /// The program a test has the platform fail to confine, which no machine's real mechanism does
     /// on demand.
     #[cfg(test)]
@@ -73,6 +78,7 @@ impl Confinement {
             roots: roots.iter().map(|root| canonical(root)).collect(),
             scratch: scratch.map(canonical),
             network: Network::Open,
+            mode: SandboxMode::Standard,
             #[cfg(test)]
             unconfinable: None,
         }
@@ -152,6 +158,13 @@ impl Confinement {
         })
     }
 
+    /// This confinement held to `mode`.
+    #[must_use]
+    pub fn with_mode(mut self, mode: SandboxMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
     /// This confinement, failing for the step that starts `program` as the platform would for one
     /// it cannot confine.
     #[cfg(test)]
@@ -164,9 +177,10 @@ impl Confinement {
     /// the platform has a mechanism that can subtract from a read and the session names a home
     /// directory to find them under. With no home the credential rows cannot be built, and a read
     /// of the whole machine with no refusal is the one thing this must not grant, so the step is
-    /// held to the listed rows instead.
+    /// held to the listed rows instead. So is every step in the strict mode, which is that choice
+    /// made by a person where the other is made by a missing home (SANDBOX-22).
     fn reads_the_machine(&self) -> bool {
-        self.prelude != Prelude::Windows && self.home.is_some()
+        self.prelude != Prelude::Windows && self.home.is_some() && self.mode != SandboxMode::Strict
     }
 
     /// The toolchain list and the credential scope a step brings to its profile.
@@ -556,20 +570,39 @@ impl Container {
 ///
 /// A turn that does not confine says nothing, so a planner is never told of a boundary its
 /// programs do not have. Where the platform has no base to confine on, it is told the opposite.
-pub fn stated_to_the_planner(confine_runs: bool) -> Option<String> {
+///
+/// The `off` mode says nothing either, for the same reason: the programs have no boundary to state.
+pub fn stated_to_the_planner(confine_runs: bool, mode: SandboxMode) -> Option<String> {
     stated(
         confine_runs,
         Prelude::current(),
         bravebot_config::run_network(),
+        mode,
     )
 }
 
-fn stated(confine_runs: bool, prelude: Option<Prelude>, network: Network) -> Option<String> {
-    if !confine_runs {
+fn stated(
+    confine_runs: bool,
+    prelude: Option<Prelude>,
+    network: Network,
+    mode: SandboxMode,
+) -> Option<String> {
+    if !confine_runs || mode == SandboxMode::Off {
         return None;
     }
+    let listed = mode == SandboxMode::Strict;
     let mut said = String::from(match prelude {
         Some(Prelude::Windows) => {
+            "Programs this tool starts are confined. Each may reach only the directories the \
+             session was opened on, the scratch directory and the temporary directory, all read \
+             and written, the system and program directories and git's configuration files, \
+             read, the caches of the toolchain it belongs to, and the credential scope its \
+             command names. A path outside those is refused by the operating system as \
+             `Operation not permitted` or `Permission denied`, so a program that reports either \
+             for such a path was stopped by the sandbox and not by a fault in the machine. Only \
+             the person widens it (`/add-dir`, `--add-dir`); a command cannot ask for more."
+        }
+        Some(Prelude::Linux | Prelude::MacOs) if listed => {
             "Programs this tool starts are confined. Each may reach only the directories the \
              session was opened on, the scratch directory and the temporary directory, all read \
              and written, the system and program directories and git's configuration files, \
@@ -982,6 +1015,42 @@ mod tests {
         }
     }
 
+    /// SANDBOX-22: `strict` is the profile a session with no home gets, on a platform that has one:
+    /// the base, the toolchain lists the program brings, and the scope its argv names. A script
+    /// that starts `gh` is no longer given the machine to read, so its root row and the credential
+    /// table are not there. The regression it rejects is a mode that changes the sentence the
+    /// planner is told and not the profile.
+    #[test]
+    fn a_strict_stage_does_not_read_the_machine() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let script = step("/bin/sh", &["-c", "gh pr list"]);
+            let standard = reading_confinement(prelude, &["/work/project"]).policy(
+                &script,
+                Path::new("/work/project"),
+                &[],
+            );
+            let strict = reading_confinement(prelude, &["/work/project"])
+                .with_mode(SandboxMode::Strict)
+                .policy(&script, Path::new("/work/project"), &[]);
+
+            assert!(
+                reads(&standard, "/"),
+                "{prelude:?}: the control reads nothing"
+            );
+            assert!(
+                !reads(&strict, "/"),
+                "{prelude:?}: strict reads the machine"
+            );
+            assert!(
+                strict
+                    .readable
+                    .iter()
+                    .any(|row| row == Path::new("/work/project")),
+                "{prelude:?}: strict does not read the session's own directory"
+            );
+        }
+    }
+
     /// Writes stay with the session: the directories it was opened on, the scratch directory, the
     /// temporary directory and the null device, and the caches. Nothing of the person's home
     /// outside those is written, whatever program the stage runs.
@@ -1096,16 +1165,41 @@ mod tests {
         assert!(machine.describe(&[]).reads_the_machine);
         assert!(!listed.describe(&[]).reads_the_machine);
         assert_ne!(
-            stated(true, Some(Prelude::Linux), Network::Open),
-            stated(true, Some(Prelude::Windows), Network::Open)
+            stated(
+                true,
+                Some(Prelude::Linux),
+                Network::Open,
+                SandboxMode::Standard
+            ),
+            stated(
+                true,
+                Some(Prelude::Windows),
+                Network::Open,
+                SandboxMode::Standard
+            )
         );
         assert_eq!(
-            stated(true, Some(Prelude::Linux), Network::Open),
-            stated(true, Some(Prelude::MacOs), Network::Open)
+            stated(
+                true,
+                Some(Prelude::Linux),
+                Network::Open,
+                SandboxMode::Standard
+            ),
+            stated(
+                true,
+                Some(Prelude::MacOs),
+                Network::Open,
+                SandboxMode::Standard
+            )
         );
         assert!(
-            stated(true, Some(Prelude::Linux), Network::Open)
-                .is_some_and(|said| said.contains("except the places that hold a credential"))
+            stated(
+                true,
+                Some(Prelude::Linux),
+                Network::Open,
+                SandboxMode::Standard
+            )
+            .is_some_and(|said| said.contains("except the places that hold a credential"))
         );
     }
 
@@ -1410,8 +1504,13 @@ mod tests {
     /// in the machine. The sentence has to name both spellings of the refusal and say who widens it.
     #[test]
     fn a_confining_turn_tells_the_planner_what_a_refusal_means() {
-        let said = stated(true, Some(Prelude::Linux), Network::Open)
-            .expect("a confining turn says something");
+        let said = stated(
+            true,
+            Some(Prelude::Linux),
+            Network::Open,
+            SandboxMode::Standard,
+        )
+        .expect("a confining turn says something");
 
         assert!(said.contains("confined"), "{said}");
         assert!(said.contains("`Operation not permitted`"), "{said}");
@@ -1426,13 +1525,34 @@ mod tests {
     /// outage and retries. Only a closed network says so, and a turn that does not confine does not.
     #[test]
     fn a_closed_network_is_told_to_the_planner_and_an_open_one_is_not() {
-        let open = stated(true, Some(Prelude::MacOs), Network::Open).expect("says something");
-        let closed = stated(true, Some(Prelude::MacOs), Network::Closed).expect("says something");
+        let open = stated(
+            true,
+            Some(Prelude::MacOs),
+            Network::Open,
+            SandboxMode::Standard,
+        )
+        .expect("says something");
+        let closed = stated(
+            true,
+            Some(Prelude::MacOs),
+            Network::Closed,
+            SandboxMode::Standard,
+        )
+        .expect("says something");
         assert!(!open.contains("network"), "{open}");
         assert!(closed.starts_with(open.as_str()), "{closed}");
         assert!(closed.contains("The network is closed"), "{closed}");
-        assert_eq!(stated(false, Some(Prelude::MacOs), Network::Closed), None);
-        let unconfined = stated(true, None, Network::Closed).expect("says something");
+        assert_eq!(
+            stated(
+                false,
+                Some(Prelude::MacOs),
+                Network::Closed,
+                SandboxMode::Standard
+            ),
+            None
+        );
+        let unconfined =
+            stated(true, None, Network::Closed, SandboxMode::Standard).expect("says something");
         assert!(!unconfined.contains("network is closed"), "{unconfined}");
     }
 
@@ -1440,16 +1560,36 @@ mod tests {
     /// can reach, so a turn that does not confine says nothing, whatever the platform.
     #[test]
     fn a_turn_that_does_not_confine_says_nothing_of_confinement() {
-        assert_eq!(stated(false, Some(Prelude::Linux), Network::Open), None);
-        assert_eq!(stated(false, Some(Prelude::MacOs), Network::Open), None);
-        assert_eq!(stated(false, None, Network::Open), None);
+        assert_eq!(
+            stated(
+                false,
+                Some(Prelude::Linux),
+                Network::Open,
+                SandboxMode::Standard
+            ),
+            None
+        );
+        assert_eq!(
+            stated(
+                false,
+                Some(Prelude::MacOs),
+                Network::Open,
+                SandboxMode::Standard
+            ),
+            None
+        );
+        assert_eq!(
+            stated(false, None, Network::Open, SandboxMode::Standard),
+            None
+        );
     }
 
     /// Windows has no base, so the same sentence would be false there. The regression it rejects
     /// is the confined sentence on a platform whose programs run with the person's own access.
     #[test]
     fn a_platform_with_no_base_says_its_programs_are_not_confined() {
-        let said = stated(true, None, Network::Open).expect("a confining turn says something");
+        let said = stated(true, None, Network::Open, SandboxMode::Standard)
+            .expect("a confining turn says something");
 
         assert!(said.contains("not confined"), "{said}");
         assert!(!said.contains("Operation not permitted"), "{said}");

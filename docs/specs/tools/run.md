@@ -478,7 +478,8 @@ confined ([SANDBOX-17](#SANDBOX-17)): on Linux and macOS to reading the machine 
 that hold a credential and writing only the session's directories, on Windows to what its plan
 accounts for, with the credential a `git push` needs lent by the operation it names
 ([SANDBOX-16](#SANDBOX-16)), and the network kept only by a stage that has a reason to reach it
-where the session closed it ([SANDBOX-20](sandboxing.md#SANDBOX-20)).
+where the session closed it ([SANDBOX-20](sandboxing.md#SANDBOX-20)), unless the person chose another
+sandbox mode ([SANDBOX-22](../sandboxing.md#SANDBOX-22)).
 
 Do not add an allowlist and treat it as the safety property. What holds is the label on the
 output, not a belief about the binary. The audited table in [command-line.md](command-line.md) is

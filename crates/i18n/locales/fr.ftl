@@ -129,6 +129,8 @@ cli-option-safe =
 cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
+cli-option-sandbox =
+    Jusqu'où peuvent aller les programmes que `run` lance : strict, standard ou off. Un fichier géré peut fixer un plancher que cette option ne peut pas franchir
 cli-option-dangerously-skip-permissions =
     Contourner toutes les vérifications de permission. Recommandé uniquement pour des bacs à sable
     sans accès à Internet
@@ -175,6 +177,19 @@ cli-plain-working-under-model = chaque demande est adressée à { $definition },
 cli-bypass-unreachable =
     --dangerously-skip-permissions est refusé : permissions.bypassUnreachable dans { $path } rend
     ce mode inaccessible ici. Retirez-le de ce fichier, ou lancez sans l'option.
+cli-sandbox-needs-a-mode = --sandbox demande l'un de : { $names }
+cli-sandbox-refused-flag =
+    --sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une exécution peut
+    être plus stricte que cela mais pas plus souple. Lancez avec --sandbox { $pinned } ou plus strict, ou sans l'option.
+cli-sandbox-refused-file =
+    sandbox.mode { $asked } dans { $asked_in } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned },
+    et une exécution peut être plus stricte que cela mais pas plus souple. Modifiez-le là, ou retirez-le.
+cli-sandbox-refused-network-flag =
+    --sandbox { $asked } est refusé : { $pinned_in } fixe run.network à closed, et un programme lancé
+    sans bac à sable n'est pas tenu à cela. Lancez avec --sandbox standard ou plus strict, ou sans l'option.
+cli-sandbox-refused-network-file =
+    sandbox.mode { $asked } dans { $asked_in } est refusé : { $pinned_in } fixe run.network à closed, et
+    un programme lancé sans bac à sable n'est pas tenu à cela. Modifiez-le là, ou retirez-le.
 cli-mode-needs-a-name = --mode demande l'un de : { $names }
 cli-model-needs-a-name = --model demande le nom d'un modèle
 cli-advisor-needs-a-name = --advisor exige le nom d'un modèle
@@ -399,6 +414,13 @@ doctor-settings-unread-key =
 doctor-settings-mcp-declared =
     { $key } dans { $path } déclare un serveur MCP, ce que seul ~/.bravebot/mcp.json peut faire :
     rien de ce qu'il contient n'est démarré
+doctor-settings-sandbox-ignored =
+    sandbox.mode { $mode } dans { $path } n'est pas appliqué : le fichier d'un projet ne peut demander que strict, et les autres modes sont lus uniquement dans ~/.bravebot/settings.json et dans le fichier que --settings nomme
+doctor-settings-sandbox-unreadable =
+    sandbox.mode dans { $path } n'est ni strict, ni standard, ni off : il est lu comme absent et la valeur par défaut s'applique
+doctor-sandbox-mode = mode du bac à sable
+doctor-sandbox-default = { $mode } (par défaut)
+doctor-sandbox-from = { $mode } depuis { $path }
 doctor-managed = géré
 doctor-managed-pinned = { $names } depuis { $path }
 doctor-managed-nothing = { $path }, n'épinglant rien
@@ -428,6 +450,8 @@ doctor-confinement = confinement { $level }
 confinement-kernel = imposé par le noyau
 confinement-partial = partiel
 confinement-none = aucun
+confinement-with-mode = { $level }, bac à sable { $mode }
+confinement-with-mode-off = { $level }, bac à sable off : les programmes s'exécutent sans confinement
 doctor-mechanisms = mécanismes
 doctor-network-denial = refus réseau
 doctor-kernel-enforced = imposé par le noyau

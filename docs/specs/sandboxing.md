@@ -13,6 +13,8 @@ governs:
   - crates/sandbox/src/process.rs
   - crates/sandbox/src/toolchain.rs
   - crates/sandbox/src/scope.rs
+  - crates/sandbox/src/mode.rs
+  - crates/config/src/sandbox.rs
   - crates/agent/src/confine.rs
 documented-by: docs/website/docs/security/security.md
 ---
@@ -336,7 +338,8 @@ decided on and the grant a program got is visible where it can be acted on.
 The opening screen and `/status` name the level this platform can enforce over a process running
 code we did not write. Neither reports the session as running inside it, and `/status` says beside
 the level what the session confines: the MCP servers it started, where it started a local one, and
-nothing otherwise.
+nothing otherwise. Under a sandbox mode other than `standard` ([SANDBOX-22](#SANDBOX-22)) both
+lines say so beside the level: `strict` names itself, and `off` says that programs run unconfined.
 
 **Why.** The level is a fact about the machine, read before the session opens. What it bounds is a
 process started to run somebody else's code, and a session that starts none of those is inside no
@@ -357,6 +360,7 @@ whatever next gives a session such a process has to revisit.
 `verified-by: bravebot_tui::status::the_servers_a_session_started_are_named_and_what_is_confined_follows_them`
 `verified-by: bravebot_tui::logo::the_mark_names_the_agent_its_confinement_and_its_tier`
 `verified-by: bravebot_tui::logo::a_narrow_pane_still_reports_the_confinement_and_the_tier`
+`verified-by: bravebot_cli::main::the_confinement_line_names_the_mode_unless_it_is_standard`
 
 <a id="SANDBOX-11"></a>
 ### SANDBOX-11: a write row says what is at the path it names, and one that is not there is created
@@ -711,8 +715,9 @@ in the background, and a stage of a plan a subagent runs. The profile is applied
 environment is set and scrubbed and before its standard streams are connected, so it is the process
 that reads its arguments that is confined. A stage the platform cannot confine, because the backend
 is unavailable or will not apply the policy, is not started, the pipeline's other stages are
-stopped, and the turn is told the program was not started since it could not be confined. No setting
-turns this off.
+stopped, and the turn is told the program was not started since it could not be confined. The one way a
+program is started with no profile is the mode `off` ([SANDBOX-22](#SANDBOX-22)), which a person
+chose by name in their own settings or on the command line, and which a window never reads.
 
 Confinement is a property of the session and not of the plan: the terminal, desktop, plain and
 one-shot front ends each ask for it when they open a session. A caller that does not ask, which is a
@@ -728,8 +733,9 @@ platform cannot confine is refused as it is elsewhere.
 
 **Why.** A profile that is applied when it can be and skipped when it cannot is the silent
 degradation [SANDBOX-1](#SANDBOX-1) exists to forbid, and the person who endorsed a line believes it
-ran under what the plan accounts for. An off switch would be the setting a person reaches for after
-one refusal and forgets, and every session after it would run unconfined. Starting the
+ran under what the plan accounts for. A switch that turns confinement off is one a person reaches for
+after one refusal and forgets, so it is a named mode that the opening line of every session it
+governs reports ([SANDBOX-22](#SANDBOX-22)), and it is not one a checkout can set. Starting the
 process already confined, through a command the caller spawns or, on Windows, through the call
 that creates it, keeps the stage's pipes its own, so the executor's cancellation and job handling
 are unchanged.
@@ -837,8 +843,10 @@ directory and the temporary directory, the system and program directories and gi
 files for reading, the caches of the toolchain a program belongs to and the credential scope its
 command names. It says that a path outside those is refused by the operating system as `Operation
 not permitted` or `Permission denied`, and that only the person widens the reach (`/add-dir`,
-`--add-dir`). On a platform with no base the description says programs are not confined. On a turn
-that does not confine runs it says nothing about confinement, since a planner told of a boundary its
+`--add-dir`). On a platform with no base the description says programs are not confined. Under the mode `strict`
+([SANDBOX-22](#SANDBOX-22)) it gives the Windows form's account of what is reachable, since the
+machine is not read there either. On a turn
+that does not confine runs, and under the mode `off`, it says nothing about confinement, since a planner told of a boundary its
 programs do not have stops reaching for paths they can reach.
 
 A result whose step did not exit zero, from a run or from a job left running, carries one more
@@ -874,6 +882,8 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::turn::a_run_that_succeeded_on_a_confining_turn_carries_no_profile_line`
 `verified-by: bravebot_agent::turn::a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_failure`
 `verified-by: bravebot_agent::turn::a_failed_job_on_a_confining_turn_says_what_it_ran_under`
+`verified-by: bravebot_agent::tools::the_statement_follows_the_sandbox_mode`
+`verified-by: bravebot_agent::confine::a_strict_stage_does_not_read_the_machine`
 
 <a id="SANDBOX-20"></a>
 ### SANDBOX-20: a session may close the network, and a stage keeps it only for a reason it carries
@@ -969,7 +979,7 @@ is let through fails, and so does one whose earlier stage is refused.
 A workflow whose program is not installed is skipped, named, and counted apart from the passes; it
 is not a failure. A workflow that fails without the sandbox as well is reported as that and not as
 the sandbox's. A failing row fails the suite, which runs in CI on Linux and macOS and reports the
-number skipped. `bravebot doctor --sandbox` runs the same suite on this machine, from a directory
+number skipped. `bravebot doctor --sandbox-check` runs the same suite on this machine, from a directory
 under the state directory, and prints each row, and for a row that failed the stage, the fix for
 that kind of failure and where the stage's output went. It exits with the failed ending
 ([CLI-6](cli.md#CLI-6)) when a row failed. It runs nothing on Windows, where programs are confined
@@ -1001,6 +1011,93 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_counts_passed_failed_and_skipped_apart`
 `verified-by: bravebot_cli::running::doctor_sandbox_skips_what_is_not_installed_and_cleans_up_after_a_clean_run`
 `verified-by: bravebot_cli::running::doctor_sandbox_refuses_a_further_argument`
+
+<a id="SANDBOX-22"></a>
+### SANDBOX-22: a person chooses how much a program `run` starts is held to, and a checkout can only ask for more
+
+There are three sandbox modes. `strict` starts every stage under the deny-by-default profile
+[SANDBOX-18](#SANDBOX-18) composes where the machine cannot be read: the base, the list its program's
+binary brings, the credential scope its argv names and the session's directories, so a program reads
+nothing else on the machine. `standard` is what [SANDBOX-17](#SANDBOX-17) and
+[SANDBOX-18](#SANDBOX-18) describe, and is the mode when nothing chose another. `off` starts the
+stage with no profile. The network is not part of a mode: whether a stage keeps egress is the setting
+[SANDBOX-20](#SANDBOX-20) describes, and `strict` and `standard` honour it the same way. `off` starts
+no profile, so under it nothing holds a network shut; the floor below is what stops a managed pin
+from meeting that.
+
+The mode is read, in this order, from `--sandbox <mode>` (the last one wins), from the `sandbox.mode`
+key of the settings, and from the managed file's pin; the default is `standard`. In the settings, the home file and a `--settings` file outside
+the workspace may name any of the three, the later of the two winning. The checkout's project and
+local files, and a `--settings` file inside the workspace, may name only `strict`; a `standard` or
+`off` there is not obeyed and `doctor` names the file and the word. A `strict` from any of them
+holds over what the home file chose. A value that is not exactly one of the three words chooses
+nothing and is reported with its file. Only `mode` is read from the `sandbox` block, and a key
+beside it is reported as unread, so a block written for another tool does not look configured.
+
+The managed file's `sandbox.mode` is a floor and not a default. A flag or a settings file that names
+a mode looser than it refuses the session before it starts, naming both files; the same mode or a
+stricter one is kept; with nothing asked, the pin is the mode. A managed file that pins `run.network`
+to `closed` ([SANDBOX-20](#SANDBOX-20)) is a floor of `standard` as well, because `off` starts a
+program with no profile and nothing would hold its network shut; the refusal says so. `doctor`,
+`--help`, `--version` and the commands that start no program (`auth`, `sessions`, `attach`,
+`completion` and the two `import-` commands) run past a refusal, so that the person can read what it
+says and sign in.
+
+The desktop and the bridge have no flag, and read the mode from the settings and the pin. `off` is
+read there as `standard`, because a window has no line that shows its programs are unconfined. A
+subagent's programs run under the mode of the session that started it, and the mode is not in the
+session record, so a resumed session takes the mode its start-up chose and not the one it was
+saved under. The mode is chosen separately from the permission mode ([MODE-1](permission-modes.md#MODE-1))
+and from `--dangerously-skip-permissions`: neither widens it.
+
+Under `off` the opening screen and `/status` do not report a closed network, since nothing then holds
+a program to it.
+
+Each `run` on a session that confines records a gate, `sandbox`, whose detail names the mode
+the programs ran in ([TRACE-1](trace.md#TRACE-1)).
+
+**Why.** A program that is refused a read or a write is a program the person wanted to run, and
+having no way to say "not under this" sends them to a wrapper script outside the tool that confines
+nothing and reports nothing. A mode they name, whose opening line reports it, is the same
+choice with the report kept. It is the person's to make and not the checkout's: a line in a
+repository that picked `off` would unconfine whoever cloned it, so the checkout may only ask for the
+stricter mode, which takes nothing from them, on the footing the `permissions` keys that only
+refuse already have ([PERM-18](permissions.md#PERM-18)). The pin is a floor because it is the
+administrator's rule about the machine, and a flag that overrode it would be the setting they wrote
+the pin to prevent. A pin looser than what a person asks for is not applied, so a person may be
+stricter than the machine requires.
+
+**What it costs.** `strict` fails any program that reads a place its binary's list and its argv do
+not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and chooses `standard` or
+adds the directory. `off` is the whole of the confinement removed: a window never offers it, and
+the command line prints it on its opening line.
+
+`verified-by: bravebot_sandbox::mode::a_mode_is_read_only_from_its_exact_word`
+`verified-by: bravebot_sandbox::mode::strict_is_the_tightest_and_off_the_loosest`
+`verified-by: bravebot_config::sandbox::a_mode_is_read_from_the_block_and_nothing_near_it_is`
+`verified-by: bravebot_config::settings::the_home_layer_and_a_named_file_outside_the_workspace_choose_the_mode`
+`verified-by: bravebot_config::settings::a_checkout_may_only_tighten_the_sandbox`
+`verified-by: bravebot_config::settings::a_word_that_is_not_a_mode_chooses_nothing_and_is_reported`
+`verified-by: bravebot_config::settings::the_flag_beats_the_files_and_the_default_is_standard`
+`verified-by: bravebot_config::settings::a_managed_pin_refuses_a_looser_request_and_keeps_a_stricter_one`
+`verified-by: bravebot_config::settings::a_pin_that_is_not_a_mode_pins_nothing`
+`verified-by: bravebot_config::settings::a_closed_network_pin_refuses_off_and_leaves_the_rest`
+`verified-by: bravebot_config::settings::a_key_beside_the_sandbox_mode_is_reported_as_unread`
+`verified-by: bravebot_tui::logo::a_closed_network_is_not_claimed_for_programs_nothing_confines`
+`verified-by: bravebot_cli::main::a_refused_mode_stops_what_runs_programs_and_not_what_does_not`
+`verified-by: bravebot_config::settings::a_window_never_runs_unconfined_and_keeps_the_pin`
+`verified-by: bravebot_cli::main::the_sandbox_flag_takes_one_of_three_words_and_the_last_wins`
+`verified-by: bravebot_cli::main::the_sandbox_flag_refuses_a_word_that_is_not_a_mode`
+`verified-by: bravebot_cli::main::doctor_names_the_sandbox_mode_and_where_it_came_from`
+`verified-by: bravebot_cli::main::doctor_reports_a_mode_the_managed_file_refuses`
+`verified-by: bravebot_cli::running::the_sandbox_flag_is_read_before_the_run_starts`
+`verified-by: bravebot_cli::running::the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run`
+`verified-by: bravebot_agent::turn::a_run_under_off_starts_with_no_profile_and_says_nothing_of_one`
+`verified-by: bravebot_agent::turn::a_run_under_strict_cannot_read_what_standard_reads`
+`verified-by: bravebot_agent::turn::a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it`
+`verified-by: bravebot_agent::turn::a_delegate_of_a_strict_turn_cannot_read_what_a_standard_one_reads`
+`verified-by: bravebot_core::policy::the_trail_says_which_sandbox_mode_the_programs_ran_in`
+`verified-by: bravebot_ui_bridge::permission_mode::a_window_reads_off_as_standard`
 
 ## Programs a person asked for
 

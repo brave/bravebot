@@ -1437,8 +1437,12 @@ pub fn offer_advisor(tools: &mut Vec<Tool>) {
 /// Appended to the table's description rather than a parameter of it, so the many callers that
 /// build a table for another reason are untouched. Nothing where the list does not offer `run` or
 /// the turn does not confine, since a planner is not told of a boundary its programs do not have.
-pub fn state_confinement(tools: &mut [Tool], confine_runs: bool) {
-    let Some(stated) = crate::confine::stated_to_the_planner(confine_runs) else {
+pub fn state_confinement(
+    tools: &mut [Tool],
+    confine_runs: bool,
+    sandbox: bravebot_sandbox::SandboxMode,
+) {
+    let Some(stated) = crate::confine::stated_to_the_planner(confine_runs, sandbox) else {
         return;
     };
     if let Some(run) = tools.iter_mut().find(|tool| tool.function.name == "run") {
@@ -1829,19 +1833,29 @@ pub struct Tools<'a> {
     ///
     /// [SANDBOX-1]: ../../../docs/specs/sandboxing.md
     pub confine_runs: bool,
+    /// How much of the machine a confined program reads, or that none is confined (SANDBOX-22).
+    ///
+    /// Read only where `confine_runs` is true. A delegate inherits the spawning turn's, so the
+    /// mode is no looser one level down.
+    pub sandbox: bravebot_sandbox::SandboxMode,
 }
 
 impl<'a> Tools<'a> {
     /// What this call's programs are confined to, or `None` where they are not.
     fn confinement(&self) -> Option<crate::confine::Confinement> {
-        if !self.confine_runs {
+        if !self.confine_runs || self.sandbox == bravebot_sandbox::SandboxMode::Off {
             return None;
         }
         let roots = std::iter::once(self.workspace.root().to_path_buf())
             .chain(self.workspace.added_directories().iter().cloned())
             .collect();
-        crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)
-            .map(|confinement| confinement.with_network(bravebot_config::run_network()))
+        crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile).map(
+            |confinement| {
+                confinement
+                    .with_network(bravebot_config::run_network())
+                    .with_mode(self.sandbox)
+            },
+        )
     }
 
     /// Where this turn's credential findings are written, and under whose name.
@@ -6992,6 +7006,9 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     }
 
     let confinement = tools.confinement();
+    if tools.confine_runs {
+        policy.record_sandbox_mode(tools.sandbox.name());
+    }
 
     let asking = policy.plan_needs_approval(&plan);
     // Whether the record is what stopped the question. Read where the result is quarantined: the
@@ -14237,6 +14254,7 @@ mod tests {
                 auto_vetting: false,
                 run_directory: &mut run_directory,
                 confine_runs: false,
+                sandbox: bravebot_sandbox::SandboxMode::default(),
                 remembering: None,
                 advising: None,
             })
@@ -14308,9 +14326,17 @@ mod tests {
             };
             let plain = described(&table());
             let mut not_confining = table();
-            state_confinement(&mut not_confining, false);
+            state_confinement(
+                &mut not_confining,
+                false,
+                bravebot_sandbox::SandboxMode::Standard,
+            );
             let mut confining = table();
-            state_confinement(&mut confining, true);
+            state_confinement(
+                &mut confining,
+                true,
+                bravebot_sandbox::SandboxMode::Standard,
+            );
 
             assert_eq!(described(&not_confining), plain);
             let confining = described(&confining);
@@ -14326,6 +14352,46 @@ mod tests {
                 }
             }
             assert!(plain.iter().any(|(name, _)| name == "run"));
+        }
+
+        /// SANDBOX-22: a turn whose programs are not confined at all says nothing of a boundary, and
+        /// a turn in the strict mode states the deny-by-default one rather than the machine-read one.
+        /// The regressions it rejects are `off` still telling the planner its programs are confined,
+        /// and `strict` repeating the sentence that says the machine is readable.
+        #[test]
+        fn the_statement_follows_the_sandbox_mode() {
+            let said = |mode| {
+                let mut table = for_planner(
+                    Scheduling::ArrangingALook,
+                    Arming::Allowed { free: 1 },
+                    &bravebot_core::delegate::Definitions::default(),
+                    Deadlines::BUILT_IN,
+                    Running::Offered,
+                );
+                let before = table
+                    .iter()
+                    .find(|tool| tool.function.name == "run")
+                    .map(|tool| tool.function.description.clone())
+                    .expect("run is offered");
+                state_confinement(&mut table, true, mode);
+                let after = table
+                    .iter()
+                    .find(|tool| tool.function.name == "run")
+                    .map(|tool| tool.function.description.clone())
+                    .expect("run is offered");
+                after
+                    .strip_prefix(&before)
+                    .map(|said| said.trim().to_string())
+            };
+            assert_eq!(
+                said(bravebot_sandbox::SandboxMode::Off),
+                Some(String::new())
+            );
+            let strict = said(bravebot_sandbox::SandboxMode::Strict).expect("appended");
+            let standard = said(bravebot_sandbox::SandboxMode::Standard).expect("appended");
+            assert!(!strict.is_empty() && !standard.is_empty());
+            assert!(!strict.contains("may read this machine"), "{strict}");
+            assert!(standard.contains("may read this machine"), "{standard}");
         }
 
         pub(super) fn told(

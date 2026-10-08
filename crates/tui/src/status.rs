@@ -242,8 +242,15 @@ pub fn named_mode(
 
 /// Compose the report.
 /// The line for the network the programs `run` starts have, where it is closed.
-fn network_line(settled: Option<&bravebot_config::RunNetwork>) -> Option<Line> {
-    let settled = settled.filter(|settled| settled.network.is_closed())?;
+fn network_line(
+    settled: Option<&bravebot_config::RunNetwork>,
+    mode: bravebot_sandbox::SandboxMode,
+) -> Option<Line> {
+    // Not under `off`: nothing confines a program then, so a closed network would be a claim about
+    // a boundary that is not there. The confinement line says the programs are unconfined.
+    let settled = settled.filter(|settled| {
+        settled.network.is_closed() && mode != bravebot_sandbox::SandboxMode::Off
+    })?;
     Some(
         Line::new(t!(status_network), t!(status_network_closed))
             .with_note(run_network_source(&settled.decided)),
@@ -426,7 +433,10 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // Only where it is closed, for the reason the mode and the vetting lines are: an open network is
     // what every session had, and a line saying so on each would be skimmed past. The note says who
     // closed it, because the way to open it again depends on that.
-    lines.extend(network_line(bravebot_config::settled_run_network()));
+    lines.extend(network_line(
+        bravebot_config::settled_run_network(),
+        bravebot_config::sandbox::in_force().mode,
+    ));
 
     // Named rather than counted, since the question is which of them this session can reach, and
     // said where there are none, since a checkout that asked for one is where somebody looks. The
@@ -1894,18 +1904,31 @@ mod tests {
     #[test]
     fn a_closed_network_is_reported_with_who_closed_it_and_an_open_one_is_not() {
         use bravebot_config::{Decided, RunNetwork};
+        use bravebot_sandbox::SandboxMode::{self, Standard};
         use bravebot_sandbox::network::Network;
         let settled = |network, decided| RunNetwork { network, decided };
 
-        assert!(network_line(None).is_none());
-        assert!(network_line(Some(&settled(Network::Open, Decided::Flag))).is_none());
-        let flag = network_line(Some(&settled(Network::Closed, Decided::Flag))).expect("a line");
+        assert!(network_line(None, Standard).is_none());
+        assert!(network_line(Some(&settled(Network::Open, Decided::Flag)), Standard).is_none());
+        let flag =
+            network_line(Some(&settled(Network::Closed, Decided::Flag)), Standard).expect("a line");
+        assert!(
+            network_line(
+                Some(&settled(Network::Closed, Decided::Flag)),
+                SandboxMode::Off
+            )
+            .is_none(),
+            "a closed network was claimed for programs nothing confines"
+        );
         assert_eq!(flag.label.trim(), t!(status_network));
         assert!(flag.note.contains("--run-network"));
-        let pinned = network_line(Some(&settled(
-            Network::Closed,
-            Decided::Managed(Some("/etc/bravebot/managed.json".into())),
-        )))
+        let pinned = network_line(
+            Some(&settled(
+                Network::Closed,
+                Decided::Managed(Some("/etc/bravebot/managed.json".into())),
+            )),
+            Standard,
+        )
         .expect("a line");
         let note = pinned.note.as_str();
         assert!(

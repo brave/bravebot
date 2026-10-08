@@ -85,6 +85,8 @@
 //! Installing them globally would put every name in the block in front of every command `run`
 //! ever starts, which is a much larger claim than "this is how I reach the backend".
 
+use crate::sandbox::{SANDBOX_BLOCK, Stated};
+use bravebot_sandbox::SandboxMode;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -140,6 +142,7 @@ const READ_KEYS: &[&str] = &[
     "promptCacheTtl",
     PROVIDER_BLOCK,
     "run",
+    SANDBOX_BLOCK,
     "search",
     "terminalTitle",
     "tui",
@@ -273,6 +276,21 @@ pub struct Settings {
     /// nothing is the one worth saying out loud, and somebody who quoted `"true"` has to be told it
     /// was read as absence rather than left to believe the tools are confined.
     narrowing_unreadable: Vec<(PathBuf, &'static str)>,
+    /// The mode `sandbox.mode` named in a layer entitled to choose one, and that layer's file
+    /// (SANDBOX-22).
+    ///
+    /// The home layer and a file the command line named from outside the workspace, the later of
+    /// the two winning. Settled per layer rather than off the merged root, for `vetting`'s reason:
+    /// the merge cannot say which file a value came from.
+    sandbox_chosen: Option<(SandboxMode, PathBuf)>,
+    /// The layers not entitled to choose that asked for `strict`, weakest first. They may only
+    /// tighten, so nothing a stronger layer chose lifts one.
+    sandbox_asked_strict: Vec<PathBuf>,
+    /// The layers not entitled to choose that named `standard` or `off`, with the mode, for
+    /// `doctor`: dropped rather than obeyed, and said so.
+    sandbox_ignored: Vec<(PathBuf, SandboxMode)>,
+    /// The layers that named `sandbox.mode` as something that is not a mode.
+    sandbox_unreadable: Vec<PathBuf>,
     /// The `allow` entries a layer not entitled to grant one wrote, with the file each came from.
     ///
     /// Kept for the reason `vetting_ignored` is kept, and it matters more: an `allow` entry is the
@@ -579,6 +597,11 @@ impl Settings {
         // the person wrote in their own file. See [`Settings::allow_ignored`].
         let mut allow = Vec::new();
         let mut allow_ignored = Vec::new();
+        // Settled per layer for the same reason: which file chose a mode decides whether it binds.
+        let mut sandbox_chosen = None;
+        let mut sandbox_asked_strict = Vec::new();
+        let mut sandbox_ignored = Vec::new();
+        let mut sandbox_unreadable = Vec::new();
         // Settled per layer for the same reason as `vetting`: a provider block or a `model` key a
         // checkout wrote picks where a request is sent and which of the person's variables are read
         // as its credential, so the merge must never see it. `model` and `provider` are removed
@@ -685,6 +708,13 @@ impl Settings {
                 }
                 NetworkStated::Word(_) => run_network_ignored.push(path.clone()),
             }
+            match crate::sandbox::stated(&root) {
+                Stated::Absent => {}
+                Stated::Unreadable => sandbox_unreadable.push(path.clone()),
+                Stated::Mode(mode) if granting => sandbox_chosen = Some((mode, path.clone())),
+                Stated::Mode(SandboxMode::Strict) => sandbox_asked_strict.push(path.clone()),
+                Stated::Mode(mode) => sandbox_ignored.push((path.clone(), mode)),
+            }
             let directory = settings_directory(&path);
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
@@ -739,6 +769,10 @@ impl Settings {
             };
         settings.run_network_ignored = run_network_ignored;
         settings.run_network_unreadable = run_network_unreadable;
+        settings.sandbox_chosen = sandbox_chosen;
+        settings.sandbox_asked_strict = sandbox_asked_strict;
+        settings.sandbox_ignored = sandbox_ignored;
+        settings.sandbox_unreadable = sandbox_unreadable;
         // Overwritten for the same reason, and the merged block is what it replaces: `deny` and
         // `ask` keep every layer's entries because both only ever narrow, and this one is put back
         // to the entries a layer entitled to grant wrote.
@@ -835,6 +869,11 @@ impl Settings {
             narrowing: narrowing_stated(root).0,
             narrowed_by: Vec::new(),
             narrowing_unreadable: Vec::new(),
+            // Filled by [`Settings::layered`], which knows which file each was written in.
+            sandbox_chosen: None,
+            sandbox_asked_strict: Vec::new(),
+            sandbox_ignored: Vec::new(),
+            sandbox_unreadable: Vec::new(),
             // Empty here, and filled by [`Settings::layered`] for the same reason: one root does
             // not say which file it was read out of, and that is the whole of what decides whether
             // an `allow` entry in it grants anything.
@@ -1024,6 +1063,37 @@ impl Settings {
             .map(|(path, key)| (path.as_path(), *key))
     }
 
+    /// The sandbox mode the settings files ask for and the file that asked, if any did
+    /// (SANDBOX-22).
+    ///
+    /// `strict` from any layer wins over what an entitled layer chose, because it only tightens: a
+    /// checkout asking for it is obeyed, and the person's own `off` does not lift it. Otherwise the
+    /// entitled layer's choice stands, the command-line file over the home one.
+    pub fn sandbox(&self) -> Option<(SandboxMode, &Path)> {
+        match &self.sandbox_chosen {
+            Some((SandboxMode::Strict, file)) => Some((SandboxMode::Strict, file.as_path())),
+            chosen => match self.sandbox_asked_strict.first() {
+                Some(file) => Some((SandboxMode::Strict, file.as_path())),
+                None => chosen.as_ref().map(|(mode, file)| (*mode, file.as_path())),
+            },
+        }
+    }
+
+    /// The layers that named `standard` or `off` without being entitled to, with the mode, weakest
+    /// first. Reported rather than obeyed, for the reason `vetting_ignored` is.
+    pub fn sandbox_ignored(&self) -> impl Iterator<Item = (&Path, SandboxMode)> {
+        self.sandbox_ignored
+            .iter()
+            .map(|(path, mode)| (path.as_path(), *mode))
+    }
+
+    /// The layers that named `sandbox.mode` as something other than one of the three words. Read as
+    /// absence and reported, since a mistyped `strict` is the failure worth interrupting somebody
+    /// over.
+    pub fn sandbox_unreadable(&self) -> impl Iterator<Item = &Path> {
+        self.sandbox_unreadable.iter().map(PathBuf::as_path)
+    }
+
     /// The `allow` entries that were dropped, and the file each was written in, weakest first.
     ///
     /// An `allow` entry answers a prompt, so reading one is granting a capability rather than
@@ -1172,6 +1242,10 @@ impl Settings {
             // the file that holds it, so reading it as no settings at all would contradict the line
             // under it.
             && self.narrowing_unreadable.is_empty()
+            && self.sandbox_chosen.is_none()
+            && self.sandbox_asked_strict.is_empty()
+            && self.sandbox_ignored.is_empty()
+            && self.sandbox_unreadable.is_empty()
             && self.keybindings.is_empty()
             && self.attribution.is_empty()
             && self.search.is_empty()
@@ -1287,6 +1361,10 @@ impl Settings {
             .chain(self.update_check.is_some().then_some("updateCheck"))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
+            .chain(
+                (self.sandbox_chosen.is_some() || !self.sandbox_asked_strict.is_empty())
+                    .then_some("sandbox.mode"),
+            )
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
             .chain(
                 self.attribution
@@ -1758,9 +1836,20 @@ fn env_names(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
 /// is reported for that by [`Settings::misshapen_rule_lists`] instead, so the shape of a value never
 /// reaches this.
 fn unread_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    // `sandbox` is a block other tools write more keys into, and a person who pasted one believes
+    // a sandbox is configured, so what sits beside `mode` is named.
+    let beside_the_mode = match root.get(SANDBOX_BLOCK) {
+        Some(serde_json::Value::Object(block)) => block
+            .keys()
+            .filter(|key| key.as_str() != crate::sandbox::MODE_KEY)
+            .map(|key| format!("{SANDBOX_BLOCK}.{key}"))
+            .collect(),
+        _ => Vec::new(),
+    };
     root.keys()
         .filter(|key| !READ_KEYS.contains(&key.as_str()))
         .cloned()
+        .chain(beside_the_mode)
         .collect()
 }
 
@@ -4317,16 +4406,16 @@ mod tests {
     /// that set it, weakest first, and every file that set one is named.
     ///
     /// Two layers write the same key, which is the case a report assembled off the merged root
-    /// cannot answer: that root holds one `sandbox`, so the home file would go unnamed and whoever
+    /// cannot answer: that root holds one `statusLine`, so the home file would go unnamed and whoever
     /// wrote it would read the report as being about the checkout's copy alone.
     ///
-    /// `hooks` and `sandbox` are the two keys a block pasted from the other tool's file carries that
-    /// read as a restriction in force, which is why they are the fixture rather than a made-up name.
+    /// `hooks` is a key a block pasted from the other tool's file carries that reads as a
+    /// restriction in force, which is why it is a fixture rather than a made-up name.
     #[test]
     fn a_key_beside_the_ones_this_build_reads_is_named_with_the_file_that_set_it() {
         let layers = Layers::new("unread-keys")
-            .global(r#"{"sandbox": {"enabled": true}, "env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"sandbox": {"enabled": true}, "hooks": {"PreToolUse": []}}"#);
+            .global(r#"{"statusLine": {"type": "command"}, "env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"statusLine": {"type": "command"}, "hooks": {"PreToolUse": []}}"#);
         let settings = layers.read();
         let unread: Vec<(PathBuf, &str)> = settings
             .unread_keys()
@@ -4335,9 +4424,12 @@ mod tests {
         assert_eq!(
             unread,
             [
-                (layers.home.join(SETTINGS_FILE), "sandbox"),
+                (layers.home.join(SETTINGS_FILE), "statusLine"),
                 (layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE), "hooks"),
-                (layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE), "sandbox"),
+                (
+                    layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE),
+                    "statusLine"
+                ),
             ]
         );
         // The key is reported and the file still applies, which is every other key reported this
@@ -4366,6 +4458,7 @@ mod tests {
                     "attribution": {"commit": ""},
                     "keybindings": {"submit": "ctrl+s"},
                     "search": {"maxFiles": 100},
+                    "sandbox": {"mode": "strict"},
                     "vetting": {"auto": true},
                     "mcp": {"request": ["docs"]},
                     "mcpServers": {"weather": {"command": "npx"}}
@@ -4389,6 +4482,23 @@ mod tests {
         assert_eq!(
             settings.names().collect::<Vec<_>>(),
             vec!["CLAUDE_CODE_SOMETHING"]
+        );
+    }
+
+    /// SANDBOX-22: only `mode` is read from the `sandbox` block, so a key beside it is reported as
+    /// unread. The regression it rejects is a pasted `sandbox.enabled` passing in silence now that
+    /// the block is a key this build reads.
+    #[test]
+    fn a_key_beside_the_sandbox_mode_is_reported_as_unread() {
+        let settings = Layers::new("unread-sandbox-sibling")
+            .global(r#"{"sandbox": {"mode": "strict", "enabled": true}}"#)
+            .read();
+        assert_eq!(
+            settings
+                .unread_keys()
+                .map(|(_, key)| key)
+                .collect::<Vec<_>>(),
+            vec!["sandbox.enabled"]
         );
     }
 
@@ -5183,5 +5293,261 @@ mod tests {
             .read();
         assert_eq!(settings.prompt_cache_ttl(), Some(CacheTtl::FiveMinutes));
         assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// A pin written to a scratch file, for the resolution tests below.
+    fn pinned(name: &str, text: &str) -> crate::Managed {
+        let dir = crate::testutil::scratch_dir(&format!("bravebot-sandbox-pin-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let file = dir.join("managed.json");
+        std::fs::write(&file, text).expect("managed file");
+        crate::Managed::at(&file)
+    }
+
+    /// SANDBOX-22: the person's own file chooses any of the three, and a file the command line
+    /// named from outside the workspace is the person's too, the later of the two winning. The
+    /// regression it rejects is a mode read only from one of them, or the earlier winning.
+    #[test]
+    fn the_home_layer_and_a_named_file_outside_the_workspace_choose_the_mode() {
+        for mode in [SandboxMode::Strict, SandboxMode::Standard, SandboxMode::Off] {
+            let layers = Layers::new(&format!("sandbox-home-{mode}"))
+                .global(&format!(r#"{{"sandbox": {{"mode": "{mode}"}}}}"#));
+            let settings = layers.read();
+            assert_eq!(
+                settings.sandbox(),
+                Some((mode, layers.home.join(SETTINGS_FILE).as_path())),
+                "{mode}"
+            );
+            assert_eq!(settings.sandbox_ignored().count(), 0);
+        }
+        let layers = Layers::new("sandbox-named")
+            .global(r#"{"sandbox": {"mode": "off"}}"#)
+            .named(r#"{"sandbox": {"mode": "standard"}}"#);
+        let settings = layers.read();
+        assert_eq!(
+            settings.sandbox().map(|(mode, _)| mode),
+            Some(SandboxMode::Standard)
+        );
+    }
+
+    /// SANDBOX-22: a checkout's two files, and a named file that resolves inside the workspace,
+    /// may ask for `strict` and are not obeyed when they name `standard` or `off`, whichever the
+    /// person's own file says. The regression it rejects is a repository loosening the sandbox of
+    /// whoever cloned it.
+    #[test]
+    fn a_checkout_may_only_tighten_the_sandbox() {
+        for (name, text) in [("project", "p"), ("local", "l"), ("inside", "i")] {
+            for loose in ["standard", "off"] {
+                let body = format!(r#"{{"sandbox": {{"mode": "{loose}"}}}}"#);
+                let layers = Layers::new(&format!("sandbox-loose-{name}-{loose}"));
+                let layers = match text {
+                    "p" => layers.project(&body),
+                    "l" => layers.local(&body),
+                    _ => layers.named_inside_the_workspace(&body),
+                };
+                let settings = layers.read();
+                assert_eq!(settings.sandbox(), None, "{name} {loose} was obeyed");
+                assert_eq!(settings.sandbox_ignored().count(), 1, "{name} {loose}");
+                assert!(!settings.is_empty());
+            }
+            let body = r#"{"sandbox": {"mode": "strict"}}"#;
+            let layers = Layers::new(&format!("sandbox-strict-{name}"));
+            let layers = match text {
+                "p" => layers.project(body),
+                "l" => layers.local(body),
+                _ => layers.named_inside_the_workspace(body),
+            };
+            let settings = layers.read();
+            assert_eq!(
+                settings.sandbox().map(|(mode, _)| mode),
+                Some(SandboxMode::Strict),
+                "{name} strict was not obeyed"
+            );
+        }
+        let layers = Layers::new("sandbox-checkout-over-home")
+            .global(r#"{"sandbox": {"mode": "off"}}"#)
+            .project(r#"{"sandbox": {"mode": "strict"}}"#);
+        let settings = layers.read();
+        assert_eq!(
+            settings.sandbox(),
+            Some((
+                SandboxMode::Strict,
+                layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE).as_path()
+            )),
+            "the person's own `off` lifted a checkout's `strict`"
+        );
+        let layers = Layers::new("sandbox-home-over-checkout")
+            .global(r#"{"sandbox": {"mode": "standard"}}"#)
+            .project(r#"{"sandbox": {"mode": "off"}}"#);
+        assert_eq!(
+            layers.read().sandbox().map(|(mode, _)| mode),
+            Some(SandboxMode::Standard)
+        );
+    }
+
+    /// SANDBOX-22: a value that is not one of the three words is absence and is reported with its
+    /// file, in every layer. The regression it rejects is a near miss read as a mode.
+    #[test]
+    fn a_word_that_is_not_a_mode_chooses_nothing_and_is_reported() {
+        let layers = Layers::new("sandbox-unreadable")
+            .global(r#"{"sandbox": {"mode": "Strict"}}"#)
+            .project(r#"{"sandbox": {"mode": 1}}"#);
+        let settings = layers.read();
+        assert_eq!(settings.sandbox(), None);
+        assert_eq!(settings.sandbox_unreadable().count(), 2);
+    }
+
+    /// SANDBOX-22: the flag, then the settings, then the pin, then the default.
+    #[test]
+    fn the_flag_beats_the_files_and_the_default_is_standard() {
+        use crate::sandbox::{Source, resolve};
+        let none = crate::Managed::default();
+        let layers = Layers::new("sandbox-resolve").global(r#"{"sandbox": {"mode": "strict"}}"#);
+        let settings = layers.read();
+        let flagged = resolve(Some(SandboxMode::Off), &settings, &none).expect("no pin");
+        assert_eq!(
+            (flagged.mode, flagged.source),
+            (SandboxMode::Off, Source::Flag)
+        );
+        let filed = resolve(None, &settings, &none).expect("no pin");
+        assert_eq!(filed.mode, SandboxMode::Strict);
+        assert_eq!(filed.source, Source::File(layers.home.join(SETTINGS_FILE)));
+        let default = resolve(None, &Settings::default(), &none).expect("no pin");
+        assert_eq!(default, crate::sandbox::Choice::default());
+        assert_eq!(default.mode, SandboxMode::Standard);
+    }
+
+    /// SANDBOX-22: a pin is a floor. A flag or the person's file looser than it is refused naming
+    /// both files, one as strict is kept, and with nothing asked the pin is the mode. The
+    /// regression it rejects is a flag overriding a pin, or a pin read as a default.
+    #[test]
+    fn a_managed_pin_refuses_a_looser_request_and_keeps_a_stricter_one() {
+        use crate::sandbox::{Refused, Source, resolve};
+        let pin = pinned("floor", r#"{"sandbox": {"mode": "strict"}}"#);
+        let pin_file = pin.path().expect("the pin's file").to_path_buf();
+        let layers = Layers::new("sandbox-pinned").global(r#"{"sandbox": {"mode": "off"}}"#);
+        let settings = layers.read();
+
+        assert_eq!(
+            resolve(Some(SandboxMode::Off), &Settings::default(), &pin),
+            Err(Refused {
+                asked: SandboxMode::Off,
+                asked_in: None,
+                pinned: SandboxMode::Strict,
+                pinned_in: pin_file.clone(),
+                because: crate::sandbox::Floor::Mode,
+            })
+        );
+        assert_eq!(
+            resolve(Some(SandboxMode::Standard), &Settings::default(), &pin)
+                .expect_err("looser than the pin")
+                .pinned,
+            SandboxMode::Strict
+        );
+        assert_eq!(
+            resolve(None, &settings, &pin),
+            Err(Refused {
+                asked: SandboxMode::Off,
+                asked_in: Some(layers.home.join(SETTINGS_FILE)),
+                pinned: SandboxMode::Strict,
+                pinned_in: pin_file.clone(),
+                because: crate::sandbox::Floor::Mode,
+            })
+        );
+        let kept = resolve(Some(SandboxMode::Strict), &Settings::default(), &pin).expect("equal");
+        assert_eq!(kept.mode, SandboxMode::Strict);
+        let unasked = resolve(None, &Settings::default(), &pin).expect("the pin");
+        assert_eq!(
+            (unasked.mode, unasked.source),
+            (SandboxMode::Strict, Source::Managed(pin_file))
+        );
+
+        let standard = pinned("standard", r#"{"sandbox": {"mode": "standard"}}"#);
+        let stricter = resolve(Some(SandboxMode::Strict), &Settings::default(), &standard)
+            .expect("stricter than the pin");
+        assert_eq!(stricter.mode, SandboxMode::Strict);
+    }
+
+    /// SANDBOX-22: a managed file that pins the network closed is a floor of `standard`, because
+    /// `off` starts a program with no profile and nothing would hold the network shut. The
+    /// regression it rejects is `--sandbox off` quietly opening a network an administrator closed.
+    #[test]
+    fn a_closed_network_pin_refuses_off_and_leaves_the_rest() {
+        use crate::sandbox::{Choice, Floor, resolve};
+        let pin = pinned("closed-network", r#"{"run": {"network": "closed"}}"#);
+        let refused = resolve(Some(SandboxMode::Off), &Settings::default(), &pin)
+            .expect_err("off would open the network");
+        assert_eq!(
+            (refused.pinned, refused.because),
+            (SandboxMode::Standard, Floor::Network)
+        );
+        for mode in [SandboxMode::Standard, SandboxMode::Strict] {
+            assert_eq!(
+                resolve(Some(mode), &Settings::default(), &pin).map(|choice| choice.mode),
+                Ok(mode)
+            );
+        }
+        assert_eq!(
+            resolve(None, &Settings::default(), &pin),
+            Ok(Choice::default()),
+            "the network pin chose a mode where it only sets a floor"
+        );
+        let open = pinned("open-network", r#"{"run": {"network": "open"}}"#);
+        assert!(resolve(Some(SandboxMode::Off), &Settings::default(), &open).is_ok());
+        let both = pinned(
+            "closed-network-and-strict",
+            r#"{"run": {"network": "closed"}, "sandbox": {"mode": "strict"}}"#,
+        );
+        assert_eq!(
+            resolve(Some(SandboxMode::Standard), &Settings::default(), &both)
+                .expect_err("the mode pin is the stricter floor")
+                .because,
+            Floor::Mode
+        );
+    }
+
+    /// SANDBOX-22: a pin that is not a mode pins nothing and says so, so a session is not refused
+    /// on the strength of a word nobody can read.
+    #[test]
+    fn a_pin_that_is_not_a_mode_pins_nothing() {
+        let pin = pinned("unreadable", r#"{"sandbox": {"mode": "Strict"}}"#);
+        assert_eq!(pin.sandbox(), None);
+        assert!(pin.sandbox_unreadable());
+        assert!(pin.is_empty());
+        let ok = crate::sandbox::resolve(Some(SandboxMode::Off), &Settings::default(), &pin);
+        assert!(ok.is_ok());
+    }
+
+    /// SANDBOX-22: a window reads `off` as `standard`, keeps `strict`, and takes the pin where the
+    /// settings went under it. The regression it rejects is a window running programs unconfined
+    /// on a setting it has no way to show, or a pin ignored there.
+    #[test]
+    fn a_window_never_runs_unconfined_and_keeps_the_pin() {
+        use crate::sandbox::for_a_window;
+        let none = crate::Managed::default();
+        for (mode, expected) in [
+            ("off", SandboxMode::Standard),
+            ("standard", SandboxMode::Standard),
+            ("strict", SandboxMode::Strict),
+        ] {
+            let settings = Layers::new(&format!("sandbox-window-{mode}"))
+                .global(&format!(r#"{{"sandbox": {{"mode": "{mode}"}}}}"#))
+                .read();
+            assert_eq!(for_a_window(&settings, &none), expected, "{mode}");
+        }
+        assert_eq!(
+            for_a_window(&Settings::default(), &none),
+            SandboxMode::Standard
+        );
+        let pin = pinned("window", r#"{"sandbox": {"mode": "strict"}}"#);
+        let off = Layers::new("sandbox-window-pinned")
+            .global(r#"{"sandbox": {"mode": "off"}}"#)
+            .read();
+        assert_eq!(for_a_window(&off, &pin), SandboxMode::Strict);
+        assert_eq!(
+            for_a_window(&Settings::default(), &pin),
+            SandboxMode::Strict
+        );
     }
 }

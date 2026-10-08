@@ -16093,6 +16093,137 @@ fn a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_
     assert!(!result.contains("Confinement:"), "{result}");
 }
 
+/// As [`requests_for_one_run`], for a turn that confines runs under `mode`.
+fn requests_for_one_run_in(
+    name: &str,
+    command: &str,
+    mode: bravebot_sandbox::SandboxMode,
+) -> (String, String) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            &serde_json::json!({ "command": command }).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        // A profile directory, because a session with none has nowhere to hold the credential
+        // locations back from and so reads no more than a strict one does. It is the account's own
+        // where there is one: a `bin` directory on `PATH` brings its parent into a strict profile
+        // unless that parent is the home or above it, so a stand-in home lets a parent of the
+        // checkout through and the strict read below succeeds on a machine whose `PATH` has one.
+        &Task::new("run it")
+            .with_profile(Some(
+                bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
+            ))
+            .with_confined_runs(true)
+            .with_sandbox_mode(mode),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    (first, second)
+}
+
+/// A file the session's profile does not let a program write, and one it does not let a strict
+/// program read: in the target directory, which is neither the temporary directory nor the home.
+fn outside_the_session(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("sandbox-mode-{name}"))
+}
+
+/// SANDBOX-22: `off` starts a program with no profile, so a write the profile refuses lands, and the
+/// planner is not told its programs are confined. The control is the same line under `standard`,
+/// where the write is refused; a test of `off` alone passes on a build that never confined anything.
+/// The regression it rejects is a mode that is recorded and not applied.
+#[test]
+fn a_run_under_off_starts_with_no_profile_and_says_nothing_of_one() {
+    if cannot_confine_here() {
+        return;
+    }
+    let marker = outside_the_session("off-marker");
+    let command = format!("sh -c 'echo x > {}'", marker.display());
+
+    let _ = std::fs::remove_file(&marker);
+    let (first, second) = requests_for_one_run_in(
+        "run-mode-standard-write",
+        &command,
+        bravebot_sandbox::SandboxMode::Standard,
+    );
+    assert!(first.contains(TOLD_CONFINED), "{first}");
+    assert!(
+        !marker.exists(),
+        "standard let a program write outside the session"
+    );
+    assert!(message_from(&second, "Result of run").contains("Confinement:"));
+
+    let (first, second) = requests_for_one_run_in(
+        "run-mode-off-write",
+        &command,
+        bravebot_sandbox::SandboxMode::Off,
+    );
+    let wrote = marker.exists();
+    let _ = std::fs::remove_file(&marker);
+    assert!(wrote, "off still held the program to a profile");
+    assert!(!first.contains(TOLD_CONFINED), "{first}");
+    assert!(!first.contains("not confined on this platform"), "{first}");
+    let result = message_from(&second, "Result of run");
+    assert!(result.contains("It exited 0."), "{result}");
+    assert!(!result.contains("Confinement:"), "{result}");
+}
+
+/// SANDBOX-22: `strict` is the deny-by-default profile, so a program cannot read a file outside the
+/// session that `standard` lets it read, and a failure says what it ran under. The control is the
+/// same read under `standard`. The regression it rejects is `strict` reading the machine.
+#[test]
+fn a_run_under_strict_cannot_read_what_standard_reads() {
+    if cannot_confine_here() {
+        return;
+    }
+    let readable = outside_the_session("strict-readable");
+    std::fs::write(&readable, "x").expect("a file to read");
+    let command = format!("sh -c 'cat {} > /dev/null'", readable.display());
+
+    let (_, second) = requests_for_one_run_in(
+        "run-mode-standard-read",
+        &command,
+        bravebot_sandbox::SandboxMode::Standard,
+    );
+    let standard = message_from(&second, "Result of run").to_string();
+    let (first, second) = requests_for_one_run_in(
+        "run-mode-strict-read",
+        &command,
+        bravebot_sandbox::SandboxMode::Strict,
+    );
+    let strict = message_from(&second, "Result of run").to_string();
+    let _ = std::fs::remove_file(&readable);
+
+    assert!(standard.contains("It exited 0."), "{standard}");
+    assert!(
+        strict.contains("exited 1"),
+        "strict read the machine: {strict}"
+    );
+    assert!(strict.contains("Confinement:"), "{strict}");
+    assert!(first.contains(TOLD_CONFINED), "{first}");
+}
+
 /// A job's failure reaches the planner in a later round, from the turn's own account of it, and
 /// that is a second place the line has to be attached.
 #[test]
@@ -22920,6 +23051,177 @@ fn a_delegate_of_a_confining_turn_cannot_write_outside_the_session() {
     }
 }
 
+/// SANDBOX-22: a delegate runs its programs under the mode of the turn that spawned it. The
+/// regression it rejects is a delegate that takes the default: under `off` its program would be
+/// confined when the person chose no profile. The `standard` turn is the control that the file
+/// cannot be planted from inside the profile; `strict` is the next test's, since both profiles
+/// refuse this write.
+#[test]
+fn a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it() {
+    if bravebot_sandbox::base::Prelude::current().is_none()
+        || !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    for (mode, written) in [
+        (bravebot_sandbox::SandboxMode::Standard, false),
+        (bravebot_sandbox::SandboxMode::Off, true),
+    ] {
+        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("delegate-mode-{mode}"));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("session")).unwrap();
+        std::fs::create_dir_all(top.join("beside")).unwrap();
+        let session = top.join("session").canonicalize().unwrap();
+        let planted = top
+            .join("beside")
+            .canonicalize()
+            .unwrap()
+            .join("planted.txt");
+        let workspace = Workspace::new(&session).expect("workspace");
+
+        let (endpoint, _received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-WRITE-UNDER-A-MODE",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"PLANT-THE-FILE-UNDER-A-MODE"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "PLANT-THE-FILE-UNDER-A-MODE",
+                vec![
+                    tool_request(
+                        "run",
+                        &format!(r#"{{"command":"touch {}"}}"#, planted.display()),
+                    ),
+                    reply_with("tried"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("HAVE-A-DELEGATE-WRITE-UNDER-A-MODE")
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+                .with_confined_runs(true)
+                .with_sandbox_mode(mode),
+            &mut bravebot_agent::confirm::ApproveRuns,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        assert_eq!(
+            planted.exists(),
+            written,
+            "mode {mode}, and the delegate's program {} outside the session",
+            if written { "did not write" } else { "wrote" }
+        );
+        let _ = std::fs::remove_dir_all(&top);
+    }
+}
+
+/// SANDBOX-22: a delegate of a `strict` turn cannot read what a delegate of a `standard` one reads.
+/// The regression it rejects is a delegate that carries only whether its programs are confined and
+/// takes the default for which profile, which the write test above cannot see because both profiles
+/// refuse the same write, and it names a profile directory, since a session with none is held to the listed rows whatever the mode. The program (`cp`) copies a file from beside the session into the session, so
+/// what arrives is the witness; the `standard` turn is the control that the file is readable.
+#[test]
+fn a_delegate_of_a_strict_turn_cannot_read_what_a_standard_one_reads() {
+    if bravebot_sandbox::base::Prelude::current().is_none()
+        || !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    for (mode, copied) in [
+        (bravebot_sandbox::SandboxMode::Standard, true),
+        (bravebot_sandbox::SandboxMode::Strict, false),
+    ] {
+        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("delegate-read-{mode}"));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("session")).unwrap();
+        std::fs::create_dir_all(top.join("beside")).unwrap();
+        let session = top.join("session").canonicalize().unwrap();
+        let beside = top
+            .join("beside")
+            .canonicalize()
+            .unwrap()
+            .join("readable.txt");
+        std::fs::write(&beside, "BESIDE-THE-SESSION").unwrap();
+        let copy = session.join("copy.txt");
+        let workspace = Workspace::new(&session).expect("workspace");
+
+        let (endpoint, _received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-READ-UNDER-A-MODE",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"COPY-THE-FILE-UNDER-A-MODE"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "COPY-THE-FILE-UNDER-A-MODE",
+                vec![
+                    tool_request(
+                        "run",
+                        &serde_json::json!({
+                            "command": format!(
+                                "cp {} {}",
+                                beside.display(),
+                                copy.display()
+                            )
+                        })
+                        .to_string(),
+                    ),
+                    reply_with("tried"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("HAVE-A-DELEGATE-READ-UNDER-A-MODE")
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+                .with_profile(Some(top.join("profile")))
+                .with_confined_runs(true)
+                .with_sandbox_mode(mode),
+            &mut bravebot_agent::confirm::ApproveRuns,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        let arrived = std::fs::read_to_string(&copy).unwrap_or_default();
+        assert_eq!(
+            arrived.contains("BESIDE-THE-SESSION"),
+            copied,
+            "mode {mode}, and the delegate's program {} the file beside the session: {arrived:?}",
+            if copied { "did not read" } else { "read" }
+        );
+        let _ = std::fs::remove_dir_all(&top);
+    }
+}
+
 /// The prompt describes the confinement the turn starts programs under, and only that one. The
 /// regression it rejects is a prompt built from anything but the executor's own decision: one that
 /// described a profile for a turn that starts programs unconfined, or none for a turn that confines
@@ -25054,6 +25356,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
         None,
         bravebot_agent::exec::Deadlines::BUILT_IN,
         false,
+        bravebot_sandbox::SandboxMode::default(),
         None,
         &bravebot_core::cancel::Cancel::new(),
         &mut bravebot_agent::confirm::ApproveWrites,
