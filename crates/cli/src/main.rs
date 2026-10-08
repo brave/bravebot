@@ -3371,6 +3371,16 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             ),
         );
     }
+    for key in managed.sandbox_hosts_unreadable() {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_sandbox_hosts_misshapen,
+                key = key,
+                path = managed_file.clone()
+            ),
+        );
+    }
 }
 
 fn doctor() -> ExitCode {
