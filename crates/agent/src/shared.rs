@@ -255,6 +255,8 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn job(&mut self, event: crate::report::JobEvent);
         fn check_started(&mut self, checking: bravebot_core::vetting::Checking);
         fn check_finished(&mut self);
+        fn hook_started(&mut self, moment: &'static str, program: String);
+        fn hook_finished(&mut self);
         fn interjected(&mut self, said: String);
         fn delegate_started(&mut self, delegation: Delegation);
         fn delegate_waiting(&mut self, delegate: DelegateId);

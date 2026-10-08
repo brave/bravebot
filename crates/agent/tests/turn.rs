@@ -34932,6 +34932,46 @@ fn a_stopped_hook_says_the_timeout_it_declared() {
     }
 }
 
+/// HOOK-8: a turn tells its reporter which program holds it, once per hook and closed again, and
+/// does not turn that into a notice, which would leave a line behind for a hook that went well.
+#[cfg(unix)]
+#[test]
+fn a_reporter_is_told_which_hook_holds_the_turn() {
+    let scratch = Scratch::new("hooks-running");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let fine = a_hook_script(&scratch.path, "fine", "#!/bin/sh\nexit 0\n");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"turn-finished\", \"run\": [{fine}]}}"),
+    );
+
+    let (endpoint, _received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("answer something").with_home(Some(home)),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a turn");
+
+    assert_eq!(
+        reporter.hooks_started.len(),
+        1,
+        "{:?}",
+        reporter.hooks_started
+    );
+    assert_eq!(reporter.hooks_started[0].0, "turn-finished");
+    assert!(reporter.hooks_started[0].1.ends_with("fine"));
+    assert_eq!(reporter.hooks_finished, 1);
+    assert!(reporter.notices.is_empty(), "{:?}", reporter.notices);
+}
+
 mod usage {
     use super::*;
     use bravebot_agent::Spent;

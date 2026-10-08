@@ -264,6 +264,36 @@ turn would fire.
 `verified-by: bravebot_ui_bridge::dispatch::the_hooks_file_is_read_through_the_bridge`
 `verified-by: by-construction (the desktop interface parses no hooks file: ui/src/shared/agent-settings.ts composes one out of the entries the agent reported and reads none, its main process offers a save channel and no read channel, and the helper binary that writes the file answers no read operation for it, which its own test asserts; ui/scripts/drive-agent-settings.mjs drives the panel against a file the agent reports it did not wholly read and asserts the form refuses it, and ui/scripts/drive-manual-walkthrough.mjs edits, fires and removes a real hook through that panel under CI)`
 
+<a id="HOOK-9"></a>
+### HOOK-9: a hook holding the turn is said to be running, by moment and program, while it runs
+
+From just before a hook is started until it has ended, a display is told that a hook is running, for
+which moment and which program. The moment is the word the hooks file spells it with and the program
+is the first word of the command the person wrote there, so every byte is the driver's own or the
+person's own and none is read from anything untrusted. The end is told however the hook ended: one
+that finished, one that failed, one that could not be started and one stopped at its bound. Two hooks
+on one moment are two pairs, one after the other. It is a transient status and not a notice: it
+leaves no line behind, and a hook that went well is still said nothing about (HOOK-7). Nothing the
+hook printed is part of it (HOOK-6), and nothing branches on it.
+
+**Why.** A hook holds the turn open, and until now nothing on screen said so: HOOK-7 gives that as
+the reason for the bound, but a person is told only once the hook has ended, so a formatter running
+for twenty seconds after a write looked like a slow model. Naming the program lets a person see
+whose command it is.
+
+It is its own pair of reporter calls rather than a phase, because a phase has no end: the next phase
+announcement is what replaces one, and a hook that runs after the last round has none to follow it.
+A check is announced the same way, for the same reason.
+
+`verified-by: bravebot_agent::hooks::a_hook_is_announced_before_it_starts_and_over_after_it_exits`
+`verified-by: bravebot_agent::hooks::a_stopped_hook_is_over_only_after_it_was_stopped`
+`verified-by: bravebot_agent::hooks::a_hook_that_never_started_is_still_closed`
+`verified-by: bravebot_agent::hooks::two_hooks_are_two_pairs_in_order`
+`verified-by: bravebot_agent::hooks::a_moment_with_no_hook_announces_nothing`
+`verified-by: bravebot_agent::turn::a_reporter_is_told_which_hook_holds_the_turn`
+`verified-by: bravebot_ui_bridge::reporting::a_running_hook_crosses_as_a_pair_naming_the_moment_and_the_program`
+`verified-by: bravebot_tui::state::a_running_hook_names_the_indicator_and_gives_it_back`
+
 ## The file
 
 ```json

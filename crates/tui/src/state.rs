@@ -1595,6 +1595,8 @@ pub struct Session {
     /// moment of its own. A phase is replaced by the next phase, and the moment this has to stop
     /// being drawn is the moment before a prompt is put up, which no phase is announced at.
     checking: Option<bravebot_core::vetting::Checking>,
+    /// The hook holding the turn open, as its moment and program, while one runs (HOOK-8).
+    hook: Option<(&'static str, String)>,
     /// The points this session can be put back to.
     pub rewind: bravebot_session::rewind::RewindStack,
     /// Where the turn in flight began, for the snapshot that rewinds to it.
@@ -1941,6 +1943,7 @@ impl Session {
             todos: Vec::new(),
             phase: None,
             checking: None,
+            hook: None,
             running: None,
             movable: None,
             queued: Vec::new(),
@@ -2187,6 +2190,17 @@ impl Session {
             });
         }
 
+        // A hook holds the turn open and nothing else on screen says so, so a slow one looks like
+        // a slow model (HOOK-8). Ahead of the phases for the reason a check is: the round's own
+        // word is the one thing here that is not what the session is waiting on. The moment is
+        // the driver's literal and the program is the person's own file, so no byte read out of
+        // anything untrusted is drawn.
+        if let Some((moment, program)) = &self.hook {
+            return Some(
+                t!(indicator_hook, moment = *moment, program = program.as_str()).to_string(),
+            );
+        }
+
         // A check next, and ahead of every phase: it is a whole model call inside the tool call
         // on the row above, so the round's own word is the one thing here that is not what the
         // session is waiting on. With auto-vetting on and a safe verdict no prompt is ever drawn
@@ -2424,6 +2438,7 @@ impl Session {
         self.todos.clear();
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.started = None;
@@ -2546,6 +2561,18 @@ impl Session {
     /// Record that the check is over.
     pub fn checked(&mut self) {
         self.checking = None;
+        self.hook = None;
+    }
+
+    /// Record that a hook is running. The tail is left alone, for the reason [`Session::checking`]
+    /// leaves it: a hook runs in the middle of a round.
+    pub fn hook_running(&mut self, moment: &'static str, program: String) {
+        self.hook = Some((moment, program));
+    }
+
+    /// Record that the hook is over.
+    pub fn hook_over(&mut self) {
+        self.hook = None;
     }
 
     /// Add what the model has written since the last frame to the reply taking shape.
@@ -6782,6 +6809,7 @@ impl Session {
         self.started = None;
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         // A prompt is English and a command line is not, so the line coming back must not land
@@ -8490,6 +8518,7 @@ impl Session {
         self.progress = Default::default();
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.started = Some(Instant::now());
@@ -8518,6 +8547,7 @@ impl Session {
         self.started = None;
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.streaming.clear();
@@ -8801,6 +8831,7 @@ impl Session {
         self.back_to_the_tail();
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.started = Some(Instant::now());
@@ -8832,6 +8863,7 @@ impl Session {
         self.started = None;
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.tokens += tokens;
@@ -8863,6 +8895,7 @@ impl Session {
         self.started = None;
         self.phase = None;
         self.checking = None;
+        self.hook = None;
         self.running = None;
         self.movable = None;
         self.tokens += tokens;
@@ -17039,6 +17072,21 @@ mod tests {
             s.set_phase(Phase::Planning);
             s.checking(bravebot_core::vetting::Checking::Lines(3));
             assert_eq!(s.indicator().expect("working").verb, "Checking 3 lines");
+        }
+
+        /// HOOK-8: a hook holding the turn names the program and the moment ahead of the phase,
+        /// and gives the phase back when it is over.
+        #[test]
+        fn a_running_hook_names_the_indicator_and_gives_it_back() {
+            let mut s = working();
+            s.set_phase(Phase::Planning);
+            s.hook_running("tool-finished", "cargo".to_string());
+            assert_eq!(
+                s.indicator().expect("working").verb,
+                "Running hook: cargo (tool-finished)"
+            );
+            s.hook_over();
+            assert_eq!(s.indicator().expect("working").verb, "Planning");
         }
 
         /// CHECK-14: a picture has no lines to count, and "Checking 1 line" over a photograph is

@@ -102,16 +102,54 @@ pub fn fire_within(
     directory: &Path,
     limit: Duration,
 ) -> Vec<Fired> {
+    fire_watched(hooks, moment, tool, directory, limit, &mut |_| {})
+}
+
+/// One edge of a hook running, for whoever is drawing the wait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Watch<'a> {
+    /// About to start this program, for this moment. Said before anything is spawned.
+    Starting {
+        moment: &'static str,
+        program: &'a str,
+    },
+    /// The hook is over, however it ended: finished, failed, never started, or stopped at its
+    /// bound. Said after the process has been reaped.
+    Over,
+}
+
+/// [`fire_within`], telling `watch` when each hook is about to start and when it is over.
+///
+/// So that a person can be told what holds the turn while it is held (HOOK-8). The two edges
+/// carry the moment's own word and the program as the person's file spelled it, and nothing a
+/// hook produced: no branch here or in a caller takes a hook's output or status as a reason.
+pub fn fire_watched(
+    hooks: &Hooks,
+    moment: Moment,
+    tool: Option<&str>,
+    directory: &Path,
+    limit: Duration,
+    watch: &mut dyn FnMut(Watch<'_>),
+) -> Vec<Fired> {
     if hooks.is_empty() {
         return Vec::new();
     }
     let said = announcement(moment);
     hooks
         .firing(moment, tool)
-        .map(|hook| Fired {
-            program: hook.run().first().cloned().unwrap_or_default(),
-            moment: moment.as_str(),
-            trouble: run(hook, &said, directory, limit),
+        .map(|hook| {
+            let program = hook.run().first().cloned().unwrap_or_default();
+            watch(Watch::Starting {
+                moment: moment.as_str(),
+                program: &program,
+            });
+            let trouble = run(hook, &said, directory, limit);
+            watch(Watch::Over);
+            Fired {
+                program,
+                moment: moment.as_str(),
+                trouble,
+            }
         })
         .collect()
 }

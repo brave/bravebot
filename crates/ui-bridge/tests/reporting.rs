@@ -237,3 +237,21 @@ fn the_call_being_written_is_reported_and_a_delegates_is_not() {
         "a delegate's call was drawn as the planner's, or the end of a call was lost"
     );
 }
+
+/// HOOK-8: a hook holding the turn crosses as a pair carrying the moment's word and the program,
+/// and nothing else, and the end crosses however the hook ended.
+#[test]
+fn a_running_hook_crosses_as_a_pair_naming_the_moment_and_the_program() {
+    let (mut reporter, events) = harness();
+
+    reporter.hook_started("tool-finished", "cargo".to_string());
+    reporter.hook_finished();
+
+    assert_eq!(names(&events), vec!["hook.started", "hook.finished"]);
+    let events = events.lock().expect("not poisoned");
+    assert_eq!(
+        events[0].data,
+        serde_json::json!({ "moment": "tool-finished", "program": "cargo" })
+    );
+    assert_eq!(events[1].data, serde_json::json!({}));
+}

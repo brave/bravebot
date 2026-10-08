@@ -325,6 +325,21 @@ impl Reporter for BridgeReporter {
         self.say("check.finished", json!({}));
     }
 
+    /// A hook running, news here for the reason a check is: it holds the turn open and no
+    /// front-end can see it from the outside. The moment's word and the program as the person's
+    /// own file spells it, and nothing the hook printed.
+    fn hook_started(&mut self, moment: &'static str, program: String) {
+        self.say(
+            "hook.started",
+            json!({ "moment": moment, "program": program }),
+        );
+    }
+
+    /// Sent however the hook ended, a stopped one included.
+    fn hook_finished(&mut self) {
+        self.say("hook.finished", json!({}));
+    }
+
     fn quarantined(&mut self, shown: Shown) {
         self.say("quarantined", wire::shown(&shown));
     }

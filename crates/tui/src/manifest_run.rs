@@ -31,6 +31,8 @@ impl Run {
             ToMain::Finished(activity) => session.finish_activity(activity),
             ToMain::CheckStarted(checking) => session.checking(checking),
             ToMain::CheckFinished => session.checked(),
+            ToMain::HookStarted(moment, program) => session.hook_running(moment, program),
+            ToMain::HookFinished => session.hook_over(),
             ToMain::Quarantined(shown) => session.show(shown),
             ToMain::Returned(returned) => session.returned(returned),
             ToMain::Landed(landing) => session.landed(landing),

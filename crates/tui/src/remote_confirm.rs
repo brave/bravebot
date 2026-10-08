@@ -146,6 +146,10 @@ pub enum ToMain {
     CheckStarted(bravebot_core::vetting::Checking),
     /// The check last announced is over, whatever it decided. No reply.
     CheckFinished,
+    /// A hook is about to start, for this moment, running this program. No reply.
+    HookStarted(&'static str, String),
+    /// The hook last announced is over, however it ended. No reply.
+    HookFinished,
     /// Quarantined content, for the person watching to read. No reply.
     Quarantined(Shown),
     /// What a command printed, for the view a person can open over it. No reply.
@@ -419,6 +423,14 @@ impl Reporter for RemoteReporter {
 
     fn check_finished(&mut self) {
         let _ = self.outbound.send(ToMain::CheckFinished);
+    }
+
+    fn hook_started(&mut self, moment: &'static str, program: String) {
+        let _ = self.outbound.send(ToMain::HookStarted(moment, program));
+    }
+
+    fn hook_finished(&mut self) {
+        let _ = self.outbound.send(ToMain::HookFinished);
     }
 
     fn quarantined(&mut self, shown: Shown) {
@@ -1035,6 +1047,8 @@ mod tests {
                     ToMain::Job(_) => seen.push("job"),
                     ToMain::CheckStarted(_) => seen.push("check started"),
                     ToMain::CheckFinished => seen.push("check finished"),
+                    ToMain::HookStarted(..) => seen.push("hook started"),
+                    ToMain::HookFinished => seen.push("hook finished"),
                     ToMain::Quarantined(_) => seen.push("quarantined"),
                     ToMain::Printed(_) => seen.push("printed"),
                     ToMain::Returned(_) => seen.push("returned"),

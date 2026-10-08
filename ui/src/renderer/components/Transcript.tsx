@@ -6,7 +6,7 @@ import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
-import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
@@ -45,6 +45,7 @@ interface Live {
   quarantine: Shown[]
   phase: Waiting | null
   checking: Checking | null
+  hook: Hook | null
   composing: string | null
   contextTokens?: number
   archived?: number
@@ -706,7 +707,7 @@ export function Transcript({
           <WorkingRow
             key={live.handle}
             bot={bot}
-            word={workingWord(live.phase, live.checking, live.composing)}
+            word={workingWord(live.phase, live.checking, live.composing, live.hook)}
             tokens={live.tokens}
             turn={Object.values(live.turns).filter((turn) => turn.status === 'running').at(-1)?.turn ?? null}
             onAudit={onAudit}
@@ -862,11 +863,13 @@ function waitedWord(waited: number | null): string {
 }
 
 /**
- * What the session is waiting on. A running check wins over the phase, which a check does not
+ * What the session is waiting on. A running hook wins over everything, since it holds the turn and
+ * says what it is; a running check wins over the phase, which a check does not
  * change, and one function serves both places the word is drawn so they cannot disagree. A call
  * being written follows the check: the phase is the same for the whole wait, which can be minutes.
  */
-export function workingWord(phase: Waiting | null, checking: Checking | null, composing: string | null = null): string {
+export function workingWord(phase: Waiting | null, checking: Checking | null, composing: string | null = null, hook: Hook | null = null): string {
+  if (hook !== null) return `Running hook: ${hook.program} (${hook.moment})`
   if (checking !== null && 'file' in checking) return checking.file === 'pdf' ? 'Checking a PDF' : 'Checking a picture'
   if (checking !== null) return `Checking ${checking.lines} ${checking.lines === 1 ? 'line' : 'lines'}`
   if (composing !== null) return `Preparing a call: ${composing}`
