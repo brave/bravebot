@@ -246,6 +246,14 @@ pub fn base(
     policy
 }
 
+/// The name of the directory under the home directory where the program keeps its own state.
+///
+/// It holds the gateway keys, the premium token and the server list, so a program a stage starts
+/// is refused it like any other credential location. The state helper in `bravebot-agent` takes its
+/// name from here, which is what keeps this table and the place the files are written from naming
+/// two different directories.
+pub const STATE_DIRECTORY: &str = ".bravebot";
+
 /// Directories under the home directory that hold a credential on every unix platform, each
 /// refused with everything beneath it.
 ///
@@ -255,6 +263,7 @@ pub fn base(
 /// `gh`, `git`, `npm`, `cargo` and `pip` read to do what a person asked, and the network is where
 /// they could leave, which is decided by the plan.
 const CREDENTIAL_DIRECTORIES: &[&str] = &[
+    STATE_DIRECTORY,
     ".ssh",
     ".aws",
     ".kube",
@@ -438,11 +447,13 @@ mod tests {
 
     /// The regression it rejects: a run base that lists what a stage reaches, which refuses a
     /// script for starting a program the list never heard of, or one that reads the machine with
-    /// no refusals, which hands the first program that asks a credential. Spelled out here and
+    /// no refusals, which hands the first program that asks a credential; or one whose table leaves out
+    /// the program's own state directory, where the gateway keys are. Spelled out here and
     /// not read from the tables, so a row dropped from them fails this.
     #[test]
     fn the_run_base_reads_the_machine_and_refuses_each_credential_location() {
         let expected_everywhere = [
+            ".bravebot",
             ".ssh",
             ".aws",
             ".kube",

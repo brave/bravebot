@@ -12,7 +12,7 @@
 //! assignment in front of it, gets no scope: what would run with the credential is not what the
 //! plan says would run.
 
-use crate::base::under;
+use crate::base::{STATE_DIRECTORY, under};
 use crate::policy::SandboxPolicy;
 use crate::toolchain::Toolchain;
 use std::path::{Component, Path, PathBuf};
@@ -214,10 +214,11 @@ fn variables_of(scope: Scope, program: &str) -> &'static [Moves] {
 /// `GH_CONFIG_DIR` over `XDG_CONFIG_HOME`, as `gh` does.
 ///
 /// A value is refused, and the stage keeps the fixed rows only, where it is empty, relative or
-/// holds `..`. A directory is refused where it is the home or above it, is `~/.ssh` or inside it,
-/// or is `~/.config`, `~/.cache` or `~/Library`: places no row of a scope reaches whole. A file is
-/// refused where it is inside `~/.ssh`, since that is where a private key is, where it is the home
-/// or above it, or where it is a directory, and is otherwise read as that file alone. A link is
+/// holds `..`. A directory is refused where it is the home or above it, is `~/.ssh` or
+/// `~/.bravebot` or inside either, or is `~/.config`, `~/.cache` or `~/Library`: places no row of
+/// a scope reaches whole. A file is refused where it is inside `~/.ssh`, since that is where a
+/// private key is, or inside `~/.bravebot`, where the gateway keys are, where it is the home or
+/// above it, or where it is a directory, and is otherwise read as that file alone. A link is
 /// judged by where it leads. A value that lands inside a row the scope already holds is no new
 /// reach and is not returned, and one named twice is returned once. Where `KUBECONFIG` lists
 /// several files, one refused entry takes none of the others with it.
@@ -276,8 +277,8 @@ pub fn environment_reach(
 /// A directory a person named, as the sandbox will be told it, or `None` where it is refused.
 ///
 /// The same judgement a variable's value gets: absolute, no `..`, not the home or above it, not
-/// `~/.ssh` or inside it, not `~/.config`, `~/.cache` or `~/Library` whole, and a link judged by
-/// where it leads. It must also be a directory that exists, since a grant of a path nothing is at
+/// `~/.ssh` or `~/.bravebot` or inside either, not `~/.config`, `~/.cache` or `~/Library` whole,
+/// and a link judged by where it leads. It must also be a directory that exists, since a grant of a path nothing is at
 /// reads as a grant of whatever is created there later.
 pub fn judged_directory(named: &Path, home: &Path) -> Option<PathBuf> {
     judged(named, true, home).filter(|path| path.is_dir())
@@ -299,6 +300,7 @@ fn judged(named: &Path, directory: bool, home: &Path) -> Option<PathBuf> {
         || [named, resolved.as_path()].iter().any(|named| {
             [home, real_home.as_path()].iter().any(|home| {
                 named.starts_with(under(home, ".ssh"))
+                    || named.starts_with(under(home, STATE_DIRECTORY))
                     || home.starts_with(named)
                     || (directory
                         && [".config", ".cache", "Library"]
@@ -1278,6 +1280,52 @@ mod tests {
             ),
             [PathBuf::from("/home/a-person/.config/aws-config")]
         );
+    }
+
+    /// The state directory holds the gateway keys, and a scope's variable or a `/reach` directory
+    /// that lifts the refusal of it hands them to a stage. A name inside it, or a link that leads
+    /// there, is refused as `~/.ssh` is; a sibling that shares the prefix is not the directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_inside_the_state_directory_is_refused_whatever_spells_it() {
+        use std::os::unix::fs::symlink;
+        let home = scratch_dir("state-directory-reach");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".bravebot")).unwrap();
+        std::fs::create_dir_all(home.join(".bravebotx")).unwrap();
+        std::fs::write(home.join(".bravebot/gateway-keys.json"), "").unwrap();
+        std::fs::write(home.join(".bravebotx/config"), "").unwrap();
+        symlink(home.join(".bravebot"), home.join("to-state")).unwrap();
+        symlink(
+            home.join(".bravebot/gateway-keys.json"),
+            home.join("to-keys"),
+        )
+        .unwrap();
+        let file = |variable: &str, value: &Path| {
+            environment_reach(
+                Scope::Aws,
+                "aws",
+                &home,
+                &the_environment(&[(variable, value.to_str().unwrap())]),
+            )
+        };
+        for spelled in [
+            home.join(".bravebot/gateway-keys.json"),
+            home.join("to-keys"),
+        ] {
+            assert!(file("AWS_CONFIG_FILE", &spelled).is_empty(), "{spelled:?}");
+        }
+        assert!(file("AWS_CONFIG_FILE", &home.join(".bravebotx/config")).len() == 1);
+
+        for spelled in [
+            home.join(".bravebot"),
+            home.join(".bravebot/sessions"),
+            home.join("to-state"),
+        ] {
+            assert_eq!(judged_directory(&spelled, &home), None, "{spelled:?}");
+        }
+        assert!(judged_directory(&home.join(".bravebotx"), &home).is_some());
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     /// A file that is a link into `~/.ssh` is judged by where it leads.

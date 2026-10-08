@@ -9,6 +9,7 @@
 //! entries a person wrote, the home directory and the directory relative entries are read from, and
 //! what a glob names is decided by the directory entries' names alone.
 
+use crate::base::STATE_DIRECTORY;
 use crate::policy::{SandboxPolicy, names_a_filesystem_root};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -130,6 +131,9 @@ pub enum Reason {
     ConfinesNothing,
     /// It names `~/.ssh`, or a place inside it, in a list that adds reach. No row is a private key.
     PrivateKey,
+    /// It names `~/.bravebot`, or a place inside it, in a list that adds reach. The directory holds
+    /// the gateway keys.
+    StateDirectory,
     /// A glob looked at more entries or went deeper than a glob may, so what it names is not
     /// known.
     TooBroad,
@@ -436,12 +440,24 @@ fn one(
     };
     let mut kept = Vec::new();
     for path in named {
-        let private_key = home.is_some_and(|home| path.starts_with(home.join(".ssh")));
-        if matches!(list, List::AllowRead | List::AllowWrite) && private_key {
-            if wildcard {
-                continue;
+        if matches!(list, List::AllowRead | List::AllowWrite) {
+            let refusal = home.and_then(|home| {
+                if path.starts_with(home.join(".ssh")) {
+                    Some(Reason::PrivateKey)
+                } else if path.starts_with(home.join(STATE_DIRECTORY))
+                    || path.starts_with(resolved(&home.join(STATE_DIRECTORY)))
+                {
+                    Some(Reason::StateDirectory)
+                } else {
+                    None
+                }
+            });
+            if let Some(refusal) = refusal {
+                if wildcard {
+                    continue;
+                }
+                return Err(refusal);
             }
-            return Err(Reason::PrivateKey);
         }
         if list == List::AllowWrite
             && (names_a_filesystem_root(&path) || home.is_some_and(|home| home.starts_with(&path)))
@@ -762,6 +778,63 @@ mod tests {
         }
         // Holding it back is the point of the table, so a refusal of it stands.
         let rules = resolve(&only(List::DenyRead, "~/.ssh/id_rsa"), Some(&home), &base);
+        assert_eq!(refusal_of(&rules), None);
+    }
+
+    /// The state directory holds the gateway keys. No list that adds reach names it or a place in
+    /// it, written out, by a link or by a pattern, whether or not a link leads to it.
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_that_adds_reach_inside_the_state_directory_is_refused() {
+        let home = fresh("rules-state-home");
+        let base = fresh("rules-state-base");
+        fs::create_dir_all(home.join(".bravebot")).unwrap();
+        fs::write(home.join(".bravebot/gateway-keys.json"), "").unwrap();
+        std::os::unix::fs::symlink(home.join(".bravebot"), base.join("shortcut")).unwrap();
+        for list in [List::AllowRead, List::AllowWrite] {
+            for spelled in [
+                "~/.bravebot",
+                "~/.bravebot/gateway-keys.json",
+                "shortcut/gateway-keys.json",
+            ] {
+                let rules = resolve(&only(list, spelled), Some(&home), &base);
+                assert_eq!(
+                    refusal_of(&rules),
+                    Some(Reason::StateDirectory),
+                    "{list:?} {spelled}"
+                );
+            }
+        }
+        let rules = resolve(
+            &only(List::AllowRead, "~/.bravebot/*.json"),
+            Some(&home),
+            &base,
+        );
+        assert_eq!(
+            rules.items()[0].state,
+            State::InForce(Vec::new()),
+            "a pattern added the files it matched in the state directory"
+        );
+        // A neighbour that only shares the prefix is not the directory.
+        let rules = resolve(&only(List::AllowRead, "~/.bravebotx"), Some(&home), &base);
+        assert_eq!(refusal_of(&rules), None);
+        // A state directory that is itself a link is judged where it leads.
+        let linked = fresh("rules-state-linked-home");
+        let real = fresh("rules-state-linked-real");
+        fs::write(real.join("gateway-keys.json"), "").unwrap();
+        std::os::unix::fs::symlink(&real, linked.join(".bravebot")).unwrap();
+        let rules = resolve(
+            &only(List::AllowRead, "~/.bravebot/gateway-keys.json"),
+            Some(&linked),
+            &base,
+        );
+        assert_eq!(refusal_of(&rules), Some(Reason::StateDirectory));
+        // Holding it back stands, as it does for ~/.ssh.
+        let rules = resolve(
+            &only(List::DenyRead, "~/.bravebot/mcp.json"),
+            Some(&home),
+            &base,
+        );
         assert_eq!(refusal_of(&rules), None);
     }
 

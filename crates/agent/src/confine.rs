@@ -1239,6 +1239,9 @@ mod tests {
 
             assert!(reads(&policy, "/"), "{prelude:?}");
             for held_back in [
+                format!("{HOME}/.bravebot/gateway-keys.json"),
+                format!("{HOME}/.bravebot/leo-premium.json"),
+                format!("{HOME}/.bravebot/mcp.json"),
                 format!("{HOME}/.ssh/id_ed25519"),
                 format!("{HOME}/.aws/credentials"),
                 format!("{HOME}/.kube/config"),
@@ -1256,6 +1259,7 @@ mod tests {
                 format!("{HOME}/.config/gh/hosts.yml"),
                 format!("{HOME}/.gitconfig"),
                 format!("{HOME}/.npmrc"),
+                format!("{HOME}/.bravebotx/state"),
             ] {
                 assert!(!refuses(&policy, &read), "{prelude:?} {read}");
             }

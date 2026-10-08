@@ -15,7 +15,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The name of the directory inside the user's home.
-const DIRECTORY: &str = ".bravebot";
+const DIRECTORY: &str = bravebot_sandbox::base::STATE_DIRECTORY;
 
 /// The variables the platform states the user's profile directory in, in the order they answer.
 ///
@@ -319,6 +319,21 @@ mod resolution {
             Some(("USERPROFILE", profile.join(DIRECTORY))),
             "a variable exported empty took away a profile directory the platform names"
         );
+    }
+
+    /// SANDBOX-12 refuses a stage the state directory by the name the sandbox crate holds. A second
+    /// spelling here would leave the directory the files are written to unrefused.
+    #[test]
+    fn the_state_directory_is_the_one_the_sandbox_refuses() {
+        let refused = bravebot_sandbox::base::run_base(
+            bravebot_sandbox::base::Prelude::Linux,
+            Path::new("/scratch"),
+            Some(Path::new("/somebody")),
+        )
+        .unreadable;
+        let (_, state) = resolve([named("HOME", "/somebody")]).expect("a home");
+
+        assert!(refused.contains(&state), "{state:?} not in {refused:?}");
     }
 
     /// STATE-2: a shell environment that sets `HOME` has been told where the profile is, and every

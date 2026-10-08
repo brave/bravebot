@@ -422,7 +422,8 @@ A stage of `run` on Linux and macOS starts from the **run base**: it reads the w
 except a fixed table of credential locations, and the only paths it writes are the temporary
 directory the session resolved as it opened and, where the platform has one as a file, the null
 device. The table is code, the same for every stage, and no value, argument vector, printed output
-or configuration file adds to it or removes from it. In the home directory it holds `~/.ssh`,
+or configuration file adds to it or removes from it. In the home directory it holds the program's own state
+directory `~/.bravebot`, where the gateway keys, the premium token and the server list are, and then `~/.ssh`,
 `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud` and `~/.gnupg`; on macOS also
 `~/Library/Keychains`, `/Library/Keychains`, the browser profiles under
 `~/Library/Application Support` (`BraveSoftware`, `Google/Chrome`, `Firefox`), `~/Library/Cookies`
@@ -498,6 +499,10 @@ confining a program was for.
 `verified-by: bravebot_sandbox::base::the_run_base_writes_only_the_temporary_directory_and_the_null_device`
 `verified-by: bravebot_sandbox::base::the_run_base_on_windows_is_the_keyed_base`
 `verified-by: bravebot_sandbox::base::the_run_base_without_a_home_refuses_only_the_machine_wide_keychains`
+`verified-by: bravebot_sandbox::macos::a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest`
+`verified-by: bravebot_sandbox::linux::a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest`
+`verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
+`verified-by: bravebot_agent::home::the_state_directory_is_the_one_the_sandbox_refuses`
 `verified-by: bravebot_sandbox::policy::a_refusal_is_recorded_and_changes_nothing_else`
 `verified-by: bravebot_sandbox::policy::a_policy_made_nameable_keeps_its_refusals`
 `verified-by: bravebot_sandbox::policy::a_refusal_nothing_grants_is_not_meaningful`
@@ -677,7 +682,8 @@ shown in the prompt because a credential scope is what the prompt says it is, an
 is not one anybody approved. Only the environment the stage starts with counts: an assignment
 written in front of the line removes the scope, so a model-written `GH_CONFIG_DIR=` moves nothing.
 A file is judged where it is rather than where its directory is: what is granted is the one file the
-person named, and `~/.ssh` is where a key would be.
+person named, and `~/.ssh` is where a key would be. `~/.bravebot` is refused the same way, since a
+variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](#SANDBOX-12)).
 
 `verified-by: bravebot_sandbox::scope::an_operation_that_talks_to_a_remote_carries_the_remote_scope`
 `verified-by: bravebot_sandbox::scope::a_git_operation_that_talks_to_no_remote_carries_none`
@@ -690,6 +696,7 @@ person named, and `~/.ssh` is where a key would be.
 `verified-by: bravebot_sandbox::scope::a_program_no_scope_knows_carries_none`
 `verified-by: bravebot_sandbox::scope::a_stage_reaches_its_own_scope_and_no_other`
 `verified-by: bravebot_sandbox::scope::no_scope_reaches_a_private_key_or_the_directory_holding_one`
+`verified-by: bravebot_sandbox::scope::a_name_inside_the_state_directory_is_refused_whatever_spells_it`
 `verified-by: bravebot_sandbox::scope::the_one_row_a_scope_writes_is_the_hosts_ssh_has_verified`
 `verified-by: bravebot_sandbox::scope::the_remote_scope_reaches_both_transports`
 `verified-by: bravebot_sandbox::scope::a_scope_leaves_the_policy_it_is_added_to_as_it_was`
@@ -1128,7 +1135,7 @@ The inputs to a grant are a person's typed words, the compiled step, the closed 
 process environment, and nothing else. In particular:
 
 - A directory is judged as `--add-dir` judges one, when it is allowed and again when it is used:
-  absolute, no `..`, existing, not the home or above it, not `~/.ssh` or inside it, and a link by
+  absolute, no `..`, existing, not the home or above it, not `~/.ssh` or `~/.bravebot` or inside either, and a link by
   where it leads. A directory later replaced by a link to `~/.ssh` is dropped from the profile and
   from the plan.
 - Write is a directory's. A scope is never written by a grant, and `/reach` refuses one.
@@ -1313,7 +1320,8 @@ with `~` in a session that names no home directory is refused. Each path is judg
 part of it that is on disk is resolved through its links. `~`, `/`, a drive root and the home directory
 or any directory above it are refused as `allowWrite` rows, since a stage that wrote there would be
 confined to nothing ([SANDBOX-2](#SANDBOX-2)). No list adds reach to `~/.ssh` or anything inside it,
-which is where a private key is ([SANDBOX-16](#SANDBOX-16)), and no list can set the `.git` writes
+which is where a private key is ([SANDBOX-16](#SANDBOX-16)), nor to `~/.bravebot` or anything inside it, which is
+where the gateway keys are ([SANDBOX-12](#SANDBOX-12)), and no list can set the `.git` writes
 [SANDBOX-14](#SANDBOX-14) withholds, since none of them reaches that setting. A write row of the
 person's above a location of the table does not write it, since Seatbelt's refusal of a read is not
 a refusal of a write. `*` and `?` in an entry of `allowRead` or `denyRead` are expanded when a call's
@@ -1362,6 +1370,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_link_is_judged_by_where_it_leads`
 `verified-by: bravebot_sandbox::rules::a_write_row_over_the_home_or_the_root_is_refused`
 `verified-by: bravebot_sandbox::rules::an_entry_that_adds_reach_inside_ssh_is_refused`
+`verified-by: bravebot_sandbox::rules::an_entry_that_adds_reach_inside_the_state_directory_is_refused`
 `verified-by: bravebot_sandbox::rules::a_glob_is_expanded_by_listing_and_applies_to_reads`
 `verified-by: bravebot_sandbox::rules::a_glob_over_a_tree_deeper_than_the_walk_goes_is_refused_and_not_cut_short`
 `verified-by: bravebot_sandbox::rules::a_match_is_judged_where_it_leads_and_the_directory_it_is_read_from_is_not_a_pattern`
