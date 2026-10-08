@@ -1124,7 +1124,7 @@ mod tests {
     fn a_scope_for_a_program_the_table_names_is_in_force_in_every_checkout() {
         let place = Place::new("scope-global");
 
-        place.say_in("s", &place.first, "docker always -- docker ps");
+        place.say_in("s", &place.first, "remote always -- git fetch");
         place.say_in("s", &place.first, "remote -- git push");
 
         let (here, there) = (
@@ -1150,6 +1150,23 @@ mod tests {
         assert_eq!(here.len(), 1, "{here:?}");
         assert!(here[0].workspace.is_some());
         assert_eq!(place.held_in("s", &place.second), []);
+    }
+
+    /// A directory row typed where the workspace root has no readable identity is refused and
+    /// recorded nowhere. The regression it rejects: the row being written with no checkout, which
+    /// reads as a row for every checkout.
+    #[test]
+    fn a_directory_row_is_refused_when_the_checkout_has_no_identity() {
+        let place = Place::new("no-identity");
+        let named = place.project.display().to_string();
+        let gone = place.profile.join("gone");
+
+        assert_eq!(
+            place.say_in("s", &gone, &format!("{named} always -- ls")),
+            t!(reach_refused_workspace)
+        );
+        assert!(!Store::new(&place.home).path().exists());
+        assert_eq!(place.held_in("s", &gone), []);
     }
 
     /// A row bound to a checkout is dropped when the directory at its path is another one, and a
