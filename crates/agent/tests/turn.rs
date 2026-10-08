@@ -16065,6 +16065,164 @@ fn a_failed_run_on_a_confining_turn_says_what_it_ran_under() {
     assert!(!line.contains("/elsewhere"), "{line}");
 }
 
+/// One confined run of `command` in a session that keeps its state in `state` and answers to `session`,
+/// with `profile` standing for the person's home. Returns what the person was asked and what the
+/// planner was sent after the run.
+fn one_confined_run_keeping_state(
+    name: &str,
+    command: &str,
+    state: &std::path::Path,
+    profile: &std::path::Path,
+    session: &str,
+) -> (bravebot_agent::RunRequest, String) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", &format!(r#"{{"command":"{command}"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = asked.seen.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it")
+            .with_confined_runs(true)
+            .with_home(Some(state.to_path_buf()))
+            .with_profile(Some(profile.to_path_buf()))
+            .remembering(Some(session.to_string())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut asked,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let request = seen
+        .lock()
+        .unwrap()
+        .first()
+        .cloned()
+        .expect("a run was asked about");
+    (request, message_from(&second, "Result of run").to_string())
+}
+
+/// SANDBOX-23: nothing a program printed becomes reach. A step that failed and named a directory on
+/// standard error leaves no record, and the same line planned again is held to the same profile.
+/// The regression it rejects: a refusal turned into a row, so that a build made to fail in a chosen
+/// way asks, or is simply given, `~/.ssh` with a plausible reason.
+#[test]
+fn a_refused_run_whose_stderr_names_a_path_adds_no_row() {
+    if cannot_confine_here() {
+        return;
+    }
+    let state = Scratch::new("reach-stderr-state");
+    let profile = Scratch::new("reach-stderr-profile");
+    let command = "sh -c 'echo /elsewhere/chosen; echo /elsewhere/chosen >&2; exit 1'";
+
+    let (first, told) =
+        one_confined_run_keeping_state("reach-stderr-1", command, &state.path, &profile.path, "s");
+    let (second, _) =
+        one_confined_run_keeping_state("reach-stderr-2", command, &state.path, &profile.path, "s");
+
+    let store = bravebot_agent::reach::Store::new(&state.path);
+    assert!(!store.path().exists(), "a refusal left a record");
+    assert!(store.read(Some("s")).is_empty());
+    assert!(!told.contains("/elsewhere"), "{told}");
+    for request in [&first, &second] {
+        let confined = request.confined.as_ref().expect("a confined plan");
+        assert!(
+            confined.sentences().is_empty(),
+            "{:?}",
+            confined.sentences()
+        );
+    }
+}
+
+/// SANDBOX-23: a remembered scope is in the plan the person endorses, named with the day it was
+/// allowed, and the failure line of the step that ran under it names the scope. A session that did
+/// not make a session grant sees neither. The regressions it rejects: a row the plan never showed,
+/// and a session grant applied to every session.
+#[test]
+fn a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only() {
+    if cannot_confine_here() {
+        return;
+    }
+    let state = Scratch::new("reach-plan-state");
+    let profile = Scratch::new("reach-plan-profile");
+    let command = "sh -c 'exit 1'";
+    let plan = bravebot_agent::cmdline::compile(
+        command,
+        &profile.path,
+        Some(&profile.path),
+        &mut |_, _| Ok(()),
+    )
+    .expect("compiles");
+    let step = &plan.steps()[0];
+    let said = bravebot_agent::reach::command(
+        &bravebot_agent::reach::Typed {
+            home: &state.path,
+            profile: Some(&profile.path),
+            session: "mine",
+            directory: &profile.path,
+            today: "2026-10-07",
+        },
+        &format!("docker -- {command}"),
+    );
+    assert!(said.contains("docker"), "{said}");
+    assert_eq!(
+        bravebot_agent::reach::Store::new(&state.path)
+            .read(Some("mine"))
+            .iter()
+            .filter(|grant| grant.covers(step))
+            .count(),
+        1
+    );
+
+    let (mine, told) = one_confined_run_keeping_state(
+        "reach-plan-mine",
+        command,
+        &state.path,
+        &profile.path,
+        "mine",
+    );
+    let (other, other_told) = one_confined_run_keeping_state(
+        "reach-plan-other",
+        command,
+        &state.path,
+        &profile.path,
+        "another",
+    );
+
+    let sentences = mine.confined.as_ref().expect("confined").sentences();
+    assert_eq!(sentences.len(), 1, "{sentences:?}");
+    assert!(sentences[0].contains("2026-10-07"), "{sentences:?}");
+    assert!(told.contains("credential scopes: docker"), "{told}");
+    assert!(
+        other
+            .confined
+            .as_ref()
+            .expect("confined")
+            .sentences()
+            .is_empty()
+    );
+    assert!(
+        other_told.contains("credential scopes: none"),
+        "{other_told}"
+    );
+}
+
 /// The line follows a step that did not exit zero, so a run that worked is told nothing more than
 /// it was, while the description still says what its programs are held to.
 #[test]

@@ -2325,6 +2325,7 @@ mod tests {
                     path: "/home/someone/docker-work".into(),
                 }],
                 network: false,
+                remembered: Vec::new(),
             }],
             reads_the_machine: false,
         });

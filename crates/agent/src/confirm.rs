@@ -282,9 +282,38 @@ pub struct Carried {
     pub reaches: Vec<bravebot_sandbox::scope::Reach>,
     /// Whether the stage keeps the network a closed session took from the others.
     pub network: bool,
+    /// What a person attached to this command with `/reach`, each with the day it was allowed.
+    pub remembered: Vec<Remembered>,
+}
+
+/// One reach a person remembered for a command, as the plan that carries it says so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Remembered {
+    /// What is added.
+    pub reached: crate::reach::Reached,
+    /// Whether a directory is written as well as read.
+    pub write: bool,
+    /// The day it was allowed.
+    pub allowed: String,
 }
 
 impl Confined {
+    /// What a credential scope brings to `program`, in the one wording both a scope the argv names
+    /// and one a person remembered use.
+    fn scope_sentence(&self, scope: bravebot_sandbox::scope::Scope, program: &str) -> String {
+        use bravebot_sandbox::scope::Scope;
+        match scope {
+            Scope::Remote if self.reads_the_machine => {
+                t!(run_carries_known_hosts, program = program)
+            }
+            Scope::Remote => t!(run_carries_remote, program = program),
+            Scope::Aws => t!(run_carries_aws, program = program),
+            Scope::Kubernetes => t!(run_carries_kubernetes, program = program),
+            Scope::Docker => t!(run_carries_docker, program = program),
+        }
+        .to_string()
+    }
+
     /// The sentence that introduces the directories, for a front end to draw above them.
     pub fn heading(&self) -> String {
         match self.reads_the_machine {
@@ -296,7 +325,6 @@ impl Confined {
     /// One sentence for each toolchain list, each credential scope and each stage that keeps a
     /// closed network, in step order, worded once here so no front end carries its own copy of them.
     pub fn sentences(&self) -> Vec<String> {
-        use bravebot_sandbox::scope::Scope;
         let mut sentences = Vec::new();
         if self.network.is_closed() {
             sentences.push(t!(run_network_closed).to_string());
@@ -317,18 +345,7 @@ impl Confined {
                 );
             }
             if let Some(scope) = stage.scope {
-                sentences.push(
-                    match scope {
-                        Scope::Remote if self.reads_the_machine => {
-                            t!(run_carries_known_hosts, program = program)
-                        }
-                        Scope::Remote => t!(run_carries_remote, program = program),
-                        Scope::Aws => t!(run_carries_aws, program = program),
-                        Scope::Kubernetes => t!(run_carries_kubernetes, program = program),
-                        Scope::Docker => t!(run_carries_docker, program = program),
-                    }
-                    .to_string(),
-                );
+                sentences.push(self.scope_sentence(scope, program));
             }
             for reach in &stage.reaches {
                 sentences.push(
@@ -340,6 +357,31 @@ impl Confined {
                     )
                     .to_string(),
                 );
+            }
+            for remembered in &stage.remembered {
+                let date = remembered.allowed.as_str();
+                sentences.push(match &remembered.reached {
+                    crate::reach::Reached::Scope(scope) => t!(
+                        run_carries_remembered,
+                        sentence = self.scope_sentence(*scope, program),
+                        date = date
+                    )
+                    .to_string(),
+                    crate::reach::Reached::Directory(path) if remembered.write => t!(
+                        run_carries_remembered_write,
+                        program = program,
+                        path = path.display().to_string(),
+                        date = date
+                    )
+                    .to_string(),
+                    crate::reach::Reached::Directory(path) => t!(
+                        run_carries_remembered_read,
+                        program = program,
+                        path = path.display().to_string(),
+                        date = date
+                    )
+                    .to_string(),
+                });
             }
         }
         sentences
@@ -2305,6 +2347,7 @@ mod tests {
             scope: Some(scope),
             reaches: Vec::new(),
             network: false,
+            remembered: Vec::new(),
         };
         let confined = Confined {
             reads_the_machine: false,
@@ -2321,6 +2364,7 @@ mod tests {
                     scope: None,
                     reaches: Vec::new(),
                     network: false,
+                    remembered: Vec::new(),
                 },
             ],
         };
@@ -2354,6 +2398,7 @@ mod tests {
                 scope: Some(Scope::Remote),
                 reaches: Vec::new(),
                 network: false,
+                remembered: Vec::new(),
             }],
             network: bravebot_sandbox::network::Network::Open,
         };
@@ -2388,6 +2433,7 @@ mod tests {
             scope: None,
             reaches: Vec::new(),
             network: true,
+            remembered: Vec::new(),
         };
         let confined = |network, carried| Confined {
             reads_the_machine: false,

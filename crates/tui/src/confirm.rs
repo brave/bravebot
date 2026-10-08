@@ -4155,6 +4155,7 @@ mod tests {
                     scope: Some(bravebot_sandbox::scope::Scope::Remote),
                     reaches: Vec::new(),
                     network: false,
+                    remembered: Vec::new(),
                 },
                 bravebot_agent::Carried {
                     program: "docker".into(),
@@ -4165,6 +4166,7 @@ mod tests {
                         path: "/home/someone/.local/share/docker-work".into(),
                     }],
                     network: false,
+                    remembered: Vec::new(),
                 },
                 bravebot_agent::Carried {
                     program: "sed".into(),
@@ -4172,6 +4174,7 @@ mod tests {
                     scope: None,
                     reaches: Vec::new(),
                     network: false,
+                    remembered: Vec::new(),
                 },
             ],
         });
@@ -4214,6 +4217,7 @@ mod tests {
                 scope: Some(bravebot_sandbox::scope::Scope::Remote),
                 reaches: Vec::new(),
                 network: kept,
+                remembered: Vec::new(),
             }],
         };
         request.confined = Some(held(bravebot_sandbox::network::Network::Closed, true));

@@ -37,6 +37,7 @@ pub mod permissions;
 pub mod preamble;
 pub mod processor;
 pub mod programs;
+pub mod reach;
 pub mod regex;
 pub mod remembered;
 pub mod replace;

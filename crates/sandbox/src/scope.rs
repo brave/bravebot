@@ -40,6 +40,13 @@ impl Scope {
         }
     }
 
+    /// The scope a person names by the word the prompt and the planner know it by.
+    pub fn named(word: &str) -> Option<Self> {
+        [Self::Remote, Self::Aws, Self::Kubernetes, Self::Docker]
+            .into_iter()
+            .find(|scope| scope.name() == word)
+    }
+
     /// The scope a stage carries, from the file its program resolved to, its argument vector, and
     /// the `NAME=value` assignments written in front of it.
     ///
@@ -224,6 +231,16 @@ pub fn environment_reach(
         }
     }
     reached
+}
+
+/// A directory a person named, as the sandbox will be told it, or `None` where it is refused.
+///
+/// The same judgement a variable's value gets: absolute, no `..`, not the home or above it, not
+/// `~/.ssh` or inside it, not `~/.config`, `~/.cache` or `~/Library` whole, and a link judged by
+/// where it leads. It must also be a directory that exists, since a grant of a path nothing is at
+/// reads as a grant of whatever is created there later.
+pub fn judged_directory(named: &Path, home: &Path) -> Option<PathBuf> {
+    judged(named, true, home).filter(|path| path.is_dir())
 }
 
 /// `named` as the sandbox will be told it, or `None` where it is refused.

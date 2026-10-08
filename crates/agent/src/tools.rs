@@ -1849,13 +1849,17 @@ impl<'a> Tools<'a> {
         let roots = std::iter::once(self.workspace.root().to_path_buf())
             .chain(self.workspace.added_directories().iter().cloned())
             .collect();
-        crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile).map(
-            |confinement| {
-                confinement
-                    .with_network(bravebot_config::run_network())
-                    .with_mode(self.sandbox)
-            },
-        )
+        let confinement =
+            crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)?
+                .with_network(bravebot_config::run_network())
+                .with_mode(self.sandbox);
+        // Read only where a person is there to see the row it adds: a session with nobody to put
+        // a prompt to reads no record, for the reason a remembered line is not read there.
+        let grants = match (self.home, self.remembering) {
+            (Some(home), Some(session)) => crate::reach::Store::new(home).read(Some(session)),
+            _ => Vec::new(),
+        };
+        Some(confinement.with_grants(grants))
     }
 
     /// Where this turn's credential findings are written, and under whose name.
@@ -14297,6 +14301,72 @@ mod tests {
                     "{root:?} is not written in {policy:?}"
                 );
             }
+        }
+
+        /// The reach a person remembered is read from the state directory for the session that has
+        /// one, and nowhere else. The regressions it rejects: a record read from the checkout, whose
+        /// contents a repository controls; a session grant applied to a session that did not make
+        /// it; and a session with nobody to see the row reading the record at all.
+        #[cfg(unix)]
+        #[test]
+        fn remembered_reach_comes_from_the_state_directory_for_the_session_that_has_one() {
+            use crate::reach::{Grant, Lifetime, Reached, Store};
+            let scratch = Scratch::new("reach-roots");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let state = Scratch::new("reach-state");
+            let elsewhere = Scratch::new("reach-in-the-checkout");
+            let state_path: &'static std::path::Path =
+                Box::leak(state.path.clone().into_boxed_path());
+            let grant = |lifetime| Grant {
+                binary: "/bin/ls".into(),
+                operation: None,
+                reached: Reached::Scope(bravebot_sandbox::scope::Scope::named("docker").unwrap()),
+                write: false,
+                allowed: "2026-10-07".to_string(),
+                lifetime,
+            };
+            assert!(Store::new(&state.path).allow(&grant(Lifetime::Session("mine".into()))));
+            for directory in [
+                workspace.root().join(".bravebot"),
+                workspace.root().to_path_buf(),
+            ] {
+                let _ = std::fs::create_dir_all(&directory);
+                std::fs::copy(
+                    Store::new(&state.path).path(),
+                    directory.join("reach.jsonl"),
+                )
+                .expect("a copy in the checkout");
+            }
+            let _ = &elsewhere;
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            };
+            let profile: &'static std::path::Path =
+                Box::leak(scratch.path.clone().into_boxed_path());
+            let carries = |home: Option<&'static std::path::Path>,
+                           session: Option<&'static str>| {
+                with_tools(&workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.home = home;
+                    tools.profile = Some(profile);
+                    tools.remembering = session;
+                    let confinement = tools.confinement().expect("a platform with a base");
+                    confinement.describe(&[&step]).sentences().len()
+                })
+            };
+
+            assert_eq!(carries(Some(state_path), Some("mine")), 1);
+            assert_eq!(carries(Some(state_path), Some("another")), 0);
+            assert_eq!(carries(Some(state_path), None), 0);
+            assert_eq!(carries(None, Some("mine")), 0);
+            let empty: &'static std::path::Path =
+                Box::leak(elsewhere.path.clone().into_boxed_path());
+            assert_eq!(carries(Some(empty), Some("mine")), 0);
         }
 
         /// The statement lands on `run` and on no other tool, and only on a turn that confines.

@@ -548,7 +548,7 @@ fn os_release() -> Option<String> {
 /// ago that was, which matters the moment anything reasons about what is recent. UTC rather than
 /// local time: the offset is not knowable without a timezone database, and being off by a day at
 /// the edges is better than a dependency for one line.
-fn today() -> String {
+pub(crate) fn today() -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())

@@ -16,6 +16,7 @@ governs:
   - crates/sandbox/src/mode.rs
   - crates/config/src/sandbox.rs
   - crates/agent/src/confine.rs
+  - crates/agent/src/reach.rs
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -1099,6 +1100,79 @@ the command line prints it on its opening line.
 `verified-by: bravebot_core::policy::the_trail_says_which_sandbox_mode_the_programs_ran_in`
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_reads_off_as_standard`
 
+<a id="SANDBOX-23"></a>
+### SANDBOX-23: reach a person remembered for a command is attached to that command's stage, and nothing else makes it
+
+`/reach <scope or directory> [write] [always] -- <command line>` records, for each stage of the line,
+that the stage reaches one more thing: a credential scope of the closed table
+([SANDBOX-16](#SANDBOX-16)), or a directory the person named, read unless they said `write`. A
+record is keyed on the file the stage's program resolved to and its operation word (its first
+argument, unless that is an option), so a grant made for `git push` is not one for `git pull` or
+`git -C dir push`, and one made for `/usr/bin/make` is not one for another `make` earlier on the
+path. It lasts the session that made it, a `--resume` of it included, or every session with
+`always`, and `/reach` alone lists the grants in force and `/reach remove <n>` removes the one
+numbered. A grant is attached when the plan is composed ([SANDBOX-18](#SANDBOX-18)): its rows are
+in the stage's profile, the plan the person endorses names it with the day it was allowed, and the
+failure line ([SANDBOX-19](#SANDBOX-19)) names a remembered scope as it names any other.
+
+The inputs to a grant are a person's typed words, the compiled step, the closed table and the
+process environment, and nothing else. In particular:
+
+- A directory is judged as `--add-dir` judges one, when it is allowed and again when it is used:
+  absolute, no `..`, existing, not the home or above it, not `~/.ssh` or inside it, and a link by
+  where it leads. A directory later replaced by a link to `~/.ssh` is dropped from the profile and
+  from the plan.
+- Write is a directory's. A scope is never written by a grant, and `/reach` refuses one.
+- A stage with an assignment in front of it is covered by no grant, and a line with one is refused,
+  for the reason an assignment removes a scope ([SANDBOX-16](#SANDBOX-16)).
+- The record is `reach.jsonl` in the state directory. A checkout's files are not read for it, a
+  session grant is read only by the session whose id it carries, and a line that is not a grant
+  this build understands grants nothing.
+- A session with no profile directory to judge against, and a turn with no session to show the row
+  to, read and add none. An incognito session reads the record and adds nothing to it
+  ([INCOG-5](incognito.md#INCOG-5)).
+- A remembered scope is a credential scope for a closed network ([SANDBOX-20](#SANDBOX-20)), so the
+  stage keeps the egress it needs to use it. A remembered directory is not a reason to keep it.
+- What a program printed and how it exited are not inputs. A refused run leaves no record and the
+  same line planned again is held to the same profile.
+
+**Why.** The decision under *Widening happens before the run* is that nothing widens in answer to a
+refusal, because the path a refusal names is chosen by the program, and a repository chooses the
+program's output. A person typing the path is the other route. Without a way to keep it, a build
+that needs a directory once needs it again in every session and the person is asked, or told to
+type `--add-dir`, for the same command each time. The grant is still the plan: it is shown before the
+run, in the words of the other reach, so there is nothing new to trust.
+
+**What is not built.** A key at the confirmation that remembers the reach, a path the planner
+proposes, and a reach attached to a command the planner has never run. Each puts a path or a shape
+the planner chose in front of a person to approve, and none is decided here.
+
+`verified-by: bravebot_agent::reach::a_grant_covers_the_file_and_the_operation_it_was_made_for`
+`verified-by: bravebot_agent::reach::an_assignment_in_front_of_a_step_removes_every_grant`
+`verified-by: bravebot_agent::reach::a_grant_is_read_back_by_the_sessions_it_was_made_for`
+`verified-by: bravebot_agent::reach::a_revoked_grant_is_gone_until_it_is_allowed_again`
+`verified-by: bravebot_agent::reach::a_line_that_is_not_a_grant_grants_nothing`
+`verified-by: bravebot_agent::reach::a_grant_made_for_one_command_is_made_for_that_command_only`
+`verified-by: bravebot_agent::reach::a_pipeline_gets_one_grant_for_each_distinct_stage`
+`verified-by: bravebot_agent::reach::a_directory_is_read_unless_the_person_said_write`
+`verified-by: bravebot_agent::reach::a_directory_that_holds_a_key_or_does_not_exist_is_refused`
+`verified-by: bravebot_agent::reach::a_directory_replaced_by_a_link_to_the_keys_is_refused_at_use`
+`verified-by: bravebot_agent::reach::a_scope_is_never_written_and_an_assignment_is_never_granted`
+`verified-by: bravebot_agent::reach::a_line_without_a_command_is_told_the_usage`
+`verified-by: bravebot_agent::reach::remove_takes_away_the_row_the_list_numbers`
+`verified-by: bravebot_agent::reach::another_sessions_grant_is_not_listed`
+`verified-by: bravebot_agent::reach::a_session_with_no_profile_grants_nothing`
+`verified-by: bravebot_agent::confine::a_remembered_scope_reaches_the_command_it_was_made_for_and_no_other`
+`verified-by: bravebot_agent::confine::a_remembered_directory_is_read_and_written_only_where_the_grant_says`
+`verified-by: bravebot_agent::confine::a_remembered_reach_is_withheld_where_the_step_or_the_machine_has_changed`
+`verified-by: bravebot_agent::confine::the_plan_and_the_failure_line_name_a_remembered_scope`
+`verified-by: bravebot_agent::confine::a_remembered_scope_keeps_a_closed_network_and_a_remembered_directory_does_not`
+`verified-by: bravebot_agent::tools::remembered_reach_comes_from_the_state_directory_for_the_session_that_has_one`
+`verified-by: bravebot_agent::turn::a_refused_run_whose_stderr_names_a_path_adds_no_row`
+`verified-by: bravebot_agent::turn::a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only`
+`verified-by: bravebot_agent::incognito::no_remembered_reach_is_written_down`
+`verified-by: bravebot_agent::incognito::a_reach_an_earlier_session_remembered_is_still_honoured`
+
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is confined on Linux, macOS and Windows
@@ -1244,9 +1318,11 @@ is never the terminal ([tools/run.md](tools/run.md)), so a terminal editor has n
 confined or not. A graphical one such as `code --wait` needs no terminal, and it is a program the
 plan never showed, so no list is keyed on it.
 
-**A command no list knows is asked about, and the answer lasts the session.** Not built: a stage no
-list knows runs under the base and its plan and nothing asks about it, so a build inside it that
-needs a cache fails and stays failed. The rest of this paragraph is the decision. A wrapper is the
+**A command no list knows is asked about, and the answer lasts the session.** Partly built: a
+stage no list knows runs under the base and its plan, and a person who knows what it needs types
+`/reach` ([SANDBOX-23](#SANDBOX-23)) to attach a scope or a directory to it, for the session or
+for good. Nothing asks about it at the prompt yet, so a build inside it that needs a cache and was
+not given one fails and stays failed. The rest of this paragraph is the decision. A wrapper is the
 common case rather than the edge one: `make check` here, a `just` recipe or an `npm run` target
 elsewhere, and the binary such a stage resolves is `make` or `just` and not the build it goes on to
 drive. That stage gets the base and its plan and nothing else, so a build inside it that needs a
@@ -1343,7 +1419,8 @@ chose to touch. Nothing grants what a program just failed to reach.
 
 **A person is the other route, and the only route to the key.** A session where no agent holds the
 key, or one wanting a store no scope names, a publish reading `~/.cargo/credentials.toml` or
-`~/.npmrc` among them, still needs somebody to name a directory: `/add-dir` in a session,
+`~/.npmrc` among them, still needs somebody to name a directory: `/reach` for one command
+([SANDBOX-23](#SANDBOX-23)), `/add-dir` in a session,
 `--add-dir` on the command line, and `additionalDirectories` in a settings file, which is put as a
 question of its own when the session opens ([trust-map.md](trust-map.md), [cli.md](cli.md),
 [permissions.md](permissions.md)). A rule about which commands to ask about is not one of them,

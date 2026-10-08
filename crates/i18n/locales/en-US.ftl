@@ -1439,6 +1439,28 @@ run-carries-docker = { $program } also reads your docker credentials in ~/.docke
 run-carries-reach = { $program } also reads { $path }, where your { $variable } points
 run-network-closed = the network is closed for programs this session starts, except for those below
 run-keeps-network = { $program } also reaches the network
+# Said for reach a person attached to a command with /reach. The date is the day they allowed it,
+# so the row is never a surprise: the reach is on the screen every time the command is asked about.
+run-carries-remembered = { $sentence } (remembered for this command, allowed { $date })
+run-carries-remembered-read = { $program } also reads { $path } (remembered for this command, allowed { $date })
+run-carries-remembered-write = { $program } also reads and writes { $path } (remembered for this command, allowed { $date })
+# The /reach command: what it lists, what it says it did, and why it did nothing.
+reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one.
+reach-none = no reach is remembered for any command
+reach-listed = { $number }. { $command } also { $access } { $entry }, allowed { $date }, { $lifetime }
+reach-access-reads = reads
+reach-access-writes = reads and writes
+reach-lifetime-session = for this session
+reach-lifetime-always = always
+reach-added = remembered: { $command } also { $access } { $entry }, { $lifetime }. The next plan for it shows this row.
+reach-removed = forgotten: { $command } no longer also { $access } { $entry }
+reach-refused-entry = { $entry } is not a credential scope (remote, aws, kubernetes, docker) or a directory that can be reached. It must be an absolute path or start with ~/, exist, and not be your home directory, ~/.ssh, or a directory above them.
+reach-refused-write = a credential scope is read only. Only a directory can be written.
+reach-refused-line = that command line cannot be run as written, so there is nothing to remember the reach for
+reach-refused-assignment = a command with NAME=value in front of it carries no remembered reach
+reach-refused-incognito = this session adds nothing to ~/.bravebot, so nothing was remembered
+reach-refused-no-home = this session has no home directory to judge a reach against
+reach-refused-number = no reach is numbered { $number }
 # Said above the list of what a line reaches that nothing here holds: no credential is handed
 # over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
 # only where a line reaches one, so the list is never empty and never noise. The line above is
@@ -2141,6 +2163,7 @@ command-effort = Choose how hard to think before answering
 command-advisor = Name the model the planner may consult, say which it may, or drop the choice
 command-config = Choose how the input box edits text
 command-add-dir = Open another directory and trust it for this session, or close one
+command-reach = Remember a directory or credential for a command, or list and remove them
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
 command-branch = Copy this session and carry on in the copy, keeping the original to return to
