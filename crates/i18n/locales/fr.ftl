@@ -426,6 +426,10 @@ doctor-settings-sandbox-filesystem-ignored =
     sandbox.filesystem.{ $key } dans { $path } n'est pas suivi : une copie de travail peut refuser un accès, jamais en ajouter, donc il est lu seulement dans ~/.bravebot/settings.json, le fichier nommé par --settings et le fichier géré
 doctor-settings-sandbox-misshapen =
     sandbox.filesystem.{ $key } dans { $path } n'est pas une liste de chaînes, donc il est lu comme absent
+doctor-settings-sandbox-hosts-ignored =
+    sandbox.network.{ $key } dans { $path } n'est pas suivi : une copie de travail peut refuser un hôte, jamais en autoriser un, donc il est lu seulement dans ~/.bravebot/settings.json, le fichier nommé par --settings et le fichier géré
+doctor-settings-sandbox-hosts-misshapen =
+    sandbox.network.{ $key } dans { $path } n'est pas une liste de chaînes (onUnlisted : ask ou refuse), donc il est lu comme absent
 doctor-managed-sandbox-misshapen =
     sandbox.filesystem.{ $key } dans { $path } n'est pas une liste de chaînes, donc il n'impose rien
 doctor-managed-sandbox-unread =

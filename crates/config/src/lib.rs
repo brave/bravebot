@@ -26,6 +26,7 @@ mod obfuscate;
 mod run_network;
 pub mod sandbox;
 mod sandbox_filesystem;
+pub mod sandbox_network;
 pub mod scrub;
 mod settings;
 #[cfg(test)]
