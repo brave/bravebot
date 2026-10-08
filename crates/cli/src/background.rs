@@ -24,6 +24,7 @@ pub(crate) fn sessions(args: &[String]) -> ExitCode {
         [flag] if flag == "--json" => list(true),
         [word, id] if word == "stop" => stop(id),
         [word, rest @ ..] if word == "import" => crate::session_import::command(rest),
+        [word, rest @ ..] if word == "search" => crate::session_search::command(rest),
         _ => fail(Ending::Argument, t!(sessions_usage)),
     }
 }
