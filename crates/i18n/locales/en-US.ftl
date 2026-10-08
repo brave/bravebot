@@ -33,6 +33,7 @@ cli-usage-resume-task = Send a one-shot task as the next turn of a session
 cli-usage-continue-task = Send a one-shot task as the next turn of the most recent session
 cli-usage-fork = Fork a session and start exploring a different path
 cli-usage-doctor = Check configuration and confinement
+cli-usage-doctor-sandbox = Run everyday workflows under the sandbox and report which work
 cli-usage-import = Import a Leo Premium subscription
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
 cli-usage-auth-login = Sign in to a model service, listing every way when none is named
@@ -2921,3 +2922,30 @@ reply-not-sent = { $name } did not take the prompt.
 reply-stopping = { $name } is stopping after an hour idle. Reply again to start it.
 bg-restart-needs-a-terminal = { $name } is stopped, and only a terminal can start it again.
 resume-held-by-background = { $name } is held by a running background session. Join it with: bravebot attach { $id }
+
+# `bravebot doctor --sandbox`: git, gh, make, cargo and the other everyday programs, run the way a
+# session runs them. A row is a workflow; a row that failed says where, what to do, and where the
+# program's output went. The output itself is never printed.
+cli-doctor-sandbox-takes-nothing-else = doctor --sandbox takes no other arguments.
+doctor-sandbox-not-here = doctor --sandbox runs programs under the sandbox on Linux and macOS. This platform confines programs another way, and the workflows are not run here.
+doctor-sandbox-cannot-confine = This machine cannot confine a program, so there is nothing to check. bravebot doctor reports the confinement it can apply.
+doctor-sandbox-no-place = There is no state directory to run the workflows in. bravebot doctor says which variables name one.
+doctor-sandbox-temporary = The state directory { $path } is under the temporary directory, which the sandbox lets every program write, so a refused write could not be told from a permitted one. Move the state directory.
+doctor-sandbox-io = Could not prepare { $path }: { $detail }
+doctor-sandbox-passed = passed
+doctor-sandbox-failed = FAILED
+doctor-sandbox-skipped = skipped
+doctor-sandbox-because = because
+doctor-sandbox-not-installed = { $programs } is not installed
+doctor-sandbox-at = at
+doctor-sandbox-exited = stage { $stage }, { $program }, exited with { $code }
+doctor-sandbox-did-not-exit = stage { $stage }, { $program }, did not exit
+doctor-sandbox-fix = fix
+doctor-sandbox-fix-refused = The sandbox refused something this program needs. Read the log for the path, then add the directory with --add-dir or /add-dir, or run the command yourself outside a session.
+doctor-sandbox-fix-allowed = The sandbox let a program reach something it exists to keep from one. Do not rely on it until this is fixed, and report it.
+doctor-sandbox-fix-without = The workflow fails without the sandbox too, so the sandbox is not the cause. Check that the program works on this machine.
+doctor-sandbox-fix-setup = Setting the workflow up failed outside the sandbox. Check that the program works on this machine.
+doctor-sandbox-fix-not-confined = The platform would not confine the program: { $detail }
+doctor-sandbox-log = log
+doctor-sandbox-total = total
+doctor-sandbox-counts = { $passed } passed, { $failed } failed, { $skipped } skipped

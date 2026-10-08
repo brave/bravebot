@@ -998,6 +998,47 @@ fn doctor_ends_on_the_configuration_status_and_says_its_identifier() {
     );
 }
 
+/// SANDBOX-21 over the argument list. `doctor --sandbox` runs programs, so a second argument that
+/// might have changed which ones is refused rather than ignored, with the status an argument error
+/// has.
+#[test]
+fn doctor_sandbox_refuses_a_further_argument() {
+    let scratch = Scratch::new("cli-running-doctor-sandbox-argument");
+
+    let output = bravebot(&scratch.path, &[], &["doctor", "--sandbox", "--extra"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains("BB1002"), "{stderr}");
+    assert!(!scratch.path.join(".bravebot/doctor-sandbox").exists());
+}
+
+/// SANDBOX-21 over the process: the command runs the suite, prints a row for each workflow, and
+/// counts a workflow whose programs are not installed as skipped without failing on it. A `PATH`
+/// naming nothing is how every program is made absent, and the suite's own directory is removed
+/// once nothing failed.
+#[cfg(unix)]
+#[test]
+fn doctor_sandbox_skips_what_is_not_installed_and_cleans_up_after_a_clean_run() {
+    if !bravebot_agent::usability::available() {
+        return;
+    }
+    let scratch = Scratch::new("cli-running-doctor-sandbox-skipped");
+
+    let output = bravebot(
+        &scratch.path,
+        &[("PATH", "/bravebot-no-such-directory")],
+        &["doctor", "--sandbox"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("git: init, add and commit"), "{stdout}");
+    assert!(stdout.contains("0 passed, 0 failed"), "{stdout}");
+    assert!(!stdout.contains("FAILED"), "{stdout}");
+    assert!(!scratch.path.join(".bravebot/doctor-sandbox").exists());
+}
+
 /// NET-8 over the status rather than the line: a proxy variable naming no route ends `doctor` on the
 /// configuration error, as a certificate path holding nothing does. A machine whose only way out is
 /// a mistyped `HTTPS_PROXY` is misconfigured, and a CI job checking a fleet reads the status rather
