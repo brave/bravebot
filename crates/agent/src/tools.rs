@@ -1354,7 +1354,7 @@ pub fn for_delegate(
     use bravebot_core::delegate::{NEVER_DELEGATED, gating_capability};
 
     let offers = |name: &str| {
-        if NEVER_DELEGATED.contains(&name) {
+        if NEVER_DELEGATED.contains(&name) || !bravebot_core::tool_set::allows(name) {
             return false;
         }
         if name == "spawn_agent" && delegating.is_none() {
@@ -3033,6 +3033,11 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                     .is_some_and(|offered| !offered.iter().any(|tool| tool == unoffered)) =>
         {
             Produced::problem(format!("error: no such tool '{unoffered}'"))
+        }
+        // What the command line took away is refused whoever asks, a delegate included, since the
+        // flags limit the run and not one turn of it.
+        taken_away if server_tool.is_none() && !bravebot_core::tool_set::allows(taken_away) => {
+            Produced::problem(format!("error: no such tool '{taken_away}'"))
         }
         // A mode that refuses writes refuses them whether or not anybody would have been asked,
         // which is what makes it a statement about the turn rather than an answer given on the

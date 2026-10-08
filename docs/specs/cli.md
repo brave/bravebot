@@ -1342,3 +1342,38 @@ process that holds the record is known.
 `verified-by: bravebot_session::sessions::continuing_a_record_adds_one_turn_and_leaves_what_it_held_as_read`
 `verified-by: bravebot_session::sessions::continuing_a_record_with_no_history_gives_it_none`
 `verified-by: bravebot_session::sessions::a_completed_turn_starts_over_when_the_conversation_got_shorter`
+
+<a id="CLI-26"></a>
+### CLI-26: `--tools` and `--no-shell` offer the planner fewer tools for one run
+
+`--tools <a,b,c>` offers the planner the tools it names and no others. `--no-shell` takes away `run`,
+`read_output` and `job_output`, which are the tools that start a program and read what one printed.
+Both apply to a session, a resumed session, a session in lines and a one-shot run, to every turn of
+it and to every delegate it starts, and they may be given together. A tool both flags touch is
+removed. The names are those of the tools a turn is offered, and `advisor`.
+
+The flags only remove. A tool the settings, a definition or a delegate's kind already removed is not
+offered, whatever the flag names. A call to a tool taken away is answered as a name nobody offered
+is, whoever asks and whatever permission mode is in force, so `--dangerously-skip-permissions` does
+not bring one back. The description of `read_git` does not send the planner to `run` where it is gone. `--tools`
+offers no tool of an MCP server, and no question about a server's tool list is put to the person.
+
+Both are taken out of the arguments before anything dispatches on them. `--tools` is refused, with
+the status for an argument (CLI-6), when no list follows it, when the list is blank, and when a name
+in it is not a tool, so a typo is not read as a smaller list than its author meant. If it is given
+twice, the last is used. Both are refused with `--mode manifest`, whose steps are planned and run
+from the plan, with `--bg`, which starts the session in another process that would not carry them,
+and with `doctor`, `auth`, `mcp`, `sessions`, `attach`, `reply`, `import-leo-creds`,
+`import-providers`, `completion` and `shell-init`, which start neither a session nor a task.
+
+**Why.** A harness running the agent on a shared machine needs to say what a run may reach without
+editing settings, and a refusal that depends on a mode could be undone by a flag that stops the
+asking. The flags remove tools and decide nothing from what a tool returns, so no content can widen
+or narrow them.
+
+`verified-by: bravebot_core::tool_set::an_allow_list_allows_what_it_names_and_no_other_tool`
+`verified-by: bravebot_core::tool_set::no_shell_removes_the_program_tools_even_where_an_allow_list_names_them`
+`verified-by: bravebot_cli::running::a_tools_list_offers_only_what_it_names_and_refuses_a_call_to_any_other`
+`verified-by: bravebot_cli::running::a_no_shell_run_offers_no_program_tool_and_refuses_a_call_to_one`
+`verified-by: bravebot_cli::running::a_tool_limit_that_limits_nothing_is_refused_by_name`
+`verified-by: bravebot_cli::main::the_tool_limit_is_taken_out_wherever_it_appears`

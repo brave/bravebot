@@ -128,6 +128,8 @@ cli-option-append-system-prompt =
 cli-option-mode = turn (par défaut) décide étape par étape ; manifest planifie tout le déroulement d'abord
 cli-option-model = Le modèle demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-advisor = Un modèle auquel l'agent peut poser une question, proposé comme l'outil advisor
+cli-option-tools = Ne proposer à l'agent que ces outils, séparés par des virgules. Il ne peut pas en ajouter un qu'un réglage a retiré
+cli-option-no-shell = Ne proposer à l'agent aucun outil qui lance un programme ou lit ce qu'il a affiché
 cli-option-effort = L'effort de réflexion demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en quarantaine
 cli-option-trace = Afficher le journal d'audit
@@ -168,6 +170,12 @@ cli-settings-not-a-file = --settings ne nomme aucun fichier : { $path }
 cli-run-network-needs-a-word = --run-network demande open ou closed
 cli-run-network-unknown = --run-network accepte open ou closed, pas { $word }
 cli-sandbox-flag-needs-a-path = { $flag } demande un chemin
+cli-tools-needs-a-list = --tools demande une liste de noms d'outils séparés par des virgules
+cli-tools-unknown = --tools nomme { $name }, qui n'est pas un outil. Les outils sont : { $known }
+cli-tools-not-for-a-command =
+    --tools et --no-shell limitent les outils proposés à une session ou à une tâche, et { $command } ne démarre ni l'une ni l'autre
+cli-tools-not-with-a-manifest =
+    --tools et --no-shell ne vont pas avec --mode manifest : les étapes d'une exécution planifiée sont prévues puis exécutées d'après le plan, et non choisies dans une liste d'outils
 cli-agent-needs-a-name = --agent demande le nom d'une définition
 cli-agent-not-for-a-command =
     --agent nomme la définition sous laquelle travaille une session ou une tâche, et { $command }

@@ -89,6 +89,8 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--json-stream` | write one event per line as the run goes, then the result object ([below](#--json-stream)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
+| `--tools <a,b,c>` | offer the agent only the named tools; a tool a setting removed stays removed, and no MCP server's tools are offered ([below](#--tools-abc-and---no-shell)) |
+| `--no-shell` | offer no tool that runs a program or reads what one printed: `run`, `read_output` and `job_output` ([below](#--tools-abc-and---no-shell)) |
 | `--safe` | load none of your hooks, skills, definitions, MCP server requests or `AGENTS.md`, and say so once; sign-in, model and permissions still apply |
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
@@ -97,9 +99,9 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 
 `-p` may lead, as it does for other agents: `bravebot -p "task"`.
 
-Five flags are taken out of the line before anything dispatches on it, so each may go anywhere and
+Seven flags are taken out of the line before anything dispatches on it, so each may go anywhere and
 each combines with every way of starting, one another included: `--incognito`, `--safe`,
-`--dangerously-skip-permissions`, `--settings` and `--vet`. `--agent` is taken out there too, and
+`--dangerously-skip-permissions`, `--settings`, `--vet`, `--tools` and `--no-shell`. `--agent` is taken out there too, and
 combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
 `--fork` or `--mode manifest`, a task carrying on a session included.
 `--system-prompt` and `--append-system-prompt` are taken out there as well, and combine with every
@@ -113,6 +115,20 @@ reads none of your hooks, skills, delegate definitions, `mcp.request` entries or
 whether they are under `~/.bravebot` or in the project, and says once what it skipped. The built-in
 skills and delegate kinds, `--append-system-prompt` and `--settings` are unaffected, and so are
 sign-in, the model, permission rules and trust. `--bg` refuses it.
+
+### `--tools <a,b,c>` and `--no-shell`
+
+```sh
+bravebot -p "summarise this repository" --tools read_file,list_files,search
+bravebot -p "fix the failing test" --no-shell
+```
+
+`--tools` offers the agent the tools it names and no others, for every turn of the run and for every
+delegate it starts. `--no-shell` takes away `run`, `read_output` and `job_output`. A name that is no
+tool is refused with the list of those that are. Both only remove: a tool your settings already
+removed is not offered because a flag names it, and a call to a tool taken away is refused as an
+unknown name even with `--dangerously-skip-permissions`. `--tools` offers no MCP server's tools.
+`--mode manifest`, `--bg` and the commands that start no session refuse them.
 
 `--dangerously-skip-permissions` is the only way to reach the mode that answers every permission
 question, including the ones that decide trust, and the only way a run nobody is watching may write.

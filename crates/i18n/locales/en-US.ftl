@@ -128,6 +128,8 @@ cli-option-append-system-prompt =
 cli-option-mode = turn (default) decides step by step; manifest plans the whole run first
 cli-option-model = The model this run asks for, in place of the remembered or configured one
 cli-option-advisor = A model the agent may put a question to, offered to it as the advisor tool
+cli-option-tools = Offer the agent only these tools, comma separated. It cannot add one a setting removed
+cli-option-no-shell = Offer the agent no tool that runs a program or reads what one printed
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
 cli-option-print = Non-interactive. Reads piped stdin as quarantined context
 cli-option-trace = Print the audit trail
@@ -171,6 +173,13 @@ cli-run-network-unknown = --run-network takes open or closed, not { $word }
 cli-sandbox-flag-needs-a-path = { $flag } requires a path
 cli-log-level-needs-a-word = --log-level requires error, info or debug
 cli-log-level-unknown = --log-level takes error, info or debug, not { $word }
+cli-tools-needs-a-list = --tools requires a comma separated list of tool names
+cli-tools-unknown = --tools names { $name }, which is no tool. The tools are: { $known }
+# The command is the first argument, one of this program's own subcommands.
+cli-tools-not-for-a-command =
+    --tools and --no-shell limit the tools a session or a task is offered, and { $command } starts neither
+cli-tools-not-with-a-manifest =
+    --tools and --no-shell do not go with --mode manifest: a manifest run's steps are planned and run from the plan, not chosen from a list of tools
 cli-agent-needs-a-name = --agent requires the name of a definition
 # The command is the first argument, one of this program's own subcommands.
 cli-agent-not-for-a-command =
