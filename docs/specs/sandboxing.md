@@ -1141,7 +1141,7 @@ process environment, and nothing else. In particular:
   which is for every checkout because that tool's configuration directory is the same in all of
   them; no second list of programs is kept. A scope typed for any other program
   (`/reach aws -- make check`) is bound like a directory. A line with no root that is not such a
-  scope, which includes every line written before grants were bound, grants nothing.
+  scope grants nothing.
 - The record is `reach.jsonl` in the state directory. A checkout's files are not read for it, a
   session grant is read only by the session whose id it carries, and a line that is not a grant
   this build understands grants nothing.
