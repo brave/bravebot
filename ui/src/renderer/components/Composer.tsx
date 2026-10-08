@@ -3,6 +3,7 @@ import type { FileAttachment } from '../../shared/files'
 import { projectLabel } from '../../shared/recents'
 import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
+import type { Staged } from '../staging'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
@@ -52,6 +53,10 @@ export interface ComposerProps {
   attachments: FileAttachment[]
   onAttach: () => void
   onRemoveAttachment: (id: string) => void
+  /** What a drop staged that the draft still names. */
+  staged: Staged[]
+  /** Take a staged file off, by taking its marker out of the draft. */
+  onRemoveStaged: (marker: string) => void
   onPreview: (path: string) => void
   queued: string[]
   queuePaused: boolean
@@ -152,7 +157,7 @@ export interface ComposerFooterProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, attachments, onAttach, onRemoveAttachment, onPreview,
+    draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
     queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false,
   } = props
@@ -249,7 +254,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   // Agent or Plan, for the next message only. Plan starts one manifest run and the menu goes back
   // to Agent, because a session may not hold the mode (MANIFEST-9).
   const [mode, setMode] = useState<Mode>('agent')
-  const planBlocked = !onPlan ? 'unavailable' : scope === 'bot' ? 'bot' : attachments.length > 0 ? 'attachments' : null
+  const planBlocked = !onPlan ? 'unavailable' : scope === 'bot' ? 'bot' : attachments.length > 0 || staged.length > 0 ? 'attachments' : null
   useEffect(() => { setMode('agent') }, [session])
   useEffect(() => { if (planBlocked) setMode('agent') }, [planBlocked])
   const modeNow = useRef(mode)
@@ -294,7 +299,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
         )}
         <div className={`composer-shell${footer ? ' with-footer' : ''}`}>
         <div className="composer-box">
-          {attachments.length > 0 && (
+          {(attachments.length > 0 || staged.length > 0) && (
             <div className="attachment-chips">
               {attachments.map((file) => (
                 <span className="attachment-chip" key={file.id}>
@@ -303,6 +308,17 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                     onClick={() => onPreview(file.path)}>{file.path.split('/').at(-1)}</button>
                   <IconButton icon="close" size="tiny" label={`Remove attachment ${file.path}`} tooltip="Remove"
                     onClick={() => onRemoveAttachment(file.id)} />
+                </span>
+              ))}
+              {staged.map((item) => (
+                <span className="attachment-chip dropped" key={item.marker} data-test="dropped-chip">
+                  {item.file.thumbnail
+                    ? <img className="attachment-thumb" src={item.file.thumbnail} alt="" />
+                    : <FileGlyph name={item.file.name} />}
+                  <span className="attachment-label" data-tooltip={item.file.name}>{item.file.name}</span>
+                  <span className="attachment-marker">{item.marker}</span>
+                  <IconButton icon="close" size="tiny" label={`Remove ${item.marker} ${item.file.name}`} tooltip="Remove"
+                    onClick={() => onRemoveStaged(item.marker)} />
                 </span>
               ))}
               <span className="attachment-trust" tabIndex={0}

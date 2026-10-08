@@ -34,6 +34,9 @@ import type { Turns, TurnDisclosure } from '../turn-details'
 import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
 import { middleTruncate } from '../truncate'
 import { pointForPrompt, undoRow } from '../rewind'
+import { showToast } from '../toasts'
+import { EMPTY_STAGING, named, stageDrop, withoutMarker, type Staging } from '../staging'
+import type { Drop } from '../../shared/drops'
 
 interface Live {
   model: string | null
@@ -61,6 +64,7 @@ interface Live {
   /** The points this session can be put back to, newest first. */
   rewind?: RewindPoint[]
   sendRefused?: string | null
+  staging?: Staging
 }
 
 /**
@@ -85,6 +89,8 @@ interface Props {
   attachments: FileAttachment[]
   onAttach: () => void
   onRemoveAttachment: (id: string) => void
+  /** Record what a drop staged in a session's composer. */
+  onStaging: (session: string, staging: Staging) => void
   backendReady: boolean | null
   onCheckBackend: () => void
   onDiagnostics: () => void
@@ -264,6 +270,7 @@ export function Transcript({
   attachments,
   onAttach,
   onRemoveAttachment,
+  onStaging,
   backendReady,
   onCheckBackend,
   onDiagnostics,
@@ -435,6 +442,25 @@ export function Transcript({
   const chooseMode = useEvent(onMode)
   const attach = useEvent(onAttach)
   const removeAttachment = useEvent(onRemoveAttachment)
+  const removeStaged = useEvent((marker: string) => onDraft(withoutMarker(draft, marker)))
+  const dropped = useEvent((drop: Drop) => {
+    if (!live || drop.session !== live.handle) return
+    const field = input.current?.shadowRoot?.querySelector('textarea')
+    const next = stageDrop(live.staging ?? EMPTY_STAGING, drop.outcomes, draft, field?.selectionEnd ?? draft.length)
+    for (const left of next.skipped) showToast(SKIPPED[left.why], left.name, 'note')
+    if (next.draft === draft) return
+    onStaging(live.handle, next.staging)
+    onDraft(next.draft)
+    requestAnimationFrame(() => {
+      input.current?.focus()
+      input.current?.shadowRoot?.querySelector('textarea')?.setSelectionRange(next.caret, next.caret)
+    })
+  })
+  useEffect(() => window.bravebot.onDrop(dropped), [dropped])
+  // Entered and left once per element crossed, so counted rather than toggled.
+  const dragDepth = useRef(0)
+  const [dragging, setDragging] = useState(false)
+  const carriesFiles = (event: React.DragEvent): boolean => event.dataTransfer.types.includes('Files')
   const preview = useEvent((path: string) => setPreviewPath(path))
   const resumeQueued = useEvent(onResumeQueued)
   const removeQueued = useEvent(onRemoveQueued)
@@ -652,7 +678,17 @@ export function Transcript({
   // Nothing said yet and nothing running: the composer is the whole of the page.
   const fresh = live.entries.length === 0 && !live.running
   return (
-    <main className={`transcript${fresh ? ' fresh' : ''}`}>
+    <main className={`transcript${fresh ? ' fresh' : ''}`} data-drop-session={live.handle}
+      onDragEnter={(event) => { if (carriesFiles(event) && ++dragDepth.current === 1) setDragging(true) }}
+      onDragLeave={(event) => { if (carriesFiles(event) && --dragDepth.current === 0) setDragging(false) }}
+      onDrop={() => { dragDepth.current = 0; setDragging(false) }}>
+      {dragging && (
+        <div className="drop-target" data-test="drop-target" aria-hidden="true">
+          <Icon name="attachment" />
+          <span className="drop-target-title">Drop files to attach</span>
+          <span className="drop-target-note"><Icon name="warning-triangle-outline" />Sent with your message as trusted context</span>
+        </div>
+      )}
       {head}
       {findBar}
 
@@ -760,6 +796,8 @@ export function Transcript({
           attachments={attachments}
           onAttach={attach}
           onRemoveAttachment={removeAttachment}
+          staged={named(live.staging, draft)}
+          onRemoveStaged={removeStaged}
           onPreview={preview}
           queued={queued}
           queuePaused={queuePaused}
@@ -783,6 +821,14 @@ export function Transcript({
     </main>
   )
 }
+
+/** What the window says about a dropped file it left out, above the file's name. */
+const SKIPPED: Record<'folder' | 'too-large' | 'unreadable', string> = {
+  folder: 'Folders are not attached',
+  'too-large': 'Too large to attach, over 8 MB',
+  unreadable: 'Could not attach a dropped file',
+}
+
 
 /** The three files a conversation can become. Ordered plainest first. */
 const FORMATS: readonly { id: ExportFormat; label: string; detail: string; icon: IconName }[] = [

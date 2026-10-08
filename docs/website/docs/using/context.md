@@ -160,6 +160,17 @@ A screenshot somebody sent you is content you have not read and are vouching for
 turn as trusted input on the strength of the gesture alone.
 :::
 
+### Dropping a file on the desktop app
+
+Drag files onto a conversation in the desktop app and they attach the same way, with the same
+types, markers and grants. Each file gets a marker in the message box where the cursor is and a
+chip above it, with a thumbnail for a picture. Delete the marker, or remove the chip, to take the
+file off. A file whose type nothing takes has its path written into the box. A folder is left out,
+and the app says so. **Plan** is off while a file is attached.
+
+A message you send while a turn is running waits in the queue and keeps its files: it goes as its
+own turn when the running one ends, and carries them then.
+
 ## Pictures and files on a slash command
 
 A [slash command](../reference/commands.md) that sends words to a model takes a pasted picture or a

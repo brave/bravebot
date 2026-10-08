@@ -25,17 +25,24 @@ and limits. Do not assume every filesystem operation uses the helper.
 
 File contents **do** cross IPC for previews and bot-memory editing. These operations
 do not themselves send the contents to a model. A file reaches the agent as trusted
-context in one of two ways, each ending in an explicit send:
+context in one of three ways, each ending in an explicit send:
 
 - A native picker selection, which leaves a session-bound token.
 - A name written with `@` in the prompt, as the terminal accepts one
   ([NAME-1](../../docs/specs/naming-files.md#NAME-1)). The renderer can name any file
   inside the folder the conversation runs in this way (its project, or a bot's home
   folder), and nothing outside it.
+- A file a person dropped on the window. A drop is taken in the preload, not the page: only a
+  drop event the browser marks trusted is read, the paths go from there to the main process,
+  and the page is told an opaque grant id, the file's name and its kind. A page that dispatches
+  its own drop event, even with File objects an earlier drop handed it, has nothing granted
+  (DROP-11 in `docs/specs/dropping.md`).
 
 The main process strips raw `files`, `dropped`, `attachments` and `images` from renderer turn requests
 and composes `files` itself from the picker's tokens, each checked through the helper as
-a regular text file by the agent's binary test. The `@` names are not the renderer's to
+a regular text file by the agent's binary test. Drop ids (`drops`) become `dropped` for text
+files and `attachments` for pictures and PDFs, each checked again when the message is sent.
+The `@` names are not the renderer's to
 list: at `turn.send` the bridge reads them back out of the prompt with the terminal's
 rule (`bravebot-mentions`) and surveys each with the agent's own read of a named file,
 which refuses `..`, an absolute path and a link leading out of the workspace, a missing

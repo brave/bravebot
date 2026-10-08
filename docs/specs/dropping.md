@@ -8,6 +8,10 @@ governs:
   - crates/agent/src/attached.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/attached.rs
+  - ui/src/main/drops.ts
+  - ui/src/preload/index.ts
+  - ui/src/renderer/staging.ts
+  - ui/src/shared/drops.ts
 documented-by: docs/website/docs/using/context.md
 ---
 
@@ -16,7 +20,8 @@ documented-by: docs/website/docs/using/context.md
 What happens when a person drags a file onto a window, and on what footing it enters the turn.
 What the box does with the marker afterwards is [terminal-input.md](terminal-input.md). The
 terminal is where the gesture is handled and most of this describes it; a front end reaching the
-same grant over the protocol is [DROP-10](#DROP-10).
+same grant over the protocol is [DROP-10](#DROP-10), and the desktop window, which is such a front
+end, is [DROP-11](#DROP-11).
 
 Three gestures put content into a turn on the user's own footing, and each has its own spec:
 [naming-files.md](naming-files.md) for `@` in a prompt, [pasting.md](pasting.md) for Ctrl-V, and
@@ -258,7 +263,40 @@ what the path was for and can say so; the turn cannot.
 `verified-by: bravebot_ui_bridge::dispatch::a_turn_may_name_files_or_none_and_none_is_the_default`
 `verified-by: bravebot_ui_bridge::attaching::a_dropped_picture_and_pdf_reach_the_model_before_a_pasted_picture`
 `verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/sanitise.test.mjs pins its half: a window's turn.send reaches the agent with no dropped, attachments or images list of its own, a path where an attachment id goes sends nothing, and a manifest run forwards a task and a model and nothing else; make check-ui runs it)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/sanitise.test.mjs and ui/scripts/drops.test.mjs pin its half: a window's turn.send reaches the agent with no dropped, attachments or images list of its own, its dropped and attachments are composed only from grants the main process minted, a path where an attachment id or a drop id goes sends nothing, and a manifest run forwards a task and a model and nothing else; make check-ui runs both)`
+
+<a id="DROP-11"></a>
+### DROP-11: the desktop window takes a drop only from a trusted drop event
+
+The window keeps [DROP-1](#DROP-1) by never letting the page name the path. The preload, in its
+isolated world, listens for the drop itself, takes only an event the browser marks trusted, asks
+Electron for each file's path, and sends the paths straight to the main process. A page cannot make
+an event the browser trusts, so the paths came from a person's drag: a page that dispatches its own
+drop event, even one carrying the very files an earlier drop handed it, has nothing taken. The main
+process resolves each path, refuses anything but a regular file, and mints an opaque grant bound
+to the session it was dropped on. The page is told the grant, the file's name and its kind, and
+for a picture a thumbnail the preload drew. It is never told the path.
+
+At send the page names grants, never paths. The main process takes away every list the page sent
+under the bridge's names and then composes `dropped` from the text files and `attachments` from
+the pictures and PDFs, each grant checked again: still there, still a regular file and not a link
+put in its place, and a picture or PDF still within the agent's cap. A grant that fails refuses the
+send with the file's name. A bot's turn keeps its briefing first in `dropped` and the dropped text
+files after it.
+
+The rest follows the terminal where a window can. Each file gets a marker at the caret, numbered
+from one counter per conversation, with a chip beside the box; the draft is what decides, so
+deleting the marker takes the file off and removing the chip deletes the marker
+([DROP-6](#DROP-6)). A type nothing takes has its path written into the box as text and is granted
+nothing ([DROP-4](#DROP-4)). A folder is left out with a note ([DROP-5](#DROP-5)). A run planned
+first takes no drop, so Plan is off while anything is staged.
+
+One part does not follow. A message queued while a turn runs keeps its grants and sends them as
+its own turn when the running one ends, where [DROP-8](#DROP-8) names the file instead. The
+window's queue never joins a running turn: each queued message starts a turn of its own, which is
+the case DROP-8 already says carries its files.
+
+`verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/drops.test.mjs pins the tables against dropped.rs and workspace.rs, the markers, and the main process's grants, and ui/scripts/drive-drop.mjs drives a trusted drag into the real app and bridge against a stub model and asserts a page-dispatched drop stages nothing; make check-ui runs the test)`
 
 ## Known costs
 
@@ -279,6 +317,13 @@ what the path was for and can say so; the turn cannot.
   queued mid-turn all hand over such a path, and confinement refuses the read when something acts
   on it. What the alternative costs is the reason: admitting the contents means a context message,
   and the requests that would need one fixed the shape of their context before the line was sent.
+- **The desktop trusts the browser's word that a drop was a person's.** The trusted bit on a drop
+  event is what separates a drag from the page's own script, and a renderer compromised below the
+  page, in the browser itself, could forge one. That is the same process boundary every other
+  protection in the window rests on.
+- **A desktop grant is checked at send, and read later.** The main process checks the file between
+  the press and the request, and the agent reads it after. A file swapped in that gap is read as
+  whatever it then is, as a picker's file would be.
 - **A line that both pastes and drops sends its pictures in one order and numbers them in
   another.** Every request puts the dropped files first and the pasted pictures after them, while
   one counter numbers the markers in the order the gestures happened, so `[Image #1]` from a paste

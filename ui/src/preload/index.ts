@@ -16,7 +16,7 @@
  * window, kept in the same file as the columns. What crosses is a name and never a colour.
  */
 
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { BridgeEvent, BridgeFailure } from '../shared/protocol'
 import type { StoredLayout } from '../shared/layout'
 import type { StoredView } from '../shared/view'
@@ -27,6 +27,7 @@ import type { Bot } from '../shared/bots'
 import type { Listing, OpenOutcome, FilePreview, FileSearch, FileAttachment } from '../shared/files'
 import type { Appearance } from '../shared/theme'
 import type { Experience } from '../shared/experience'
+import type { Drop, DropOutcome } from '../shared/drops'
 
 /** The appearance in force: System, Light, or Dark. */
 export interface ThemeState {
@@ -36,6 +37,79 @@ export interface ThemeState {
 export interface Answer<T> {
   ok?: T
   error?: BridgeFailure
+}
+
+/**
+ * Files dropped on the window.
+ *
+ * Handled here, in the preload's isolated world, rather than by the page, because a dropped file is
+ * the one path the agent may read from anywhere on the disk (DROP-1, DROP-3). The page can neither
+ * call `webUtils` nor make an event the browser marks trusted, so the paths sent on below came from a
+ * person's drag and from nothing the page or a model could say. The page is told an id and a name
+ * per file, never the path.
+ *
+ * Every file drag is cancelled here so that a file dropped anywhere never navigates the window.
+ * Only a drop inside an element carrying `data-drop-session` is taken, and the session it names is
+ * the one the files are granted to: the page can choose which of its sessions a drop goes to, which
+ * is a choice it already makes when it sends, and it cannot choose what was dropped.
+ */
+const dropListeners = new Set<(drop: Drop) => void>()
+const carriesFiles = (event: DragEvent): boolean => event.dataTransfer?.types.includes('Files') === true
+const zoneOf = (event: DragEvent): HTMLElement | null =>
+  event.target instanceof Element ? event.target.closest<HTMLElement>('[data-drop-session]') : null
+
+window.addEventListener('dragover', (event) => {
+  if (!carriesFiles(event)) return
+  event.preventDefault()
+  event.dataTransfer!.dropEffect = event.isTrusted && zoneOf(event) ? 'copy' : 'none'
+}, true)
+
+window.addEventListener('drop', (event) => {
+  if (!carriesFiles(event)) return
+  event.preventDefault()
+  if (!event.isTrusted) return
+  const session = zoneOf(event)?.dataset.dropSession
+  if (!session) return
+  const files = [...event.dataTransfer!.files]
+  const paths = files.map((file) => webUtils.getPathForFile(file))
+  void (async () => {
+    const outcomes = await ipcRenderer.invoke('bravebot:drops:stage', session, paths) as DropOutcome[]
+    await Promise.all(outcomes.map(async (outcome, index) => {
+      if (outcome.kind === 'staged' && outcome.file.kind === 'image') {
+        const thumbnail = await thumbnailOf(files[index]!)
+        if (thumbnail) outcome.file.thumbnail = thumbnail
+      }
+    }))
+    for (const listener of dropListeners) listener({ session, outcomes })
+  })()
+}, true)
+
+/** Thumbnail height in CSS pixels, drawn at twice that for a Retina screen. */
+const THUMBNAIL = 20
+
+/**
+ * A small picture of a dropped image, as a `data:` URL, or `undefined` if it will not decode.
+ *
+ * Decoded here, in the sandboxed renderer, rather than in the main process: a picture from anywhere
+ * on the disk is somebody else's bytes, and the place to parse those is the process with the least
+ * it can reach.
+ */
+async function thumbnailOf(file: File): Promise<string | undefined> {
+  try {
+    const bitmap = await createImageBitmap(file, { resizeHeight: THUMBNAIL * 2, resizeQuality: 'medium' })
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0)
+    bitmap.close()
+    const blob = await canvas.convertToBlob({ type: 'image/png' })
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(blob)
+    })
+  } catch {
+    return undefined
+  }
 }
 
 const api = {
@@ -215,6 +289,7 @@ const api = {
     grounded: boolean
     model?: string | null
     attachments?: string[]
+    drops?: string[]
   }): Promise<Answer<{ turn: number }>> {
     return ipcRenderer.invoke('bravebot:bots:send', request) as Promise<Answer<{ turn: number }>>
   },
@@ -357,6 +432,17 @@ const api = {
       ipcRenderer.off('bravebot:bots:consolidating', started)
       ipcRenderer.off('bravebot:bots:consolidated', ended)
     }
+  },
+
+  /**
+   * Listen for files dropped on a session's conversation. Returns an unsubscribe.
+   *
+   * Each outcome is a grant id and a name, a path to write as text for a type nothing takes, or a
+   * file that was left out. A turn names the grants it carries as `drops`.
+   */
+  onDrop(listener: (drop: Drop) => void): () => void {
+    dropListeners.add(listener)
+    return () => dropListeners.delete(listener)
   },
 
   /** Listen for the window gaining and losing focus. Returns an unsubscribe. */

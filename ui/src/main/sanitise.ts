@@ -1,3 +1,4 @@
+import { withDrops } from './drops'
 import { attachmentPaths } from './files'
 
 /**
@@ -26,6 +27,11 @@ import { attachmentPaths } from './files'
  * person chose in a native picker, which this process resolves to `files`. It is never forwarded
  * under its own name, so an id list cannot become a list of paths the agent reads as bytes.
  *
+ * `drops` is the window's list of files a person dropped, again as ids: grants `drops.ts` minted
+ * from paths the preload took off a trusted drop event, which the page never saw. This process
+ * turns them into the agent's `dropped` and `attachments` after everything the window said under
+ * those names is gone, so the only paths in either are ones a drop put there.
+ *
  * Stripped silently. There is no legitimate caller to warn, and a message saying which key was
  * removed would be a message telling a compromised renderer what to try next.
  */
@@ -50,7 +56,9 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
     recall: _recall,
     definition: _definition,
     attachments,
+    drops,
     ...rest
   } = held
-  return { ...rest, files: attachmentPaths(typeof rest.session === 'string' ? rest.session : '', attachments) }
+  const session = typeof rest.session === 'string' ? rest.session : ''
+  return withDrops(session, drops, { ...rest, files: attachmentPaths(session, attachments) })
 }

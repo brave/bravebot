@@ -62,10 +62,10 @@ The **Agent** menu beside the model picker chooses how the next message is handl
 the default: an ordinary turn. **Plan** makes the next Send start a manifest run from the draft.
 The agent plans the whole task before reading anything, shows you the plan, and runs it only if
 you approve. The menu goes back to Agent once the run starts, so the next message is an ordinary
-turn; a conversation never holds the mode. A run cannot take attached files, and a bot cannot
-start one, so Plan is greyed with the reason in either case. A file named with `@` in the task
-stays a word of the task and is not read into it, as with `/manifest` in the terminal: a plan is
-fixed before anything is read, so the run reads that file, if it does, as one of its steps. The
+turn; a conversation never holds the mode. A run cannot take attached or dropped files, and a bot
+cannot start one, so Plan is greyed with the reason in either case. A file named with `@` in the
+task stays a word of the task and is not read into it, as with `/manifest` in the terminal: a plan
+is fixed before anything is read, so the run reads that file, if it does, as one of its steps. The
 run is saved as its own record and is not part of the conversation, so a later turn is not sent
 what the run said.
 
@@ -478,11 +478,12 @@ Two more things are honestly imperfect and worth knowing:
 #### What the window cannot do
 
 The bridge protocol accepts `files` and `dropped` paths, both admitted as trusted
-context. The main process strips those raw lists from renderer requests. A person's
-files reach `files` two ways: native-picker grants bound to the session, which the
-main process revalidates as text files at send, and names written with `@` in the
-prompt, which the bridge reads back out of the prompt at `turn.send` and surveys with
-the agent's own confined read before the turn starts.
+context, and `attachments`, pictures and PDFs carried as bytes. The main process strips those
+raw lists from renderer requests. A person's files reach a turn three ways: native-picker grants
+bound to the session, which the main process revalidates as text files at send; drop grants bound
+to the session, which the main process checks again at send and turns into `dropped` and
+`attachments`; and names written with `@` in the prompt, which the bridge reads back out of the
+prompt at `turn.send` and surveys with the agent's own confined read before the turn starts.
 Bot briefings are composed by the main process from a bot definition, and are the only
 `dropped` path a bot contributes.
 
@@ -645,6 +646,8 @@ src/main/                   Electron main: one window, one child process, a narr
   bots.ts                   the bots, and the two files each one speaks through
   state.ts                  bravebot-ui.json: one key replaced at a time, rest untouched
   files.ts                  listing, search, preview, opening and attachment grants
+  drops.ts                  grants for files a person dropped, and checking them at send
+  sanitise.ts               what a window's request may carry to the agent
   project-files.ts          client for the secure-file helper
   experience.ts             drafts, scroll position, pins and archives
   memory.ts                 bot-memory editing and revision history
@@ -653,7 +656,7 @@ src/main/                   Electron main: one window, one child process, a narr
   export.ts                 text, Markdown and the second renderer that draws the PDF
   theme.ts                  applying System / Light / Dark to nativeTheme
 src/preload/                the only thing the renderer can reach
-  index.ts                  a handful of functions and one subscription
+  index.ts                  a handful of functions and subscriptions, and the drop handler
   export.ts                 the same, for the PDF renderer
 src/renderer/               the React app
   App.tsx                   the three columns
@@ -663,6 +666,7 @@ src/renderer/               the React app
   styles.css styles/        the stylesheet modules and the token layer; see development.md
   highlight.ts              the syntax-colour grammars, shared by replies and diffs
   toasts.ts                 the store behind the confirmation toasts
+  staging.ts                the markers a drop writes into the draft, and what a send carries
   theme.ts                  putting System / Light / Dark on <html> data-theme
   export.tsx                the PDF entry point, using the components the window uses
   components/               SettingsView, Sidebar, Transcript, BotView, FileTree,
