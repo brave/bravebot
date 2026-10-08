@@ -12,6 +12,8 @@ governs:
   - crates/sandbox/src/windows/appcontainer.rs
   - crates/sandbox/src/process.rs
   - crates/sandbox/src/toolchain.rs
+  - crates/sandbox/src/hosts.rs
+  - crates/sandbox/src/proxy.rs
   - crates/sandbox/src/scope.rs
   - crates/sandbox/src/mode.rs
   - crates/config/src/sandbox.rs
@@ -1176,6 +1178,68 @@ the planner chose in front of a person to approve, and none is decided here.
 `verified-by: bravebot_agent::turn::a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only`
 `verified-by: bravebot_agent::incognito::no_remembered_reach_is_written_down`
 `verified-by: bravebot_agent::incognito::a_reach_an_earlier_session_remembered_is_still_honoured`
+
+<a id="SANDBOX-24"></a>
+### SANDBOX-24: a list of hosts is applied by a proxy the session runs
+
+A stage that has egress may be held to a list of host names. A backend filters by address and port
+and never by name ([SANDBOX-3](#SANDBOX-3)), so the list is applied by a proxy on a loopback port:
+the profile allows that one port, and the proxy decides on the name.
+
+A list is an allowed set and a denied set. An entry is a host name or `*.` and a domain, which
+covers every name below the domain and not the domain itself. Names are compared in lower case
+without a trailing dot. An entry that is anything else, `*` alone and `a.*.com` included, is not a
+rule and is returned to the caller to report. A denied entry wins over an allowed one in either
+order, and a name no allowed entry covers is refused, so an empty list refuses every host. No list
+means no proxy and no filtering. The defaults a caller adds to a list are code: `github.com`,
+`api.github.com` and `*.githubusercontent.com` for a stage carrying the remote scope, and for a
+toolchain its registry hosts (`crates.io`, `static.crates.io` and `index.crates.io` for cargo,
+`registry.npmjs.org` for node, `pypi.org` and `files.pythonhosted.org` for python,
+`proxy.golang.org` for go).
+
+The proxy decides from the destination in the `CONNECT` request line and from nothing else: not a
+header, not a reply, not a byte the tunnel carries. TLS is not terminated, so an allowed tunnel is
+two byte streams copied into each other unread, and a request that is not a `CONNECT` is refused.
+A tunnel is opened only to port 443 or 80. A refused request is answered with the same bytes for
+every host and every reason, which name neither the host the program asked for nor the rule, so the
+program learns nothing from it and nothing a program chose reaches the planner. Every decision is
+recorded with the host and the rule that decided it, for the trace, and never the traffic. The
+proxy decides on the name the client sent, so a host on an allowed content network can still reach
+other tenants of it. That is a known cost and not something the list can close.
+
+The variables `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`, in both cases, name the proxy, and a
+caller sets them after the person's environment so an assignment a model wrote cannot point a
+stage elsewhere. The proxy lives as long as the value that started it, and is not listening once
+that is dropped.
+
+**Why.** With the network open, a stage that can read a credential can send it anywhere, and
+closing the network wholesale ([SANDBOX-20](#SANDBOX-20)) takes the registries from a build.
+Letting a person name the hosts a program may reach keeps the build and removes the exfiltration
+path to the rest. Deciding from the request line alone keeps the proxy from being a second reader
+of content, and a fixed refusal keeps a name the program chose out of a sentence the planner reads.
+
+Half built. The list, its defaults and the proxy are written and tested, and nothing starts a
+proxy for a session. Unbuilt: the `sandbox.network.allowedHosts`, `deniedHosts` and `onUnlisted`
+settings and the layers each may be read from, policy rows that allow only the proxy's port, the
+environment injection in `confine.rs`, the prompt for an unlisted host, the trace record and the
+`/status` line, and refusing the stage with the SANDBOX-19 sentence naming the setting.
+
+`verified-by: bravebot_sandbox::hosts::an_exact_entry_covers_that_name_and_no_other`
+`verified-by: bravebot_sandbox::hosts::a_wildcard_covers_names_below_the_domain_and_not_the_domain`
+`verified-by: bravebot_sandbox::hosts::a_denied_entry_wins_over_an_allowed_one_in_either_order`
+`verified-by: bravebot_sandbox::hosts::an_empty_list_refuses_every_host`
+`verified-by: bravebot_sandbox::hosts::an_entry_that_is_not_a_name_or_a_leading_wildcard_is_returned_and_not_read`
+`verified-by: bravebot_sandbox::hosts::the_defaults_are_the_hosts_the_remote_scope_and_each_registry_need`
+`verified-by: bravebot_sandbox::proxy::a_listed_host_is_tunnelled_and_an_unlisted_one_is_refused`
+`verified-by: bravebot_sandbox::proxy::a_denied_host_is_refused_although_an_allowed_entry_covers_it`
+`verified-by: bravebot_sandbox::proxy::a_listed_host_is_refused_on_a_port_the_proxy_does_not_carry`
+`verified-by: bravebot_sandbox::proxy::a_default_config_carries_tunnels_to_ports_443_and_80_only`
+`verified-by: bravebot_sandbox::proxy::a_refusal_is_the_same_bytes_whatever_host_was_asked_for`
+`verified-by: bravebot_sandbox::proxy::the_host_is_read_from_the_request_line_and_not_from_a_header`
+`verified-by: bravebot_sandbox::proxy::a_request_that_is_not_a_connect_is_refused_without_a_decision`
+`verified-by: bravebot_sandbox::proxy::every_decision_is_recorded_with_the_host_and_the_rule_that_decided_it`
+`verified-by: bravebot_sandbox::proxy::the_environment_points_every_proxy_variable_at_the_loopback_port`
+`verified-by: bravebot_sandbox::proxy::dropping_the_proxy_stops_it_listening`
 
 ## Programs a person asked for
 
