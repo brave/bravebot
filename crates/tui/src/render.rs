@@ -9866,13 +9866,78 @@ mod tests {
         assert!(!back.contains("below") && !back.contains("held"), "{back}");
     }
 
+    /// The cue is the first of the things the hint line keeps for its own sake to go, so a terminal
+    /// with no room for it loses the cue and keeps the mode, in the ordinary line and the shell
+    /// line. Left out of either order, the line would be cleared whole and the mode with it.
+    #[test]
+    fn a_held_view_on_a_narrow_terminal_drops_the_cue_and_keeps_the_mode() {
+        let mut session = Session::new("none").starting_in_bypass();
+        while session.permission_mode() != bravebot_agent::PermissionMode::AcceptEdits {
+            session.cycle_permission_mode();
+        }
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+        let hint_at = |session: &mut Session, width: u16| {
+            // The first frame lays the transcript out at this width and the second draws against it.
+            rows_of_a_frame_at(session, width, 24);
+            rows_of_a_frame_at(session, width, 24)
+                .pop()
+                .expect("a last row")
+        };
+        let mode =
+            crate::status::named_mode(session.permission_mode(), true).expect("a named mode");
+
+        session.scroll_up(60);
+        let roomy = hint_at(&mut session, 90);
+        assert!(
+            roomy.contains("rows below") && roomy.contains(mode),
+            "the cue was not drawn where it fits, so its absence below proves nothing: {roomy}"
+        );
+
+        let narrow = hint_at(&mut session, 40);
+        assert!(session.rows_below() > 0, "the view left the held position");
+        assert!(
+            narrow.contains(mode),
+            "the mode went with the cue: {narrow:?}"
+        );
+        assert!(
+            !narrow.contains("held") && !narrow.contains("below"),
+            "a cue with no room was drawn: {narrow:?}"
+        );
+
+        session.shell = true;
+        let roomy = hint_at(&mut session, 120);
+        assert!(
+            roomy.contains("rows below"),
+            "the shell line did not draw the cue where it fits: {roomy}"
+        );
+        let narrow = hint_at(&mut session, 40);
+        assert!(session.rows_below() > 0, "the view left the held position");
+        assert!(
+            narrow.trim_start().starts_with("! "),
+            "the shell went with the cue: {narrow:?}"
+        );
+        assert!(
+            !narrow.contains("held") && !narrow.contains("below"),
+            "a cue with no room was drawn in shell mode: {narrow:?}"
+        );
+    }
+
     /// Draw one frame the way the loop draws it, tell the session what the frame laid out, and give
     /// back the rows of the screen.
     ///
     /// [`rendered`] cannot answer a question about a held view: it never reports the layout, so the
     /// offset stays measured against a screen the session has not seen.
     fn rows_of_a_frame(session: &mut Session) -> Vec<String> {
-        let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+        rows_of_a_frame_at(session, 90, 24)
+    }
+
+    /// [`rows_of_a_frame`] at a chosen size.
+    fn rows_of_a_frame_at(session: &mut Session, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         let mut laid = crate::state::Laid::default();
         terminal
             .draw(|frame| laid = draw(frame, session))

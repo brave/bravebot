@@ -710,3 +710,4 @@ The count is read from the layout's row geometry and the sentence is the session
 holds no bytes of what the rows contain and the rule is kept ([SCROLL-5](scroller.md#SCROLL-5)).
 
 `verified-by: bravebot_tui::render::a_held_view_says_how_many_rows_arrived_below_and_the_key_back`
+`verified-by: bravebot_tui::render::a_held_view_on_a_narrow_terminal_drops_the_cue_and_keeps_the_mode`
