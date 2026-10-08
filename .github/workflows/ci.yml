@@ -169,13 +169,34 @@ jobs:
       # ring compiles C for whichever target it is built for, so the C half needs a cross compiler
       # even though the Rust half needs none. Nothing is linked: clippy stops before that, which is
       # what makes a Windows host unnecessary.
+      - name: Find the week of the apt cache
+        id: apt-week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      # The downloaded packages are kept for a week, so a run that finds them skips the download
+      # from the runner image's mirror, which is the step that has stalled.
+      - name: Cache the cross compiler packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bravebot-apt/*.deb
+          key: apt-mingw-${{ runner.os }}-${{ steps.apt-week.outputs.week }}
+
       - name: Install the cross compiler ring builds with
         # Each attempt is killed after 3 minutes, since a stalled apt mirror connection otherwise
         # holds the job until the 6 hour default. One attempt and up to three retries fit in the step limit.
+        # The first two attempts use the runner image's mirror list. The last two use
+        # archive.ubuntu.com, so one slow mirror cannot fail every attempt.
+        # Only the win32 compiler is installed: ring compiles C and links nothing, and the
+        # gcc-mingw-w64-x86-64 package adds the posix compiler and its runtime on top of it.
         timeout-minutes: 15
         run: |
+          archives="$HOME/.cache/bravebot-apt"
+          mkdir -p "$archives"
           for attempt in 1 2 3 4; do
-            if sudo timeout 180 sh -c 'apt-get update && apt-get install -y gcc-mingw-w64-x86-64'; then
+            if [ "$attempt" -ge 3 ]; then
+              sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|' /etc/apt/sources.list.d/*.sources
+            fi
+            if sudo timeout 180 sh -c "apt-get update && apt-get install -y --no-install-recommends -o Dir::Cache::archives=$archives gcc-mingw-w64-x86-64-win32"; then
               exit 0
             fi
             echo "apt attempt $attempt failed or timed out" >&2
