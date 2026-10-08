@@ -30,7 +30,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// What a refused tunnel is answered with. It is the same for every host and every reason, so a
 /// program learns nothing from it and the planner is handed nothing a program chose.
 const REFUSAL: &[u8] = b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\
-Content-Length: 41\r\nConnection: close\r\n\r\n\
+Content-Length: 43\r\nConnection: close\r\n\r\n\
 refused by the session's allowed-hosts list";
 const NOT_A_TUNNEL: &[u8] = b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\
 Connection: close\r\n\r\n";
@@ -323,21 +323,49 @@ mod tests {
 
     #[test]
     fn a_refusal_is_the_same_bytes_whatever_host_was_asked_for() {
-        let proxy = proxy_for(&[], &["denied.example"], vec![443]);
+        let proxy = proxy_for(&["listed.example"], &["denied.example"], vec![443]);
         let mut bodies = Vec::new();
-        for target in ["a.example:443", "denied.example:443", "b.example:8080"] {
+        for target in ["a.example:443", "denied.example:443", "listed.example:8080"] {
             let mut stream = TcpStream::connect(proxy.addr()).unwrap();
             write!(stream, "CONNECT {target} HTTP/1.1\r\n\r\n").unwrap();
             let mut body = Vec::new();
             stream.read_to_end(&mut body).unwrap();
             bodies.push(body);
         }
+        let reasons: Vec<_> = proxy.decisions().into_iter().map(|d| d.verdict).collect();
+        assert!(matches!(
+            reasons.as_slice(),
+            [
+                Verdict::Refused(Refusal::NotListed),
+                Verdict::Refused(Refusal::Denied(_)),
+                Verdict::Refused(Refusal::Port)
+            ]
+        ));
         assert!(bodies.windows(2).all(|pair| pair[0] == pair[1]));
         let text = String::from_utf8(bodies.remove(0)).unwrap();
         assert!(text.starts_with("HTTP/1.1 403"));
         for target in ["example", "denied", "8080"] {
             assert!(!text.contains(target), "{text}");
         }
+    }
+
+    #[test]
+    fn a_refusal_declares_the_length_of_the_body_it_carries() {
+        let text = std::str::from_utf8(REFUSAL).unwrap();
+        let (head, body) = text.split_once("\r\n\r\n").unwrap();
+        let declared: usize = head
+            .lines()
+            .find_map(|line| line.strip_prefix("Content-Length: "))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(declared, body.len());
+    }
+
+    #[test]
+    fn a_default_config_carries_tunnels_to_ports_443_and_80_only() {
+        let config = ProxyConfig::new(HostList::default());
+        assert_eq!(config.ports, vec![443, 80]);
     }
 
     #[test]

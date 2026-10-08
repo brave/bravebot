@@ -1233,6 +1233,7 @@ environment injection in `confine.rs`, the prompt for an unlisted host, the trac
 `verified-by: bravebot_sandbox::proxy::a_listed_host_is_tunnelled_and_an_unlisted_one_is_refused`
 `verified-by: bravebot_sandbox::proxy::a_denied_host_is_refused_although_an_allowed_entry_covers_it`
 `verified-by: bravebot_sandbox::proxy::a_listed_host_is_refused_on_a_port_the_proxy_does_not_carry`
+`verified-by: bravebot_sandbox::proxy::a_default_config_carries_tunnels_to_ports_443_and_80_only`
 `verified-by: bravebot_sandbox::proxy::a_refusal_is_the_same_bytes_whatever_host_was_asked_for`
 `verified-by: bravebot_sandbox::proxy::the_host_is_read_from_the_request_line_and_not_from_a_header`
 `verified-by: bravebot_sandbox::proxy::a_request_that_is_not_a_connect_is_refused_without_a_decision`
