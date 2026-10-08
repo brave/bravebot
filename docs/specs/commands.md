@@ -409,10 +409,11 @@ carried out or queued as above.
 ### CMD-9: the skills a turn would advertise, and taking one writes a prompt
 
 A slash word at the start of the line is offered the commands it could still become and, beneath
-them, the skills whose names start with it. A slash word after other words is offered the skills
-alone, since there a command is a prompt (CMD-2). The skills are the ones a turn starting now would
-advertise to the planner, read the same way, and each row says when to use the skill and where it
-was found: the project, the person's own directory, or this program. They are read when a line
+them, the skills whose names start with it, including a word that is a command in full, since a
+longer skill name may extend it (`/pr` lists `pr-fix`). A slash word after other words is offered
+the skills alone, since there a command is a prompt (CMD-2). The skills are the ones a turn starting
+now would advertise to the planner, read the same way, and each row says when to use the skill and
+where it was found: the project, the person's own directory, or this program. They are read when a line
 first holds a slash word and let go when it holds none (CMD-10 also needs the names of a finished
 word), so a skill written while the box sat idle is offered at the next line with a slash.
 
@@ -441,6 +442,7 @@ would read them on every letter.
 `verified-by: bravebot_tui::app::a_skill_is_completed_mid_sentence_and_sent_as_a_prompt`
 `verified-by: bravebot_tui::app::enter_completes_a_half_typed_skill_and_sends_a_whole_one`
 `verified-by: bravebot_tui::app::the_arrows_walk_from_the_commands_onto_the_skills`
+`verified-by: bravebot_tui::app::a_command_word_typed_in_full_still_offers_the_skills_extending_it`
 `verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
 `verified-by: bravebot_tui::app::no_skill_is_offered_in_a_command_line_or_inside_a_command`
 `verified-by: bravebot_tui::app::a_slash_offers_every_command_and_no_skill_while_a_turn_runs`

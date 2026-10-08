@@ -43,15 +43,17 @@ pub fn resolved(workspace: &Workspace, trust: TrustStore, permissions: Permissio
 
 /// The half-typed skill name at the end of the line, without its slash, or `None`.
 ///
-/// The last word, so a skill can be named mid-sentence the way a file can. Never on a command
-/// line: what follows a command is its argument, taken verbatim, and completing inside one would
-/// change what the command is given.
+/// The last word, so a skill can be named mid-sentence the way a file can. Never after the word
+/// of a command line: what follows a command is its argument, taken verbatim, and completing
+/// inside one would change what the command is given. The command word alone is still being
+/// typed, since a longer skill name may start with it.
 pub fn typed(line: &str) -> Option<&str> {
     if line.ends_with(char::is_whitespace) {
         return None;
     }
-    let name = line.split_whitespace().next_back()?.strip_prefix('/')?;
-    if crate::app::command_typed(line).is_some() {
+    let mut words = line.split_whitespace();
+    let name = words.clone().next_back()?.strip_prefix('/')?;
+    if words.nth(1).is_some() && crate::app::command_typed(line).is_some() {
         return None;
     }
     Some(name)
@@ -132,7 +134,8 @@ mod tests {
     fn nothing_is_offered_inside_a_command_line() {
         assert_eq!(typed("/add-dir /rel"), None);
         assert_eq!(typed("/btw what does /rel"), None);
-        assert_eq!(typed("/model"), None, "the bare command");
+        assert_eq!(typed("/model"), Some("model"), "the bare command");
+        assert_eq!(typed("/pr /rel"), None, "an argument");
         assert_eq!(typed("/renamed /rel"), Some("rel"));
     }
 
