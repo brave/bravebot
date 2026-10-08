@@ -78,11 +78,25 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Test
-        run: cargo test --all --locked
+      # nextest runs the test binaries side by side, where `cargo test` runs them one after another
+      # and waits on each one's slowest test. Each test is a process of its own, so the locks a test
+      # file holds around the environment or a fork have nothing left to share.
+      - name: Install nextest
+        # Pinned to a full commit SHA, like every other step here.
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        with:
+          tool: cargo-nextest@0.9.146
 
-      # The same test again with its output, to put the number of workflows skipped for want of a
-      # tool in the log.
+      # Everything but the usability suite, which the step after next runs once with its output.
+      - name: Test
+        run: cargo nextest run --workspace --locked --no-fail-fast -E 'not binary(usability)'
+
+      # nextest does not run doctests.
+      - name: Doctests
+        run: cargo test --workspace --doc --locked
+
+      # Run once, with its output, to put the number of workflows skipped for want of a tool in the
+      # log. Running it inside the Test step as well used to double its tens of seconds.
       - name: Report the everyday workflows under the sandbox default
         run: cargo test -p bravebot-agent --test usability --locked -- --nocapture
 
@@ -124,11 +138,18 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Test
-        run: cargo test --all --locked
+      # As in the `check` job.
+      - name: Install nextest
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        with:
+          tool: cargo-nextest@0.9.146
 
-      # The same test again with its output, to put the number of workflows skipped for want of a
-      # tool in the log.
+      - name: Test
+        run: cargo nextest run --workspace --locked --no-fail-fast -E 'not binary(usability)'
+
+      - name: Doctests
+        run: cargo test --workspace --doc --locked
+
       - name: Report the everyday workflows under the sandbox default
         run: cargo test -p bravebot-agent --test usability --locked -- --nocapture
 
@@ -363,11 +384,14 @@ jobs:
   # manifest, the lockfile, a build script or the Dockerfile. Nothing in the tree is gated on an
   # architecture, and the jobs above lint every platform these build, so for anything else a
   # cross-build proves again what they did. Main and every tag build all six.
+  #
+  # Not after `check`: the installers and the install on each Windows architecture wait on this,
+  # so waiting here put the length of the test suite in front of the longest chain in the run.
   cross-build:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
-    needs: [changes, check]
-    if: ${{ !cancelled() && contains(fromJSON('["success", "skipped"]'), needs.check.result) && needs.changes.outputs.build != 'false' }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.build != 'false' }}
     strategy:
       fail-fast: false
       matrix:
