@@ -524,8 +524,12 @@ impl RunRequest {
         self.may_record() && RememberedLine::family_of(&self.plan).is_some()
     }
 
-    /// The line as the family answer would record it, drawn with its number free.
+    /// The line as the family answer would record it, drawn with its number free, where the
+    /// prompt offers that answer.
     pub fn family_display(&self) -> Option<String> {
+        if !self.offers_a_family() {
+            return None;
+        }
         RememberedLine::family_of(&self.plan).map(|line| line.display())
     }
 
@@ -2212,6 +2216,7 @@ mod tests {
             Some("/usr/bin/gh pr view <number> --repo brave/bravebot")
         );
         assert!(!request(a_listed_line(), None).offers_a_family());
+        assert_eq!(request(a_listed_line(), None).family_display(), None);
         let unlisted = gh_plan(&["pr", "merge", "1", "--repo", "brave/bravebot"]);
         assert!(
             !request(unlisted, Some("/home/.bravebot/remembered/work.jsonl")).offers_a_family()

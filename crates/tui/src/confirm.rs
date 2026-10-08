@@ -5030,9 +5030,15 @@ mod tests {
         ] {
             assert!(drawn.contains(wanted), "{wanted:?} was not drawn: {drawn}");
         }
-        let plain = fully_rendered_run(&a_recordable_run());
-        assert!(!plain.contains("<number>"), "{plain}");
-        assert!(!plain.contains("any number"), "{plain}");
+        let cannot_record = RunRequest {
+            record: None,
+            ..a_family_run()
+        };
+        for request in [a_recordable_run(), cannot_record] {
+            let plain = fully_rendered_run(&request);
+            assert!(!plain.contains("<number>"), "{plain}");
+            assert!(!plain.contains("any number"), "{plain}");
+        }
     }
 
     /// RUN-19: declining and Ctrl-C record nothing, which is what every standing grant here
