@@ -759,7 +759,7 @@ mod tests {
             "/usr/bin/make",
             Reached::Scope(Scope::named("aws").expect("a scope")),
             Lifetime::Always,
-            &std::env::temp_dir(),
+            &fresh("covers"),
         );
         assert!(bare.covers(&step("make", "/usr/bin/make", &[])));
         assert!(!bare.covers(&step("make", "/usr/bin/make", &["-j4"])));
