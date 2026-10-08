@@ -1296,7 +1296,9 @@ function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onMana
  * it was written to stop.
  */
 export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Element {
-  const count = rules.unreadable.length + rules.proposed.length + rules.directories.length
+  const refused = t.refusedPaths(rules)
+  const ignored = rules.filesystemIgnored ?? []
+  const count = rules.unreadable.length + rules.proposed.length + rules.directories.length + refused.length + ignored.length
   return (
     <details className="rules-banner" role="note">
       <summary className="session-notice">
@@ -1341,6 +1343,33 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
             {rules.directories.map((directory, index) => (
               <li key={index}>
                 <code>{directory}</code>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {refused.length > 0 && (
+        <>
+          <p>
+            These paths for the programs the agent runs are not in force. A program that
+            would have been held back by a refused one is not started:
+          </p>
+          <ul>
+            {refused.map((entry, index) => (
+              <li key={index}>
+                <code>{entry.key}</code> <code>{entry.path}</code>: {entry.refused}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {ignored.length > 0 && (
+        <>
+          <p>A project’s settings file can refuse a path to a program and never add one, so these are not obeyed:</p>
+          <ul>
+            {ignored.map((entry, index) => (
+              <li key={index}>
+                <code>{entry.key}</code> in <code>{entry.file}</code>
               </li>
             ))}
           </ul>

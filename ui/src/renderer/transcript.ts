@@ -284,7 +284,10 @@ export const narrowing = (rules: SettingsRules | null | undefined): string[] => 
 
 /** Whether a settings file wrote something that is not in force, which the person is told. */
 export const notInForce = (rules: SettingsRules | null | undefined): boolean =>
-  !!rules && (rules.unreadable.length > 0 || rules.proposed.length > 0 || rules.directories.length > 0)
+  !!rules && (rules.unreadable.length > 0 || rules.proposed.length > 0 || rules.directories.length > 0 || refusedPaths(rules).length > 0 || (rules.filesystemIgnored?.length ?? 0) > 0)
+
+/** The entries of the four filesystem lists that are not in force, each with the agent's sentence about why. */
+export const refusedPaths = (rules: SettingsRules) => (rules.filesystem ?? []).filter((entry) => entry.refused !== null)
 export const askedExposure = (request: ExposureRequest): Entry => ({ kind: 'exposure', id: nextId(), request, decision: null })
 export const askedMcpServer = (request: McpServerRequest): Entry => ({ kind: 'mcp-server', id: nextId(), request, decision: null, remember: false })
 export const askedMcpTools = (request: McpToolsRequest): Entry => ({ kind: 'mcp-tools', id: nextId(), request, decision: null })

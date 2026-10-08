@@ -126,7 +126,17 @@ export interface SettingsRules {
   proposed: { rule: string; file: string }[]
   /** A directory a settings file asked to have opened. This app opens none of them. */
   directories: string[]
+  /**
+   * Every entry of the four `sandbox.filesystem` lists a confined program is held to, with the
+   * file that wrote it (null for the command line) and, where it is not in force, the agent's
+   * sentence about why. Absent from an older bridge.
+   */
+  filesystem?: { key: FilesystemKey; path: string; file: string | null; pinned: boolean; refused: string | null }[]
+  /** `allowRead` and `allowWrite` a project's file wrote, which are not in force. Absent from an older bridge. */
+  filesystemIgnored?: { key: FilesystemKey; file: string }[]
 }
+
+export type FilesystemKey = 'allowRead' | 'denyRead' | 'allowWrite' | 'denyWrite'
 
 export interface SessionSummary {
   id: string
