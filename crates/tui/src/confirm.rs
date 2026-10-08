@@ -636,6 +636,13 @@ pub enum RunAnswer {
     /// an answer lasts, where the other decides what a label is. The row says so in as many words,
     /// because one word saying `always` is what could be read as either.
     ApproveAndRecord,
+    /// Run it, and record this line with its number left free ([RUN-20]).
+    ///
+    /// Its own key rather than a wider reading of `r`, because it covers lines nobody has been
+    /// asked about, and the row for it says exactly which parts may change.
+    ///
+    /// [RUN-20]: ../../../docs/specs/tools/run.md
+    ApproveAndRecordFamily,
     Reject,
     /// Refuse the run and stop the turn that asked for it.
     Interrupt,
@@ -649,6 +656,7 @@ impl RunAnswer {
             RunAnswer::Approve => RunDecision::approve(),
             RunAnswer::ApproveAlways => RunDecision::approve_always(),
             RunAnswer::ApproveAndRecord => RunDecision::approve_and_record(),
+            RunAnswer::ApproveAndRecordFamily => RunDecision::approve_and_record_family(),
             RunAnswer::Reject | RunAnswer::Interrupt => RunDecision::reject(),
         }
     }
@@ -661,6 +669,7 @@ impl RunAnswer {
             RunAnswer::Approve
             | RunAnswer::ApproveAlways
             | RunAnswer::ApproveAndRecord
+            | RunAnswer::ApproveAndRecordFamily
             | RunAnswer::Reject => false,
             RunAnswer::Interrupt => true,
         }
@@ -705,6 +714,11 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
         KeyCode::Char('r' | 'R') if request.may_record() => {
             Some(RunResponse::Answer(RunAnswer::ApproveAndRecord))
         }
+        // Unbound where the prompt did not draw it, for the same reason, and where the table in
+        // the core does not list the line.
+        KeyCode::Char('f' | 'F') if request.offers_a_family() => {
+            Some(RunResponse::Answer(RunAnswer::ApproveAndRecordFamily))
+        }
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(RunResponse::Answer(RunAnswer::Reject)),
         KeyCode::Up => Some(RunResponse::Scroll(-1)),
         KeyCode::Down => Some(RunResponse::Scroll(1)),
@@ -745,17 +759,20 @@ struct RunDrawn {
     always_unread: usize,
     /// Rows saying what `r` grants besides running the line, not on the screen yet.
     record_unread: usize,
+    /// Rows saying what `f` grants besides running the line, not on the screen yet.
+    family_unread: usize,
 }
 
 impl RunDrawn {
-    /// Whether this draw takes `answer`. A key that runs the line waits on the plan, and `a` and
-    /// `r` each wait on what they grant besides as well. Refusing waits on nothing.
+    /// Whether this draw takes `answer`. A key that runs the line waits on the plan, and `a`,
+    /// `r` and `f` each wait on what they grant besides as well. Refusing waits on nothing.
     fn takes(&self, answer: RunAnswer) -> bool {
         let grant_unread = match answer {
             RunAnswer::Reject | RunAnswer::Interrupt => return true,
             RunAnswer::Approve => 0,
             RunAnswer::ApproveAlways => self.always_unread,
             RunAnswer::ApproveAndRecord => self.record_unread,
+            RunAnswer::ApproveAndRecordFamily => self.family_unread,
         };
         self.whole && self.unread == 0 && grant_unread == 0
     }
@@ -1077,6 +1094,7 @@ fn draw_run(
     let plan = 0..measure(&lines);
     let mut always = 0..0;
     let mut record = 0..0;
+    let mut family = 0..0;
 
     // What `a` would actually grant, in as many words. It is two things, not one, and the second
     // is the one nothing else in the interface would tell them: what the command prints stops
@@ -1196,6 +1214,28 @@ fn draw_run(
         record.end = measure(&lines);
     }
 
+    // What `f` would grant, where the table lists the line: the same record, with the number left
+    // free. The line is drawn as the entry will hold it, so the reader sees the slot, and the
+    // sentence under it names what stays fixed, because "any number" is the half a person is most
+    // likely to read as wider than it is.
+    if let Some(family_line) = request.family_display() {
+        lines.push(Line::raw(""));
+        family.start = measure(&lines);
+        lines.push(Line::from(Span::styled(
+            format!("  {}", t!(run_remember_family_explained)),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("       {family_line}"),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", t!(run_remember_family_only_number)),
+            Style::default().fg(theme::running()),
+        )));
+        family.end = measure(&lines);
+    }
+
     // What answers a line whose arguments differ from one run to the next, since no key on this
     // screen does. Drawn only where the person has already answered a prompt for this binary under
     // other arguments, so it is not a sentence every prompt carries. It names the file rather than
@@ -1257,11 +1297,12 @@ fn draw_run(
         unread: shown.unseen(plan),
         always_unread: shown.unseen(always),
         record_unread: shown.unseen(record),
+        family_unread: shown.unseen(family),
     };
 
     // Said in place of how far there is to scroll while a key waits on it, since what the person
     // needs to know then is why the key does nothing.
-    let waiting = drawn.always_unread + drawn.record_unread;
+    let waiting = drawn.always_unread + drawn.record_unread + drawn.family_unread;
     let hint = if drawn.unread > 0 {
         Line::styled(
             format!("   {}", t!(run_unseen, count = drawn.unread)),
@@ -1331,6 +1372,15 @@ fn run_keys(
                 .add_modifier(Modifier::BOLD),
         ));
         key_spans.push(Span::raw(format!(" {}    ", t!(run_remember))));
+    }
+    if request.offers_a_family() {
+        key_spans.push(Span::styled(
+            "f",
+            Style::default()
+                .fg(colour(RunAnswer::ApproveAndRecordFamily, theme::running()))
+                .add_modifier(Modifier::BOLD),
+        ));
+        key_spans.push(Span::raw(format!(" {}    ", t!(run_remember_family))));
     }
     key_spans.extend([
         Span::styled(
@@ -4886,6 +4936,111 @@ mod tests {
         );
     }
 
+    /// A run prompt for a line the family table lists, in a session that can record.
+    fn a_family_run() -> RunRequest {
+        RunRequest {
+            record: a_recordable_run().record,
+            ..RunRequest::from_pipeline(
+                &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
+                    "gh",
+                    ["pr", "view", "1081", "--repo", "brave/bravebot"]
+                        .map(String::from)
+                        .to_vec(),
+                )]),
+                &["/usr/bin/gh".into()],
+                "/home/someone/project",
+            )
+        }
+    }
+
+    /// RUN-20: the family answer has a key of its own, approves the run, and records the family
+    /// and not the exact line. It vouches for nothing.
+    #[test]
+    fn the_family_key_approves_and_records_the_family_only() {
+        assert_eq!(
+            run_answer_for(press(KeyCode::Char('f')), &a_family_run()),
+            Some(RunResponse::Answer(RunAnswer::ApproveAndRecordFamily))
+        );
+        let decision = RunAnswer::ApproveAndRecordFamily.decision();
+        assert!(decision.approved());
+        assert!(decision.record_family);
+        assert!(
+            !decision.record,
+            "the family key also recorded the exact line"
+        );
+        assert!(
+            !decision.remember,
+            "the family key also vouched for the programs"
+        );
+        assert!(!RunAnswer::ApproveAndRecord.decision().record_family);
+    }
+
+    /// RUN-20: the key is unbound where the line is not in the table, and where the prompt cannot
+    /// record at all, so no key promises what the screen did not offer.
+    #[test]
+    fn the_family_key_is_unbound_where_the_prompt_does_not_offer_it() {
+        let cannot_record = RunRequest {
+            record: None,
+            ..a_family_run()
+        };
+        for request in [a_run(false), a_recordable_run(), cannot_record] {
+            assert_eq!(
+                run_answer_for(press(KeyCode::Char('f')), &request),
+                None,
+                "a key recorded a family the prompt did not offer"
+            );
+        }
+    }
+
+    /// RUN-20: refusing and interrupting record no family.
+    #[test]
+    fn refusing_a_run_records_no_family() {
+        for answer in [RunAnswer::Reject, RunAnswer::Interrupt] {
+            assert!(!answer.decision().record_family, "{answer:?}");
+        }
+    }
+
+    /// RUN-20, PROMPT-4: the family key waits for the rows saying what it grants, as `r` waits for
+    /// its own.
+    #[test]
+    fn the_family_key_waits_for_the_rows_saying_what_it_grants() {
+        let seen = RunDrawn {
+            whole: true,
+            ..RunDrawn::default()
+        };
+        assert!(seen.takes(RunAnswer::ApproveAndRecordFamily));
+        let unread = RunDrawn {
+            family_unread: 1,
+            ..seen
+        };
+        assert!(!unread.takes(RunAnswer::ApproveAndRecordFamily));
+        assert!(unread.takes(RunAnswer::Approve));
+        assert!(unread.takes(RunAnswer::ApproveAndRecord));
+    }
+
+    /// RUN-20: the prompt draws the entry with its slot, says what stays fixed, and draws the key.
+    /// A prompt for a line the table does not list draws none of it.
+    #[test]
+    fn a_prompt_offering_a_family_draws_the_entry_with_its_number_free() {
+        let drawn = fully_rendered_run(&a_family_run());
+        for wanted in [
+            "pr view <number> --repo brave/bravebot",
+            "only a whole number may change",
+            "any number",
+        ] {
+            assert!(drawn.contains(wanted), "{wanted:?} was not drawn: {drawn}");
+        }
+        let cannot_record = RunRequest {
+            record: None,
+            ..a_family_run()
+        };
+        for request in [a_recordable_run(), cannot_record] {
+            let plain = fully_rendered_run(&request);
+            assert!(!plain.contains("<number>"), "{plain}");
+            assert!(!plain.contains("any number"), "{plain}");
+        }
+    }
+
     /// RUN-19: declining and Ctrl-C record nothing, which is what every standing grant here
     /// requires. A refusal is not a reason to answer for anything past this moment.
     #[test]
@@ -4995,8 +5150,8 @@ mod tests {
         );
     }
 
-    /// RUN-20: no key here covers a family, so the advice must not read as one being offered. The
-    /// keys on the row are the same four whether the advice is drawn or not.
+    /// RUN-20: no key here covers a pattern, so the advice must not read as one being offered. The
+    /// keys on the row are the same whether the advice is drawn or not.
     #[test]
     fn advising_a_pattern_offers_no_key_that_grants_one() {
         let drawn = fully_rendered_run(&a_varying_run());
@@ -5010,7 +5165,7 @@ mod tests {
                 &a_varying_run()
             ),
             None,
-            "a key granted the family the advice says a file has to be edited for"
+            "a key granted the pattern the advice says a file has to be edited for"
         );
     }
 

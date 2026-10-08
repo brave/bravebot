@@ -16,6 +16,16 @@
 //! matched against one string in a language where a character means anything, and which is the way
 //! to cover a family of lines on purpose.
 //!
+//! # The one exception: a family with its number free
+//!
+//! A second answer, for a line the table in [`families`] lists, records the line with one argument
+//! left as a number slot: `gh pr view 1081 --repo brave/bravebot` becomes `gh pr view <number>
+//! --repo brave/bravebot`. The slot admits a decimal integer and nothing else, every other field is
+//! compared as before, and a line the table does not list can only be recorded exact. The table is
+//! written by hand and never built from anything a run printed ([RUN-20]).
+//!
+//! [RUN-20]: ../../../docs/specs/tools/run.md
+//!
 //! The joins are part of an entry too. `a && b`, `a | b` and `a ; b` run the same programs and are
 //! three different lines, so the shape is recorded and compared rather than flattened away.
 //!
@@ -38,8 +48,43 @@
 //! This crate performs no I/O, so where the entries are kept and how they are spelled on disk is
 //! `bravebot_agent::remembered`'s.
 
-use crate::command::{Joiner, Plan, Route, Step, Steps};
+use crate::command::{Joiner, Plan, Route, Step, Steps, quoted};
 use std::path::PathBuf;
+
+/// One argument of a remembered step: a value to be equal to, or a slot a number fills.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RememberedArg {
+    /// This text and no other.
+    Literal(String),
+    /// Any decimal integer, spelled with digits only.
+    Number,
+}
+
+impl RememberedArg {
+    /// Whether `seen`, an argument of a step about to run, is what this one admits.
+    fn admits(&self, seen: &str) -> bool {
+        match self {
+            Self::Literal(text) => text == seen,
+            Self::Number => is_number(seen),
+        }
+    }
+
+    fn display(&self) -> String {
+        match self {
+            Self::Literal(text) => quoted(text),
+            // A literal `<number>` draws quoted, because it holds a `>`, so this cannot be spelled
+            // by an argument.
+            Self::Number => "<number>".to_string(),
+        }
+    }
+}
+
+/// Digits only and small enough to be a number of an issue or a pull request.
+///
+/// `str::parse` alone would accept a leading `+`, and a leading `-` would read as a flag.
+pub fn is_number(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) && text.parse::<u32>().is_ok()
+}
 
 /// One step of a remembered line, in the fields a person read at the prompt.
 ///
@@ -65,8 +110,8 @@ pub struct RememberedStep {
     /// and a program can read which of them started it. So this path is held beside the name and
     /// the file.
     pub started_as: PathBuf,
-    /// The arguments, in order, each its own value.
-    pub args: Vec<String>,
+    /// The arguments, in order, each its own value or a number slot.
+    pub args: Vec<RememberedArg>,
     /// `NAME=value` written in front of the program, each name and value its own value.
     ///
     /// Part of the key rather than left out of it: an assignment decides what a program loads
@@ -109,7 +154,7 @@ impl RememberedStep {
             program: program.clone(),
             resolved: resolved.clone(),
             started_as: started_as.clone(),
-            args: args.clone(),
+            args: args.iter().cloned().map(RememberedArg::Literal).collect(),
             environment: environment.clone(),
             routes: routes.clone(),
         }
@@ -117,9 +162,46 @@ impl RememberedStep {
 
     /// Whether a step about to run is the one this entry holds.
     ///
-    /// The whole struct, so every field [`Self::of`] carried across is part of the question.
+    /// Every field [`Self::of`] carried across is part of the question, and the arguments are
+    /// compared one for one: a literal by equality, a slot by being a number.
     pub fn matches(&self, step: &Step) -> bool {
-        *self == Self::of(step)
+        let Step {
+            program,
+            resolved,
+            started_as,
+            args,
+            environment,
+            routes,
+        } = step;
+        let Self {
+            program: held_program,
+            resolved: held_resolved,
+            started_as: held_started_as,
+            args: held_args,
+            environment: held_environment,
+            routes: held_routes,
+        } = self;
+        held_program == program
+            && held_resolved == resolved
+            && held_started_as == started_as
+            && held_environment == environment
+            && held_routes == routes
+            && held_args.len() == args.len()
+            && held_args
+                .iter()
+                .zip(args)
+                .all(|(held, seen)| held.admits(seen))
+    }
+
+    /// This step with its number left free, where the table in [`families`] lists it.
+    ///
+    /// `None` for a step that has an assignment or a route, or whose arguments are not exactly the
+    /// shape an entry of the table has.
+    pub fn with_number_free(step: &Step) -> Option<Self> {
+        let slot = families::number_slot(step)?;
+        let mut held = Self::of(step);
+        held.args[slot] = RememberedArg::Number;
+        Some(held)
     }
 
     /// The step as it was drawn at the prompt.
@@ -128,7 +210,8 @@ impl RememberedStep {
     /// spelled a line differently from the screen the person answered on would be describing
     /// something they have to translate before they can recognise it.
     pub fn display(&self) -> String {
-        self.as_step().display()
+        self.as_step()
+            .display_args(self.args.iter().map(RememberedArg::display).collect())
     }
 
     fn as_step(&self) -> Step {
@@ -136,7 +219,7 @@ impl RememberedStep {
             program: self.program.clone(),
             resolved: self.resolved.clone(),
             started_as: self.started_as.clone(),
-            args: self.args.clone(),
+            args: Vec::new(),
             environment: self.environment.clone(),
             routes: self.routes.clone(),
         }
@@ -176,6 +259,30 @@ impl Shape {
                 right: Box::new(Self::of(right)),
             },
             Steps::Group(inner) => Self::Group(Box::new(Self::of(inner))),
+        }
+    }
+
+    /// Whether the steps about to run are the ones this shape holds, joined the same way.
+    pub fn matches(&self, steps: &Steps) -> bool {
+        match (self, steps) {
+            (Self::Pipeline(held), Steps::Pipeline(seen)) => {
+                held.len() == seen.len()
+                    && held.iter().zip(seen).all(|(held, seen)| held.matches(seen))
+            }
+            (
+                Self::Join {
+                    left: held_left,
+                    joiner: held_joiner,
+                    right: held_right,
+                },
+                Steps::Join {
+                    left,
+                    joiner,
+                    right,
+                },
+            ) => held_joiner == joiner && held_left.matches(left) && held_right.matches(right),
+            (Self::Group(held), Steps::Group(seen)) => held.matches(seen),
+            _ => false,
         }
     }
 
@@ -242,7 +349,29 @@ impl RememberedLine {
     /// Every field of every step, and the shape they are joined in. Nothing partial: a line
     /// matching in all but one argument is a different line, and this is the whole of what says so.
     pub fn covers(&self, plan: &Plan) -> bool {
-        self.steps == Shape::of(&plan.steps)
+        self.steps.matches(&plan.steps)
+    }
+
+    /// The line a plan would be recorded as with its number free, where it is a lone step the
+    /// table in [`families`] lists. `None` for anything else, which can only be recorded exact.
+    pub fn family_of(plan: &Plan) -> Option<Self> {
+        let Steps::Pipeline(list) = &plan.steps else {
+            return None;
+        };
+        let [step] = list.as_slice() else {
+            return None;
+        };
+        Some(Self {
+            steps: Shape::Pipeline(vec![RememberedStep::with_number_free(step)?]),
+        })
+    }
+
+    /// Whether this line has a number slot, which is to say it is a family.
+    pub fn is_family(&self) -> bool {
+        self.steps
+            .steps()
+            .iter()
+            .any(|step| step.args.contains(&RememberedArg::Number))
     }
 
     /// The line as it was drawn at the prompt.
@@ -355,6 +484,74 @@ impl FromIterator<Entry> for Remembered {
             entries: entries.into_iter().collect(),
             files: Vec::new(),
         }
+    }
+}
+
+/// The sub-commands whose number a person may leave free when they ask for a line to be remembered
+/// ([RUN-20]).
+///
+/// Written by hand, one entry at a time, as the `git` options in [CMDLINE-8] are, and never built
+/// from anything a run printed. An entry says: this program, these two words, then one decimal
+/// integer, then `--repo OWNER/REPO`, and nothing else. The number is the only thing left free,
+/// and the repository stays a literal in the entry. Any flag the entry does not name makes the
+/// line one the table does not list, and it can only be recorded exact.
+///
+/// Each entry was checked against the program's own `--help` to be a read of one object that takes
+/// no path to write to and reads no file named on the line.
+///
+/// [RUN-20]: ../../../docs/specs/tools/run.md
+/// [CMDLINE-8]: ../../../docs/specs/tools/command-line.md
+pub mod families {
+    use crate::command::Step;
+
+    /// The program name and the two words after it.
+    const TABLE: &[(&str, [&str; 2])] = &[
+        ("gh", ["pr", "view"]),
+        ("gh", ["pr", "diff"]),
+        ("gh", ["pr", "checks"]),
+        ("gh", ["issue", "view"]),
+    ];
+
+    /// Where the number sits in the argument list of every entry.
+    const SLOT: usize = 2;
+
+    /// The index of the argument that may be left free, where `step` is a line the table lists.
+    pub fn number_slot(step: &Step) -> Option<usize> {
+        let Step {
+            program,
+            resolved: _,
+            started_as: _,
+            args,
+            environment,
+            routes,
+        } = step;
+        if !environment.is_empty() || !routes.is_empty() {
+            return None;
+        }
+        let [first, second, number, flag, repo] = args.as_slice() else {
+            return None;
+        };
+        let listed = TABLE
+            .iter()
+            .any(|(name, words)| name == program && words[0] == first && words[1] == second);
+        (listed && super::is_number(number) && flag == "--repo" && is_repository(repo))
+            .then_some(SLOT)
+    }
+
+    /// `OWNER/REPO` and no other spelling: no host, no leading dash or dot, nothing a shell or a flag
+    /// parser reads as more than a name.
+    fn is_repository(text: &str) -> bool {
+        let Some((owner, name)) = text.split_once('/') else {
+            return false;
+        };
+        let part = |part: &str| {
+            !part.is_empty()
+                && !part.starts_with(['-', '.'])
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        };
+        part(owner) && part(name)
     }
 }
 
@@ -621,5 +818,155 @@ mod tests {
 
         let lines = remembering(&one("make", &["check"]));
         assert!(!lines.covers_file(std::path::Path::new("/usr/bin/make")));
+    }
+
+    fn gh(args: &[&str]) -> Plan {
+        one("gh", args)
+    }
+
+    fn view(number: &str) -> Plan {
+        gh(&["pr", "view", number, "--repo", "brave/bravebot"])
+    }
+
+    fn family(plan: &Plan) -> Remembered {
+        let mut record = Remembered::new();
+        record.record(
+            RememberedLine::family_of(plan).expect("the table lists this line"),
+            "session-1",
+        );
+        record
+    }
+
+    /// RUN-20: the exception. A family recorded from one number covers the same sub-command on the
+    /// same repository with any other.
+    #[test]
+    fn a_family_covers_the_same_sub_command_with_another_number() {
+        let record = family(&view("1081"));
+        assert!(record.covers(&view("1081")));
+        assert!(record.covers(&view("1082")));
+        assert!(record.covers(&view("7")));
+    }
+
+    /// RUN-20: the number is the only thing free. Another repository, another sub-command, another
+    /// program, an extra flag and a missing repository are each a line the person has not answered.
+    #[test]
+    fn a_family_frees_the_number_and_nothing_else() {
+        let record = family(&view("1081"));
+        for other in [
+            gh(&["pr", "view", "1082", "--repo", "other/repo"]),
+            gh(&["pr", "diff", "1082", "--repo", "brave/bravebot"]),
+            gh(&["issue", "view", "1082", "--repo", "brave/bravebot"]),
+            gh(&["pr", "view", "1082", "--repo", "brave/bravebot", "--web"]),
+            gh(&["pr", "view", "1082", "--web", "--repo", "brave/bravebot"]),
+            gh(&["pr", "view", "--repo", "brave/bravebot", "1082"]),
+            gh(&["pr", "view", "1082"]),
+            gh(&["pr", "view", "--repo", "brave/bravebot"]),
+            gh(&["pr", "view", "1082", "1083", "--repo", "brave/bravebot"]),
+            one("hub", &["pr", "view", "1082", "--repo", "brave/bravebot"]),
+        ] {
+            assert!(!record.covers(&other), "{} was covered", other.line);
+        }
+    }
+
+    /// RUN-20: what fills the slot is a decimal integer. Text, a signed number, a number with
+    /// something after it, an empty argument and a number too large for either are asked about.
+    #[test]
+    fn the_slot_admits_a_decimal_integer_and_no_other_argument() {
+        let record = family(&view("1081"));
+        for other in [
+            "abc",
+            "",
+            "-1",
+            "+1",
+            "1e3",
+            "0x10",
+            "12 ",
+            " 12",
+            "1,2",
+            "1.5",
+            "１２",
+            "99999999999999999999",
+            "feature/branch",
+            "https://github.com/brave/bravebot/pull/1",
+        ] {
+            assert!(!record.covers(&view(other)), "{other:?} filled the slot");
+        }
+    }
+
+    /// RUN-20: an exact entry is still exact. Recording `gh pr view 1081 ...` with `r` does not
+    /// cover another number.
+    #[test]
+    fn an_exact_entry_for_a_listed_line_does_not_free_its_number() {
+        let record = remembering(&view("1081"));
+        assert!(record.covers(&view("1081")));
+        assert!(!record.covers(&view("1082")));
+    }
+
+    /// RUN-20: a line the table does not list has no family, however much it looks like one.
+    #[test]
+    fn a_line_the_table_does_not_list_has_no_family() {
+        let mut with_assignment = step("gh", &["pr", "view", "1", "--repo", "brave/bravebot"]);
+        with_assignment.environment = vec![("GH_HOST".to_string(), "example.com".to_string())];
+        let mut with_route = step("gh", &["pr", "view", "1", "--repo", "brave/bravebot"]);
+        with_route.routes = vec![Route::StderrToStdout];
+        let joined = plan_of(Steps::Join {
+            left: Box::new(Steps::Pipeline(vec![step(
+                "gh",
+                &["pr", "view", "1", "--repo", "brave/bravebot"],
+            )])),
+            joiner: Joiner::And,
+            right: Box::new(Steps::Pipeline(vec![step("make", &["check"])])),
+        });
+        let piped = plan_of(Steps::Pipeline(vec![
+            step("gh", &["pr", "view", "1", "--repo", "brave/bravebot"]),
+            step("cat", &[]),
+        ]));
+        let grouped = plan_of(Steps::Group(Box::new(Steps::Pipeline(vec![step(
+            "gh",
+            &["pr", "view", "1", "--repo", "brave/bravebot"],
+        )]))));
+        for plan in [
+            plan_of(Steps::Pipeline(vec![with_assignment])),
+            plan_of(Steps::Pipeline(vec![with_route])),
+            joined,
+            piped,
+            grouped,
+            gh(&["pr", "view", "1", "--repo=brave/bravebot"]),
+            gh(&["pr", "view", "1", "-R", "brave/bravebot"]),
+            gh(&["pr", "view", "1", "--repo", "github.com/brave/bravebot"]),
+            gh(&["pr", "view", "1", "--repo", "-x/bravebot"]),
+            gh(&["pr", "view", "1", "--repo", "../bravebot"]),
+            gh(&["pr", "view", "x", "--repo", "brave/bravebot"]),
+            gh(&["pr", "merge", "1", "--repo", "brave/bravebot"]),
+            gh(&["pr", "close", "1", "--repo", "brave/bravebot"]),
+            one("make", &["check"]),
+        ] {
+            assert!(
+                RememberedLine::family_of(&plan).is_none(),
+                "{} has a family",
+                plan.line
+            );
+        }
+    }
+
+    /// RUN-20: the name still has to resolve to the binary the person answered for.
+    #[test]
+    fn a_family_is_bound_to_the_binary_it_was_recorded_for() {
+        let record = family(&view("1081"));
+        let mut elsewhere = step("gh", &["pr", "view", "1082", "--repo", "brave/bravebot"]);
+        elsewhere.resolved = PathBuf::from("/tmp/gh");
+        assert!(!record.covers(&plan_of(Steps::Pipeline(vec![elsewhere]))));
+    }
+
+    /// RUN-20: the reading back draws the slot, so a family is not mistaken for the line.
+    #[test]
+    fn a_family_is_drawn_with_its_number_free() {
+        let line = RememberedLine::family_of(&view("1081")).unwrap();
+        assert!(line.is_family());
+        assert_eq!(
+            line.display(),
+            "/usr/bin/gh pr view <number> --repo brave/bravebot"
+        );
+        assert!(!RememberedLine::of(&view("1081")).is_family());
     }
 }

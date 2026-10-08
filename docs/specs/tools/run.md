@@ -909,7 +909,10 @@ put a prompt to consults nothing. A session that moves its working directory is 
 record for where it moved to and no longer by the one for where it was, because what `make check`
 does depends on the tree it runs in and the person answered about one tree. The prompt shows what
 would be recorded and where, because that is the whole of the grant and a person cannot endorse a
-record they were not shown.
+record they were not shown. Where a table in the source lists the line, a fourth key, `f`, records it
+with one number left free; that is the one exception to "this exact command line", and
+[RUN-20](#RUN-20) states it. Everything below about what is recorded, where, and when `r` is withheld
+holds for `f` unchanged, except the sentence naming the number.
 
 The row relabels `a` so that both lifetimes can be read off the screen, and it replaces
 [RUN-7](#RUN-7)'s row wherever a run prompt is drawn, including the prompts that offer no `r`. What
@@ -1150,10 +1153,11 @@ begun in either. And a line whose arguments differ every time is not helped at a
 `verified-by: bravebot_agent::remembered::an_entry_whose_recorded_binary_is_a_rendering_covers_nothing`
 
 <a id="RUN-20"></a>
-### RUN-20: no answer at a prompt grants a family, because nothing here tells a value from a program
+### RUN-20: no answer at a prompt grants a family, except one a hand-written table lists
 
 Neither `a` nor `r` covers more than one argument list, and no key derives a wider grant from the
-lines a person has already answered.
+lines a person has already answered. One answer is the exception, and only for a line a table in the
+source lists: `f`, which records the line with a single number left free.
 
 **Why.** Bounding a family means knowing which argument positions carry a value and which name
 something to run, and nothing available at a prompt can tell those apart. A wrapper puts what runs
@@ -1180,6 +1184,55 @@ is handed over is not a chore but an authority: deciding which argument carries 
 about a program, and nothing here can make it. Where the line repeats, nothing is handed over at all
 and [RUN-19](#RUN-19)'s key is the whole of the answer. The lines that vary are the only ones left,
 and they are the person's because only the person can decide them.
+
+**The one exception: a table of sub-commands with a typed slot.** The reason above is that nothing at a
+prompt can tell a value from a program, and it stops holding for a program whose argument positions
+somebody has audited ahead of time. The table is written by hand, one entry at a time, never built
+from the lines a person answered or from anything a program printed, and it is a proof in the sense of
+[command-line.md](command-line.md) rather than something a keypress mints. An entry names a program,
+two words after it, and the position of one slot. The first slot type is a decimal integer. The first
+entries are `gh pr view`, `gh pr diff`, `gh pr checks` and `gh issue view`, each as
+`gh <word> <word> <number> --repo OWNER/REPO`, with the repository a fixed literal in the entry.
+
+A line is in the table only when its arguments are exactly that shape: the two words, an argument made of
+decimal digits alone, `--repo`, and an `OWNER/REPO` made of letters, digits, `-`, `_` and `.`, neither
+part empty or starting with `-` or `.`. Nothing else is listed. A flag the entry does not name
+(`--web`, `--json`, `--watch`), the short or `=` spelling of `--repo`, a host in the repository, a
+missing `--repo`, a second number, an environment assignment, a redirection, and any pipeline, join or
+group make the line one the table does not list, and it is asked about and recorded exactly as RUN-19
+says. Each of the four sub-commands was checked against `gh`'s own option list: with the repository
+fixed and no other flag present, the number selects which object is read, and the command reads it.
+
+`f` is offered next to `r` only for such a line, and records `gh pr view <number> --repo
+brave/bravebot`:
+
+```
+  y run it    a always this session    r remember it    f any number    n don't    ctrl-c stop the turn
+```
+
+The prompt draws the entry as it will be held, with the slot written `<number>`, and says that only a
+whole number may change. A later line is covered by it when every field but that argument is equal,
+including the binary and the path that started it, and that argument is nothing but decimal digits.
+`gh pr view 1082 --repo other/repo` is asked about after a record made for `brave/bravebot`, and so are
+`gh pr view abc` and `gh pr view 1082 --web`. A prompt for a program the table does not list is
+unchanged: no key, no row, no sentence.
+
+An entry is held as a list of arguments, each a literal or a slot, and is written with a slot as an
+object where a literal is a string. A build that knows no slots fails to read such an entry as a list
+of strings and skips it, and a build that finds a slot kind it does not know does the same, so an entry
+this build cannot read covers nothing, as RUN-19 already says of every entry it cannot read. The
+refusals RUN-19 makes are made again for `f`, where the prompt is drawn and where a keypress is acted
+on: a line that writes, reads a redirected file, runs outside the workspace root or carries an
+assignment cannot be recorded by either key. The table is consulted again at that second place, so a
+front end that sends `f` for a line the table does not list records nothing, and one that sends both
+keys records the exact line.
+
+What `f` grants is the asking only, as `r` does. A covered line's output keeps the label RUN-4 gives
+it. What it adds to `r` is lines nobody read: other numbers of the same sub-command on the same
+repository. The repository is read from the argument list the planner wrote, which is the planner's own
+and public, so nothing a program printed decides what is covered. Slots other than a decimal integer, a
+second repository scope for the same entry, and an entry for a program the table does not list are
+each a change to the table and to this clause, and `f` for any repository is not offered.
 
 **What the prompt says instead.** Where the line being asked about is one whose arguments will differ
 next time, the prompt says that a pattern is written in a settings file rather than answered at a
@@ -1225,7 +1278,8 @@ and both answers are then true of it.
 **A known cost.** A line whose arguments change every time is asked about every time, in this session
 and in the next. A commit message and a new branch name are the two that do this in ordinary work.
 The answer for them is a pattern the person writes or a prompt each time, and this clause chooses the
-prompt.
+prompt. A number of a pull request or an issue is not one of these for the sub-commands the table lists,
+and is one for every program it does not.
 
 **A second known cost.** Two different jobs for one program read as one job whose arguments moved.
 `git log` followed by `git push` draws the advice, because telling those apart means deciding which
@@ -1252,6 +1306,27 @@ the alternative of withholding it from the case it exists for.
 `verified-by: bravebot_tui::confirm::a_prompt_for_a_line_whose_arguments_vary_says_what_a_pattern_costs`
 `verified-by: bravebot_tui::confirm::advising_a_pattern_offers_no_key_that_grants_one`
 `verified-by: bravebot_tui::confirm::a_prompt_for_a_line_nothing_has_varied_says_nothing_about_a_pattern`
+`verified-by: bravebot_core::remembered::a_family_covers_the_same_sub_command_with_another_number`
+`verified-by: bravebot_core::remembered::a_family_frees_the_number_and_nothing_else`
+`verified-by: bravebot_core::remembered::the_slot_admits_a_decimal_integer_and_no_other_argument`
+`verified-by: bravebot_core::remembered::an_exact_entry_for_a_listed_line_does_not_free_its_number`
+`verified-by: bravebot_core::remembered::a_line_the_table_does_not_list_has_no_family`
+`verified-by: bravebot_core::remembered::a_family_is_bound_to_the_binary_it_was_recorded_for`
+`verified-by: bravebot_core::remembered::a_family_is_drawn_with_its_number_free`
+`verified-by: bravebot_core::policy::a_family_remembered_past_the_session_is_not_asked_about_for_another_number`
+`verified-by: bravebot_agent::remembered::a_family_is_read_back_with_its_number_free`
+`verified-by: bravebot_agent::remembered::an_entry_whose_slot_cannot_be_read_covers_nothing`
+`verified-by: bravebot_agent::confirm::each_answer_records_the_line_it_names`
+`verified-by: bravebot_agent::confirm::the_family_answer_for_an_unlisted_line_records_nothing`
+`verified-by: bravebot_agent::confirm::both_keys_at_once_record_the_exact_line`
+`verified-by: bravebot_agent::confirm::the_prompt_offers_the_family_key_for_a_listed_line_it_may_record`
+`verified-by: bravebot_agent::turn::the_family_answer_for_a_program_the_table_does_not_list_records_nothing`
+`verified-by: bravebot_agent::run_family::a_family_remembered_in_one_session_covers_another_number_in_the_next`
+`verified-by: bravebot_tui::confirm::the_family_key_approves_and_records_the_family_only`
+`verified-by: bravebot_tui::confirm::the_family_key_is_unbound_where_the_prompt_does_not_offer_it`
+`verified-by: bravebot_tui::confirm::refusing_a_run_records_no_family`
+`verified-by: bravebot_tui::confirm::the_family_key_waits_for_the_rows_saying_what_it_grants`
+`verified-by: bravebot_tui::confirm::a_prompt_offering_a_family_draws_the_entry_with_its_number_free`
 
 <a id="RUN-21"></a>
 ### RUN-21: the cap on what output may spend of the conversation is configurable

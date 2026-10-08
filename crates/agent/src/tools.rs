@@ -7100,15 +7100,16 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         // with a key the prompt never offered must not be able to put a line into a record that
         // outlives the session, and a guard that consulted what was drawn would be resting on the
         // very thing it is there to check. `may_be_added_to` is asked a second time too, inside
-        // the store, for the mode that adds nothing to the state directory.
-        if answer.record
-            && policy.may_remember(&plan)
-            && let (Some(store), Some(session)) = (record.as_ref(), tools.remembering)
+        // the store, for the mode that adds nothing to the state directory. The family answer of
+        // RUN-20 is asked of the table again by `line_to_record`.
+        if policy.may_remember(&plan)
+            && let (Some(store), Some(session), Some(line)) = (
+                record.as_ref(),
+                tools.remembering,
+                answer.line_to_record(&plan),
+            )
         {
-            store.remember(
-                &bravebot_core::remembered::RememberedLine::of(&plan),
-                session,
-            );
+            store.remember(&line, session);
         }
     }
 

@@ -184,7 +184,7 @@ pub(crate) fn started_through(started_as: &Path, file: &Path) -> String {
 /// backslash and a quote escaped inside the wrapping, which is what makes the rendering reversible
 /// and therefore safe to bind an approval to. An argument holding `>` is wrapped too, so an
 /// argument list cannot draw as the arrow [`started_through`] puts between a link and its file.
-fn quoted(arg: &str) -> String {
+pub(crate) fn quoted(arg: &str) -> String {
     let plain = !arg.is_empty()
         && !arg.contains(|c: char| c.is_whitespace() || c == '\'' || c == '\\' || c == '>');
     if plain {
@@ -383,14 +383,24 @@ impl Step {
     }
 
     fn render(&self, program: &str) -> String {
+        self.render_args(program, self.args.iter().map(|arg| quoted(arg)).collect())
+    }
+
+    /// [`Step::display`] with the arguments already rendered, for a caller whose arguments are not
+    /// all text. The caller owns the quoting of what it passes.
+    pub(crate) fn display_args(&self, args: Vec<String>) -> String {
+        self.render_args(&self.resolved.to_string_lossy(), args)
+    }
+
+    fn render_args(&self, program: &str, args: Vec<String>) -> String {
         let mut out = String::new();
         for (name, value) in &self.environment {
             out.push_str(&format!("{name}={} ", quoted(value)));
         }
         out.push_str(program);
-        for arg in &self.args {
+        for arg in args {
             out.push(' ');
-            out.push_str(&quoted(arg));
+            out.push_str(&arg);
         }
         for route in &self.routes {
             out.push(' ');

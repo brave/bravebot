@@ -9908,6 +9908,36 @@ five
         assert!(!policy.plan_needs_approval(&a_plan()));
     }
 
+    /// RUN-20: a family remembered past the session stops the asking for the same sub-command on
+    /// the same repository with another number, and for nothing near it.
+    #[test]
+    fn a_family_remembered_past_the_session_is_not_asked_about_for_another_number() {
+        let view = |number: &str, repo: &str| {
+            plan_of(vec![step_named(
+                "gh",
+                &["pr", "view", number, "--repo", repo],
+            )])
+        };
+        let family = crate::remembered::RememberedLine::family_of(&view("1081", "brave/bravebot"))
+            .expect("a listed line");
+        let mut record = crate::remembered::Remembered::new();
+        record.record(family, "an-earlier-session");
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(record);
+        assert!(!policy.plan_needs_approval(&view("1082", "brave/bravebot")));
+        assert!(policy.plan_needs_approval(&view("1082", "other/repo")));
+        assert!(policy.plan_needs_approval(&view("abc", "brave/bravebot")));
+
+        let mut writing = view("1082", "brave/bravebot");
+        writing.writes = vec![std::path::PathBuf::from("/work/out.txt")];
+        assert!(
+            policy.plan_needs_approval(&writing),
+            "a family covered a line that names a file to write"
+        );
+    }
+
     /// RUN-19: it stops only the asking. What a covered line prints carries the label it would have
     /// carried anyway, which is untrusted and private, because an assertion about output is one
     /// only somebody looking at it can make.

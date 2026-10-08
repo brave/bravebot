@@ -14395,6 +14395,39 @@ fn answering_with_a_key_the_prompt_did_not_offer_records_nothing() {
     );
 }
 
+/// RUN-20: the family answer is checked against the table where it is acted on. A program the
+/// table does not list is run once and recorded as nothing, however the front end came to send it.
+#[test]
+fn the_family_answer_for_a_program_the_table_does_not_list_records_nothing() {
+    let scratch = Scratch::new("run-remembered-family-unlisted");
+    let home = Scratch::new("run-remembered-family-unlisted-home");
+    let mut confirmer =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_and_record_family());
+    a_run_turn_remembering(
+        &scratch,
+        &home.path,
+        Some("a-session"),
+        r#"{"command":"touch family.txt"}"#,
+        &mut confirmer,
+    )
+    .expect("the turn runs");
+
+    let asked = confirmer.seen.lock().unwrap();
+    let request = asked.first().expect("the person was asked");
+    assert!(
+        !request.offers_a_family(),
+        "the prompt offered a family for a program the table does not list"
+    );
+    assert!(
+        scratch.path.join("family.txt").exists(),
+        "the approved line did not run"
+    );
+    assert!(
+        record_for(&home.path, &scratch).read().is_empty(),
+        "a family answer for an unlisted program put a line into the record"
+    );
+}
+
 /// RUN-8, RUN-19: a line writing an assignment in front of a program is asked about before the
 /// record is reached, so neither key is offered for it and neither may write anything. The record
 /// holds every assignment in a field of its own, which is what makes this worth pinning: the key

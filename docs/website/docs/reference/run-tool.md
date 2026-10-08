@@ -111,14 +111,17 @@ behind.
 ## The answers, and how long each one lasts
 
 ```
-  y run it    a always this session    r remember it    n don't    ctrl-c stop the turn
+  y run it    a always this session    r remember it    f any number    n don't    ctrl-c stop the turn
 ```
+
+The `f` key appears only for a line of the form `gh pr view 1081 --repo brave/bravebot`, described below.
 
 | Key | Lasts | Grants |
 |---|---|---|
 | `y` | this call | the line runs once |
 | `a` | this session | the line runs unasked, **and** what it prints becomes readable |
 | `r` | past the session | the line runs unasked, and what it prints stays quarantined |
+| `f` | past the session | as `r`, for the same sub-command on the same repository with any whole number |
 | `n` | nothing | the line does not run |
 
 `a` is [vouching](../security/permissions.md#vouching-for-a-command), and it is the only answer that
@@ -134,8 +137,16 @@ else: a covered line still runs with its side effects, and what it prints is sti
 What is recorded is the line and never a pattern: the program's name, the binary that name resolved
 to, each argument as its own field, and where the output was sent. A later line is covered only when
 every one of those is the same and the name still resolves to the same binary. Sending the errors
-somewhere else makes a different line. Nothing in the record can mean "any text", so no answer here can
-reach a second line.
+somewhere else makes a different line. Nothing in the record can mean "any text", so only one answer here can
+reach a second line, and only as follows.
+
+**`f` frees one number.** For `gh pr view`, `gh pr diff`, `gh pr checks` and `gh issue view`, written
+as `gh pr view 1081 --repo brave/bravebot`, the prompt offers `f` beside `r`. It records
+`gh pr view <number> --repo brave/bravebot`, so another whole number on the same sub-command and
+repository is not asked about. Those four were checked by hand against what `gh` does and are listed in
+the source. Another repository, `gh pr view abc`, any other flag such as `--web` or `--json`, and any
+line not in the list are asked about as before. The same lines `r` is withheld from are withheld from
+`f`.
 
 A record is read only where a prompt could have been drawn. A [one-shot run](../using/headless.md) reads
 none, and puts a covered line where it puts every other one. A tick of a

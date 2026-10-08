@@ -1537,6 +1537,10 @@ run-remember-explained = r: stop asking about this exact line, in this directory
 run-remember-where = it is written down here, and deleting the line is the way back:
 run-remember-only-asking = it stops the asking only: what it prints stays quarantined
 run-remember-every-session = every session started in this directory reads it, not just this one
+# Said only for a sub-command the program's table lists, under the record's own rows. The line below
+# it is the entry as it will be held, with the slot drawn where the number goes.
+run-remember-family-explained = f: stop asking about this line with any number in place of this one, in this directory, from now on
+run-remember-family-only-number = only a whole number may change: another repository, another flag or another sub-command is still asked about
 # Said where the person has already answered a prompt for this binary under other arguments, which
 # is the only thing a prompt can establish about a line that will be asked about however it is
 # answered. No pattern is suggested: which argument carried the message is the person's to decide.
@@ -1548,6 +1552,7 @@ run-pattern-only-asking = a pattern stops the asking and nothing else: what the 
 run-yes = run it
 run-always = always this session
 run-remember = remember it
+run-remember-family = any number
 run-no = don't
 # Said above the keys while a row of the plan has not been on the screen. It counts rows, which is
 # what the arrows move by, and the count comes first so a narrow box does not cut it off.

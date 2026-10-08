@@ -88,10 +88,10 @@ The run prompt is the one place a standing permission is offered, and it offers 
 different lifetimes:
 
 ```
-  y run it    a always this session    r remember it    n don't    ctrl-c stop the turn
+  y run it    a always this session    r remember it    f any number    n don't    ctrl-c stop the turn
 ```
 
-The keys are labelled that way so both lifetimes can be read off the screen. `a` is a **vouch** and
+`f` is offered only for the lines described under [a number that changes](#when-a-lines-arguments-change-every-time). The keys are labelled that way so both lifetimes can be read off the screen. `a` is a **vouch** and
 lasts the session. `r` [remembers the line past the session](#remembering-a-line-past-the-session) and
 grants strictly less. Enter reaches neither, and declining or Ctrl-C records nothing.
 
@@ -200,7 +200,7 @@ it prints stays untrusted and private, exactly as it would without the record. `
 decides a label; `r` is the key that decides a lifetime. If you want a command's output readable, press
 `a`.
 
-**It covers one line, not a family.** A later line is covered when the program's name, the binary that
+**It covers one line, not a family**, apart from the `f` answer described [below](#when-a-lines-arguments-change-every-time). A later line is covered when the program's name, the binary that
 name resolved to, every argument, every variable the line set, and where its output went are all the
 same. Sending the errors somewhere else makes a different line. A pipeline is covered only where every
 stage is.
@@ -243,7 +243,8 @@ way back is to delete the line.
 
 ## When a line's arguments change every time
 
-`r` covers one argument list, and no key at a prompt widens a grant to a family: bounding one means
+`r` covers one argument list, and no key at a prompt widens a grant to a family, with one exception
+described at the end of this section: bounding one means
 knowing which argument carries a value and which names something to run, and nothing at a prompt can
 tell those apart. `npm run <script>` and `ssh <host> <command>` put what runs into an argument, and
 `git --no-pager <sub-command>` puts a sub-command into one.
@@ -254,6 +255,14 @@ prompt. It names the file. It does not offer a pattern, because which argument c
 your judgment to make. What a pattern costs is stated with it: it covers lines nobody has read, it
 stops the asking, and it makes nothing readable. See
 [Configuration](../customize/configuration.md#permissions).
+
+**The exception: a pull request or issue number.** For `gh pr view`, `gh pr diff`, `gh pr checks` and
+`gh issue view`, written as `gh pr view 1081 --repo brave/bravebot`, the prompt also offers `f`. It
+records the line with the number free: `gh pr view <number> --repo brave/bravebot` is then not asked
+about again for any whole number, in that directory. These four were checked by hand against what `gh`
+does, and they are listed in the source; nothing is worked out from your answers. Another repository,
+a number that is not digits, and any other flag (`--web`, `--json`) are still asked about, as is a
+line that is not in the list. `f` stops the asking and nothing else, as `r` does.
 
 ## A fetch is approved one URL at a time
 
