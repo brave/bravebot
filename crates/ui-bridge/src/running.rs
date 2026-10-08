@@ -330,6 +330,9 @@ pub struct Running {
     /// Which question is waiting, if any.
     pub pending: crate::turn::Pending,
     pub turn: usize,
+    /// Whether this is a manifest run, which takes the session's last turn number but is not a
+    /// turn, so a cancel that names a turn never stops it (RPCVIEW-6).
+    pub run: bool,
     /// Set by the worker on its way out.
     ///
     /// The dispatch thread needs to know a turn has ended without joining on it, and it

@@ -128,8 +128,11 @@ refused.
 
 `turn.cancel` may name the turn it is for. A cancel that names a turn other than the one running,
 or one that has ended, stops nothing and answers `{ "cancelled": false }`; one that names the
-running turn answers `{ "cancelled": true }`. A cancel that names no turn stops whatever is
-running and answers `{}`, as before. A `turn` that is not a number is refused.
+running turn answers `{ "cancelled": true }`. A manifest run carries the session's last turn number
+but is not a turn, so a cancel that names a turn never stops it. A cancel that names no turn stops
+whatever is running and answers `{}`, as before. A `turn` that is not a number is refused. Turn
+numbers repeat after `session.rewind`, so a named cancel separates turns within one history, not
+the turns before a rewind from the turns after it.
 
 `trust.reply` is taken once, while the session's startup question is waiting. A repeat, and any
 answer to a session that was never asked, is refused with `no_such_request` before the session's
@@ -144,6 +147,7 @@ repeated trust answer, and a client talking to one must not claim the stronger p
 `verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_the_running_turn_stops_it`
 `verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_a_finished_turn_stops_nothing`
 `verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_no_turn_stops_whatever_is_running`
+`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_a_turn_never_stops_a_manifest_run_that_carries_its_number`
 `verified-by: bravebot_ui_bridge::targets_tests::a_turn_that_is_not_a_number_is_refused_and_stops_nothing`
 `verified-by: bravebot_ui_bridge::targets_tests::the_bridge_advertises_what_it_promises_about_targets`
 `verified-by: bravebot_ui_bridge::refusal::question_numbers_are_not_reused_by_a_later_turn_of_the_same_session`

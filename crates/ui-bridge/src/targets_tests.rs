@@ -15,6 +15,10 @@ struct Session {
 /// A session with turn `turn` in flight, started by one of its two watches. A cancel that applies
 /// stops the watch that started it and leaves the other.
 fn session_running(turn: usize) -> Session {
+    session_holding(turn, false)
+}
+
+fn session_holding(turn: usize, run: bool) -> Session {
     let project = std::env::temp_dir();
     let mut watches = bravebot_agent::watch::Watches::new();
     let now = Instant::now();
@@ -52,6 +56,7 @@ fn session_running(turn: usize) -> Session {
             answers,
             pending: Arc::new(Mutex::new(None)),
             turn,
+            run,
             finished: Arc::clone(&finished),
         }),
         model: None,
@@ -140,6 +145,21 @@ fn a_cancel_naming_no_turn_stops_whatever_is_running() {
         1,
         "the watch that started the turn kept firing"
     );
+}
+
+/// A manifest run takes the session's last turn number without being a turn, so a late cancel for
+/// that finished turn must not stop the run that came after it.
+#[test]
+fn a_cancel_naming_a_turn_never_stops_a_manifest_run_that_carries_its_number() {
+    let mut session = session_holding(3, true);
+    assert_eq!(
+        session.cancel_turn(Some(json!(3))).unwrap(),
+        json!({"cancelled": false})
+    );
+    assert!(!session.cancel.is_cancelled());
+    // A cancel that names nothing still stops the run, as it always has.
+    assert_eq!(session.cancel_turn(None).unwrap(), json!({}));
+    assert!(session.cancel.is_cancelled());
 }
 
 #[test]

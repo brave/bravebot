@@ -54,6 +54,8 @@ class Session implements AgentSession {
   private readonly replying = new Set<number>()
   /** The latest turn this session sent, which the view may not show yet. */
   private sent = 0
+  /** Sends whose answer has not arrived, so the turn they will be numbered is not yet known. */
+  private sending = 0
   /** Why the view could not start, when a malformed event arrived before it existed. */
   refused: string | null = null
 
@@ -138,7 +140,13 @@ class Session implements AgentSession {
 
   async send(text: string): Promise<SendResult> {
     this.live('send')
-    const result = await this.connection.request('turn.send', this.params({ prompt: text }))
+    this.sending++
+    let result: unknown
+    try {
+      result = await this.connection.request('turn.send', this.params({ prompt: text }))
+    } finally {
+      this.sending--
+    }
     if (!isRecord(result) || typeof result.turn !== 'number') throw new ProtocolError('turn.send did not report a turn')
     this.sent = Math.max(this.sent, result.turn)
     return { turn: result.turn }
@@ -187,9 +195,11 @@ class Session implements AgentSession {
 
   async cancel(): Promise<void> {
     // Name the turn to stop when the runtime can use it, so a cancel that arrives late cannot reach a
-    // turn that began after the one meant. The turn just sent may not be in the view yet.
+    // turn that began after the one meant. While a send is unanswered the number of the turn it
+    // starts is not known, so the cancel names none and stops whatever is running, as Stop always has.
     const turn = Math.max(this.sent, this.current?.turn ?? 0)
-    await this.connection.request('turn.cancel', this.params(this.namesTurns ? { turn } : {}), undefined, { control: true })
+    const named = this.namesTurns && this.sending === 0
+    await this.connection.request('turn.cancel', this.params(named ? { turn } : {}), undefined, { control: true })
   }
 
   async close(): Promise<CloseOutcome> {

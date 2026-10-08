@@ -694,7 +694,8 @@ flight errors `turn_in_flight`. Different sessions run concurrently.
 running and returns `{}`, as it always has. Present, it stops that turn and no other: it returns
 `{ "cancelled": true }` for the running turn, and `{ "cancelled": false }` when the named turn is
 not the one running or has ended, in which case nothing is stopped, the watches included. A `turn`
-that is not a number is refused with `bad_request`. A client that holds a turn number should send
+that is not a number is refused with `bad_request`. A manifest run is never stopped by a cancel
+that names a turn, and turn numbers repeat after `session.rewind`. A client that holds a turn number should send
 it, so a cancel that arrives late cannot stop the turn after.
 
 

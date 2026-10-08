@@ -60,7 +60,8 @@ This block supplies no saved-history import, late subscription, reconnect, contr
 send deduplication, persistent listener, networking or embedded bindings. Session identity lasts
 for the connection. Closing detaches the view without claiming worker termination or save
 success. Question numbers last the session, a cancel can name its turn, and the trust answer is taken once
-(RPCVIEW-6); a runtime that does not advertise these keeps its older, weaker targets.
+(RPCVIEW-6); a runtime that does not advertise these keeps its older, weaker targets. A cancel issued
+while a send is unanswered names no turn, since the turn it starts is not yet known.
 
 ## Implemented TypeScript client
 

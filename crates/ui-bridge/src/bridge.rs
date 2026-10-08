@@ -973,6 +973,7 @@ impl Bridge {
             answers: answers_tx,
             pending: Arc::clone(&pending),
             turn: turn_number,
+            run: false,
             finished: Arc::clone(&finished),
         };
 
@@ -1128,6 +1129,7 @@ impl Bridge {
             pending: Arc::clone(&pending),
             // The session's last turn. A run is not a turn and takes no number of its own.
             turn: turns,
+            run: true,
             finished: Arc::clone(&finished),
         };
 
@@ -1321,10 +1323,9 @@ impl Bridge {
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
         if let Some(expected) = expected {
-            let running = open
-                .running
-                .as_ref()
-                .filter(|running| !running.is_finished() && running.turn as u64 == expected);
+            let running = open.running.as_ref().filter(|running| {
+                !running.is_finished() && !running.run && running.turn as u64 == expected
+            });
             let Some(running) = running else {
                 // An old cancel for a turn that is over reaches a later turn as nothing at all, and
                 // does not stop the watches either.
@@ -3166,6 +3167,7 @@ mod watch_tests {
             answers,
             pending: Arc::new(Mutex::new(None)),
             turn: 1,
+            run: false,
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let mut bridge = Bridge::new(Box::new(|_| {}));
