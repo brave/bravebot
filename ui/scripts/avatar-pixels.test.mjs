@@ -73,7 +73,7 @@ test('faces differ between bots in colour and, mostly, in shape', () => {
   assert.ok(shapes.size >= 400, `${shapes.size} distinct silhouettes in 1000`)
 })
 
-test('a face mixes distant hues only, and its eye whites stand out from the fill around them', () => {
+test('a face chooses paints at least HUE_DISTANCE apart, and its eye whites stand out from the fill around them', () => {
   for (const seed of seeds(512)) {
     const sprite = buildSprite(seed)
     const { paints } = sprite.traits

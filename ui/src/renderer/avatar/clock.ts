@@ -66,8 +66,13 @@ let moved = false
  */
 function aimAt(entry: Registered): void {
   const frame = entry.svg.parentElement
+  // Only a face under the pointer is measured, so a move costs one layout read, not one per face.
+  if (!pointer || !frame || !(pointer.target instanceof Node) || !frame.contains(pointer.target)) {
+    entry.aim = null
+    return
+  }
   const box = entry.svg.getBoundingClientRect()
-  entry.aim = pointer && frame && box.width > 0 && pointer.target instanceof Node && frame.contains(pointer.target)
+  entry.aim = box.width > 0
     ? eyesToward(pointer.x - (box.left + box.width / 2), pointer.y - (box.top + box.height / 2), box.width)
     : null
 }
@@ -191,12 +196,14 @@ export function show(svg: SVGSVGElement, seed: string, doing: Doing = 'idle', ex
     was: doing,
     // Well in the past, so a face mounted while failed does not look away as if it just failed.
     since: performance.now() / 1000 - 60,
-    written: JSON.stringify(lookOf(sprite, doing, expression)),
+    written: '',
     aim: null,
   }
   registered.set(svg, entry)
   aimAt(entry)
-  paint(entry, performance.now() / 1000)
+  // Forced, because React may have rendered a different face into this element, or rewritten
+  // some of its attributes, since the last look the clock wrote to it.
+  paint(entry, performance.now() / 1000, true)
   schedule()
   return () => {
     registered.delete(svg)
