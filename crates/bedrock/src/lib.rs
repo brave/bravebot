@@ -428,6 +428,7 @@ impl<'a> BedrockClient<'a> {
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
+                    log_retry(attempt + 1, backoff(self.backoff, attempt));
                     if !self.wait(backoff(self.backoff, attempt)) {
                         return Err(BedrockError::Cancelled);
                     }
@@ -791,6 +792,7 @@ impl<'a> BedrockClient<'a> {
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
                     attempt += 1;
+                    log_retry(attempt, backoff(self.backoff, attempt - 1));
                     // Announced before the wait rather than after it, so the pause is explained
                     // while it is happening. Reply progress resets; completed costs remain charged.
                     progress(Progress {
@@ -1363,6 +1365,17 @@ fn worth_another_attempt(attempt: u32, error: &BedrockError) -> bool {
 
 fn backoff(base: Duration, failures: u32) -> Duration {
     base * 2u32.pow(failures - 1)
+}
+
+/// Writes the decision to send again to the diagnostic log: which attempt, and the wait before it.
+fn log_retry(attempt: u32, wait: Duration) {
+    bravebot_diag::info(
+        "bedrock.retry",
+        &[
+            ("attempt", bravebot_diag::Field::num(attempt)),
+            ("backoff_ms", bravebot_diag::Field::num(wait.as_millis())),
+        ],
+    );
 }
 
 /// Validate reported counts independently of assistant content.

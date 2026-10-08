@@ -93,6 +93,25 @@ impl Drop for StdioServer {
     }
 }
 
+/// Writes how a handshake step ended to the diagnostic log: that it did, or which kind of failure.
+/// Never the server's name or anything it sent, since both are text someone else chose.
+fn log_step<T>(step: &'static str, outcome: &McpResult<T>) {
+    match outcome {
+        Ok(_) => bravebot_diag::info(step, &[("outcome", bravebot_diag::Field::word("ok"))]),
+        Err(error) => {
+            let kind = match error {
+                McpError::Confinement(_) => "confinement",
+                McpError::Denied(_) => "denied",
+                McpError::Transport(_) => "transport",
+                McpError::Server { .. } => "server",
+                McpError::ToolFailed { .. } => "tool_failed",
+                McpError::TimedOut { .. } => "timed_out",
+            };
+            bravebot_diag::error(step, &[("kind", bravebot_diag::Field::word(kind))]);
+        }
+    }
+}
+
 impl StdioServer {
     /// Launch a server under confinement, holding `variables` and nothing else of an
     /// environment, with its stderr sent to `diagnostics`.
@@ -101,6 +120,20 @@ impl StdioServer {
     /// not started: running unconfined third-party code would silently remove the
     /// guarantee the caller believes it has.
     pub fn launch(
+        name: impl Into<String>,
+        program: &str,
+        args: &[String],
+        variables: Variables,
+        sandbox: &dyn Sandbox,
+        policy: &SandboxPolicy,
+        diagnostics: Stream,
+    ) -> McpResult<Self> {
+        let launched = Self::spawn(name, program, args, variables, sandbox, policy, diagnostics);
+        log_step("mcp.launch", &launched);
+        launched
+    }
+
+    fn spawn(
         name: impl Into<String>,
         program: &str,
         args: &[String],
@@ -264,18 +297,22 @@ impl StdioServer {
 
     /// Complete the handshake.
     pub fn initialize(&mut self, client_name: &str, client_version: &str) -> McpResult<()> {
-        self.send_request(
-            "initialize",
-            Some(initialize_params(client_name, client_version)),
-        )?;
-        self.notify("notifications/initialized")
+        let done = self
+            .send_request(
+                "initialize",
+                Some(initialize_params(client_name, client_version)),
+            )
+            .and_then(|_| self.notify("notifications/initialized"));
+        log_step("mcp.initialize", &done);
+        done
     }
 
     /// List the tools this server offers, as the one labelled text a person vouches for before any
     /// of them is offered. SERVERS-8.
     pub fn list_tools(&mut self) -> McpResult<Listing> {
-        let list = paged(|params| self.send_request("tools/list", params))?;
-        Ok(list.listing(&self.name))
+        let listed = paged(|params| self.send_request("tools/list", params));
+        log_step("mcp.list_tools", &listed);
+        Ok(listed?.listing(&self.name))
     }
 
     /// Call a tool.

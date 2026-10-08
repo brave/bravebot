@@ -585,11 +585,16 @@ impl Egress {
         cancel: Option<&Cancel>,
         stoppable: bool,
     ) -> Result<(u16, Option<String>, Box<dyn std::io::Read + Send>), EgressError> {
+        let started = std::time::Instant::now();
         let mut redirected = false;
-        match self.follow(policy, request, cancel, stoppable, &mut redirected) {
+        let outcome = match self.follow(policy, request, cancel, stoppable, &mut redirected) {
             Err(error) if redirected => Err(error.into_a_failure_of(&request.url)),
             outcome => outcome,
+        };
+        if let Err(error) = &outcome {
+            log_failure(&request.url, error, started.elapsed());
         }
+        outcome
     }
 
     /// Whether a connection to `url` would end on this machine: its host is one, and no proxy
@@ -834,6 +839,33 @@ fn within<B>(
             builder.config().timeout_recv_response(Some(bound)).build()
         }
     }
+}
+
+/// Writes a failed request to the diagnostic log: the host asked, what kind of failure, the status
+/// where there was one, and how long it took. The URL is the caller's, never a redirect target, and
+/// only its host is kept; the failure's own text can carry what a server said, so it is not.
+fn log_failure(url: &str, error: &EgressError, elapsed: Duration) {
+    let (kind, status) = match error {
+        EgressError::Denied(_) => ("denied", None),
+        EgressError::TooManyRedirects { .. } => ("too_many_redirects", None),
+        EgressError::MissingLocation { .. } => ("missing_location", None),
+        EgressError::InvalidUrl { .. } => ("invalid_url", None),
+        EgressError::InsecureRedirect { .. } => ("insecure_redirect", None),
+        EgressError::Transport { .. } => ("transport", None),
+        EgressError::OutOfTime { .. } => ("out_of_time", None),
+        EgressError::Status { status, .. } => ("status", Some(*status)),
+        EgressError::Stopped { .. } => ("stopped", None),
+    };
+    let mut fields = vec![
+        ("host", bravebot_diag::Field::host(url)),
+        ("kind", bravebot_diag::Field::word(kind)),
+        ("transient", bravebot_diag::Field::num(error.is_transient())),
+        ("elapsed_ms", bravebot_diag::Field::num(elapsed.as_millis())),
+    ];
+    if let Some(status) = status {
+        fields.push(("status", bravebot_diag::Field::num(status)));
+    }
+    bravebot_diag::error("net.fetch", &fields);
 }
 
 /// How often a thread waiting on a reply looks at whether the caller has stopped.
@@ -1200,6 +1232,80 @@ mod tests {
         // 403 and 451 are refusals.
         let retryable: Vec<u16> = (100..=599).filter(|status| at(*status)).collect();
         assert_eq!(retryable, [408, 429, 500, 502, 503, 504]);
+    }
+
+    /// A request that fails is written to the diagnostic log as the host, the kind of failure and
+    /// the status, and nothing of the URL's path, query or credentials or of what the server sent.
+    /// Writing the failure's text or the URL would put a token or a reply into a file a person
+    /// attaches to a public issue.
+    #[test]
+    fn a_failed_request_is_logged_as_host_status_and_kind_only() {
+        use std::io::{BufRead, BufReader, Write};
+
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                if line == "\r\n" {
+                    break;
+                }
+                line.clear();
+            }
+            let _ = stream.write_all(
+                b"HTTP/1.1 503 Unavailable\r\nContent-Length: 10\r\nConnection: close\r\n\r\nSERVERBODY",
+            );
+        });
+
+        let dir = std::env::temp_dir().join(format!("bravebot-net-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        bravebot_diag::configure(bravebot_diag::Level::Error, Some(dir.clone()));
+
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "fetch a page");
+        let mut sink = bravebot_core::event::NullSink;
+        let mut policy = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy begins");
+        let outcome = Egress::new().fetch(
+            &mut policy,
+            Request::get(format!(
+                "http://user:hunter2@127.0.0.1:{port}/private/path?token=abc"
+            )),
+            Label::untrusted_public(),
+        );
+        assert!(matches!(
+            outcome,
+            Err(EgressError::Status { status: 503, .. })
+        ));
+
+        let log: String = std::fs::read_dir(&dir)
+            .expect("a failure makes the log")
+            .flatten()
+            .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        bravebot_diag::configure(bravebot_diag::Level::Error, None);
+
+        assert!(log.contains("ERROR net.fetch"), "{log}");
+        assert!(log.contains(&format!("host=127.0.0.1:{port}")), "{log}");
+        assert!(
+            log.contains("status=503") && log.contains("kind=status"),
+            "{log}"
+        );
+        for leaked in ["hunter2", "private", "token", "SERVERBODY", "Unavailable"] {
+            assert!(!log.contains(leaked), "{leaked} reached the log: {log}");
+        }
     }
 
     #[test]

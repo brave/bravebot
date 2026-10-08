@@ -2012,6 +2012,52 @@ fn a_retry_goes_through_the_gate_again() {
     assert_eq!(checks, 2, "each attempt must be checked on its own");
 }
 
+/// A retry is a decision worth reading after the fact, so it leaves the attempt it is and the wait
+/// before it in the diagnostic log, and nothing of the request.
+#[test]
+fn a_retry_is_written_to_the_diagnostic_log() {
+    let dir = std::env::temp_dir().join(format!("bravebot-aichat-log-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.clone()));
+
+    let (endpoint, _received) = serve_attempts(vec![
+        Attempt::Dropped,
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("a private prompt")]);
+    client
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect("the second attempt succeeds");
+
+    let log: String = std::fs::read_dir(&dir)
+        .expect("a retry makes the log")
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+    let _ = std::fs::remove_dir_all(&dir);
+    bravebot_diag::configure(bravebot_diag::Level::Error, None);
+
+    assert!(
+        log.contains("INFO aichat.retry attempt=2 backoff_ms="),
+        "{log}"
+    );
+    assert!(!log.contains("a private prompt"), "{log}");
+}
+
 /// The listing is a plain GET on the base host. It carries no signature and no credential: the
 /// endpoint requires neither, and spending a subscription credential to read a public list would
 /// be spending one for nothing.

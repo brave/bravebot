@@ -506,9 +506,19 @@ impl Drop for Server {
         // Asked to stop, then killed if it did not. LSP-8: a server must not outlive the agent.
         let _ = self.request_shutdown();
         let deadline = Instant::now() + SHUTDOWN_GRACE;
+        let language = (
+            "language",
+            bravebot_diag::Field::word(self.language.as_str()),
+        );
         loop {
             match self.child.try_wait() {
-                Ok(Some(_)) => return,
+                Ok(Some(_)) => {
+                    bravebot_diag::info(
+                        "lsp.exit",
+                        &[language, ("how", bravebot_diag::Field::word("shutdown"))],
+                    );
+                    return;
+                }
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(20));
                 }
@@ -517,6 +527,10 @@ impl Drop for Server {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        bravebot_diag::info(
+            "lsp.exit",
+            &[language, ("how", bravebot_diag::Field::word("killed"))],
+        );
     }
 }
 
@@ -535,6 +549,35 @@ impl Server {
     ///
     /// LSP-6: a missing binary is reported as missing rather than as an empty answer.
     pub fn launch(
+        language: Language,
+        resolved: &Path,
+        root: &Path,
+        cache: &Path,
+        withheld: &[String],
+    ) -> LspResult<Self> {
+        let launched = Self::start(language, resolved, root, cache, withheld);
+        let language_word = ("language", bravebot_diag::Field::word(language.as_str()));
+        match &launched {
+            Ok(_) => bravebot_diag::info(
+                "lsp.launch",
+                &[language_word, ("outcome", bravebot_diag::Field::word("ok"))],
+            ),
+            Err(error) => {
+                let kind = match error {
+                    LspError::NoBinary { .. } => "no_binary",
+                    LspError::Start { .. } => "start",
+                    _ => "other",
+                };
+                bravebot_diag::error(
+                    "lsp.launch",
+                    &[language_word, ("kind", bravebot_diag::Field::word(kind))],
+                );
+            }
+        }
+        launched
+    }
+
+    fn start(
         language: Language,
         resolved: &Path,
         root: &Path,
@@ -1225,6 +1268,37 @@ mod tests {
 
     fn root() -> PathBuf {
         PathBuf::from("/workspace")
+    }
+
+    /// A server that is not installed is the first thing asked about in a bug report, so the log
+    /// says which language and that the binary was missing, and not the path that was tried.
+    #[test]
+    fn a_missing_server_binary_is_written_to_the_diagnostic_log() {
+        let dir = std::env::temp_dir().join(format!("bravebot-lsp-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        bravebot_diag::configure(bravebot_diag::Level::Error, Some(dir.join("logs")));
+
+        let launched = Server::launch(
+            Language::Rust,
+            Path::new("/nonexistent/secret-dir/rust-analyzer"),
+            &dir,
+            &dir.join("cache"),
+            &[],
+        );
+        let log: String = std::fs::read_dir(dir.join("logs"))
+            .expect("a failed launch makes the log")
+            .flatten()
+            .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        bravebot_diag::configure(bravebot_diag::Level::Error, None);
+
+        assert!(matches!(launched, Err(LspError::NoBinary { .. })));
+        assert!(
+            log.contains("ERROR lsp.launch language=Rust kind=no_binary"),
+            "{log}"
+        );
+        assert!(!log.contains("secret-dir"), "{log}");
     }
 
     /// LSP-5: nothing starts until a person says so, and a refusal is not a failure of the tool.

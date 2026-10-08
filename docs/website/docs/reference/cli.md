@@ -78,6 +78,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../customize/configuration.md#runnetwork)) |
 | `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
+| `--log-level <error\|info\|debug>` | how much of a failure's shape goes to the [diagnostic log](#--log-level-errorinfodebug) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
 | `--system-prompt <prompt>` | replace the opening of the system prompt for this run; the rest of it stays ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--append-system-prompt <prompt>` | add your own words to the system prompt for this run, after the project's `AGENTS.md` ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
@@ -426,6 +427,20 @@ takes the next one as its answer. Only the affirmative approves, so the line has
 word for an effect to follow.
 :::
 
+## `--log-level <error|info|debug>`
+
+Brave Bot keeps a diagnostic log you can attach to a bug report. It records the shape of a failure:
+the host a request went to, the status it came back with, how many attempts were made, and whether
+a language server or an MCP server started. It never records a prompt, a reply, a file's contents,
+a header, a credential or the text of an error.
+
+Each run that has something to write makes its own file in `logs/` in the [state
+directory](#doctor), readable by you alone, and the ten most recent are kept. At the default level,
+`error`, a run that fails nowhere leaves no file. `info` adds the steps taken, such as a retry or a
+server starting, and `debug` adds the detail between them. `doctor` prints the directory.
+
+An [`--incognito`](../using/sessions.md) session writes no log.
+
 ## `--vet`
 
 ```sh
@@ -475,7 +490,7 @@ Answers "what will this actually use", and changes nothing. It reports:
 - which names a machine-level file pinned, and where that file is;
 - how to configure a model service where nothing configured will serve a turn;
 - the model in force, and whether it was chosen or defaulted;
-- where the state directory is, or that there is none;
+- where the state directory is, or that there is none, and the diagnostic logs in it;
 - what a TLS handshake is validated against, and what a request is routed through;
 - the confinement available on this platform;
 - the state of any imported subscription.

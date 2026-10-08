@@ -1,0 +1,10 @@
+[package]
+name = "bravebot-diag"
+description = "The diagnostic log: what went wrong, as hosts, counts and words, never content"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

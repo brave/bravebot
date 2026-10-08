@@ -197,6 +197,7 @@ the profile directory instead. Where there is no state directory, the report say
 looked at, points the remedy at those same variables, names what is not kept without one, and says
 that a checkout's own settings, skills and instructions are read regardless. It is reported rather than failed on, and sits outside the
 configuration section, which a configuration error stops early.
+Beside it, the report names the directory the diagnostic log is kept in ([diagnostic-log.md](diagnostic-log.md)).
 
 In a Bravebot source checkout (including its subdirectories), it also reports whether root
 `AGENTS.md` resolves to `agents/AGENTS.md` and whether `direnv` is executable on PATH. These

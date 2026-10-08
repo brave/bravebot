@@ -165,6 +165,7 @@ version = "0.14.0"
 dependencies = [
  "bravebot-config",
  "bravebot-core",
+ "bravebot-diag",
  "bravebot-net",
  "bravebot-signing",
  "serde",
@@ -178,6 +179,7 @@ dependencies = [
  "bravebot-aichat",
  "bravebot-config",
  "bravebot-core",
+ "bravebot-diag",
  "bravebot-net",
  "bravebot-signing",
  "serde",
@@ -203,6 +205,7 @@ dependencies = [
  "bravebot-agent",
  "bravebot-config",
  "bravebot-core",
+ "bravebot-diag",
  "bravebot-i18n",
  "bravebot-mcp",
  "bravebot-net",
@@ -228,6 +231,10 @@ name = "bravebot-core"
 version = "0.14.0"
 
 [[package]]
+name = "bravebot-diag"
+version = "0.14.0"
+
+[[package]]
 name = "bravebot-filetype"
 version = "0.14.0"
 
@@ -240,6 +247,7 @@ name = "bravebot-lsp"
 version = "0.14.0"
 dependencies = [
  "bravebot-core",
+ "bravebot-diag",
  "serde",
  "serde_json",
 ]
@@ -250,6 +258,7 @@ version = "0.14.0"
 dependencies = [
  "bravebot-config",
  "bravebot-core",
+ "bravebot-diag",
  "bravebot-net",
  "bravebot-sandbox",
  "serde",
@@ -269,6 +278,7 @@ name = "bravebot-net"
 version = "0.14.0"
 dependencies = [
  "bravebot-core",
+ "bravebot-diag",
  "ureq",
 ]
 
