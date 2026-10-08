@@ -16116,9 +16116,14 @@ fn requests_for_one_run_in(
         &egress,
         &workspace,
         // A profile directory, because a session with none has nowhere to hold the credential
-        // locations back from and so reads no more than a strict one does.
+        // locations back from and so reads no more than a strict one does. It is the account's own
+        // where there is one: a `bin` directory on `PATH` brings its parent into a strict profile
+        // unless that parent is the home or above it, so a stand-in home lets a parent of the
+        // checkout through and the strict read below succeeds on a machine whose `PATH` has one.
         &Task::new("run it")
-            .with_profile(Some(scratch.path.join("profile")))
+            .with_profile(Some(
+                bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
+            ))
             .with_confined_runs(true)
             .with_sandbox_mode(mode),
         &mut bravebot_agent::Conversation::new(),
