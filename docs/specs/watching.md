@@ -143,6 +143,7 @@ sentence drawn in a delegate's view would be the only thing on that screen the d
 do.
 
 `verified-by: bravebot_tui::state::a_reply_a_delegate_is_writing_is_not_drawn_over_the_turn`
+`verified-by: bravebot_tui::state::what_a_delegate_says_between_its_tool_calls_is_not_in_the_transcript`
 
 <a id="WATCH-7"></a>
 ### WATCH-7: Ctrl-L opens what happened outside the transcript: the list where there are several rows, the one where there is one
@@ -379,6 +380,7 @@ press of enter into an exit.
 `verified-by: bravebot_tui::render::the_list_holds_the_session_above_the_delegates`
 `verified-by: bravebot_tui::state::moving_up_from_the_first_delegate_in_the_list_reaches_the_session`
 `verified-by: bravebot_tui::state::going_back_to_the_list_lands_on_the_delegate_that_was_open`
+`verified-by: bravebot_tui::state::moving_down_from_the_session_in_the_list_reaches_the_first_delegate`
 `verified-by: bravebot_tui::app::opening_the_session_row_goes_back_to_the_conversation`
 
 <a id="WATCH-15"></a>
@@ -448,6 +450,7 @@ RUN-11 has the limit end the run rather than fail it, and a cross beside it woul
 about the program that is not true.
 
 `verified-by: bravebot_tui::render::a_command_row_says_how_the_run_ended`
+`verified-by: bravebot_tui::render::a_command_stopped_at_the_limit_is_marked_as_work_still_going`
 `verified-by: bravebot_tui::render::a_commands_view_says_how_the_run_ended`
 `verified-by: bravebot_agent::turn::what_a_command_printed_reaches_the_person_watching`
 

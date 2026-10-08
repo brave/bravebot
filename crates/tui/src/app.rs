@@ -25225,6 +25225,61 @@ mod tests {
         );
     }
 
+    /// Stopping the turn a watch's fire started ends that watch, and says so. The state method is
+    /// tested alone; this is the wiring, which is what a person's key press reaches.
+    #[test]
+    fn stopping_a_fires_turn_through_the_driver_ends_the_watch_that_fired() {
+        let mut session = Session::new("none");
+        let saw = |token: &str| bravebot_agent::watch::Looked::Saw(token.to_string());
+        session.arm_watch("notes.md", ".", saw("first"));
+        session
+            .watch_fired(Instant::now() + Duration::from_secs(6), |_, _| {
+                saw("second")
+            })
+            .expect("a fire");
+        assert!(session.watch_is_firing());
+        let asked = Asked {
+            name: "test-model".to_string(),
+            comparable: true,
+        };
+
+        fold_outcome(
+            &mut session,
+            Err(turn::TurnError::Cancelled { attempts: None }),
+            Trail::new(),
+            Carried {
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+            },
+            Occupied {
+                budget: 100_000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            asked,
+            Line {
+                text: "",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            &workspace_for_test(),
+        );
+
+        assert!(
+            session.watches().is_empty(),
+            "stopping a fire's turn left the watch that fired running"
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(watch_stopped_with_its_turn, number = 1)),
+            "the watch ended in silence"
+        );
+    }
+
     /// A goal is a condition for a session and not for one turn, so stopping a turn going the
     /// wrong way has to leave it: a person who has to retype the condition every time they
     /// interrupt cannot steer the work at all. The stopped turn is recorded as stopped, which is

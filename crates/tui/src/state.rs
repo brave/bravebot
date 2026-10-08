@@ -9979,6 +9979,37 @@ mod tests {
             );
         }
 
+        /// The session is the row above the first delegate, so moving down from it lands on the
+        /// first delegate and not on the second, and the highlight sits one row below the session.
+        #[test]
+        fn moving_down_from_the_session_in_the_list_reaches_the_first_delegate() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            session.watch();
+            session.watch_previous();
+            session.watch_previous();
+            assert!(session.listing_on_the_session());
+
+            session.watch_next();
+            assert!(
+                !session.listing_on_the_session(),
+                "moving down from the session stayed on the session"
+            );
+            assert_eq!(
+                session.list_highlight(),
+                1,
+                "moving down from the session did not land on the first delegate"
+            );
+            assert_eq!(
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
+                Some("reader"),
+                "moving down from the session skipped the first delegate"
+            );
+        }
+
         /// What is on the screen changes when a person asks and not otherwise. A delegate that
         /// answers while somebody is reading it has not asked for anything.
         #[test]
@@ -11200,6 +11231,33 @@ mod tests {
             session.streaming(" and now the delegate is");
 
             assert_eq!(session.streaming, "the turn is thinking");
+        }
+
+        /// A delegate says a great deal on its way to an answer and none of it is the turn's.
+        /// Pushed into the transcript, it reads as the planner announcing something it never said.
+        #[test]
+        fn what_a_delegate_says_between_its_tool_calls_is_not_in_the_transcript() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.narrate("DELEGATE-SAID-THIS");
+
+            assert!(
+                !session
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.text.contains("DELEGATE-SAID-THIS")),
+                "a delegate's words between tool calls landed in the turn's transcript"
+            );
+
+            session.reporting_for(None);
+            session.narrate("THE-TURN-SAID-THIS");
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.text.contains("THE-TURN-SAID-THIS")),
+                "the turn's own words were dropped along with the delegate's"
+            );
         }
 
         /// The block where a delegate started is a glance at it rather than the whole of it. It
