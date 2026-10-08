@@ -296,6 +296,20 @@ const LINUX_CREDENTIAL_DIRECTORIES: &[&str] = &[
 /// The machine-wide keychain directory on macOS.
 const MACOS_SYSTEM_KEYCHAINS: &str = "/Library/Keychains";
 
+/// The one file in `~/Library/Keychains` that is read, under the home directory.
+///
+/// `gh` and git's `osxkeychain` helper keep their tokens in it, and the process asking opens the
+/// database file itself, so a refusal of the file is a refusal of the lookup. Another file in the
+/// directory, such as `aws-vault.keychain-db`, stays refused.
+const MACOS_LOGIN_KEYCHAIN: &str = "Library/Keychains/login.keychain-db";
+
+/// The directory under the per-user cache directory that the Security framework keeps its
+/// framework database in.
+///
+/// A process that opens the login keychain writes a lock and two database files here first, and
+/// `gh` and `osxkeychain` fail without it even when the keychain file is readable.
+const MACOS_SECURITY_CACHE: &str = "mds";
+
 /// The files of `~/.ssh` that hold no secret: the client configuration, the hosts already
 /// verified, and the default public keys. Everything else in the directory is a private key or
 /// something named after one.
@@ -355,9 +369,23 @@ pub fn run_base(
         for row in SSH_READABLE {
             policy = policy.allow_read(under(home, row));
         }
+        if prelude == Prelude::MacOs {
+            policy = policy.allow_read(under(home, MACOS_LOGIN_KEYCHAIN));
+        }
     }
 
     policy
+}
+
+/// `policy` with the one directory the Security framework writes before it opens a keychain, which
+/// is under `user_cache`, the per-user cache directory the caller resolved (`confstr` with
+/// `_CS_DARWIN_USER_CACHE_DIR`, links followed).
+///
+/// Separate from [`run_base`] because that directory is the machine's to say and not a row under
+/// the home directory. The caller adds it for [`Prelude::MacOs`] only.
+#[must_use]
+pub fn with_security_cache(policy: SandboxPolicy, user_cache: &Path) -> SandboxPolicy {
+    policy.allow_write(user_cache.join(MACOS_SECURITY_CACHE))
 }
 
 /// The row a developer directory is granted as, where it is one of the two the platform installs.
@@ -531,6 +559,53 @@ mod tests {
         .collect();
 
         assert_eq!(lifted, expected);
+    }
+
+    /// The regression it rejects: the login keychain refused, which is `gh` and git's
+    /// `osxkeychain` helper finding no token, or the lift written as the directory, which reads
+    /// every other keychain file beside it. Linux has no such file, so no row names one there.
+    #[test]
+    fn the_run_base_on_macos_reads_the_login_keychain_file_and_no_other_keychain_file() {
+        let keychains = under(Path::new(A_HOME), "Library/Keychains");
+        let macos = a_run_base(Prelude::MacOs);
+
+        let lifted: Vec<PathBuf> = macos
+            .readable
+            .iter()
+            .filter(|row| row.starts_with(&keychains))
+            .cloned()
+            .collect();
+        assert_eq!(lifted, vec![keychains.join("login.keychain-db")]);
+        assert!(macos.unreadable.contains(&keychains));
+        assert!(
+            macos
+                .unreadable
+                .contains(&PathBuf::from("/Library/Keychains"))
+        );
+
+        let linux = a_run_base(Prelude::Linux);
+        assert!(
+            !linux.readable.iter().any(|row| row.starts_with(&keychains)),
+            "a Linux base names a macOS keychain"
+        );
+    }
+
+    /// The regression it rejects: the keychain lookup failing for want of the framework's cache
+    /// directory, which is `gh` and `osxkeychain` finding no token with the keychain file
+    /// readable, or the row written as the whole cache directory, which writes every cache of the
+    /// account's.
+    #[test]
+    fn the_security_cache_row_is_the_one_directory_under_the_user_cache() {
+        let cache = Path::new("/private/var/folders/ab/cdef/C");
+        let policy = with_security_cache(a_run_base(Prelude::MacOs), cache);
+
+        let written: Vec<PathBuf> = policy
+            .writable
+            .iter()
+            .filter(|row| row.path.starts_with(cache))
+            .map(|row| row.path.clone())
+            .collect();
+        assert_eq!(written, vec![cache.join("mds")]);
     }
 
     /// The regression it rejects: a token file refused, which is `gh`, `git`, `npm`, `cargo` and

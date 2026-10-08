@@ -180,6 +180,30 @@ impl SeatbeltSandbox {
     }
 }
 
+/// The per-user cache directory the platform names for this account, with its links followed,
+/// which is how Seatbelt matches it. `None` where the platform does not name one.
+// The exemption sits on the function because the function is the syscall.
+#[allow(unsafe_code)]
+#[cfg(target_os = "macos")]
+pub fn user_cache_directory() -> Option<std::path::PathBuf> {
+    let mut buffer = [0u8; libc::PATH_MAX as usize];
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let length = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_CACHE_DIR,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    if length == 0 || length > buffer.len() {
+        return None;
+    }
+    let text = std::ffi::CStr::from_bytes_until_nul(&buffer).ok()?;
+    Path::new(OsStr::from_bytes(text.to_bytes()))
+        .canonicalize()
+        .ok()
+}
+
 /// How many names a path has, which is how far down the filesystem it is.
 fn depth(path: &Path) -> usize {
     path.components()
@@ -1947,9 +1971,10 @@ int main(void) {
 
     /// The run base as the kernel holds it: one process per credential location is refused it,
     /// each token file a program reads by name is read, the three kinds of file in `~/.ssh` that
-    /// hold no secret are read beside the private key that is not, and nothing outside the
-    /// temporary directory is written. The table is spelled out here and not read from the base, so
-    /// a row dropped from the base is a row this fails on.
+    /// hold no secret are read beside the private key that is not, the login keychain is read
+    /// beside the other keychain files and the directory listing that are not, and nothing outside
+    /// the temporary directory is written. The table is spelled out here and not read from the
+    /// base, so a row dropped from the base is a row this fails on.
     #[test]
     fn a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest() {
         let (scratch, home, temporary) =
@@ -1966,7 +1991,8 @@ int main(void) {
             ".azure/accessTokens.json",
             ".config/gcloud/credentials.db",
             ".gnupg/private-keys-v1.d/key",
-            "Library/Keychains/login.keychain-db",
+            "Library/Keychains/aws-vault.keychain-db",
+            "Library/Keychains/a-keychain-of-its-own.keychain-db",
             "Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies",
             "Library/Application Support/Google/Chrome/Default/Cookies",
             "Library/Application Support/Firefox/Profiles/x/cookies.sqlite",
@@ -1985,6 +2011,7 @@ int main(void) {
             ".ssh/known_hosts",
             ".ssh/id_ed25519.pub",
             ".bravebotx/state",
+            "Library/Keychains/login.keychain-db",
             "Documents/notes.txt",
             "Library/Application Support/Other/state",
         ];
@@ -2019,6 +2046,11 @@ int main(void) {
             );
         }
         assert_eq!(
+            code("/bin/ls", home.join("Library").join("Keychains")),
+            Some(READ_FAILED),
+            "the keychain directory was listed"
+        );
+        assert_eq!(
             code("/usr/bin/touch", home.join("Documents").join("made")),
             Some(TOUCH_FAILED),
             "a file was made outside the temporary directory"
@@ -2028,6 +2060,14 @@ int main(void) {
             Some(0),
             "the temporary directory was not written"
         );
+        assert_eq!(
+            code(
+                "/usr/bin/touch",
+                home.join("Library/Keychains/login.keychain-db")
+            ),
+            Some(TOUCH_FAILED),
+            "the login keychain was written"
+        );
         assert!(
             SeatbeltSandbox::profile(&policy)
                 .contains("(deny file-read* (subpath \"/Library/Keychains\"))"),
@@ -2035,6 +2075,49 @@ int main(void) {
         );
 
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The Security framework's cache row as the kernel holds it: a file in the `mds` directory
+    /// under the user cache directory is made, and a file beside that directory is not. The cache
+    /// directory here is a scratch one, since the row is the same under any.
+    #[test]
+    fn a_stage_under_the_run_base_writes_the_security_cache_and_no_other_cache() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-run-base-security-cache");
+        let cache = scratch.join("C");
+        std::fs::create_dir_all(cache.join("mds")).expect("the scratch cache is creatable");
+        let cache = cache.canonicalize().expect("the scratch cache is there");
+        let policy = crate::base::with_security_cache(
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home)),
+            &cache,
+        );
+        let code = |path: PathBuf| {
+            exit_code_under(
+                &policy,
+                a_stage_for(&home),
+                "/usr/bin/touch",
+                &[&path.display().to_string()],
+            )
+        };
+
+        assert_eq!(code(cache.join("mds").join("mds.lock")), Some(0));
+        assert_eq!(
+            code(cache.join("com.example.cache")),
+            Some(TOUCH_FAILED),
+            "a cache beside the Security framework's was written"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The host's answer: a directory that exists, with no link left in it, which is the form a
+    /// Seatbelt row has to be written in.
+    #[test]
+    fn the_user_cache_directory_is_an_existing_path_with_its_links_followed() {
+        let cache = user_cache_directory().expect("macOS names a cache directory per user");
+
+        assert!(cache.is_dir(), "{} is not a directory", cache.display());
+        assert_eq!(cache.canonicalize().expect("it is there"), cache);
     }
 
     /// The cargo list as the kernel holds it: the registry is written, the configuration cargo

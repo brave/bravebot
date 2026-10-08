@@ -44,7 +44,8 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   were in it. See [Trusted directories](trust.md#known-costs).
 - **A program the agent was allowed to run.** On Linux and macOS a program can read the machine
   except the places that hold a credential (ssh private keys, cloud and container logins,
-  keychains, browser profiles and password stores) and can write only the directories the session
+  keychains other than the macOS login keychain file that `gh` and `git` use, browser profiles and
+  password stores) and can write only the directories the session
   was opened on, its scratch directory, the system temporary directory and the toolchain caches. A
   command that names `aws`, `kubectl` or `docker` is lent that tool's directory, and a `git push` the
   agent socket, never a private key. The files a tool reads by name to do its job, such as the `gh`
