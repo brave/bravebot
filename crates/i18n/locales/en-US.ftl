@@ -1458,6 +1458,7 @@ reach-refused-entry = { $entry } is not a credential scope (remote, aws, kuberne
 reach-refused-write = a credential scope is read only. Only a directory can be written.
 reach-refused-line = that command line cannot be run as written, so there is nothing to remember the reach for
 reach-refused-assignment = a command with NAME=value in front of it carries no remembered reach
+reach-refused-option = a command that starts with an option, such as `sh -c ...` or `git -C dir push`, cannot carry a remembered reach. Name the operation first, as in `git push`.
 reach-refused-incognito = this session adds nothing to ~/.bravebot, so nothing was remembered
 reach-refused-no-home = this session has no home directory to judge a reach against
 reach-refused-number = no reach is numbered { $number }

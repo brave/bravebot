@@ -16129,7 +16129,9 @@ fn a_refused_run_whose_stderr_names_a_path_adds_no_row() {
     }
     let state = Scratch::new("reach-stderr-state");
     let profile = Scratch::new("reach-stderr-profile");
-    let command = "sh -c 'echo /elsewhere/chosen; echo /elsewhere/chosen >&2; exit 1'";
+    // The path is spelled in pieces so the command text, which the failure line quotes, does not
+    // carry it: only what the program printed does.
+    let command = "sh -c 'p=/else; echo ${p}where/chosen; echo ${p}where/chosen >&2; exit 1'";
 
     let (first, told) =
         one_confined_run_keeping_state("reach-stderr-1", command, &state.path, &profile.path, "s");
@@ -16161,7 +16163,7 @@ fn a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only() 
     }
     let state = Scratch::new("reach-plan-state");
     let profile = Scratch::new("reach-plan-profile");
-    let command = "sh -c 'exit 1'";
+    let command = "false";
     let plan = bravebot_agent::cmdline::compile(
         command,
         &profile.path,

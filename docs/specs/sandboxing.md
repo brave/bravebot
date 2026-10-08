@@ -1125,6 +1125,9 @@ process environment, and nothing else. In particular:
 - Write is a directory's. A scope is never written by a grant, and `/reach` refuses one.
 - A stage with an assignment in front of it is covered by no grant, and a line with one is refused,
   for the reason an assignment removes a scope ([SANDBOX-16](#SANDBOX-16)).
+- A stage that starts with an option (`sh -c ...`, `git -C dir push`) has no operation to key on,
+  so `/reach` refuses the line, and a grant for a command given no arguments covers it only while
+  it is given none. Otherwise a grant made for one script would follow every script.
 - The record is `reach.jsonl` in the state directory. A checkout's files are not read for it, a
   session grant is read only by the session whose id it carries, and a line that is not a grant
   this build understands grants nothing.
@@ -1154,6 +1157,7 @@ the planner chose in front of a person to approve, and none is decided here.
 `verified-by: bravebot_agent::reach::a_line_that_is_not_a_grant_grants_nothing`
 `verified-by: bravebot_agent::reach::a_grant_made_for_one_command_is_made_for_that_command_only`
 `verified-by: bravebot_agent::reach::a_pipeline_gets_one_grant_for_each_distinct_stage`
+`verified-by: bravebot_agent::reach::a_command_that_starts_with_an_option_carries_no_grant`
 `verified-by: bravebot_agent::reach::a_directory_is_read_unless_the_person_said_write`
 `verified-by: bravebot_agent::reach::a_directory_that_holds_a_key_or_does_not_exist_is_refused`
 `verified-by: bravebot_agent::reach::a_directory_replaced_by_a_link_to_the_keys_is_refused_at_use`

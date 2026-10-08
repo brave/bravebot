@@ -77,8 +77,9 @@ pub struct Grant {
 
 /// The operation word of an argument vector: its first argument, unless that is an option.
 ///
-/// An option in front of the operation (`git -C dir push`) leaves none, so the step has the shape
-/// of no operation and a grant made for `git push` does not follow it.
+/// An option in front of the operation (`git -C dir push`) leaves none, so a grant made for
+/// `git push` does not follow it. A step with no operation is covered only when it has no arguments
+/// at all ([`Grant::covers`]), and `/reach` makes no grant for one that starts with an option.
 pub fn operation_of(args: &[String]) -> Option<String> {
     args.first()
         .filter(|first| !first.starts_with('-'))
@@ -93,7 +94,10 @@ impl Grant {
     pub fn covers(&self, step: &Step) -> bool {
         step.environment.is_empty()
             && step.resolved == self.binary
-            && operation_of(&step.args) == self.operation
+            && match &self.operation {
+                Some(operation) => operation_of(&step.args).as_ref() == Some(operation),
+                None => step.args.is_empty(),
+            }
     }
 
     /// The program and operation, as the grant is listed.
@@ -421,6 +425,12 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
     if steps.is_empty() || steps.iter().any(|step| !step.environment.is_empty()) {
         return t!(reach_refused_assignment).to_string();
     }
+    if steps
+        .iter()
+        .any(|step| !step.args.is_empty() && operation_of(&step.args).is_none())
+    {
+        return t!(reach_refused_option).to_string();
+    }
     let mut made: Vec<Grant> = Vec::new();
     for step in steps {
         let grant = Grant {
@@ -553,7 +563,8 @@ mod tests {
         assert!(!push.covers(&step("ls", "/bin/ls", &["push"])));
 
         let bare = scope_grant("/usr/bin/make", None, Lifetime::Always);
-        assert!(bare.covers(&step("make", "/usr/bin/make", &["-j4"])));
+        assert!(bare.covers(&step("make", "/usr/bin/make", &[])));
+        assert!(!bare.covers(&step("make", "/usr/bin/make", &["-j4"])));
         assert!(!bare.covers(&step("make", "/usr/bin/make", &["check"])));
     }
 
@@ -655,6 +666,29 @@ mod tests {
             Reached::Scope(Scope::named("aws").unwrap())
         );
         assert_eq!(held[0].lifetime, Lifetime::Session("s".to_string()));
+    }
+
+    /// A command that starts with an option has no operation to key on, so it gets no grant, and a
+    /// grant for a bare command does not follow it once it is given arguments. The regression it
+    /// rejects: a grant made for `sh -c 'aws s3 ls'` attached to every `sh -c <script>` the model
+    /// writes afterwards.
+    #[test]
+    fn a_command_that_starts_with_an_option_carries_no_grant() {
+        let place = Place::new("option-first");
+
+        let refused = place.say("s", "aws -- sh -c 'exit 1'");
+        assert_eq!(refused, t!(reach_refused_option).to_string());
+        assert!(place.held("s").is_empty());
+
+        place.say("s", "aws -- ls");
+        let held = place.held("s");
+        assert_eq!(held.len(), 1, "{held:?}");
+        let compile = |line: &str| {
+            crate::cmdline::compile(line, &place.profile, None, &mut |_, _| Ok(()))
+                .expect("compiles")
+        };
+        assert!(held[0].covers(compile("ls").steps()[0]));
+        assert!(!held[0].covers(compile("ls -la").steps()[0]));
     }
 
     /// Every stage of a line gets the reach, once for each shape. The regression it rejects: only
