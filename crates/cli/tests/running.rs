@@ -6091,12 +6091,13 @@ fn the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable() 
 }
 
 /// SANDBOX-22 through the process: `--sandbox` is read before anything dispatches, so a word that is
-/// not a mode stops the run with the three named, a mode that is one gets past it, and `--bg`, whose
-/// session starts in another process that would not carry it, refuses it by name.
+/// not a mode stops the run with the three named, and `--bg`, whose session starts in another
+/// process that would not carry it, refuses it by name.
 ///
-/// Running the binary because the flag is taken off the command line in `main` and what happens to
-/// it afterwards is a property of that process. The failure this rejects is the flag ignored: the
-/// run carrying on under the default after being told `strict`.
+/// Running the binary because the flag is taken off the command line in `main`. The failures this
+/// rejects are a word taken as a mode whatever it says, and `--bg` starting a session that has
+/// quietly lost the flag. That a word which is a mode reaches the session is
+/// `the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run`'s.
 #[test]
 fn the_sandbox_flag_is_read_before_the_run_starts() {
     let scratch = Scratch::new("cli-running-sandbox-flag");
@@ -6114,19 +6115,6 @@ fn the_sandbox_flag_is_read_before_the_run_starts() {
         );
     }
 
-    for word in ["strict", "standard", "off"] {
-        let output = bravebot(
-            &scratch.path,
-            CONFIGURED,
-            &["--sandbox", word, "-p", "say something"],
-        );
-        let (stdout, stderr) = said(&output);
-        assert!(
-            !stderr.contains("--sandbox requires"),
-            "{word} was refused as not being a mode: {stdout}{stderr}"
-        );
-    }
-
     let output = bravebot(
         &scratch.path,
         CONFIGURED,
@@ -6137,6 +6125,51 @@ fn the_sandbox_flag_is_read_before_the_run_starts() {
     assert!(
         stderr.contains("--sandbox"),
         "--bg did not name the flag: {stderr}"
+    );
+}
+
+/// SANDBOX-22: the mode `--sandbox` names reaches the description of the programs `run` starts. The
+/// three runs differ only in the flag, so a flag that is read and dropped, leaving every run under
+/// the default, gives `strict` and `off` the sentence `standard` gets and fails here.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run() {
+    let asked_under = |word: &str| {
+        let gateway = a_gateway_asking_for_a_run();
+        let scratch = Scratch::new(&format!("cli-running-sandbox-{word}"))
+            .with_settings(&settings_for(&gateway));
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            &environment,
+            &[
+                "--sandbox",
+                word,
+                "--dangerously-skip-permissions",
+                "-p",
+                "say hello",
+            ],
+        );
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway")
+    };
+
+    let strict = asked_under("strict");
+    assert!(
+        strict.contains("may reach only the directories"),
+        "{strict}"
+    );
+    let standard = asked_under("standard");
+    assert!(standard.contains("may read this machine"), "{standard}");
+    let off = asked_under("off");
+    assert!(!off.contains("Programs this tool starts"), "{off}");
+    assert!(
+        off.contains("\"name\":\"run\""),
+        "off dropped the run tool: {off}"
     );
 }
 

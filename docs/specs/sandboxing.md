@@ -1021,7 +1021,9 @@ binary brings, the credential scope its argv names and the session's directories
 nothing else on the machine. `standard` is what [SANDBOX-17](#SANDBOX-17) and
 [SANDBOX-18](#SANDBOX-18) describe, and is the mode when nothing chose another. `off` starts the
 stage with no profile. The network is not part of a mode: whether a stage keeps egress is the setting
-[SANDBOX-20](#SANDBOX-20) describes, and each mode honours it the same way.
+[SANDBOX-20](#SANDBOX-20) describes, and `strict` and `standard` honour it the same way. `off` starts
+no profile, so under it nothing holds a network shut; the floor below is what stops a managed pin
+from meeting that.
 
 The mode is read, in this order, from `--sandbox <mode>` (the last one wins), from the `sandbox.mode`
 key of the settings, and from the managed file's pin; the default is `standard`. In the settings, the home file and a `--settings` file outside
@@ -1089,9 +1091,11 @@ the command line prints it on its opening line.
 `verified-by: bravebot_cli::main::doctor_names_the_sandbox_mode_and_where_it_came_from`
 `verified-by: bravebot_cli::main::doctor_reports_a_mode_the_managed_file_refuses`
 `verified-by: bravebot_cli::running::the_sandbox_flag_is_read_before_the_run_starts`
+`verified-by: bravebot_cli::running::the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run`
 `verified-by: bravebot_agent::turn::a_run_under_off_starts_with_no_profile_and_says_nothing_of_one`
 `verified-by: bravebot_agent::turn::a_run_under_strict_cannot_read_what_standard_reads`
 `verified-by: bravebot_agent::turn::a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it`
+`verified-by: bravebot_agent::turn::a_delegate_of_a_strict_turn_cannot_read_what_a_standard_one_reads`
 `verified-by: bravebot_core::policy::the_trail_says_which_sandbox_mode_the_programs_ran_in`
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_reads_off_as_standard`
 

@@ -22994,8 +22994,9 @@ fn a_delegate_of_a_confining_turn_cannot_write_outside_the_session() {
 
 /// SANDBOX-22: a delegate runs its programs under the mode of the turn that spawned it. The
 /// regression it rejects is a delegate that takes the default: under `off` its program would be
-/// confined when the person chose no profile, and under `strict` it would read the machine. The
-/// `standard` turn is the control that the file cannot be planted from inside the profile.
+/// confined when the person chose no profile. The `standard` turn is the control that the file
+/// cannot be planted from inside the profile; `strict` is the next test's, since both profiles
+/// refuse this write.
 #[test]
 fn a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it() {
     if bravebot_sandbox::base::Prelude::current().is_none()
@@ -23066,6 +23067,97 @@ fn a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it() {
             written,
             "mode {mode}, and the delegate's program {} outside the session",
             if written { "did not write" } else { "wrote" }
+        );
+        let _ = std::fs::remove_dir_all(&top);
+    }
+}
+
+/// SANDBOX-22: a delegate of a `strict` turn cannot read what a delegate of a `standard` one reads.
+/// The regression it rejects is a delegate that carries only whether its programs are confined and
+/// takes the default for which profile, which the write test above cannot see because both profiles
+/// refuse the same write, and it names a profile directory, since a session with none is held to the listed rows whatever the mode. The program (`cp`) copies a file from beside the session into the session, so
+/// what arrives is the witness; the `standard` turn is the control that the file is readable.
+#[test]
+fn a_delegate_of_a_strict_turn_cannot_read_what_a_standard_one_reads() {
+    if bravebot_sandbox::base::Prelude::current().is_none()
+        || !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    for (mode, copied) in [
+        (bravebot_sandbox::SandboxMode::Standard, true),
+        (bravebot_sandbox::SandboxMode::Strict, false),
+    ] {
+        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("delegate-read-{mode}"));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("session")).unwrap();
+        std::fs::create_dir_all(top.join("beside")).unwrap();
+        let session = top.join("session").canonicalize().unwrap();
+        let beside = top
+            .join("beside")
+            .canonicalize()
+            .unwrap()
+            .join("readable.txt");
+        std::fs::write(&beside, "BESIDE-THE-SESSION").unwrap();
+        let copy = session.join("copy.txt");
+        let workspace = Workspace::new(&session).expect("workspace");
+
+        let (endpoint, _received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-READ-UNDER-A-MODE",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"COPY-THE-FILE-UNDER-A-MODE"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "COPY-THE-FILE-UNDER-A-MODE",
+                vec![
+                    tool_request(
+                        "run",
+                        &serde_json::json!({
+                            "command": format!(
+                                "cp {} {}",
+                                beside.display(),
+                                copy.display()
+                            )
+                        })
+                        .to_string(),
+                    ),
+                    reply_with("tried"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("HAVE-A-DELEGATE-READ-UNDER-A-MODE")
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+                .with_profile(Some(top.join("profile")))
+                .with_confined_runs(true)
+                .with_sandbox_mode(mode),
+            &mut bravebot_agent::confirm::ApproveRuns,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        let arrived = std::fs::read_to_string(&copy).unwrap_or_default();
+        assert_eq!(
+            arrived.contains("BESIDE-THE-SESSION"),
+            copied,
+            "mode {mode}, and the delegate's program {} the file beside the session: {arrived:?}",
+            if copied { "did not read" } else { "read" }
         );
         let _ = std::fs::remove_dir_all(&top);
     }
