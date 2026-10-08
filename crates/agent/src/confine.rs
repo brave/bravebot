@@ -1591,6 +1591,7 @@ mod tests {
             write,
             allowed: "2026-10-07".to_string(),
             lifetime: crate::reach::Lifetime::Always,
+            workspace: None,
         }
     }
 

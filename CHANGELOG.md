@@ -44,6 +44,7 @@
  - Changed a session in lines to remember your answers for the session and ask only the questions not yet settled.
  - Changed the row for a read released by auto-vetting to say so: "read without asking: a check found nothing". ([#1141](https://github.com/brave/bravebot/issues/1141))
  - Changed every refusal of a stored subscription batch to name the fix: `bravebot auth login leo` again, or `bravebot auth logout leo`. ([#1172](https://github.com/brave/bravebot/issues/1172))
+ - Fixed a directory or credential `/reach` remembered for a command applying in every checkout and, with `always`, every project. A row is now for the checkout it was typed in, except a credential scope for the program that scope belongs to (`gh`, `git push`, `aws`, `kubectl`, `docker`). Rows made before this are not read. ([#1803](https://github.com/brave/bravebot/issues/1803))
  - Fixed a redirection writing to a file a project-relative deny rule names, such as `Edit(.env)`. ([#1169](https://github.com/brave/bravebot/issues/1169))
  - Fixed a deny rule not covering a repository reached through a symbolic link, a rule written with a full path not holding in a delegate's checkout, and two spellings of a path that differ only in case deciding differently. ([#1187](https://github.com/brave/bravebot/issues/1187), [#1151](https://github.com/brave/bravebot/issues/1151), [#1194](https://github.com/brave/bravebot/issues/1194))
  - Fixed `/dev//null` and `/dev/./null` being treated as the discard device, which skipped the write checks.

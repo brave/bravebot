@@ -5,6 +5,9 @@
 //! named, read by default. It is made by a person typing `/reach`, and by nothing else: no program
 //! output, no planner argument and no settings file in a checkout is an input.
 //!
+//! A grant is for the checkout it was typed in, except a credential scope for a program the scope
+//! table already gives that scope to ([`Grant::workspace`]).
+//!
 //! `docs/specs/sandboxing.md` (SANDBOX-23) decides what a grant means. This module is the record: how
 //! a grant is spelled on disk, which are read back, and what the command that makes and removes
 //! them does.
@@ -14,13 +17,16 @@
 //! `reach.jsonl` in the state directory is JSON, one object per line, appended for the reasons
 //! [`crate::remembered`] gives. A line either allows a grant or revokes one, and the file is read in
 //! order, so removing a grant is a line rather than a rewrite. An unreadable line, or one naming a
-//! scope this build does not know, is skipped: it grants nothing.
+//! scope this build does not know, is skipped: it grants nothing. So is one that is bound to no
+//! checkout where it should be.
 //!
 //! # Everything degrades to asking
 //!
 //! No state directory, an unreadable file or a failed write each mean no grant, and a plan with no
 //! grant is the plan a session had before this existed. Nothing here fails a run.
 
+use crate::granted::WrittenPath;
+use crate::trusted::Identity;
 use bravebot_core::command::Step;
 use bravebot_i18n::t;
 use bravebot_sandbox::scope::{Scope, judged_directory};
@@ -58,6 +64,34 @@ pub enum Lifetime {
     Always,
 }
 
+/// The checkout a grant was typed in: where it is, and which directory was there.
+///
+/// The identity is what tells the checkout apart from another one made at the same path, as it
+/// does for a kept answer to the startup question ([`crate::trusted`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Workspace {
+    /// The workspace root, as the session names it.
+    pub root: PathBuf,
+    /// What the filesystem says about the directory at `root`.
+    pub identity: Identity,
+}
+
+impl Workspace {
+    /// The workspace at `root` as it is now, or `None` where the filesystem cannot tell it from
+    /// another directory made at the same path.
+    pub fn of(root: &Path) -> Option<Self> {
+        Some(Self {
+            root: root.to_path_buf(),
+            identity: Identity::of(root)?,
+        })
+    }
+
+    /// Whether this is the directory at `root` now.
+    fn is_at(&self, root: &Path) -> bool {
+        self.root == root && Identity::of(root) == Some(self.identity)
+    }
+}
+
 /// Reach attached to every step of one shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
@@ -73,6 +107,14 @@ pub struct Grant {
     pub allowed: String,
     /// How long it applies.
     pub lifetime: Lifetime,
+    /// The checkout it applies in, or `None` where it applies in every one.
+    ///
+    /// `None` only for a credential scope of a program the scope table gives that scope to
+    /// ([`Grant::is_global`]), such as `gh` for the remote scope, whose configuration directory is
+    /// the same in every project. Every other grant, a directory above all, is for the program a
+    /// checkout's own files decide the behaviour of (`make`, `npm run`, `sh script.sh`), so an
+    /// answer about one checkout's `make check` is not one about the next checkout's.
+    pub workspace: Option<Workspace>,
 }
 
 /// The operation word of an argument vector: its first argument, unless that is an option.
@@ -110,6 +152,24 @@ fn key_of(step: &Step) -> Key<'_> {
 }
 
 impl Grant {
+    /// Whether a grant of `reached` to `binary` and `operation` is for every checkout.
+    ///
+    /// Asked of the scope table, which is the one list of the programs a scope belongs to.
+    pub fn is_global(binary: &Path, operation: Option<&str>, reached: &Reached) -> bool {
+        let Reached::Scope(scope) = reached else {
+            return false;
+        };
+        let args: Vec<String> = operation.map(str::to_string).into_iter().collect();
+        Scope::of(binary, &args, &[]) == Some(*scope)
+    }
+
+    /// Whether this grant is in force in the workspace at `root`.
+    fn applies_in(&self, root: &Path) -> bool {
+        self.workspace
+            .as_ref()
+            .is_none_or(|workspace| workspace.is_at(root))
+    }
+
     /// Whether this grant attaches to `step`.
     ///
     /// A step with an assignment in front of it is covered by none, as it carries no scope: every
@@ -151,6 +211,7 @@ impl Grant {
             && self.reached == other.reached
             && self.write == other.write
             && self.lifetime == other.lifetime
+            && self.workspace == other.workspace
     }
 
     /// The directory to open, judged again against `home` now. A link that has since been pointed
@@ -170,9 +231,19 @@ impl Grant {
     }
 
     fn lasting(&self) -> String {
-        match self.lifetime {
-            Lifetime::Session(_) => t!(reach_lifetime_session).to_string(),
-            Lifetime::Always => t!(reach_lifetime_always).to_string(),
+        match (&self.lifetime, &self.workspace) {
+            (Lifetime::Session(_), None) => t!(reach_lifetime_session).to_string(),
+            (Lifetime::Always, None) => t!(reach_lifetime_always).to_string(),
+            (Lifetime::Session(_), Some(workspace)) => t!(
+                reach_lifetime_session_in,
+                workspace = workspace.root.display().to_string()
+            )
+            .to_string(),
+            (Lifetime::Always, Some(workspace)) => t!(
+                reach_lifetime_always_in,
+                workspace = workspace.root.display().to_string()
+            )
+            .to_string(),
         }
     }
 }
@@ -206,6 +277,15 @@ struct Written {
     write: bool,
     allowed: String,
     session: Option<String>,
+    workspace: Option<WrittenWorkspace>,
+}
+
+/// The checkout a line is bound to, as it is spelled on disk.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WrittenWorkspace {
+    root: WrittenPath,
+    identity: Identity,
 }
 
 impl Written {
@@ -226,6 +306,10 @@ impl Written {
                 Lifetime::Session(id) => Some(id.clone()),
                 Lifetime::Always => None,
             },
+            workspace: grant.workspace.as_ref().map(|workspace| WrittenWorkspace {
+                root: WrittenPath::of(&workspace.root),
+                identity: workspace.identity,
+            }),
         })
     }
 
@@ -239,10 +323,28 @@ impl Written {
             }
             _ => return None,
         };
+        let binary = PathBuf::from(self.binary);
+        let workspace = match self.workspace {
+            Some(bound) => {
+                let root = bound.root.to_path()?;
+                root.is_absolute().then_some(())?;
+                Some(Workspace {
+                    root,
+                    identity: bound.identity,
+                })
+            }
+            None => {
+                // A line with no checkout is for every checkout, which only the scope table may
+                // say. Anything else, including a line from before grants were bound, grants
+                // nothing.
+                Grant::is_global(&binary, self.operation.as_deref(), &reached).then_some(())?;
+                None
+            }
+        };
         Some((
             self.action,
             Grant {
-                binary: PathBuf::from(self.binary),
+                binary,
                 operation: self.operation,
                 reached,
                 write: self.write,
@@ -251,6 +353,7 @@ impl Written {
                     Some(id) => Lifetime::Session(id),
                     None => Lifetime::Always,
                 },
+                workspace,
             },
         ))
     }
@@ -276,11 +379,14 @@ impl Store {
         &self.path
     }
 
-    /// The grants in force for `session`: every `always` grant and those made in that session.
+    /// The grants in force for `session` in the workspace at `root`: every `always` grant and those
+    /// made in that session, less those bound to another checkout, including another directory
+    /// that is now at the path a grant was made in.
     ///
     /// Read afresh on every call, so a grant removed in another session stops applying here at the
-    /// next plan. `None` is a session with nobody to put a prompt to, which reads no session grant.
-    pub fn read(&self, session: Option<&str>) -> Vec<Grant> {
+    /// next plan, and a session that moved to another checkout reads the grants of that one.
+    /// `None` is a session with nobody to put a prompt to, which reads no session grant.
+    pub fn read(&self, session: Option<&str>, root: &Path) -> Vec<Grant> {
         let Ok(contents) = std::fs::read_to_string(&self.path) else {
             return Vec::new();
         };
@@ -295,9 +401,12 @@ impl Store {
                 held.push(grant);
             }
         }
-        held.retain(|grant| match &grant.lifetime {
-            Lifetime::Always => true,
-            Lifetime::Session(id) => session == Some(id.as_str()),
+        held.retain(|grant| {
+            let lasts = match &grant.lifetime {
+                Lifetime::Always => true,
+                Lifetime::Session(id) => session == Some(id.as_str()),
+            };
+            lasts && grant.applies_in(root)
         });
         held
     }
@@ -343,7 +452,8 @@ pub struct Typed<'a> {
     pub profile: Option<&'a Path>,
     /// The session a `session` grant belongs to.
     pub session: &'a str,
-    /// The working directory the command line is compiled in.
+    /// The workspace root: the command line is compiled in it, the grants listed and removed are the
+    /// ones in force in it, and a grant that is not for every checkout is bound to it.
     pub directory: &'a Path,
     /// The day the grant is dated.
     pub today: &'a str,
@@ -358,11 +468,11 @@ pub fn command(typed: &Typed<'_>, argument: &str) -> String {
     let store = Store::new(typed.home);
     let argument = argument.trim();
     if argument.is_empty() {
-        return listing(&store.read(Some(typed.session)));
+        return listing(&store.read(Some(typed.session), typed.directory));
     }
     if let Some(number) = argument.strip_prefix("remove") {
         return match number.trim().parse::<usize>() {
-            Ok(number) => remove(&store, typed.session, number),
+            Ok(number) => remove(&store, typed.session, typed.directory, number),
             Err(_) => t!(reach_usage).to_string(),
         };
     }
@@ -391,8 +501,8 @@ fn listing(held: &[Grant]) -> String {
         .join("\n")
 }
 
-fn remove(store: &Store, session: &str, number: usize) -> String {
-    let held = store.read(Some(session));
+fn remove(store: &Store, session: &str, root: &Path, number: usize) -> String {
+    let held = store.read(Some(session), root);
     let Some(grant) = number.checked_sub(1).and_then(|at| held.get(at)) else {
         return t!(reach_refused_number, number = number.to_string()).to_string();
     };
@@ -462,11 +572,20 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
     {
         return t!(reach_refused_option).to_string();
     }
+    let here = Workspace::of(typed.directory);
     let mut made: Vec<Grant> = Vec::new();
     for key in keys {
+        let operation = operation_of(key.args);
+        let workspace = match Grant::is_global(&key.binary, operation.as_deref(), &reached) {
+            true => None,
+            false => match &here {
+                Some(here) => Some(here.clone()),
+                None => return t!(reach_refused_workspace).to_string(),
+            },
+        };
         let grant = Grant {
             binary: key.binary,
-            operation: operation_of(key.args),
+            operation,
             reached: reached.clone(),
             write,
             allowed: typed.today.to_string(),
@@ -474,6 +593,7 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
                 true => Lifetime::Always,
                 false => Lifetime::Session(typed.session.to_string()),
             },
+            workspace,
         };
         if !made.iter().any(|held| held.same_as(&grant)) {
             made.push(grant);
@@ -522,14 +642,31 @@ mod tests {
         }
     }
 
+    /// A grant for every checkout, of the scope the table gives `binary` and `operation`.
     fn scope_grant(binary: &str, operation: Option<&str>, lifetime: Lifetime) -> Grant {
+        let args: Vec<String> = operation.map(str::to_string).into_iter().collect();
+        let scope = Scope::of(Path::new(binary), &args, &[]).expect("a program the table names");
         Grant {
             binary: PathBuf::from(binary),
             operation: operation.map(str::to_string),
-            reached: Reached::Scope(Scope::named("aws").expect("a scope")),
+            reached: Reached::Scope(scope),
             write: false,
             allowed: "2026-10-07".to_string(),
             lifetime,
+            workspace: None,
+        }
+    }
+
+    /// A grant of `reached` to `binary` bound to the checkout at `root`.
+    fn bound_grant(binary: &str, reached: Reached, lifetime: Lifetime, root: &Path) -> Grant {
+        Grant {
+            binary: PathBuf::from(binary),
+            operation: None,
+            reached,
+            write: false,
+            allowed: "2026-10-07".to_string(),
+            lifetime,
+            workspace: Some(Workspace::of(root).expect("an identity")),
         }
     }
 
@@ -539,6 +676,9 @@ mod tests {
         home: PathBuf,
         profile: PathBuf,
         project: PathBuf,
+        /// Two checkouts of one project, to type a row in one and use it in the other.
+        first: PathBuf,
+        second: PathBuf,
     }
 
     impl Place {
@@ -552,11 +692,33 @@ mod tests {
             std::fs::create_dir_all(&home).expect("state");
             std::fs::create_dir_all(profile.join(".ssh")).expect(".ssh");
             std::fs::create_dir_all(&project).expect("project");
+            let (first, second) = (root.join("profile/first"), root.join("profile/second"));
+            std::fs::create_dir_all(&first).expect("first checkout");
+            std::fs::create_dir_all(&second).expect("second checkout");
             Self {
                 home,
                 profile,
                 project,
+                first,
+                second,
             }
+        }
+
+        fn say_in(&self, session: &str, directory: &Path, argument: &str) -> String {
+            command(
+                &Typed {
+                    home: &self.home,
+                    profile: Some(&self.profile),
+                    session,
+                    directory,
+                    today: "2026-10-07",
+                },
+                argument,
+            )
+        }
+
+        fn held_in(&self, session: &str, directory: &Path) -> Vec<Grant> {
+            Store::new(&self.home).read(Some(session), directory)
         }
 
         fn say(&self, session: &str, argument: &str) -> String {
@@ -573,7 +735,7 @@ mod tests {
         }
 
         fn held(&self, session: &str) -> Vec<Grant> {
-            Store::new(&self.home).read(Some(session))
+            Store::new(&self.home).read(Some(session), &self.profile)
         }
     }
 
@@ -593,7 +755,12 @@ mod tests {
         assert!(!push.covers(&step("git", "/tmp/elsewhere/git", &["push"])));
         assert!(!push.covers(&step("ls", "/bin/ls", &["push"])));
 
-        let bare = scope_grant("/usr/bin/make", None, Lifetime::Always);
+        let bare = bound_grant(
+            "/usr/bin/make",
+            Reached::Scope(Scope::named("aws").expect("a scope")),
+            Lifetime::Always,
+            &std::env::temp_dir(),
+        );
         assert!(bare.covers(&step("make", "/usr/bin/make", &[])));
         assert!(!bare.covers(&step("make", "/usr/bin/make", &["-j4"])));
         assert!(!bare.covers(&step("make", "/usr/bin/make", &["check"])));
@@ -622,9 +789,15 @@ mod tests {
         let once = scope_grant("/usr/bin/kubectl", None, Lifetime::Session("one".into()));
         assert!(store.allow(&always) && store.allow(&once));
 
-        assert_eq!(store.read(Some("one")), [always.clone(), once.clone()]);
-        assert_eq!(store.read(Some("two")), std::slice::from_ref(&always));
-        assert_eq!(store.read(None), [always]);
+        assert_eq!(
+            store.read(Some("one"), &place.profile),
+            [always.clone(), once.clone()]
+        );
+        assert_eq!(
+            store.read(Some("two"), &place.profile),
+            std::slice::from_ref(&always)
+        );
+        assert_eq!(store.read(None, &place.profile), [always]);
     }
 
     /// A removed grant stays removed, and a grant allowed again after it comes back. The
@@ -640,16 +813,21 @@ mod tests {
 
         dropped.allowed = "2030-01-01".to_string();
         assert!(store.revoke(&dropped));
-        assert_eq!(store.read(None), std::slice::from_ref(&kept));
+        assert_eq!(
+            store.read(None, &place.profile),
+            std::slice::from_ref(&kept)
+        );
 
         assert!(store.allow(&dropped));
-        assert_eq!(store.read(None), [kept, dropped]);
+        assert_eq!(store.read(None, &place.profile), [kept, dropped]);
     }
 
     /// A line that is not a grant this build understands grants nothing, and the lines around it
     /// still count. The regressions it rejects: a file that fails whole on one bad line, so one
-    /// stray byte drops every grant, and a line naming a scope this build does not know, a write
-    /// to a scope or a relative directory being read as the nearest thing it can be.
+    /// stray byte drops every grant, a line naming a scope this build does not know, a write to a
+    /// scope or a relative directory being read as the nearest thing it can be, and a line with no
+    /// checkout (every line written before grants were bound) being read as one for every checkout
+    /// when its program is not one the scope table names.
     #[test]
     fn a_line_that_is_not_a_grant_grants_nothing() {
         let place = Place::new("bad-lines");
@@ -664,10 +842,12 @@ mod tests {
             r#"{"action":"allow","binary":"/b","operation":null,"scope":null,"directory":"relative/dir","write":false,"allowed":"d","session":null}"#.to_string(),
             r#"{"action":"allow","binary":"/b","operation":null,"scope":"aws","directory":"/tmp","write":false,"allowed":"d","session":null}"#.to_string(),
             r#"{"action":"allow","binary":"/b","operation":null,"scope":"aws","directory":null,"write":false,"allowed":"d","session":null,"extra":1}"#.to_string(),
+            r#"{"action":"allow","binary":"/usr/bin/make","operation":null,"scope":null,"directory":"/tmp","write":false,"allowed":"d","session":null}"#.to_string(),
+            r#"{"action":"allow","binary":"/usr/bin/make","operation":null,"scope":"aws","directory":null,"write":false,"allowed":"d","session":null}"#.to_string(),
         ];
         std::fs::write(store.path(), format!("{}\n{before}", bad.join("\n"))).expect("seed");
 
-        assert_eq!(store.read(None), [good]);
+        assert_eq!(store.read(None, &place.profile), [good]);
     }
 
     /// A grant made for one command is attached to that command. The regression it rejects: a grant
@@ -907,5 +1087,124 @@ mod tests {
 
         assert_eq!(said, t!(reach_refused_no_home));
         assert!(place.held("s").is_empty());
+    }
+
+    /// A directory row is for the checkout it was typed in. The regressions it rejects: a row read
+    /// in every checkout, so `/cd` into another one carries the first one's directory; a row bound
+    /// to a session only, so an `always` row follows the person into every project; and a session
+    /// row that outlives its session.
+    #[test]
+    fn a_directory_row_is_in_force_only_in_the_checkout_it_was_typed_in() {
+        let place = Place::new("directory-bound");
+        let named = place.project.display().to_string();
+
+        place.say_in("s", &place.first, &format!("{named} write -- ls"));
+        place.say_in("s", &place.first, &format!("{named} always -- cat"));
+
+        assert_eq!(place.held_in("s", &place.first).len(), 2);
+        assert_eq!(place.held_in("s", &place.second), [], "after /cd");
+        assert_eq!(
+            place.held_in("new", &place.first).len(),
+            1,
+            "a new session: the always row only"
+        );
+        assert_eq!(place.held_in("new", &place.second), [], "always, elsewhere");
+        let listed = place.say_in("s", &place.first, "");
+        assert!(
+            listed.contains(&place.first.display().to_string()),
+            "{listed}"
+        );
+        assert_eq!(place.say_in("s", &place.second, ""), t!(reach_none));
+    }
+
+    /// A credential scope for a program the scope table gives it to is for every checkout. The
+    /// regression it rejects: every row bound, so `gh` has to be allowed again in each project
+    /// though its configuration directory is the same in all of them.
+    #[test]
+    fn a_scope_for_a_program_the_table_names_is_in_force_in_every_checkout() {
+        let place = Place::new("scope-global");
+
+        place.say_in("s", &place.first, "docker always -- docker ps");
+        place.say_in("s", &place.first, "remote -- git push");
+
+        let (here, there) = (
+            place.held_in("s", &place.first),
+            place.held_in("s", &place.second),
+        );
+        assert_eq!(here.len(), 2, "{here:?}");
+        assert_eq!(here, there);
+        assert!(here.iter().all(|grant| grant.workspace.is_none()));
+        assert_eq!(place.held_in("new", &place.second).len(), 1);
+    }
+
+    /// A scope typed for a program the table does not name for it is bound, not global. The
+    /// regression it rejects: the scope being what makes a row global, so `/reach aws -- make
+    /// check` hands every checkout's `make check` the AWS credentials.
+    #[test]
+    fn a_scope_for_a_program_the_table_does_not_name_is_bound_to_the_checkout() {
+        let place = Place::new("scope-bound");
+
+        place.say_in("s", &place.first, "aws always -- make check");
+
+        let here = place.held_in("s", &place.first);
+        assert_eq!(here.len(), 1, "{here:?}");
+        assert!(here[0].workspace.is_some());
+        assert_eq!(place.held_in("s", &place.second), []);
+    }
+
+    /// A row bound to a checkout is dropped when the directory at its path is another one, and a
+    /// line from before rows were bound, whose program the table does not name, grants nothing.
+    /// The regressions they reject: the path alone deciding, so a checkout deleted and cloned again
+    /// inherits what was said of the first; and an old line read as global, which carries every old
+    /// directory row into every project.
+    #[test]
+    fn a_row_bound_to_another_directory_at_the_same_path_is_dropped() {
+        let place = Place::new("same-path");
+        let named = place.project.display().to_string();
+        place.say_in("s", &place.first, &format!("{named} always -- ls"));
+        assert_eq!(place.held_in("s", &place.first).len(), 1);
+        let store = Store::new(&place.home);
+        let before = std::fs::read_to_string(store.path()).expect("record");
+
+        for field in ["made", "inode"] {
+            let mut line: serde_json::Value = serde_json::from_str(before.trim()).expect("json");
+            let identity = &mut line["workspace"]["identity"][field];
+            let Some(number) = identity.as_u64() else {
+                continue;
+            };
+            *identity = (number + 1).into();
+            std::fs::write(store.path(), format!("{line}\n")).expect("rewrite");
+
+            assert_eq!(place.held_in("s", &place.first), [], "{field} differs");
+        }
+
+        let mut old: serde_json::Value = serde_json::from_str(before.trim()).expect("json");
+        old.as_object_mut().expect("object").remove("workspace");
+        std::fs::write(store.path(), format!("{old}\n")).expect("rewrite");
+        assert_eq!(
+            place.held_in("s", &place.first),
+            [],
+            "a line with no checkout"
+        );
+    }
+
+    /// A row is removed by the number the list gives in this checkout, and only that one. The
+    /// regression it rejects: a list or a removal across checkouts, whose numbers a person in one
+    /// checkout would use to remove a row of another.
+    #[test]
+    fn remove_reaches_only_the_rows_of_this_checkout() {
+        let place = Place::new("remove-bound");
+        let named = place.project.display().to_string();
+        place.say_in("s", &place.first, &format!("{named} -- ls"));
+        place.say_in("s", &place.second, &format!("{named} -- cat"));
+
+        assert_eq!(
+            place.say_in("s", &place.first, "remove 2"),
+            t!(reach_refused_number, number = "2")
+        );
+        place.say_in("s", &place.first, "remove 1");
+
+        assert_eq!(place.held_in("s", &place.first), []);
+        assert_eq!(place.held_in("s", &place.second).len(), 1);
     }
 }

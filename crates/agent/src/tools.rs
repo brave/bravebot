@@ -1857,7 +1857,9 @@ impl<'a> Tools<'a> {
         // Read only where a person is there to see the row it adds: a session with nobody to put
         // a prompt to reads no record, for the reason a remembered line is not read there.
         let grants = match (self.home, self.remembering) {
-            (Some(home), Some(session)) => crate::reach::Store::new(home).read(Some(session)),
+            (Some(home), Some(session)) => {
+                crate::reach::Store::new(home).read(Some(session), self.workspace.root())
+            }
             _ => Vec::new(),
         };
         Some(confinement.with_grants(grants))
@@ -14380,6 +14382,11 @@ mod tests {
             let elsewhere = Scratch::new("reach-in-the-checkout");
             let state_path: &'static std::path::Path =
                 Box::leak(state.path.clone().into_boxed_path());
+            let Some(here) = crate::reach::Workspace::of(workspace.root()) else {
+                // A filesystem that keeps no creation time binds nothing, so a bound row has no
+                // checkout to apply in.
+                return;
+            };
             let grant = |lifetime| Grant {
                 binary: "/bin/ls".into(),
                 operation: None,
@@ -14387,6 +14394,7 @@ mod tests {
                 write: false,
                 allowed: "2026-10-07".to_string(),
                 lifetime,
+                workspace: Some(here.clone()),
             };
             assert!(Store::new(&state.path).allow(&grant(Lifetime::Session("mine".into()))));
             for directory in [
@@ -14430,6 +14438,18 @@ mod tests {
             let empty: &'static std::path::Path =
                 Box::leak(elsewhere.path.clone().into_boxed_path());
             assert_eq!(carries(Some(empty), Some("mine")), 0);
+
+            // The same session, the same record, another checkout: the row was typed in the first.
+            let other = Workspace::new(&elsewhere.path).expect("another workspace");
+            let carried_in_other = with_tools(&other, |tools| {
+                tools.confine_runs = true;
+                tools.home = Some(state_path);
+                tools.profile = Some(profile);
+                tools.remembering = Some("mine");
+                let confinement = tools.confinement().expect("a platform with a base");
+                confinement.describe(&[&step]).sentences().len()
+            });
+            assert_eq!(carried_in_other, 0);
         }
 
         /// The statement lands on `run` and on no other tool, and only on a turn that confines.
