@@ -1375,5 +1375,7 @@ or narrow them.
 `verified-by: bravebot_core::tool_set::no_shell_removes_the_program_tools_even_where_an_allow_list_names_them`
 `verified-by: bravebot_cli::running::a_tools_list_offers_only_what_it_names_and_refuses_a_call_to_any_other`
 `verified-by: bravebot_cli::running::a_no_shell_run_offers_no_program_tool_and_refuses_a_call_to_one`
+`verified-by: bravebot_cli::running::a_delegate_is_limited_by_the_flags_the_run_was_given`
+`verified-by: bravebot_cli::running::a_tools_list_offers_no_tool_of_an_approved_server`
 `verified-by: bravebot_cli::running::a_tool_limit_that_limits_nothing_is_refused_by_name`
 `verified-by: bravebot_cli::main::the_tool_limit_is_taken_out_wherever_it_appears`
