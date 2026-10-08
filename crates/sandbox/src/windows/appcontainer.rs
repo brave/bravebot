@@ -10,12 +10,12 @@
 use super::{
     Grant, OWNER_ONLY_DIRECTORY_SDDL, OWNER_ONLY_FILE_SDDL, capability_names, command_line,
     environment_block, grants_to_write, paths_that_are_not_there, profile_name, refusal_for,
-    refusal_for_program,
+    refusal_for_program, text_of,
 };
 use crate::policy::{Capabilities, SandboxPolicy};
 use crate::process::{Attached, ConfinedChild, Environment, Stream, Streams};
 use crate::{Sandbox, SandboxError};
-use std::ffi::{OsStr, c_void};
+use std::ffi::{OsStr, OsString, c_void};
 use std::fs::{File, OpenOptions};
 use std::io::{Error, Result};
 use std::os::windows::ffi::OsStrExt;
@@ -192,18 +192,19 @@ impl Sandbox for AppContainerSandbox {
 
     fn spawn(
         &self,
-        program: &str,
-        args: &[String],
+        program: &OsStr,
+        args: &[OsString],
         policy: &SandboxPolicy,
         streams: Streams,
         environment: Environment,
     ) -> std::result::Result<ConfinedChild, SandboxError> {
-        let capabilities = self.prepare(program, policy)?;
+        let (program, args) = text_of(program, args)?;
+        let capabilities = self.prepare(&program, policy)?;
         start(
             &self.sid,
             &capabilities,
-            program,
-            args,
+            &program,
+            &args,
             Wiring::Streams(streams),
             &environment,
             policy.starting_in.as_deref(),
@@ -212,18 +213,19 @@ impl Sandbox for AppContainerSandbox {
 
     fn spawn_attached(
         &self,
-        program: &str,
-        args: &[String],
+        program: &OsStr,
+        args: &[OsString],
         policy: &SandboxPolicy,
         attached: Attached,
         environment: Environment,
     ) -> std::result::Result<ConfinedChild, SandboxError> {
-        let capabilities = self.prepare(program, policy)?;
+        let (program, args) = text_of(program, args)?;
+        let capabilities = self.prepare(&program, policy)?;
         start(
             &self.sid,
             &capabilities,
-            program,
-            args,
+            &program,
+            &args,
             Wiring::Handles(attached),
             &environment,
             policy.starting_in.as_deref(),

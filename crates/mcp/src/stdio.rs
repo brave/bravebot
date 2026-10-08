@@ -23,6 +23,7 @@ use bravebot_sandbox::{
     Streams, Variables,
 };
 use serde_json::Value;
+use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -142,10 +143,11 @@ impl StdioServer {
         policy: &SandboxPolicy,
         diagnostics: Stream,
     ) -> McpResult<Self> {
+        let args: Vec<OsString> = args.iter().map(OsString::from).collect();
         let mut child = sandbox
             .spawn(
-                program,
-                args,
+                OsStr::new(program),
+                &args,
                 policy,
                 Streams {
                     stdin: Stream::Piped,

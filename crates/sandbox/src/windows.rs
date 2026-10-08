@@ -29,6 +29,7 @@
 
 use crate::SandboxError;
 use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// The capability that lets a confined process open an outbound socket.
@@ -281,6 +282,29 @@ pub fn refusal_for_program(program: &str) -> Option<SandboxError> {
              than starting it"
         ),
     })
+}
+
+/// The program and arguments as the text a command line is written from, or a refusal of the
+/// first that is not text.
+///
+/// A command line is one string, so a value that is not valid Unicode cannot be written into it
+/// without being replaced by a character it does not hold, and the process started would then be
+/// the one that character names. It is refused here, before a profile or a grant exists.
+pub fn text_of(program: &OsStr, args: &[OsString]) -> Result<(String, Vec<String>), SandboxError> {
+    let refused = |value: &OsStr| SandboxError::SetupFailed {
+        mechanism: "appcontainer",
+        detail: format!(
+            "{} is not text and cannot be written into a command line without naming a \
+             different file or value; refusing rather than starting that one",
+            value.to_string_lossy()
+        ),
+    };
+    let program = program.to_str().ok_or_else(|| refused(program))?.to_owned();
+    let args = args
+        .iter()
+        .map(|arg| arg.to_str().map(str::to_owned).ok_or_else(|| refused(arg)))
+        .collect::<Result<_, _>>()?;
+    Ok((program, args))
 }
 
 /// What an AppContainer enforces here.
@@ -826,6 +850,34 @@ mod tests {
             longest.len() <= LONGEST_PROFILE_NAME,
             "{longest} is {} characters",
             longest.len()
+        );
+    }
+
+    /// RUN-8: a command line is text, so a program or an argument that is not text is refused
+    /// where it would otherwise be written as the file or value whose name spells the replacement
+    /// of its bytes. The regression it rejects is the lossy rendering written into the line.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_or_an_argument_that_is_not_text_is_refused_for_a_command_line() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let not_text = OsStr::from_bytes(b"dir-\xff");
+        let text = OsString::from("fine");
+
+        assert!(matches!(
+            text_of(not_text, &[]),
+            Err(SandboxError::SetupFailed { .. })
+        ));
+        assert!(matches!(
+            text_of(
+                OsStr::new("s.exe"),
+                &[text.clone(), not_text.to_os_string()]
+            ),
+            Err(SandboxError::SetupFailed { .. })
+        ));
+        assert_eq!(
+            text_of(OsStr::new("s.exe"), &[text]).expect("text"),
+            ("s.exe".to_owned(), vec!["fine".to_owned()])
         );
     }
 

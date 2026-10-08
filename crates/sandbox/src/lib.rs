@@ -55,6 +55,7 @@ pub use process::{
     ConfinedChild, ConfinedStderr, ConfinedStdin, ConfinedStdout, Environment, Stream, Streams,
     Variables,
 };
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 
 #[derive(Debug)]
@@ -116,8 +117,8 @@ pub trait Sandbox: Send {
     /// backend this is.
     fn spawn(
         &self,
-        program: &str,
-        args: &[String],
+        program: &OsStr,
+        args: &[OsString],
         policy: &SandboxPolicy,
         streams: Streams,
         environment: Environment,
@@ -136,8 +137,8 @@ pub trait Sandbox: Send {
     #[cfg(unix)]
     fn command(
         &self,
-        program: &str,
-        args: &[String],
+        program: &OsStr,
+        args: &[OsString],
         policy: &SandboxPolicy,
         environment: &Environment,
     ) -> Result<std::process::Command, SandboxError>;
@@ -154,8 +155,8 @@ pub trait Sandbox: Send {
     #[cfg(windows)]
     fn spawn_attached(
         &self,
-        _program: &str,
-        _args: &[String],
+        _program: &OsStr,
+        _args: &[OsString],
         _policy: &SandboxPolicy,
         _attached: Attached,
         _environment: Environment,
@@ -231,7 +232,13 @@ pub fn confinement_works_here() -> bool {
         stderr: Stream::Null,
     };
     sandbox
-        .spawn(program, &[], &policy, nothing, Environment::Inherited)
+        .spawn(
+            OsStr::new(program),
+            &[],
+            &policy,
+            nothing,
+            Environment::Inherited,
+        )
         .and_then(|mut child| child.wait().map_err(SandboxError::SpawnFailed))
         .is_ok_and(|status| status.success())
 }
@@ -257,8 +264,8 @@ impl Sandbox for Unavailable {
 
     fn spawn(
         &self,
-        _program: &str,
-        _args: &[String],
+        _program: &OsStr,
+        _args: &[OsString],
         _policy: &SandboxPolicy,
         _streams: Streams,
         _environment: Environment,
@@ -272,8 +279,8 @@ impl Sandbox for Unavailable {
     #[cfg(unix)]
     fn command(
         &self,
-        _program: &str,
-        _args: &[String],
+        _program: &OsStr,
+        _args: &[OsString],
         _policy: &SandboxPolicy,
         _environment: &Environment,
     ) -> Result<std::process::Command, SandboxError> {
@@ -293,7 +300,7 @@ mod tests {
     fn an_unavailable_backend_refuses_to_spawn() {
         let sandbox = Unavailable;
         let result = sandbox.spawn(
-            "echo",
+            OsStr::new("echo"),
             &[],
             &SandboxPolicy::strict(),
             nothing_attached(),
@@ -309,7 +316,7 @@ mod tests {
         let sandbox = Unavailable;
         let err = sandbox
             .spawn(
-                "echo",
+                OsStr::new("echo"),
                 &[],
                 &SandboxPolicy::strict(),
                 nothing_attached(),
@@ -361,7 +368,7 @@ mod tests {
             };
             sandbox
                 .spawn(
-                    program,
+                    OsStr::new(program),
                     &[],
                     &policy,
                     nothing_attached(),

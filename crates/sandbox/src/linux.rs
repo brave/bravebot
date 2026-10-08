@@ -19,6 +19,7 @@ use landlock::{
     ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, RulesetAttr,
     RulesetCreatedAttr, RulesetError, RulesetStatus, path_beneath_rules,
 };
+use std::ffi::{OsStr, OsString};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
@@ -205,8 +206,8 @@ impl Sandbox for LandlockSandbox {
 
     fn spawn(
         &self,
-        program: &str,
-        args: &[String],
+        program: &OsStr,
+        args: &[OsString],
         policy: &SandboxPolicy,
         streams: Streams,
         environment: Environment,
@@ -217,8 +218,8 @@ impl Sandbox for LandlockSandbox {
 
     fn command(
         &self,
-        program: &str,
-        args: &[String],
+        program: &OsStr,
+        args: &[OsString],
         policy: &SandboxPolicy,
         environment: &Environment,
     ) -> Result<Command, SandboxError> {
@@ -232,8 +233,8 @@ impl LandlockSandbox {
     /// The command for `program` with the ruleset installed between the fork and the exec, or
     /// a refusal of the policy.
     fn confining(
-        program: &str,
-        args: &[String],
+        program: &OsStr,
+        args: &[OsString],
         policy: &SandboxPolicy,
     ) -> Result<Command, SandboxError> {
         if !policy.is_meaningful() {
@@ -438,6 +439,33 @@ mod tests {
             )
     }
 
+    /// RUN-8: the program and arguments the command holds are the bytes the caller gave, so a
+    /// path that is not text is not replaced by the file whose name spells the replacement of its
+    /// bytes. Decided before any process exists, so it runs on a kernel without Landlock.
+    ///
+    /// The regression it rejects is a conversion to text between the caller and the command: the
+    /// command then names the lookalike, which runs under the profile computed for the other.
+    #[test]
+    fn a_program_and_an_argument_that_are_not_text_reach_the_command_as_their_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let program = OsStr::from_bytes(b"/opt/dir-\xff/runner");
+        let argument = OsString::from(OsStr::from_bytes(b"dir-\xff"));
+
+        let command = LandlockSandbox::confining(
+            program,
+            std::slice::from_ref(&argument),
+            &loadable_policy(),
+        )
+        .expect("a policy over directories that exist");
+
+        assert_eq!(command.get_program(), program);
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [argument.as_os_str()]
+        );
+    }
+
     /// Landlock is unusable here on kernels before 5.19 and in container runtimes that do
     /// not enable the LSM, notably Docker Desktop's linuxkit kernel.
     ///
@@ -511,7 +539,7 @@ mod tests {
     fn a_policy_requiring_network_denial_is_refused() {
         let err = LandlockSandbox
             .spawn(
-                "/bin/true",
+                OsStr::new("/bin/true"),
                 &[],
                 &SandboxPolicy::strict(),
                 nothing_attached(),
@@ -536,7 +564,7 @@ mod tests {
     fn a_policy_requiring_subprocess_denial_is_refused() {
         let err = LandlockSandbox
             .spawn(
-                "/bin/true",
+                OsStr::new("/bin/true"),
                 &[],
                 &SandboxPolicy::strict().allow_network_egress(),
                 nothing_attached(),
@@ -563,7 +591,7 @@ mod tests {
             .allow_write("/");
         let err = LandlockSandbox
             .spawn(
-                "/bin/true",
+                OsStr::new("/bin/true"),
                 &[],
                 &policy,
                 nothing_attached(),
@@ -582,7 +610,7 @@ mod tests {
 
         let mut child = sandbox
             .spawn(
-                "/bin/true",
+                OsStr::new("/bin/true"),
                 &[],
                 &policy,
                 nothing_attached(),
@@ -611,8 +639,8 @@ mod tests {
 
         let mut child = sandbox
             .spawn(
-                "/usr/bin/touch",
-                &[target.display().to_string()],
+                OsStr::new("/usr/bin/touch"),
+                &[target.display().to_string().into()],
                 &policy,
                 nothing_attached(),
                 Environment::Inherited,
@@ -653,8 +681,8 @@ mod tests {
         let policy = loadable_policy().allow_write(&dir);
         let mut child = sandbox
             .spawn(
-                "/usr/bin/touch",
-                &[target.display().to_string()],
+                OsStr::new("/usr/bin/touch"),
+                &[target.display().to_string().into()],
                 &policy,
                 nothing_attached(),
                 Environment::Inherited,
@@ -689,8 +717,8 @@ mod tests {
         let cat = |policy: &SandboxPolicy| {
             sandbox
                 .spawn(
-                    "/usr/bin/cat",
-                    &[target.display().to_string()],
+                    OsStr::new("/usr/bin/cat"),
+                    &[target.display().to_string().into()],
                     policy,
                     nothing_attached(),
                     Environment::Inherited,
@@ -736,8 +764,8 @@ mod tests {
         let touch = |target: &std::path::Path| {
             sandbox
                 .command(
-                    "/usr/bin/touch",
-                    &[target.display().to_string()],
+                    OsStr::new("/usr/bin/touch"),
+                    &[target.display().to_string().into()],
                     &policy,
                     &environment,
                 )
@@ -756,7 +784,7 @@ mod tests {
         assert!(!withheld.join("written").exists());
 
         let printed = sandbox
-            .command("/usr/bin/env", &[], &policy, &environment)
+            .command(OsStr::new("/usr/bin/env"), &[], &policy, &environment)
             .expect("a command")
             .output()
             .expect("spawned");
@@ -797,7 +825,7 @@ mod tests {
 
         let mut child = sandbox
             .spawn(
-                "/bin/true",
+                OsStr::new("/bin/true"),
                 &[],
                 &resolved.policy,
                 nothing_attached(),
@@ -828,8 +856,8 @@ mod tests {
 
         let mut child = sandbox
             .spawn(
-                "/usr/bin/id",
-                &["-gn".to_owned()],
+                OsStr::new("/usr/bin/id"),
+                &["-gn".into()],
                 &policy,
                 nothing_attached(),
                 Environment::Inherited,
@@ -868,8 +896,8 @@ mod tests {
         let cat = |path: &Path| {
             sandbox
                 .spawn(
-                    "/usr/bin/cat",
-                    &[path.display().to_string()],
+                    OsStr::new("/usr/bin/cat"),
+                    &[path.display().to_string().into()],
                     &policy,
                     nothing_attached(),
                     Environment::Inherited,
@@ -953,8 +981,8 @@ mod tests {
         let cat = |path: &Path| {
             let mut child = sandbox
                 .spawn(
-                    "/usr/bin/cat",
-                    &[path.display().to_string()],
+                    OsStr::new("/usr/bin/cat"),
+                    &[path.display().to_string().into()],
                     &policy,
                     nothing_attached(),
                     Environment::Inherited,
@@ -1002,8 +1030,8 @@ mod tests {
         let touch = |path: &Path| {
             let mut child = sandbox
                 .spawn(
-                    "/usr/bin/touch",
-                    &[path.display().to_string()],
+                    OsStr::new("/usr/bin/touch"),
+                    &[path.display().to_string().into()],
                     &policy,
                     nothing_attached(),
                     Environment::Inherited,
@@ -1047,8 +1075,8 @@ mod tests {
         let cat = |path: &Path| {
             let mut child = sandbox
                 .spawn(
-                    "/usr/bin/cat",
-                    &[path.display().to_string()],
+                    OsStr::new("/usr/bin/cat"),
+                    &[path.display().to_string().into()],
                     &policy,
                     nothing_attached(),
                     Environment::Inherited,
@@ -1090,10 +1118,11 @@ mod tests {
         .nameable_under(&sandbox.capabilities())
         .policy;
         let run = |program: &str, args: &[String]| {
+            let args: Vec<OsString> = args.iter().map(OsString::from).collect();
             let mut child = sandbox
                 .spawn(
-                    program,
-                    args,
+                    OsStr::new(program),
+                    &args,
                     &policy,
                     nothing_attached(),
                     Environment::Inherited,
@@ -1160,7 +1189,7 @@ mod tests {
         ] {
             let err = LandlockSandbox
                 .spawn(
-                    "/bin/true",
+                    OsStr::new("/bin/true"),
                     &[],
                     &policy,
                     nothing_attached(),
@@ -1201,7 +1230,7 @@ mod tests {
         let wanted = loadable_policy().allow_write(&dir).allow_write(&absent);
         sandbox
             .spawn(
-                "/bin/true",
+                OsStr::new("/bin/true"),
                 &[],
                 &wanted,
                 nothing_attached(),
@@ -1217,7 +1246,7 @@ mod tests {
         );
         let mut confined = sandbox
             .spawn(
-                "/bin/true",
+                OsStr::new("/bin/true"),
                 &[],
                 &resolved.policy,
                 nothing_attached(),
@@ -1252,7 +1281,7 @@ mod tests {
         // handed to it does not read as one refusing this path.
         let mut confined = sandbox
             .spawn(
-                "/bin/true",
+                OsStr::new("/bin/true"),
                 &[],
                 &loadable_policy().allow_write(&dir),
                 nothing_attached(),
@@ -1262,7 +1291,7 @@ mod tests {
         assert!(confined.wait().expect("should wait").success());
 
         let started = sandbox.spawn(
-            "/bin/true",
+            OsStr::new("/bin/true"),
             &[],
             &loadable_policy().allow_write(&absent),
             nothing_attached(),
@@ -1350,10 +1379,10 @@ mod tests {
         let policy = loadable_policy().allow_write(&dir);
         let mut child = sandbox
             .spawn(
-                "/usr/bin/mv",
+                OsStr::new("/usr/bin/mv"),
                 &[
-                    source.display().to_string(),
-                    destination.display().to_string(),
+                    source.display().to_string().into(),
+                    destination.display().to_string().into(),
                 ],
                 &policy,
                 nothing_attached(),
@@ -1417,11 +1446,11 @@ mod tests {
             std::fs::write(&target, CONTENTS).expect("the file is writable");
             let mut child = sandbox
                 .spawn(
-                    "/usr/bin/python3",
+                    OsStr::new("/usr/bin/python3"),
                     &[
-                        "-c".to_owned(),
-                        "import os, sys; os.truncate(sys.argv[1], 0)".to_owned(),
-                        target.display().to_string(),
+                        "-c".into(),
+                        "import os, sys; os.truncate(sys.argv[1], 0)".into(),
+                        target.display().to_string().into(),
                     ],
                     policy,
                     nothing_attached(),
@@ -1494,8 +1523,8 @@ mod tests {
         let driven_under = |policy: &SandboxPolicy| {
             sandbox
                 .spawn(
-                    "/usr/bin/python3",
-                    &["-c".to_owned(), request.to_owned()],
+                    OsStr::new("/usr/bin/python3"),
+                    &["-c".into(), request.into()],
                     policy,
                     nothing_attached(),
                     Environment::Empty,
@@ -1542,12 +1571,8 @@ mod tests {
 
         let mut child = sandbox
             .spawn(
-                "/usr/bin/truncate",
-                &[
-                    "-s".to_owned(),
-                    "0".to_owned(),
-                    target.display().to_string(),
-                ],
+                OsStr::new("/usr/bin/truncate"),
+                &["-s".into(), "0".into(), target.display().to_string().into()],
                 &loadable_policy().allow_write(&dir),
                 nothing_attached(),
                 Environment::Inherited,
@@ -1585,7 +1610,7 @@ mod tests {
 
         let mut child = sandbox
             .spawn(
-                "/usr/bin/env",
+                OsStr::new("/usr/bin/env"),
                 &[],
                 &loadable_policy(),
                 capturing_stdout(),
@@ -1624,8 +1649,8 @@ mod tests {
 
         let mut child = sandbox
             .spawn(
-                "/bin/pwd",
-                &["-P".to_owned()],
+                OsStr::new("/bin/pwd"),
+                &["-P".into()],
                 &policy,
                 capturing_stdout(),
                 Environment::Empty,
@@ -1658,7 +1683,7 @@ mod tests {
 
         let mut child = sandbox
             .spawn(
-                "/usr/bin/env",
+                OsStr::new("/usr/bin/env"),
                 &[],
                 &loadable_policy(),
                 capturing_stdout(),

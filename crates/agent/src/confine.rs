@@ -528,11 +528,8 @@ impl Confinement {
             });
         Ok(Prepared {
             sandbox,
-            program: command.get_program().to_string_lossy().into_owned(),
-            args: command
-                .get_args()
-                .map(|argument| argument.to_string_lossy().into_owned())
-                .collect(),
+            program: command.get_program().to_os_string(),
+            args: command.get_args().map(OsStr::to_os_string).collect(),
             policy,
             variables,
         })
@@ -769,8 +766,8 @@ fn cannot_close_the_network(
 /// What a step is started with, once its policy is decided.
 struct Prepared {
     sandbox: Box<dyn bravebot_sandbox::Sandbox>,
-    program: String,
-    args: Vec<String>,
+    program: std::ffi::OsString,
+    args: Vec<std::ffi::OsString>,
     policy: SandboxPolicy,
     variables: Variables,
 }
@@ -2329,6 +2326,98 @@ mod tests {
 
     fn can_confine() -> bool {
         Prelude::current().is_some() && bravebot_sandbox::confinement_works_here()
+    }
+
+    /// What a platform with a confinement of its own is started with: the program and then every
+    /// argument, in the order the process receives them.
+    #[cfg(unix)]
+    fn what_the_process_receives(command: &Command) -> Vec<std::ffi::OsString> {
+        std::iter::once(command.get_program())
+            .chain(command.get_args())
+            .map(OsStr::to_os_string)
+            .collect()
+    }
+
+    /// RUN-8: the program a confined step is started by is the path the command held, byte for
+    /// byte, so a file whose name is not text is not swapped for the file whose name spells the
+    /// replacement of its bytes.
+    ///
+    /// The step is approved as `/usr/bin/git`, reached through a link in a directory whose name
+    /// holds an invalid byte, and the checkout holds a second directory named with U+FFFD, which is
+    /// what a lossy rendering of the first spells. The regression it rejects is a conversion to
+    /// text between the command and the process: the wrapped command then names the second
+    /// directory's file and runs it under the profile computed for git.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_whose_path_is_not_text_is_started_by_its_own_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
+            return;
+        }
+        let (session, confinement) = a_session("program-path-bytes");
+        let by_bytes = session.join(OsStr::from_bytes(b"dir-\xff")).join("runner");
+        let lookalike = session.join("dir-\u{FFFD}").join("runner");
+        assert_ne!(by_bytes, lookalike);
+        let mut git = step("/usr/bin/git", &["--version"]);
+        git.started_as = by_bytes.clone();
+
+        let prepared = confinement
+            .prepared(&Command::new(&by_bytes), &git, &session)
+            .expect("the step is confined");
+
+        assert_eq!(
+            prepared.program, by_bytes,
+            "the process is not started by the path the command held"
+        );
+        assert_ne!(
+            prepared.program, lookalike,
+            "the process is started by the file whose name spells the lossy rendering"
+        );
+
+        // A backend that writes its policy as text cannot name the path in it and refuses the
+        // step; one that does not starts the program by its bytes. The lookalike is the one
+        // answer neither gives.
+        if let Ok(wrapped) = confinement.wrap(Command::new(&by_bytes), &git, &session) {
+            let received = what_the_process_receives(&wrapped);
+            assert!(
+                received.iter().any(|part| part == by_bytes.as_os_str()),
+                "{received:?}"
+            );
+            assert!(
+                !received.iter().any(|part| part == lookalike.as_os_str()),
+                "{received:?}"
+            );
+        }
+    }
+
+    /// The same of an argument, which is carried to the process as the bytes the command held.
+    #[cfg(unix)]
+    #[test]
+    fn an_argument_that_is_not_text_is_carried_by_its_own_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
+            return;
+        }
+        let (session, confinement) = a_session("argument-bytes");
+        let by_bytes = OsStr::from_bytes(b"dir-\xff");
+        let mut command = Command::new("/usr/bin/git");
+        command.arg(by_bytes);
+
+        let wrapped = confinement
+            .wrap(command, &step("/usr/bin/git", &["status"]), &session)
+            .expect("the step is confined");
+
+        let received = what_the_process_receives(&wrapped);
+        assert!(
+            received.iter().any(|part| part == by_bytes),
+            "the argument is not carried as the bytes the command held: {received:?}"
+        );
+        assert!(
+            !received.iter().any(|part| part == "dir-\u{FFFD}"),
+            "the argument is carried as its lossy rendering: {received:?}"
+        );
     }
 
     fn plan_of(line: &str, session: &Path) -> bravebot_core::command::Plan {

@@ -491,8 +491,8 @@ impl Sandbox for ProgramWouldNotStart {
 
     fn spawn(
         &self,
-        _program: &str,
-        _args: &[String],
+        _program: &std::ffi::OsStr,
+        _args: &[std::ffi::OsString],
         _policy: &SandboxPolicy,
         _streams: Streams,
         _environment: Environment,
@@ -505,8 +505,8 @@ impl Sandbox for ProgramWouldNotStart {
     #[cfg(unix)]
     fn command(
         &self,
-        _program: &str,
-        _args: &[String],
+        _program: &std::ffi::OsStr,
+        _args: &[std::ffi::OsString],
         _policy: &SandboxPolicy,
         _environment: &Environment,
     ) -> Result<std::process::Command, bravebot_sandbox::SandboxError> {
@@ -549,8 +549,8 @@ impl Sandbox for RecordsStreams {
 
     fn spawn(
         &self,
-        _program: &str,
-        _args: &[String],
+        _program: &std::ffi::OsStr,
+        _args: &[std::ffi::OsString],
         _policy: &SandboxPolicy,
         streams: Streams,
         _environment: Environment,
@@ -564,8 +564,8 @@ impl Sandbox for RecordsStreams {
     #[cfg(unix)]
     fn command(
         &self,
-        _program: &str,
-        _args: &[String],
+        _program: &std::ffi::OsStr,
+        _args: &[std::ffi::OsString],
         _policy: &SandboxPolicy,
         _environment: &Environment,
     ) -> Result<std::process::Command, bravebot_sandbox::SandboxError> {
