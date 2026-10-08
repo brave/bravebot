@@ -870,6 +870,9 @@ pub struct Task {
     /// They grant nothing: the mode, the permission prompts and every refusal are enforced below
     /// the prompt, whatever it says. Empty by default, which is every caller that read no flag.
     pub system_prompts: SystemPrompts,
+    /// The built-in style `/style` chose, which stands in for the opening where `--system-prompt`
+    /// did not (CLI-19). A person's own words win over it. Not given to a delegate.
+    pub style: Option<&'static crate::styles::Style>,
     /// How much this turn asks before it acts.
     ///
     /// Carried by the task because the planner has to be told about one of them: plan mode refuses
@@ -1087,6 +1090,7 @@ impl Task {
             // file. Empty is a value the block can carry and this is not it.
             attribution: bravebot_config::Attribution::default(),
             system_prompts: SystemPrompts::default(),
+            style: None,
             delegate: None,
             addressing: None,
             model_outranks_a_definition: false,
@@ -1311,6 +1315,12 @@ impl Task {
     /// State what the settings say a commit message and a pull request may carry.
     pub fn with_attribution(mut self, attribution: bravebot_config::Attribution) -> Self {
         self.attribution = attribution;
+        self
+    }
+
+    /// Open the system prompt with this style's words, unless `--system-prompt` named its own.
+    pub fn with_style(mut self, style: Option<&'static crate::styles::Style>) -> Self {
+        self.style = style;
         self
     }
 
@@ -3559,11 +3569,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             // `--system-prompt` stands in for the opening alone (CLI-19): what follows it is what
             // the quarantine, the goal and the modes rest on.
             None => {
-                match task.system_prompts.replacing.as_deref() {
-                    Some(replacing) => {
+                match (task.system_prompts.replacing.as_deref(), task.style) {
+                    (Some(replacing), _) => {
                         system.push(Provenance::Trusted("command line"), replacing.trim())
                     }
-                    None => system.push(Provenance::Driver, OPENING),
+                    (None, Some(style)) => system.push(Provenance::Driver, style.words),
+                    (None, None) => system.push(Provenance::Driver, OPENING),
                 }
                 system.push(Provenance::Driver, PLANNING);
                 system.push(Provenance::Driver, FOR_A_PERSON);

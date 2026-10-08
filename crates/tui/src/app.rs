@@ -95,6 +95,12 @@ const ADVISOR_COMMAND: &str = "/advisor";
 /// The word after `/advisor` that drops the session's own choice.
 const ADVISOR_OFF: &str = "off";
 
+/// The line that lists the output styles, picks one by name, or clears the pick.
+const STYLE_COMMAND: &str = "/style";
+
+/// The word after `/style` that clears the session's pick.
+const STYLE_OFF: &str = "off";
+
 /// The line that opens the panel of preferences about the interface itself.
 const CONFIG_COMMAND: &str = "/config";
 
@@ -277,7 +283,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 38] {
+pub fn commands() -> [Command; 39] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -337,6 +343,12 @@ pub fn commands() -> [Command; 38] {
             name: ADVISOR_COMMAND,
             argument: "[model | off]",
             description: t!(command_advisor),
+            mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: STYLE_COMMAND,
+            argument: "[name | off]",
+            description: t!(command_style),
             mid_turn: MidTurn::Changes,
         },
         Command {
@@ -647,6 +659,8 @@ pub enum Action {
     /// Say which model the planner may consult, take one by name, or drop the choice. Empty says.
     /// Needs the configuration to resolve the name against, which the loop owns.
     Advisor(String),
+    /// Say which output style is in force, take one by name, or clear the pick. Empty says.
+    Style(String),
     /// Ask how the box should edit. Needs the terminal, so the loop runs it.
     ChooseEditing,
     /// Open another directory. Needs the workspace and the trust map, which the loop owns.
@@ -1085,6 +1099,9 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         }
         Action::Advisor(word) => {
             session.answer_while_working(|session| set_advisor(session, beside.config, &word));
+        }
+        Action::Style(word) => {
+            session.answer_while_working(|session| set_style(session, &word));
         }
         Action::CopyReply(text) => session.answer_while_working(|session| {
             copy_reply(session, &text, crate::clipboard::copy);
@@ -1881,6 +1898,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if let Some(word) = argument_to(line, ADVISOR_COMMAND) {
         return Action::Advisor(word.to_string());
+    }
+    if let Some(word) = argument_to(line, STYLE_COMMAND) {
+        return Action::Style(word.to_string());
     }
     if line.trim() == CONFIG_COMMAND {
         return Action::ChooseEditing;
@@ -4143,6 +4163,10 @@ fn event_loop(
                 set_advisor(&mut session, config, &word);
                 needs_draw = true;
             }
+            Action::Style(word) => {
+                set_style(&mut session, &word);
+                needs_draw = true;
+            }
             Action::ChooseEditing => {
                 choose_editing(terminal, &mut session);
                 needs_draw = true;
@@ -5664,6 +5688,40 @@ fn set_advisor(session: &mut Session, config: &Config, word: &str) {
                 session.choose_advisor(Some(model));
             }
         }
+    }
+}
+
+/// Say which output style is in force, take one by name, or clear the pick.
+///
+/// Only the styles this build ships are offered, so a name is looked up and never read from the
+/// line into the prompt. The pick lasts for the session and is not recorded.
+fn set_style(session: &mut Session, word: &str) {
+    let word = word.trim();
+    let styles = bravebot_agent::styles::BUILT_IN
+        .iter()
+        .map(|style| style.name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if word.is_empty() {
+        let note = match session.style() {
+            Some(style) => t!(session_style_in_force, style = style.name, styles = styles),
+            None => t!(session_style_none, styles = styles).to_string(),
+        };
+        session.note(note);
+    } else if word == STYLE_OFF {
+        session.choose_style(None);
+        session.note(t!(session_style_cleared));
+    } else if let Some(style) = bravebot_agent::styles::named(word) {
+        session.choose_style(Some(style));
+        // `--system-prompt` was given for this run and has the opening, so the pick is held and
+        // says it does not show.
+        if session.system_prompts().replacing.is_some() {
+            session.note(t!(session_style_set_but_replaced, style = style.name));
+        } else {
+            session.note(t!(session_style_set, style = style.name));
+        }
+    } else {
+        session.note(t!(session_style_unknown, style = word, styles = styles));
     }
 }
 
@@ -7849,6 +7907,7 @@ fn run_turn_animated(
     }
     task = with_submitted_attachments(task, session);
     task = with_session_advisor(task, session);
+    task = with_session_style(task, session);
     // The worker shares file decisions so errors cannot return the pre-write map.
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
@@ -8377,6 +8436,11 @@ fn finish_turn(
         exposed,
         events,
     }
+}
+
+/// The output style `/style` chose, carried on the turn so it opens the system prompt (CLI-19).
+fn with_session_style(task: Task, session: &Session) -> Task {
+    task.with_style(session.style())
 }
 
 /// The model `/advisor` named, carried on the turn so the planner is offered it (ADVISOR-9).
@@ -15131,6 +15195,102 @@ mod tests {
         }
     }
 
+    /// The words `/style` takes: none lists, a name picks, `off` clears. The handler tells them apart.
+    #[test]
+    fn the_style_command_takes_a_name_or_nothing() {
+        for (line, word) in [
+            ("/style", ""),
+            ("/style concise", "concise"),
+            ("/style off", "off"),
+        ] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                dispatch_command(&mut session, commanded(line)),
+                Action::Style(word.to_string()),
+                "{line}"
+            );
+        }
+    }
+
+    /// A sentence that mentions the word, or a longer word, is said to the planner.
+    #[test]
+    fn a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt() {
+        for line in ["use a /style here", "/styles are useful"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line}"
+            );
+        }
+    }
+
+    /// A style is picked by a name this build ships. Each name reaches the next turn's task as its
+    /// own style, an unknown name is refused and leaves the held one, and `off` clears it.
+    #[test]
+    fn a_style_named_to_the_command_reaches_the_next_turn_and_only_a_known_name_does() {
+        let mut session = Session::new("none");
+        assert_eq!(with_session_style(Task::new("p"), &session).style, None);
+
+        set_style(&mut session, "concise");
+        assert_eq!(
+            with_session_style(Task::new("p"), &session)
+                .style
+                .map(|style| style.name),
+            Some("concise")
+        );
+
+        set_style(&mut session, "explanatory");
+        assert_eq!(session.style().map(|style| style.name), Some("explanatory"));
+
+        set_style(&mut session, "no-such-style");
+        assert_eq!(
+            session.style().map(|style| style.name),
+            Some("explanatory"),
+            "an unknown name replaced the style in force"
+        );
+
+        set_style(&mut session, "off");
+        assert_eq!(with_session_style(Task::new("p"), &session).style, None);
+    }
+
+    /// A run given `--system-prompt` keeps its own opening, so `/style` says the pick does not show
+    /// rather than reporting a style that no turn will carry.
+    #[test]
+    fn a_style_picked_under_a_replaced_opening_says_it_does_not_show() {
+        let words = bravebot_agent::turn::SystemPrompts {
+            replacing: Some("You are a reviewer.".to_string()),
+            appending: None,
+        };
+        let mut replaced = Session::new("none").with_system_prompts(words);
+        set_style(&mut replaced, "concise");
+        let mut plain = Session::new("none");
+        set_style(&mut plain, "concise");
+
+        let said = |session: &Session| {
+            session
+                .transcript
+                .iter()
+                .map(|entry| entry.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(
+            said(&replaced).contains("--system-prompt"),
+            "{}",
+            said(&replaced)
+        );
+        assert!(
+            !said(&plain).contains("--system-prompt"),
+            "{}",
+            said(&plain)
+        );
+        assert_eq!(replaced.style().map(|style| style.name), Some("concise"));
+    }
+
     /// `/advisors` is not `/advisor`: the whole word must match.
     #[test]
     fn a_longer_word_starting_with_advisor_is_a_prompt() {
@@ -19855,6 +20015,7 @@ mod tests {
                 RENAME_COMMAND,
                 REQUEST_COMMAND,
                 STATUS_COMMAND,
+                STYLE_COMMAND,
                 THEME_COMMAND,
                 WATCH_COMMAND,
             ]
