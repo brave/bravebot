@@ -83,8 +83,8 @@ Reports everything the session knows about itself:
   Typed while a turn runs, these two lines say the running turn holds them and show them once it
   ends, since the turn can add to both as it goes;
 - what a [`/loop`](#loop-interval-prompt) is repeating and when the next tick is due, where one is
-  running, or what a [`/goal`](#goal-condition) is working towards and how many rounds it has
-  spent.
+  running, or what a [`/goal`](#goal-condition) is working towards, how many rounds it has
+  spent, how long it has been set and what the session has spent since.
 
 The last three are the ones nothing else on your screen tells you. A vouched command is the one that
 stops appearing, and what happens next without anybody typing anything cannot be read off the
@@ -386,6 +386,10 @@ judged against it, so you can ask something unrelated or work by hand without lo
 `/goal resume` arms the same condition with the rounds it had spent, and `/status` and the panel say
 it is paused. A check already out when you pause is not acted on. `/goal clear`, `/clear` and `/loop`
 still end a paused goal, and it is not written down either.
+
+**The report carries the cost.** `/goal` and `/status` say how long the goal has been set and the
+tokens the session has spent since, and a goal that is met, cannot be met or gives up says the same
+as it ends. Tokens are counted as each turn ends, so a turn still running is not in the figure yet.
 
 **Setting a goal sends nothing.** A condition is not a prompt, so the session sits idle until you
 ask for something; what a goal does is keep that work going. Nothing here writes a first prompt for

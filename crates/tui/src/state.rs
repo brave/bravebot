@@ -7761,7 +7761,10 @@ impl Session {
         }
         self.end_watches_for_another_kind();
         self.note(t!(goal_set, condition = &condition));
-        self.goal = Some(crate::goals::Running::begin(condition));
+        self.goal = Some(crate::goals::Running::begin(
+            condition,
+            self.tokens + self.progress.tokens,
+        ));
     }
 
     /// Take the goal off without saying anything, and say whether there was one.
@@ -7806,6 +7809,7 @@ impl Session {
 
     /// Take the goal off because it has been met, and say so.
     pub fn goal_met(&mut self, reason: String) {
+        let usage = self.goal_usage();
         if !self.drop_goal() {
             return;
         }
@@ -7813,6 +7817,29 @@ impl Session {
             self.note(t!(goal_met_unsaid));
         } else {
             self.note(t!(goal_met, reason = &reason));
+        }
+        self.note_usage(usage);
+    }
+
+    /// How long the goal has run and what the session has spent since it was armed, in words, or
+    /// `None` where there is no goal.
+    ///
+    /// Tokens are counted as each turn ends, as `/status` counts them, so a turn still running is
+    /// not in the figure yet.
+    fn goal_usage(&self) -> Option<String> {
+        let goal = self.goal.as_ref()?;
+        Some(t!(
+            goal_usage,
+            elapsed = crate::indicator::format_elapsed(goal.elapsed(Instant::now())),
+            tokens = crate::status::tokens(goal.spent(self.tokens))
+        ))
+    }
+
+    /// Say what a goal that has just ended cost. Taken before the goal is dropped, so it is passed
+    /// in.
+    fn note_usage(&mut self, usage: Option<String>) {
+        if let Some(usage) = usage {
+            self.note(usage);
         }
     }
 
@@ -7828,7 +7855,9 @@ impl Session {
         };
         let condition = goal.condition().to_string();
         let last = goal.last_reason().map(str::to_string);
+        let usage = self.goal_usage();
         self.note(t!(goal_active, condition = &condition));
+        self.note_usage(usage);
         match last {
             Some(reason) => self.note(t!(goal_last_check, reason = &reason)),
             None => self.note(t!(goal_never_checked)),
@@ -7844,8 +7873,10 @@ impl Session {
         let condition = goal.condition().to_string();
         if !goal.not_met(reason.clone()) {
             let rounds = goal.rounds();
+            let usage = self.goal_usage();
             self.goal = None;
             self.note(t!(goal_spent, rounds = rounds));
+            self.note_usage(usage);
             // The sentence `/goal` answers with, said here because there is no goal left to ask:
             // the round that spent the budget is the one whose reason a person wants, and this is
             // the only place it is ever reported.
@@ -7905,8 +7936,10 @@ impl Session {
                 None
             }
             Verdict::Impossible { reason } => {
+                let usage = self.goal_usage();
                 self.drop_goal();
                 self.note(t!(goal_impossible, reason = &reason));
+                self.note_usage(usage);
                 None
             }
             Verdict::Unreadable => {
@@ -14669,10 +14702,10 @@ mod tests {
         s.start_goal("cargo test exits 0".to_string());
         let rounds = spend(&mut s, "the linker is still missing");
 
-        let ending = &s.transcript[s.transcript.len() - 2..];
+        let ending = &s.transcript[s.transcript.len() - 3..];
         assert_eq!(ending[0].text, t!(goal_spent, rounds = rounds));
         assert_eq!(
-            ending[1].text,
+            ending[2].text,
             t!(goal_last_check, reason = "the linker is still missing"),
             "the give-up said nothing about the round that spent the budget"
         );
@@ -14682,10 +14715,56 @@ mod tests {
         let rounds = spend(&mut s, "");
 
         assert_eq!(
-            s.transcript.last().expect("an entry").text,
+            s.transcript[s.transcript.len() - 2].text,
             t!(goal_spent, rounds = rounds),
             "a check that said nothing was quoted as having said it"
         );
+    }
+
+    /// How long a goal ran and what it cost is said where it ends and where it is asked about, so
+    /// a person deciding whether it was converging has more than a round count. The spend is what
+    /// the session spent after the goal was set, so tokens from before it are not in the figure.
+    #[test]
+    fn a_goal_says_what_it_has_cost_since_it_was_set() {
+        let spent = |s: &Session| -> Vec<String> {
+            s.transcript
+                .iter()
+                .filter(|entry| entry.text.starts_with("it has run for"))
+                .map(|entry| entry.text.clone())
+                .collect()
+        };
+
+        let mut s = session();
+        s.tokens = 50_000;
+        s.start_goal("cargo test exits 0".to_string());
+        s.tokens = 62_400;
+        s.report_goal();
+        let reported = spent(&s);
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert!(reported[0].contains("12.4k tokens"), "{reported:?}");
+
+        for judged in [
+            Ok(bravebot_agent::goal::Verdict::Met {
+                reason: "it exits 0".to_string(),
+            }),
+            Ok(bravebot_agent::goal::Verdict::Impossible {
+                reason: "no such crate".to_string(),
+            }),
+        ] {
+            let mut s = session();
+            s.start_goal("cargo test exits 0".to_string());
+            s.tokens = 3_000;
+            s.goal_judged(judged.clone());
+            let ended = spent(&s);
+            assert_eq!(ended.len(), 1, "{judged:?} did not say the cost");
+            assert!(ended[0].contains("3.0k tokens"), "{ended:?}");
+        }
+
+        let mut s = session();
+        s.start_goal("cargo test exits 0".to_string());
+        s.tokens = 1_500;
+        spend(&mut s, "still nothing");
+        assert_eq!(spent(&s).len(), 1, "giving up did not say the cost");
     }
 
     /// Send the work back with the same reason every round until the goal gives up, and say how

@@ -1710,6 +1710,7 @@ status-loop-running = running now
 status-loop-unpaced = waiting for the turn to say when
 status-goal = Goal
 status-goal-paused = paused, /goal resume arms it
+status-goal-usage = { $note } · { $elapsed } · { $tokens }
 status-watch = Watch { $number }
 status-watch-armed-by = armed by turn { $turn } · { $left } left
 # One line per background job of the last turn. The name is the driver's.
@@ -2452,6 +2453,7 @@ goal-none =
     takes it off again
 goal-active = working towards: { $condition }
 goal-last-check = the last check said: { $reason }
+goal-usage = it has run for { $elapsed } and the session has spent { $tokens } since it was set
 goal-never-checked = nothing has been judged against it yet
 goal-not-met = the goal is not met yet: { $reason }
 goal-not-met-unsaid = the goal is not met yet, and the check did not say what is missing

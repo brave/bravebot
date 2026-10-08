@@ -1515,6 +1515,7 @@ status-loop-running = en cours
 status-loop-unpaced = en attente que le tour dise quand
 status-goal = Objectif
 status-goal-paused = suspendu, /goal resume le réarme
+status-goal-usage = { $note } · { $elapsed } · { $tokens }
 status-watch = Veille { $number }
 status-watch-armed-by = posée au tour { $turn } · il reste { $left }
 # Une ligne par tâche en arrière-plan du dernier tour. Le nom est celui du pilote.
@@ -2059,6 +2060,7 @@ goal-none =
     avec le code 0, et /goal clear le retire
 goal-active = objectif : { $condition }
 goal-last-check = la dernière vérification a dit : { $reason }
+goal-usage = il est en cours depuis { $elapsed } et la session a dépensé { $tokens } depuis qu'il est fixé
 goal-never-checked = rien n'a encore été jugé par rapport à lui
 goal-not-met = l'objectif n'est pas encore atteint : { $reason }
 goal-not-met-unsaid =
