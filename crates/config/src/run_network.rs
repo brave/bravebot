@@ -75,6 +75,15 @@ pub fn settle_run_network(flag: Option<Network>) -> &'static RunNetwork {
     SETTLED.get_or_init(|| resolve(flag, &Settings::load(), &Managed::load()))
 }
 
+/// As [`settle_run_network`], for an entry point that reads its settings layers itself.
+///
+/// The desktop bridge answers a settings file it was started on without registering it for the
+/// whole process, because a window can choose another file later and the process-wide one would
+/// then disagree with the bridge's own reads.
+pub fn settle_run_network_in(flag: Option<Network>, settings: &Settings) -> &'static RunNetwork {
+    SETTLED.get_or_init(|| resolve(flag, settings, &Managed::load()))
+}
+
 /// The answer [`settle_run_network`] settled, or `open` where nothing did, which is every test that
 /// does not start from the entry point.
 pub fn run_network() -> Network {

@@ -761,6 +761,10 @@ operating system cannot take the network from one program and leave it to anothe
 `closed` a program that does not need it is not started, and the result says so. The opening screen,
 `/status` and `bravebot doctor` say when it is closed and which layer closed it.
 
+The desktop app reads the setting once, when it starts, from your own file, the file `--settings` names
+when it exists, the settings file of the directory it was started in and the machine-level pin. A project opened in a window afterwards, or a
+settings file chosen there, does not change it.
+
 ### `run.maxOutput`
 
 ```json

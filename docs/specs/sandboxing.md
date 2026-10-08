@@ -895,7 +895,10 @@ a file outranks the default. A managed pin that is neither word is read as `clos
 because a mistyped restriction must not open the network. A file in the person's home, or one named by `--settings` from outside
 the workspace, may set either word. A file a checkout carries, which includes a named file inside
 the workspace, may set `closed` and never `open`, and `doctor` says that it was ignored. A word that
-is neither is reported and not obeyed.
+is neither is reported and not obeyed. The desktop's bridge takes no flag: it settles the answer once,
+when it starts, from the person's home layer, the file `--settings` named, when it exists, the settings file of the
+directory it started in and the managed pin, and every window's turns read that answer. A project a
+window opens later does not close it, and neither does a settings file a window selects afterwards.
 
 Where the backend cannot deny the network (Landlock, [SANDBOX-5](#SANDBOX-5)) a stage that would
 lose egress is not started, and the result says that the network is closed and the platform cannot
@@ -936,6 +939,7 @@ reach, but can ask for less of it.
 `verified-by: bravebot_config::run_network::the_flag_beats_the_settings`
 `verified-by: bravebot_config::run_network::a_managed_pin_beats_the_flag_and_the_settings`
 `verified-by: bravebot_cli::main::the_run_network_flag_is_taken_out_with_its_word_and_refuses_any_other`
+`verified-by: bravebot_ui_bridge::run_network::a_closed_network_in_the_settings_reaches_a_windows_turns`
 `verified-by: bravebot_tui::confirm::a_run_prompt_says_the_network_is_closed_and_which_stage_keeps_it`
 `verified-by: bravebot_tui::logo::a_closed_network_is_named_on_the_opening_screen_and_an_open_one_is_not`
 `verified-by: bravebot_tui::status::a_closed_network_is_reported_with_who_closed_it_and_an_open_one_is_not`
