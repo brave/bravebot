@@ -692,10 +692,17 @@ export interface RunRequest {
   /**
    * Credential scopes and toolchain lists the planner asked this line to be lent, by name.
    *
-   * Asked about every time: a front end that offers a standing answer for a line with any of
-   * these would record a grant it did not show. Empty for nearly every command.
+   * Empty for nearly every command.
    */
   requestedScopes?: string[]
+  /**
+   * Whether a standing answer exists for this line.
+   *
+   * False for a line that is asked about every time whatever is remembered: private input, an
+   * assignment, a file to write, a reference as input, or a requested scope. A front end offers
+   * "Trust" only when this is true and does not work the reasons out for itself.
+   */
+  canBeRemembered: boolean
   /**
    * Access the command reaches that nothing in the agent holds.
    *

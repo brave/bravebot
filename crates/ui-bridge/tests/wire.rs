@@ -767,6 +767,9 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     // to tell a line that reaches nothing from a build that does not send the field at all.
     assert_eq!(value["ambient"], json!([]));
     assert_eq!(value["requestedScopes"], json!([]));
+    // This line writes a file, so no standing answer exists for it, and the front end is told so
+    // rather than working it out from the fields above.
+    assert_eq!(value["canBeRemembered"], json!(false));
 }
 
 /// SANDBOX-26: the desktop draws no `confined`, so the names a line asked for cross as their own
@@ -810,7 +813,23 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
     };
     let value = wire::run_request(2, &request);
     assert_eq!(value["requestedScopes"], json!(["aws", "docker"]));
+    assert_eq!(value["canBeRemembered"], json!(false));
     assert_eq!(value["vouches"], json!([]));
+}
+
+/// A line with nothing that forces a question every time has a standing answer, so the front end
+/// is told it may offer one.
+#[test]
+fn a_plain_run_prompt_says_it_can_be_remembered() {
+    use bravebot_agent::confirm::RunRequest;
+    let pipeline = bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+        "git",
+        vec!["log".into()],
+    )]);
+    let request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/git".into()], "/w");
+    let value = wire::run_request(1, &request);
+    assert_eq!(value["canBeRemembered"], json!(true));
+    assert_eq!(value["requestedScopes"], json!([]));
 }
 
 /// A reader given only the plan has nothing to compare it against, and comparing the two is what

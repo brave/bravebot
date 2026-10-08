@@ -1882,7 +1882,7 @@ function Card({
             {/* Separate from "Run once" rather than a checkbox beside it: remembering
                 answers every later question about these programs, so it should take its
                 own deliberate press. The tooltip says exactly what it would cover. */}
-            {!lent.length && (
+            {request.canBeRemembered && (
               <Button
                 kind="outline" size="small" className="approve always"
                 data-tooltip={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}`}
@@ -1939,7 +1939,7 @@ function Card({
           )}
           {/* Outside the fold: "Trust command and output" is a standing grant, and what it covers
               has to be readable at the moment it can be pressed, not only on hover or after a click. */}
-          {answerable && decision === null && !lent.length && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
+          {answerable && decision === null && request.canBeRemembered && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
           <Collapse className="card-details" title="Details" isOpen={undefined}>
             <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
           </Collapse>
