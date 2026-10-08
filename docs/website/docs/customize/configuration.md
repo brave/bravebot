@@ -407,7 +407,7 @@ one thing leaves everything else in force:
 | `env`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `agent` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | anything else | the closest file that set it wins |
 
@@ -445,6 +445,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `model` | the model to request when nobody has chosen one ([below](#model)) |
 | `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
 | `fallbackModel` | the model a turn moves to when its own keeps failing ([below](#fallbackmodel)) |
+| `agent` | the definition every turn of a session is addressed to when `--agent` names none ([below](#agent)) |
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
@@ -603,6 +604,26 @@ other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that nam
 reported by `bravebot doctor`. A model your administrator refuses is not used as a fallback.
 
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
+
+### `agent`
+
+```json
+{ "agent": "rule-reviewer" }
+```
+
+The name of one of your [definitions](agents.md). A session, a session in lines or a one-shot run
+that is given no [`--agent`](../reference/cli.md#--agent-name) addresses every turn to it, as the
+flag would. `--agent` outranks the setting, and so does the name recorded by a session you resume.
+`/status` and the first line of the session say that the setting chose it. It does not apply to
+`--mode manifest`.
+
+If no definition has the name, bravebot says so and the session or run goes on without one, where
+`--agent` would refuse it. A definition whose model needs a sign-in you have not made is refused.
+
+**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that names one is ignored and
+reported by `bravebot doctor`, since it would choose the prompt and the tools of every turn from a
+file you did not write.
 
 ### `effort`
 

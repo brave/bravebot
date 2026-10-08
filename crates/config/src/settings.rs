@@ -129,6 +129,7 @@ const PERMISSIONS_BLOCK: &str = "permissions";
 /// report is one mistake somebody has to work out is not two.
 const READ_KEYS: &[&str] = &[
     "advisorModel",
+    "agent",
     "attribution",
     "editorMode",
     "effort",
@@ -215,6 +216,11 @@ pub struct Settings {
     ///
     /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
     fallback_model: Option<String>,
+    /// What the top-level `agent` key named, if it named anything.
+    ///
+    /// The name as the file spelled it. Matching it against the definitions a session resolved is
+    /// the front end's to do (ADDRESS-13).
+    agent: Option<String>,
     /// What the top-level `effort` key named, if it named anything.
     ///
     /// The word as the file spelled it, for the reason `editor_mode` below keeps one: which words
@@ -319,6 +325,11 @@ pub struct Settings {
     /// Kept for the same reason: the model it names is sent the whole conversation once the
     /// primary fails, which makes it a destination, and a checkout cannot choose one.
     fallback_ignored: Vec<PathBuf>,
+    /// The layers that named `agent` and were not obeyed, weakest first.
+    ///
+    /// Kept because a definition chosen for every turn is a prompt and a narrowing nobody vouched
+    /// for where a checkout wrote it, so only a file the person wrote or named can choose one.
+    agent_ignored: Vec<PathBuf>,
     /// The `permissions` blocks and rule lists a layer spelled as another shape, with the file each
     /// came from. The merge keeps the weaker block or list in their place, so the merged root no
     /// longer holds them and only the layer that wrote one can say it was ignored (PERM-11).
@@ -610,6 +621,7 @@ impl Settings {
         let mut model_ignored = Vec::new();
         let mut advisor_ignored = Vec::new();
         let mut fallback_ignored = Vec::new();
+        let mut agent_ignored = Vec::new();
         let mut misshapen = Vec::new();
         let mut mcp_declared = Vec::new();
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
@@ -659,6 +671,9 @@ impl Settings {
                 }
                 if root.remove("fallbackModel") {
                     fallback_ignored.push(path.clone());
+                }
+                if root.remove("agent") {
+                    agent_ignored.push(path.clone());
                 }
             }
             if root.contains_key(VETTING_BLOCK) {
@@ -792,6 +807,7 @@ impl Settings {
         settings.model_ignored = model_ignored;
         settings.advisor_ignored = advisor_ignored;
         settings.fallback_ignored = fallback_ignored;
+        settings.agent_ignored = agent_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -842,6 +858,7 @@ impl Settings {
             model: word(root, "model"),
             advisor_model: word(root, "advisorModel"),
             fallback_model: word(root, "fallbackModel"),
+            agent: word(root, "agent"),
             effort: word(root, "effort"),
             prompt_cache_ttl: word(root, "promptCacheTtl")
                 .and_then(|word| crate::CacheTtl::parse(&word)),
@@ -905,6 +922,7 @@ impl Settings {
             model_ignored: Vec::new(),
             advisor_ignored: Vec::new(),
             fallback_ignored: Vec::new(),
+            agent_ignored: Vec::new(),
         }
     }
 
@@ -959,6 +977,15 @@ impl Settings {
     /// [`Settings::model`] is.
     pub fn fallback_model(&self) -> Option<&str> {
         self.fallback_model.as_deref()
+    }
+
+    /// The definition the settings in force name for every turn of a session to be addressed to,
+    /// where `--agent` did not name one (ADDRESS-13).
+    ///
+    /// Read from the person's own file and the file `--settings` names only, for the reason
+    /// [`Settings::model`] is.
+    pub fn agent(&self) -> Option<&str> {
+        self.agent.as_deref()
     }
 
     /// How hard the settings in force asked the model to think, if they asked for anything.
@@ -1278,6 +1305,7 @@ impl Settings {
             && self.model_ignored.is_empty()
             && self.advisor_ignored.is_empty()
             && self.fallback_ignored.is_empty()
+            && self.agent_ignored.is_empty()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -1312,6 +1340,11 @@ impl Settings {
     /// The files that named `fallbackModel` from a layer not entitled to, weakest first.
     pub fn fallback_ignored(&self) -> impl Iterator<Item = &Path> {
         self.fallback_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The files that named `agent` from a layer not entitled to, weakest first.
+    pub fn agent_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.agent_ignored.iter().map(PathBuf::as_path)
     }
 
     /// The files that were read, weakest first, for `doctor` to report.
@@ -1354,6 +1387,7 @@ impl Settings {
             .into_iter()
             .chain(self.advisor_model.is_some().then_some("advisorModel"))
             .chain(self.fallback_model.is_some().then_some("fallbackModel"))
+            .chain(self.agent.is_some().then_some("agent"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
@@ -5104,6 +5138,32 @@ mod tests {
             .named(r#"{"fallbackModel": "named-fallback"}"#)
             .read();
         assert_eq!(named.fallback_model(), Some("named-fallback"));
+    }
+
+    /// ADDRESS-13: a definition chosen for every turn narrows and prompts them all, so a checkout's
+    /// layers cannot choose one, and the layers that can are reported for the ones that could not.
+    #[test]
+    fn a_project_layer_cannot_name_the_agent() {
+        let settings = Layers::new("agent-layers")
+            .global(r#"{"agent": "  my-reviewer "}"#)
+            .project(r#"{"agent": "this-checkout"}"#)
+            .local(r#"{"agent": "also-this-checkout"}"#)
+            .read();
+        assert_eq!(settings.agent(), Some("my-reviewer"));
+        assert_eq!(settings.agent_ignored().count(), 2);
+
+        let only_project = Layers::new("agent-only-project")
+            .project(r#"{"agent": "this-checkout"}"#)
+            .read();
+        assert_eq!(only_project.agent(), None);
+        assert_eq!(only_project.agent_ignored().count(), 1);
+
+        let named = Layers::new("agent-named")
+            .global(r#"{"agent": "my-reviewer"}"#)
+            .named(r#"{"agent": "named-reviewer"}"#)
+            .read();
+        assert_eq!(named.agent(), Some("named-reviewer"));
+        assert_eq!(named.agent_ignored().count(), 0);
     }
 
     #[test]

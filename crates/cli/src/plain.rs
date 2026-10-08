@@ -285,20 +285,40 @@ fn run(
     // Matched after that question, because its answer decides whether the checkout's definitions
     // are in the set, and before any server is reached, so a name matching nothing starts nothing
     // (ADDRESS-5).
-    let agent = match agent
-        .map(|name| {
-            let definitions = bravebot_agent::agents::resolved(
-                &workspace,
-                home.as_deref(),
-                trust.clone(),
-                permissions.clone(),
-                &mut RecordingSink::new(),
-            );
-            bravebot_tui::app::definition_named(&config, &definitions, &name)
-        })
+    // The `agent` setting stands in where `--agent` named nothing, and a name it gives that matches
+    // nothing is said and the session goes on without one (ADDRESS-13).
+    // A session resumed from a record that names a definition is left as it was before the
+    // setting existed: it does not take the setting's, which the record outranks.
+    let recorded = resumed
+        .as_ref()
+        .is_some_and(|record| record.agent.is_some());
+    let configured = settings.agent().filter(|_| !recorded);
+    let by_setting = agent.is_none() && configured.is_some();
+    let wanted = agent.or_else(|| configured.map(str::to_string));
+    let definitions = wanted.as_ref().map(|_| {
+        bravebot_agent::agents::resolved(
+            &workspace,
+            home.as_deref(),
+            trust.clone(),
+            permissions.clone(),
+            &mut RecordingSink::new(),
+        )
+    });
+    let agent = match wanted
+        .as_deref()
+        .zip(definitions.as_ref())
+        .map(|(name, definitions)| bravebot_tui::app::definition_named(&config, definitions, name))
         .transpose()
     {
         Ok(agent) => agent,
+        Err(bravebot_tui::app::Unusable::Missing(why)) if by_setting => {
+            asking.say(&t!(
+                cli_agent_setting_gone,
+                definition = wanted.as_deref().unwrap_or_default()
+            ));
+            asking.say(&why);
+            None
+        }
         Err(refused) => return fail(Ending::Argument, refused.into_message()),
     };
     // With the definition's model, because the opening line named the session's before the name
@@ -313,6 +333,12 @@ fn run(
             None => t!(cli_plain_working_under, definition = &agent.name),
         };
         asking.say(&t!(cli_notice, notice = notice));
+        if by_setting {
+            asking.say(&t!(
+                cli_notice,
+                notice = t!(session_working_under_by_setting)
+            ));
+        }
     }
 
     // After that question, and put on the same two streams every other question here is. Held for

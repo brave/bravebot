@@ -109,6 +109,8 @@ pub struct Facts<'a> {
     pub model: Option<&'a str>,
     /// The definition every turn is addressed to, where `--agent` named one (CLI-17).
     pub agent: Option<&'a crate::state::Addressed>,
+    /// Whether the `agent` setting chose it (ADDRESS-13).
+    pub agent_by_setting: bool,
     /// How hard the model is asked to think, or `None` where nothing is asked and the service
     /// applies its own default.
     pub effort: Option<bravebot_aichat::protocol::Effort>,
@@ -359,7 +361,11 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // Nothing else on the screen shows that the session is not the planner's, since the input box
     // is unchanged.
     if let Some(agent) = facts.agent {
-        lines.push(Line::new(t!(status_agent), &agent.name).with_note(t!(status_agent_every_turn)));
+        let note = match facts.agent_by_setting {
+            true => t!(status_agent_by_setting),
+            false => t!(status_agent_every_turn),
+        };
+        lines.push(Line::new(t!(status_agent), &agent.name).with_note(note));
     }
 
     // What actually answered, where that is not what was asked for. The endpoint substitutes a
@@ -900,6 +906,7 @@ mod tests {
             checkouts: &[],
             model: None,
             agent: None,
+            agent_by_setting: false,
             effort: None,
             model_reads_effort: true,
             // Nothing observed, which is what a session looks like before its first turn. Tests
@@ -1244,6 +1251,17 @@ mod tests {
                 t!(status_model_chosen).to_string()
             ))
         );
+
+        facts.agent_by_setting = true;
+        assert_eq!(
+            agent_line(&report(&facts)),
+            Some((
+                "rule-reviewer".to_string(),
+                t!(status_agent_by_setting).to_string()
+            )),
+            "a definition the setting chose was said to be named with --agent"
+        );
+        facts.agent_by_setting = false;
 
         facts.model = Some("the-definitions-model");
         facts.agent = Some(&naming_a_model);
