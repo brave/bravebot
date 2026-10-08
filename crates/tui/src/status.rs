@@ -488,6 +488,12 @@ pub fn report(facts: &Facts<'_>) -> Report {
             0 => t!(goal_never_checked).to_string(),
             rounds => t!(status_goal_rounds, rounds = rounds, left = goal.left()),
         };
+        let note = t!(
+            status_goal_usage,
+            note = note,
+            elapsed = crate::indicator::format_elapsed(goal.elapsed(std::time::Instant::now())),
+            tokens = tokens(goal.spent(facts.tokens))
+        );
         lines.push(Line::new(t!(status_goal), goal.condition()).with_note(note));
     }
 
@@ -1139,7 +1145,7 @@ mod tests {
     fn the_report_says_what_the_session_is_working_towards_and_how_many_rounds_are_left() {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string());
+        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
         goal.not_met("nothing above runs the tests".to_string());
 
         let mut facts = facts(&config, &trust);
@@ -1161,6 +1167,26 @@ mod tests {
             "the report did not say how many rounds had gone: {}",
             line.note
         );
+    }
+
+    /// A person deciding whether a goal is converging wants the time and the spend as much as the
+    /// round count, and the spend is counted from when the goal was armed.
+    #[test]
+    fn the_report_says_how_long_a_goal_has_run_and_what_it_has_spent() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut facts = facts(&config, &trust);
+        // The session had already spent part of its total before the goal was set.
+        let goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 10_000);
+        facts.goal = Some(&goal);
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_goal))
+            .expect("the goal is on the report");
+        assert!(line.note.ends_with(" · 2.4k tokens"), "{:?}", line.note);
     }
 
     /// CLI-17. The note saying a session works under a definition scrolls away, and the input box
@@ -1227,7 +1253,7 @@ mod tests {
     fn the_report_says_a_goal_is_paused() {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string());
+        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
         goal.not_met("nothing above runs the tests".to_string());
         goal.pause();
 
@@ -1245,7 +1271,11 @@ mod tests {
             "{:?}",
             line.value
         );
-        assert_eq!(line.note, t!(status_goal_paused));
+        assert!(
+            line.note.starts_with(t!(status_goal_paused)),
+            "{:?}",
+            line.note
+        );
     }
 
     #[test]
