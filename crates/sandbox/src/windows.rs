@@ -149,6 +149,16 @@ fn refusal_for(policy: &SandboxPolicy) -> Option<SandboxError> {
         });
     }
 
+    if !policy.unwritable.is_empty() {
+        return Some(SandboxError::SetupFailed {
+            mechanism: "appcontainer",
+            detail: "a container is granted the paths it is given and a write grant cannot be \
+                     narrowed beneath its row, so a write refusal subtracts from nothing here; \
+                     refusing rather than reporting a path held back that was still writable"
+                .into(),
+        });
+    }
+
     if !policy.allow_subprocesses {
         return Some(SandboxError::SetupFailed {
             mechanism: "appcontainer",
@@ -734,6 +744,18 @@ mod tests {
 
         assert!(matches!(refusal, SandboxError::SetupFailed { .. }));
         assert!(refusal.to_string().contains("refusing"));
+    }
+
+    /// The write counterpart of the read refusal above: a container cannot narrow a grant, so a
+    /// policy refusing a write beneath a row is refused rather than applied with the path writable.
+    #[test]
+    fn a_policy_refusing_a_write_is_refused_rather_than_applied() {
+        let policy = a_policy_this_backend_applies().deny_write("/workspace/.env");
+
+        let refusal = refusal_for(&policy).expect("a write refusal is not enforceable here");
+
+        assert!(matches!(refusal, SandboxError::SetupFailed { .. }));
+        assert!(refusal.to_string().contains("write refusal"));
     }
 
     /// A container does not stop a process creating children, so a policy asking for that

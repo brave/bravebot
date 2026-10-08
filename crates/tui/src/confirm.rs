@@ -4148,6 +4148,7 @@ mod tests {
                 "/var/scratch/session".into(),
             ],
             network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
             carried: vec![
                 bravebot_agent::Carried {
                     program: "git".into(),
@@ -4211,6 +4212,7 @@ mod tests {
             reads_the_machine: false,
             directories: vec!["/home/someone/project".into()],
             network,
+            filesystem: Default::default(),
             carried: vec![bravebot_agent::Carried {
                 program: "git".into(),
                 toolchain: None,

@@ -268,6 +268,16 @@ pub struct Managed {
     sandbox: Option<bravebot_sandbox::SandboxMode>,
     /// Whether it named `sandbox.mode` as something that is not a mode, which pins nothing.
     sandbox_unreadable: bool,
+    /// The lists of `sandbox.filesystem` it wrote, one slot to a list in the order of
+    /// `FILESYSTEM_LISTS`, and `None` for a list it said nothing about.
+    ///
+    /// A list it wrote is pinned: a pinned `allowRead` or `allowWrite` replaces the person's, so a
+    /// person's entry cannot widen it, and a refusal it wrote is one nothing a person wrote lifts.
+    /// `Some` of an empty list pins that list to nothing.
+    filesystem: [Option<Vec<String>>; 4],
+    /// The lists it gave something other than a list of strings, for `doctor` to report for the
+    /// reason `narrowing_unreadable` is.
+    filesystem_unreadable: Vec<bravebot_sandbox::rules::List>,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -309,6 +319,15 @@ impl Managed {
             crate::settings::NetworkStated::Absent => (None, false),
         };
         let sandbox = crate::sandbox::stated(&root);
+        let mut filesystem: [Option<Vec<String>>; 4] = Default::default();
+        let mut filesystem_unreadable = Vec::new();
+        for (slot, list) in crate::settings::FILESYSTEM_LISTS.into_iter().enumerate() {
+            match crate::settings::filesystem_list(&root, list) {
+                crate::settings::ListStated::Absent => {}
+                crate::settings::ListStated::Entries(entries) => filesystem[slot] = Some(entries),
+                crate::settings::ListStated::Unreadable => filesystem_unreadable.push(list),
+            }
+        }
         Self {
             narrowing,
             narrowing_unreadable,
@@ -319,6 +338,8 @@ impl Managed {
                 _ => None,
             },
             sandbox_unreadable: sandbox == crate::sandbox::Stated::Unreadable,
+            filesystem,
+            filesystem_unreadable,
             pins: PINNABLE
                 .iter()
                 .filter_map(|name| {
@@ -442,6 +463,20 @@ impl Managed {
         self.network_unreadable
     }
 
+    /// What this layer pinned `list` of `sandbox.filesystem` to, or `None` where it said nothing.
+    pub fn filesystem(&self, list: bravebot_sandbox::rules::List) -> Option<&[String]> {
+        let slot = crate::settings::FILESYSTEM_LISTS
+            .iter()
+            .position(|held| *held == list)?;
+        self.filesystem[slot].as_deref()
+    }
+
+    /// The lists of `sandbox.filesystem` the file gave something other than a list of strings,
+    /// which pin nothing.
+    pub fn filesystem_unreadable(&self) -> impl Iterator<Item = bravebot_sandbox::rules::List> {
+        self.filesystem_unreadable.iter().copied()
+    }
+
     /// The names it pinned, for `doctor` to report.
     ///
     /// Names rather than values, for the reason the settings report gives: everyone on the machine
@@ -459,6 +494,13 @@ impl Managed {
             .chain(self.narrowing.named())
             .chain(self.network.is_some().then_some(RUN_NETWORK))
             .chain(self.sandbox.is_some().then_some("sandbox.mode"))
+            .chain(
+                crate::settings::FILESYSTEM_LISTS
+                    .into_iter()
+                    .zip(self.filesystem.iter())
+                    .filter(|(_, pinned)| pinned.is_some())
+                    .map(|(list, _)| list.setting()),
+            )
     }
 
     /// The file, where there is one there at all, read or not.
@@ -689,6 +731,41 @@ mod tests {
         assert_eq!(unreadable.network(), None);
         assert!(unreadable.network_unreadable());
         assert!(!unreadable.pinned().any(|name| name == "run.network"));
+    }
+
+    /// A list of `sandbox.filesystem` is pinned by being written, an empty one included, `doctor`
+    /// names each by its key, and one that is not a list of strings pins nothing and says so.
+    #[test]
+    fn the_filesystem_lists_are_pinnable() {
+        use bravebot_sandbox::rules::List;
+        let layer = scratch(
+            "managed-filesystem",
+            r#"{"sandbox": {"filesystem": {"allowWrite": [], "denyRead": ["/etc/secret"], "denyWrite": "x"}}}"#,
+        );
+        assert_eq!(layer.filesystem(List::AllowWrite), Some(&[][..]));
+        assert_eq!(
+            layer.filesystem(List::DenyRead),
+            Some(&["/etc/secret".to_string()][..])
+        );
+        assert_eq!(layer.filesystem(List::AllowRead), None);
+        assert_eq!(layer.filesystem(List::DenyWrite), None);
+        assert_eq!(
+            layer.filesystem_unreadable().collect::<Vec<_>>(),
+            vec![List::DenyWrite]
+        );
+        let pinned: Vec<&str> = layer.pinned().collect();
+        assert!(
+            pinned.contains(&"sandbox.filesystem.allowWrite"),
+            "{pinned:?}"
+        );
+        assert!(
+            pinned.contains(&"sandbox.filesystem.denyRead"),
+            "{pinned:?}"
+        );
+        assert!(
+            !pinned.contains(&"sandbox.filesystem.denyWrite"),
+            "{pinned:?}"
+        );
     }
 
     /// A layer that can pin anything is a layer somebody uses to pin a preference. What an

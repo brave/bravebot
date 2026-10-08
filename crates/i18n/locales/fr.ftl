@@ -111,6 +111,14 @@ cli-option-run-network =
     Si les programmes lancés par `run` peuvent joindre le réseau. closed le refuse à tous sauf à la
     récupération d'un gestionnaire de paquets, à git ou gh avec une opération distante, à curl, à ssh et
     à une étape avec une portée distante
+cli-option-sandbox-allow-read =
+    Laisser les programmes lancés par `run` lire ce chemin ou ce motif, ce qui lève un refus qui le vise. Réglage : sandbox.filesystem.allowRead (répétable)
+cli-option-sandbox-deny-read =
+    Refuser aux programmes lancés par `run` la lecture de ce chemin ou de ce motif. Réglage : sandbox.filesystem.denyRead (répétable)
+cli-option-sandbox-allow-write =
+    Laisser les programmes lancés par `run` écrire ce chemin, qu'ils peuvent aussi lire. Réglage : sandbox.filesystem.allowWrite (répétable)
+cli-option-sandbox-deny-write =
+    Refuser aux programmes lancés par `run` l'écriture de ce chemin, un dossier de la session compris. Réglage : sandbox.filesystem.denyWrite (répétable)
 cli-option-agent = Adresser chaque tour à cette définition, comme /agent le fait pour un seul
 cli-option-system-prompt =
     Remplacer la phrase d'ouverture de l'invite système du planificateur à chaque tour. Le reste demeure
@@ -155,6 +163,7 @@ cli-settings-needs-a-path = --settings demande le chemin d'un fichier de réglag
 cli-settings-not-a-file = --settings ne nomme aucun fichier : { $path }
 cli-run-network-needs-a-word = --run-network demande open ou closed
 cli-run-network-unknown = --run-network accepte open ou closed, pas { $word }
+cli-sandbox-flag-needs-a-path = { $flag } demande un chemin
 cli-agent-needs-a-name = --agent demande le nom d'une définition
 cli-agent-not-for-a-command =
     --agent nomme la définition sous laquelle travaille une session ou une tâche, et { $command }
@@ -409,6 +418,25 @@ doctor-settings-network-unreadable =
     run.network dans { $path } n'est ni open ni closed, donc il est lu comme absent
 doctor-managed-network-unreadable =
     run.network dans { $path } n'est ni open ni closed, donc le réseau est fermé
+doctor-sandbox-filesystem = système de fichiers du bac à sable
+doctor-sandbox-filesystem-entry = { $key } { $path } ({ $source })
+doctor-sandbox-filesystem-refused = { $key } { $path } n'est pas appliqué : { $reason } ({ $source })
+doctor-sandbox-filesystem-source-flag = une option de la ligne de commande
+doctor-settings-sandbox-filesystem-ignored =
+    sandbox.filesystem.{ $key } dans { $path } n'est pas suivi : une copie de travail peut refuser un accès, jamais en ajouter, donc il est lu seulement dans ~/.bravebot/settings.json, le fichier nommé par --settings et le fichier géré
+doctor-settings-sandbox-misshapen =
+    sandbox.filesystem.{ $key } dans { $path } n'est pas une liste de chaînes, donc il est lu comme absent
+doctor-managed-sandbox-misshapen =
+    sandbox.filesystem.{ $key } dans { $path } n'est pas une liste de chaînes, donc il n'impose rien
+doctor-managed-sandbox-unread =
+    sandbox.filesystem.{ $key } { $path } n'est pas lu : { $managed } impose cette liste
+sandbox-rule-no-home = il commence par ~ et cette session ne nomme aucun dossier personnel
+sandbox-rule-climbs = il sort du dossier dont il est lu, ou contient .. là où il ne peut pas être jugé
+sandbox-rule-glob-on-a-write = un joker s'applique aux lectures et pas aux écritures
+sandbox-rule-confines-nothing = une écriture sur le dossier personnel ou sur tout le système de fichiers ne confine rien
+sandbox-rule-private-key = aucune liste n'ajoute d'accès à ~/.ssh, où se trouve une clé privée
+sandbox-rule-too-broad = son joker a regardé plus du disque qu'un motif ne le peut, donc ce qu'il désigne est inconnu
+sandbox-rule-overridden = une autre entrée décide de ce chemin : un refus au même chemin, ou un refus écrit par le fichier géré
 doctor-settings-allow-ignored =
     la règle allow { $rule } dans { $path } n'est pas accordée : une règle allow répond à une
     invite, le fichier d'un projet la propose donc et vous l'accordez au démarrage d'une session
@@ -1281,6 +1309,7 @@ reach-refused-option = une commande qui commence par une option, comme `sh -c ..
 reach-refused-incognito = cette session n'ajoute rien à ~/.bravebot, rien n'a donc été retenu
 reach-refused-no-home = cette session n'a pas de répertoire personnel pour juger un accès
 reach-refused-number = aucun accès n'est numéroté { $number }
+run-filesystem-rules = vos propres règles de système de fichiers s'appliquent à ces programmes : { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 run-spends-authority =
     elle dépense aussi des accès qui sont déjà les vôtres ailleurs, que personne ne redemande et que rien ici ne reprend :
 run-authority-container = { $named } : le démon de conteneurs, qui exécute n'importe quoi en root sur cette machine
@@ -1592,6 +1621,10 @@ status-network-by-settings = fermé par run.network dans { $path }
 status-network-by-a-setting = fermé par run.network dans un fichier de réglages
 status-network-pinned = imposé fermé par { $path }, ni un drapeau ni un fichier de réglages ne peut le changer
 status-network-pinned-by-policy = imposé fermé par les réglages gérés, ni un drapeau ni un fichier de réglages ne peut le changer
+status-sandbox-filesystem = Règles de fichiers
+status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
+status-sandbox-filesystem-files = de { $files }
+status-sandbox-filesystem-flags = la ligne de commande
 status-this-session = Cette session
 status-time = Temps
 status-time-inference = sur le modèle
@@ -2360,6 +2393,7 @@ agent-checkout-not-applied =
 
 opening-confinement = confinement disponible : { $level }
 opening-network-closed = réseau fermé
+opening-filesystem-rules = règles de fichiers en vigueur
 opening-invitation = Posez une question sur cet espace de travail.
 
 

@@ -101,33 +101,40 @@ impl SeatbeltSandbox {
         // `ENV` is exec'd under `process-exec` above and is not opened for reading, so no
         // read row names it: its contents are readable only where a policy grants /usr/bin.
 
-        // The last matching rule wins, so a refusal follows the grants it narrows and the rows that
-        // lift it follow the refusal. A read row at or beneath a refused path is a lift; any other
-        // row is written before the refusals it is narrowed by.
-        let lifts_a_refusal = |path: &Path| policy.unreadable.iter().any(|d| path.starts_with(d));
-        let allow_read = |out: &mut String, path: &Path| {
+        // The last matching rule wins, so the rows are written from the widest path to the
+        // narrowest: a refusal follows the grants it narrows, a row beneath a refusal lifts it, and
+        // a refusal beneath that row holds again. At one path a read row follows the refusal, which
+        // is how a credential scope lifts a location the base refuses.
+        let mut reads: Vec<(&Path, bool)> = policy
+            .readable
+            .iter()
+            .map(|path| (path.as_path(), true))
+            .chain(policy.unreadable.iter().map(|path| (path.as_path(), false)))
+            .collect();
+        reads.sort_by_key(|(path, allows)| (depth(path), *allows));
+        for (path, allows) in reads {
             out.push_str(&format!(
-                "(allow file-read* (subpath {}))\n",
+                "({} file-read* (subpath {}))\n",
+                if allows { "allow" } else { "deny" },
                 quote(&path.to_string_lossy())
             ));
-        };
-        for path in policy.readable.iter().filter(|p| !lifts_a_refusal(p)) {
-            allow_read(&mut out, path);
-        }
-        for path in &policy.unreadable {
-            out.push_str(&format!(
-                "(deny file-read* (subpath {}))\n",
-                quote(&path.to_string_lossy())
-            ));
-        }
-        for path in policy.readable.iter().filter(|p| lifts_a_refusal(p)) {
-            allow_read(&mut out, path);
         }
 
-        for row in &policy.writable {
+        // Written the same way, except that a row at a refused path is withdrawn and not lifted:
+        // the refusal of a write is a person's, and it wins at the path it names.
+        let mut writes: Vec<(&Path, bool)> = policy
+            .writable
+            .iter()
+            .filter(|row| !policy.unwritable.contains(&row.path))
+            .map(|row| (row.path.as_path(), true))
+            .chain(policy.unwritable.iter().map(|path| (path.as_path(), false)))
+            .collect();
+        writes.sort_by_key(|(path, allows)| (depth(path), *allows));
+        for (path, allows) in writes {
             out.push_str(&format!(
-                "(allow file-write* (subpath {}))\n",
-                quote(&row.path.to_string_lossy())
+                "({} file-write* (subpath {}))\n",
+                if allows { "allow" } else { "deny" },
+                quote(&path.to_string_lossy())
             ));
         }
 
@@ -171,6 +178,13 @@ impl SeatbeltSandbox {
 
         out
     }
+}
+
+/// How many names a path has, which is how far down the filesystem it is.
+fn depth(path: &Path) -> usize {
+    path.components()
+        .filter(|part| matches!(part, std::path::Component::Normal(_)))
+        .count()
 }
 
 /// Quote a path as a Seatbelt string literal.
@@ -315,6 +329,7 @@ impl SeatbeltSandbox {
 #[cfg(test)]
 mod argument_tests {
     use super::*;
+    use crate::policy::SandboxPolicy;
 
     fn held(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         pairs
@@ -500,6 +515,50 @@ mod argument_tests {
             profile.contains(r#"(subpath "/tmp/x\\\") (allow network-outbound) (")"#),
             "the path did not stay one literal: {profile}"
         );
+    }
+
+    /// The regression it rejects: refusals written after every grant, which cannot say "the
+    /// persons own row beneath this refusal stands, and a refusal beneath that row holds again".
+    /// The last matching rule decides, so each row has to come after every wider one.
+    #[test]
+    fn the_profile_orders_every_row_from_the_widest_path_to_the_narrowest() {
+        let policy = SandboxPolicy::strict()
+            .allow_read("/")
+            .deny_read("/h/p")
+            .allow_read("/h/p/public")
+            .deny_read("/h/p/public/inner")
+            .allow_write("/h")
+            .allow_write("/h/p/out")
+            .allow_write("/h/gone")
+            .deny_write("/h/p")
+            .deny_write("/h/gone");
+        let profile = SeatbeltSandbox::profile(&policy);
+        let at = |rule: &str| {
+            profile
+                .find(rule)
+                .unwrap_or_else(|| panic!("{rule} is not in the profile:\n{profile}"))
+        };
+        let (grant, refusal, lift, again) = (
+            at(r#"(allow file-read* (subpath "/"))"#),
+            at(r#"(deny file-read* (subpath "/h/p"))"#),
+            at(r#"(allow file-read* (subpath "/h/p/public"))"#),
+            at(r#"(deny file-read* (subpath "/h/p/public/inner"))"#),
+        );
+        assert!(
+            grant < refusal && refusal < lift && lift < again,
+            "{profile}"
+        );
+        let (allowed, denied, narrower) = (
+            at(r#"(allow file-write* (subpath "/h"))"#),
+            at(r#"(deny file-write* (subpath "/h/p"))"#),
+            at(r#"(allow file-write* (subpath "/h/p/out"))"#),
+        );
+        assert!(allowed < denied && denied < narrower, "{profile}");
+        assert!(
+            !profile.contains(r#"(allow file-write* (subpath "/h/gone"))"#),
+            "a write row at a refused path was kept: {profile}"
+        );
+        assert!(profile.contains(r#"(deny file-write* (subpath "/h/gone"))"#));
     }
 }
 

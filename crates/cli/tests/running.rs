@@ -565,6 +565,60 @@ fn doctor_names_a_pick_it_sets_aside() {
     );
 }
 
+/// SANDBOX: the lists a person writes reach the report through the process: one from the settings
+/// file, one from a flag, and one a checkout wrote and may not, each said with where it came from.
+///
+/// A property of the process: the flag is read in `main` and settled once, the settings are read by
+/// the layers, and `doctor` is the only place that joins them to the file that wrote each. A link
+/// that dropped either would leave every in-crate test passing while a person's refusal was
+/// silently not in force. The checkout's `allowWrite` is the control that the report distinguishes
+/// the two kinds of file.
+#[test]
+fn doctor_names_each_filesystem_rule_with_where_it_came_from() {
+    let scratch = Scratch::new("cli-running-doctor-filesystem-rules")
+        .with_settings(r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-settings"]}}}"#);
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"sandbox": {"filesystem": {"allowWrite": ["/from-a-checkout"], "denyWrite": [".env"]}}}"#,
+    )
+    .expect("the checkout's settings");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["doctor", "--sandbox-deny-write", "from-a-flag"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("the report did not name {needle}: {stdout}{stderr}"))
+            .to_string()
+    };
+    assert!(
+        line("denyRead ~/from-settings").contains("settings.json"),
+        "{stdout}"
+    );
+    assert!(
+        line("denyWrite from-a-flag").contains("command-line flag"),
+        "{stdout}"
+    );
+    assert!(
+        line("denyWrite .env").contains("checkout"),
+        "a checkout's refusal was not in force: {stdout}"
+    );
+    assert!(
+        !stdout.contains("allowWrite /from-a-checkout (")
+            && line("sandbox.filesystem.allowWrite").contains("not obeyed"),
+        "a checkout's allowance was read or went unreported: {stdout}"
+    );
+}
+
 /// A machine with nowhere to keep credentials has none imported, rather than a batch that could
 /// not be read.
 ///
@@ -2604,6 +2658,91 @@ fn a_gateway_asking_for_a_run() -> Gateway {
             body.len()
         )
     })
+}
+
+/// A gateway whose model asks to run `command` and, once that call has an answer in the
+/// conversation, says it is done.
+#[cfg(unix)]
+fn a_gateway_asking_to_run(command: &'static str) -> Gateway {
+    a_gateway(r#"["tools"]"#, move |body| {
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"run",
+                        "arguments":serde_json::json!({"command": command, "why": "make a file"})
+                            .to_string()}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// SANDBOX: `--sandbox-deny-write` and a settings file's `sandbox.filesystem.denyWrite` reach the
+/// programs `run` starts, and a run with neither reaches none.
+///
+/// A property of the process: the flag is read in `main`, joined to the settings and settled once,
+/// and read again by the confinement each `run` call builds. Every in-crate test hands the lists to
+/// the confinement itself, so a link that dropped them would leave all of them passing while a
+/// refusal was in no stage's profile. The program is `touch` making a file in a directory the
+/// refusal names, so the effect is a file on disk and not words the model was handed; the run with
+/// no list is the control that this machine lets the file be made.
+#[cfg(unix)]
+#[test]
+fn a_denied_write_reaches_the_programs_a_run_starts() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return;
+    }
+    let run_in = |name: &str, flags: &[&str], settings: Option<&str>| {
+        let gateway = a_gateway_asking_to_run("touch blocked/made.txt");
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(project.join("blocked")).expect("a project");
+        if let Some(settings) = settings {
+            std::fs::create_dir_all(project.join(".bravebot")).expect("a checkout");
+            std::fs::write(project.join(".bravebot").join("settings.json"), settings)
+                .expect("the checkout's settings");
+        }
+        let mut arguments = flags.to_vec();
+        arguments.extend(["--dangerously-skip-permissions", "-p", "make a file"]);
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(&scratch.path, &project, &environment, &arguments);
+        let _ = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        project.join("blocked").join("made.txt").exists()
+    };
+
+    assert!(
+        run_in("cli-running-write-control", &[], None),
+        "the control did not make the file, so the refusals below say nothing"
+    );
+    assert!(
+        !run_in(
+            "cli-running-write-flag",
+            &["--sandbox-deny-write", "blocked/made.txt"],
+            None
+        ),
+        "the flag did not reach the stage"
+    );
+    assert!(
+        !run_in(
+            "cli-running-write-checkout",
+            &[],
+            Some(r#"{"sandbox": {"filesystem": {"denyWrite": ["blocked/made.txt"]}}}"#)
+        ),
+        "a checkout's refusal did not reach the stage"
+    );
 }
 
 /// SANDBOX: `--run-network closed` reaches the programs `run` starts, the planner's description of

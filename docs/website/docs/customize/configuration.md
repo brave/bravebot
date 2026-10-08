@@ -409,6 +409,8 @@ one thing leaves everything else in force:
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `agent` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
+| `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
+| `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
 | anything else | the closest file that set it wins |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
@@ -454,6 +456,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([below](#runnetwork)) |
+| `sandbox.filesystem.allowRead`, `denyRead`, `allowWrite`, `denyWrite` | lists of paths that move what a program the agent runs reads and writes ([below](#sandboxfilesystem)) |
 | `run.maxOutput` | how much of what a command printed the agent reads ([below](#runmaxoutput)) |
 | `run.defaultSeconds`, `run.maxSeconds` | how long a command may run ([below](#rundefaultseconds-and-runmaxseconds)) |
 | `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
@@ -785,6 +788,49 @@ operating system cannot take the network from one program and leave it to anothe
 The desktop app reads the setting once, when it starts, from your own file, the file `--settings` names
 when it exists, the settings file of the directory it was started in and the machine-level pin. A project opened in a window afterwards, or a
 settings file chosen there, does not change it.
+
+### `sandbox.filesystem`
+
+```json
+{
+  "sandbox": {
+    "filesystem": {
+      "allowWrite": ["~/notes"],
+      "denyRead": ["~/.config/gh", "**/*.env"],
+      "denyWrite": [".env"],
+      "allowRead": ["~/.aws"]
+    }
+  }
+}
+```
+
+Four lists of paths for the programs the agent runs. `allowRead` lets them read a place that is
+refused by default, such as `~/.aws`. `denyRead` refuses them a place they could read. `allowWrite`
+lets them write and read a place. `denyWrite` takes write access away under a path, one inside a
+directory the session was opened on included. Each list is empty unless you write it.
+
+A path is absolute, starts with `~/`, or is relative to the directory the session was opened on. A
+`..` that climbs out of it is refused. `*` and `?` work in `allowRead` and `denyRead`, so
+`**/*.env` refuses every file ending in `.env` under the directory; the listing is made when a
+command starts, so a file made afterwards is not in it. A link is judged by where it leads.
+
+The narrower path wins: `allowWrite` on `~/a` and `denyWrite` on `~/a/b` writes `~/a/c` and not
+`~/a/b/x`. Where both name the same path the refusal wins, and it wins over what a command is given
+for itself, so a refusal of `~/.config/gh` stands against `gh`. Nothing adds reach to `~/.ssh`, and
+the home directory, `/` and a directory above the home are refused as write paths.
+
+Your own file and a `--settings` file outside the project may write all four. A project or local file
+may write `denyRead` and `denyWrite` and not the other two, so a repository you clone cannot widen
+what its own commands reach; `bravebot doctor` names the file that tried. A machine-level file can pin
+any list: a pinned `allowRead` or `allowWrite` replaces yours, and a pinned refusal is one nothing
+you wrote lifts. `--sandbox-allow-read`, `--sandbox-deny-read`, `--sandbox-allow-write` and
+`--sandbox-deny-write` add to the lists for one run.
+
+An entry that cannot be applied is not in force. A refused `denyRead` or `denyWrite` stops the
+commands it would have held back, with a message naming it, rather than letting them through. On
+Linux a directory holding a path you refused writes to cannot have new entries made directly in it,
+and on Windows a command the refusal would reach is not started, since neither can narrow a write
+grant.
 
 ### `run.maxOutput`
 

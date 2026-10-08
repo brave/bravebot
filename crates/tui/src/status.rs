@@ -259,6 +259,60 @@ fn network_line(
     )
 }
 
+/// The line for the person's own filesystem lists, where any has an entry: how many each holds and
+/// the files that wrote them, never an entry, since a path is for `doctor` and a glob's matches are
+/// the machine's.
+fn filesystem_line(settled: Option<&bravebot_config::Filesystem>) -> Option<Line> {
+    let lists = &settled.filter(|settled| !settled.lists.is_empty())?.lists;
+    let mut sources: Vec<String> = Vec::new();
+    for list in [
+        &lists.allow_read,
+        &lists.deny_read,
+        &lists.allow_write,
+        &lists.deny_write,
+    ] {
+        for entry in list {
+            let source = match &entry.by {
+                Some(path) => path.display().to_string(),
+                None => t!(status_sandbox_filesystem_flags).to_string(),
+            };
+            if !sources.contains(&source) {
+                sources.push(source);
+            }
+        }
+    }
+    Some(
+        Line::new(
+            t!(status_sandbox_filesystem),
+            t!(
+                status_sandbox_filesystem_counts,
+                allow_read = lists.allow_read.len(),
+                deny_read = lists.deny_read.len(),
+                allow_write = lists.allow_write.len(),
+                deny_write = lists.deny_write.len()
+            ),
+        )
+        .with_note(t!(
+            status_sandbox_filesystem_files,
+            files = sources.join(", ")
+        )),
+    )
+}
+
+/// Why an entry of one of the filesystem lists is not in force, in the words `doctor` uses.
+pub fn filesystem_reason(reason: bravebot_sandbox::rules::Reason) -> &'static str {
+    use bravebot_sandbox::rules::Reason;
+    match reason {
+        Reason::NoHome => t!(sandbox_rule_no_home),
+        Reason::Climbs => t!(sandbox_rule_climbs),
+        Reason::GlobOnAWrite => t!(sandbox_rule_glob_on_a_write),
+        Reason::ConfinesNothing => t!(sandbox_rule_confines_nothing),
+        Reason::PrivateKey => t!(sandbox_rule_private_key),
+        Reason::TooBroad => t!(sandbox_rule_too_broad),
+        Reason::Overridden => t!(sandbox_rule_overridden),
+    }
+}
+
 /// Who closed the network for the programs `run` starts, in the words `/status` and `doctor` share.
 pub fn run_network_source(decided: &bravebot_config::Decided) -> String {
     use bravebot_config::Decided;
@@ -442,6 +496,11 @@ pub fn report(facts: &Facts<'_>) -> Report {
     lines.extend(network_line(
         bravebot_config::settled_run_network(),
         bravebot_config::sandbox::in_force().mode,
+    ));
+    // Beside it and on the same terms: nothing for a session that wrote no list, which is the
+    // session this screen has always described.
+    lines.extend(filesystem_line(
+        bravebot_config::settled_sandbox_filesystem(),
     ));
 
     // Named rather than counted, since the question is which of them this session can reach, and
@@ -1953,6 +2012,44 @@ mod tests {
             note.contains("/etc/bravebot/managed.json") && note.contains("pinned"),
             "{note}"
         );
+    }
+
+    /// The lists are on the report with how many entries each holds and the files that wrote them,
+    /// never an entry, and a session with none says nothing.
+    #[test]
+    fn filesystem_rules_are_reported_by_count_and_file_and_never_by_path() {
+        use bravebot_sandbox::rules::{Entry, Lists};
+        let entry = |path: &str, by: Option<&str>| Entry {
+            path: path.into(),
+            by: by.map(Into::into),
+            pinned: false,
+        };
+        let settled = |lists| bravebot_config::Filesystem {
+            lists,
+            ..Default::default()
+        };
+
+        assert!(filesystem_line(None).is_none());
+        assert!(filesystem_line(Some(&settled(Lists::default()))).is_none());
+        let line = filesystem_line(Some(&settled(Lists {
+            deny_read: vec![
+                entry("~/very-secret", Some("/home/a/.bravebot/settings.json")),
+                entry("~/other", None),
+            ],
+            deny_write: vec![entry(".env", Some("/home/a/.bravebot/settings.json"))],
+            ..Lists::default()
+        })))
+        .expect("a line");
+
+        assert_eq!(line.label.trim(), t!(status_sandbox_filesystem));
+        assert!(
+            line.value.contains("2 denyRead") && line.value.contains("1 denyWrite"),
+            "{}",
+            line.value
+        );
+        assert!(!line.value.contains("very-secret") && !line.note.contains("very-secret"));
+        assert!(line.note.contains("/home/a/.bravebot/settings.json"));
+        assert!(line.note.contains(t!(status_sandbox_filesystem_flags)));
     }
 
     /// Before the first turn nothing has been observed, so the panel says premium is available

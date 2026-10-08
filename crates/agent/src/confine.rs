@@ -20,6 +20,7 @@ use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base, run_base};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
+use bravebot_sandbox::rules::{Lists, Rules};
 use bravebot_sandbox::scope::{Reach, Scope, environment_reach};
 use bravebot_sandbox::toolchain::Toolchain;
 use std::ffi::OsStr;
@@ -42,6 +43,8 @@ pub struct Confinement {
     mode: SandboxMode,
     /// The reach a person remembered for commands, which attaches to the steps its shape names.
     grants: Vec<Grant>,
+    /// The person's own filesystem lists, resolved against this session's directories.
+    filesystem: Rules,
     /// The program a test has the platform fail to confine, which no machine's real mechanism does
     /// on demand.
     #[cfg(test)]
@@ -83,6 +86,7 @@ impl Confinement {
             network: Network::Open,
             mode: SandboxMode::Standard,
             grants: Vec::new(),
+            filesystem: Rules::none(),
             #[cfg(test)]
             unconfinable: None,
         }
@@ -93,6 +97,28 @@ impl Confinement {
     pub fn with_network(mut self, network: Network) -> Self {
         self.network = network;
         self
+    }
+
+    /// This confinement with the person's own filesystem lists (`sandbox.filesystem`), resolved
+    /// now against the session's home and its first directory: globs are listed here, so a file a
+    /// program makes afterwards is outside what one named, and a link is judged by where it leads.
+    ///
+    /// Every stage of every line this confinement starts gets them, a stage of a line left running
+    /// included, because [`Confinement::policy`] is the one place a stage's rows are made.
+    pub fn with_filesystem(mut self, lists: &Lists) -> Self {
+        let base = self
+            .roots
+            .first()
+            .cloned()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        self.filesystem = bravebot_sandbox::rules::resolve(lists, self.home.as_deref(), &base);
+        self
+    }
+
+    /// The entries of the person's filesystem lists, each with what became of it, for a report.
+    pub fn filesystem(&self) -> &Rules {
+        &self.filesystem
     }
 
     /// Whether the stage `step` starts may reach the network.
@@ -244,6 +270,7 @@ impl Confinement {
                 .cloned()
                 .collect(),
             network: self.network,
+            filesystem: self.filesystem.counts(),
             carried: steps
                 .iter()
                 .filter_map(|step| {
@@ -370,7 +397,7 @@ impl Confinement {
         if let Some(scratch) = &self.scratch {
             policy = policy.allow_read(scratch).allow_write(scratch);
         }
-        policy.starting_in(directory)
+        self.filesystem.apply(policy).starting_in(directory)
     }
 
     /// The one sentence that says what the programs of `steps` ran under, for a result whose
@@ -412,6 +439,17 @@ impl Confinement {
             Network::Open => "open".to_string(),
             Network::Closed => format!("closed, kept only by steps with: {}", named(reaching),),
         };
+        // The count of each list and never an entry: a path a person wrote is not text this line
+        // has any use for repeating to the planner, and a glob's matches are the machine's.
+        let rules = self.filesystem.counts();
+        let rules = match rules.is_empty() {
+            true => String::new(),
+            false => format!(
+                " The person's own rules also applied: {} allowRead, {} denyRead, {} allowWrite, \
+                 {} denyWrite.",
+                rules.allow_read, rules.deny_read, rules.allow_write, rules.deny_write,
+            ),
+        };
         if self.reads_the_machine() {
             return format!(
                 "Confinement: programs could read this machine except the places that hold a \
@@ -419,10 +457,11 @@ impl Confinement {
                  a place that holds a credential was read only where a credential scope added it \
                  for the steps that named one (credential scopes: {}). Any other path is refused \
                  by the operating system as `Operation not permitted` or `Permission denied`. \
-                 Network: {}.",
+                 Network: {}.{}",
                 directories.join(", "),
                 named(scopes),
                 network,
+                rules,
             );
         }
         format!(
@@ -431,11 +470,12 @@ impl Confinement {
              they reached only what a toolchain list or credential scope added for the steps \
              that named one (toolchain lists: {}; credential scopes: {}). Any other path is \
              refused by the operating system as `Operation not permitted` or `Permission \
-             denied`. Network: {}.",
+             denied`. Network: {}.{}",
             directories.join(", "),
             named(toolchains),
             named(scopes),
             network,
+            rules,
         )
     }
 
@@ -467,6 +507,14 @@ impl Confinement {
                 Some((name.to_str()?.to_string(), value.to_str()?.to_string()))
             })
             .collect();
+        if let Some(item) = self.filesystem.unapplied_denial() {
+            return Err(not_confined(format!(
+                "sandbox.filesystem.{} names `{}`, which cannot be applied, and a stage started \
+                 without it would reach the path it holds back",
+                item.list.key(),
+                item.entry.path
+            )));
+        }
         let wanted = self.policy(step, directory, &readable);
         if let Some(detail) = cannot_close_the_network(&wanted, &capabilities) {
             return Err(not_confined(detail));
@@ -1262,6 +1310,140 @@ mod tests {
             )
             .is_some_and(|said| said.contains("except the places that hold a credential"))
         );
+    }
+
+    fn listed(deny_read: &[&str], allow_write: &[&str], deny_write: &[&str]) -> Lists {
+        let entries = |paths: &[&str]| {
+            paths
+                .iter()
+                .map(|path| bravebot_sandbox::rules::Entry {
+                    path: (*path).to_string(),
+                    by: None,
+                    pinned: false,
+                })
+                .collect()
+        };
+        Lists {
+            deny_read: entries(deny_read),
+            allow_write: entries(allow_write),
+            deny_write: entries(deny_write),
+            ..Lists::default()
+        }
+    }
+
+    /// The regression it rejects: a person's refusal that the rows a stage brings for itself lift.
+    /// A push carries the remote scope, whose read of `~/.ssh/known_hosts` is a lift of the table's
+    /// refusal of `~/.ssh`; the person refused that file by name, and the stage must not read it.
+    /// The same stage without the list is the control that the scope does lift it.
+    #[test]
+    fn a_refusal_of_the_persons_is_not_lifted_by_the_scope_a_stage_carries() {
+        // A home that exists with its links followed, as a real one is: the list resolves a path
+        // through the links of its deepest part on disk, and `/home` is a link on macOS.
+        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/confine-unit-refusal-home");
+        std::fs::create_dir_all(&home).expect("home directory");
+        let home = home.canonicalize().expect("canonical home");
+        let known_hosts = format!("{}/.ssh/known_hosts", home.display());
+        let push = step("/usr/bin/git", &["push"]);
+        let plain = Confinement::new(
+            Prelude::Linux,
+            PathBuf::from("/tmp"),
+            Some(&home),
+            vec![PathBuf::from("/work/project")],
+            Some(Path::new("/var/scratch")),
+        );
+        let held = plain
+            .clone()
+            .with_filesystem(&listed(&[&known_hosts], &[], &[]));
+
+        let without = plain.policy(&push, Path::new("/work/project"), &[]);
+        let with = held.policy(&push, Path::new("/work/project"), &[]);
+
+        assert!(reads(&without, &known_hosts), "the scope lifts it unlisted");
+        assert!(!reads(&with, &known_hosts), "a scope lifted the refusal");
+        assert!(with.unreadable.contains(&PathBuf::from(&known_hosts)));
+    }
+
+    /// Every stage of a line is built by the one function, so a stage of a pipeline and a stage of a
+    /// line left running hold the lists as the first does; a stage that carries a toolchain or a
+    /// scope holds them as well.
+    #[test]
+    fn every_kind_of_stage_holds_the_lists() {
+        let held = reading_confinement(Prelude::Linux, &["/work/project"]).with_filesystem(
+            &listed(&["/work/project/secret"], &[], &["/work/project/.env"]),
+        );
+        for step in [
+            step("/bin/cat", &["file"]),
+            step("/usr/bin/git", &["push"]),
+            step("/usr/bin/cargo", &["build"]),
+        ] {
+            let policy = held.policy(&step, Path::new("/work/project"), &[]);
+            assert!(
+                policy
+                    .unreadable
+                    .contains(&PathBuf::from("/work/project/secret")),
+                "{}",
+                step.program
+            );
+            assert!(
+                policy
+                    .unwritable
+                    .contains(&PathBuf::from("/work/project/.env")),
+                "{}",
+                step.program
+            );
+        }
+    }
+
+    /// The prompt's description and the failure sentence say how many entries are in force and never
+    /// which paths, and say nothing where there are none.
+    #[test]
+    fn the_counts_reach_the_description_and_the_profile_and_no_path_does() {
+        let plain = reading_confinement(Prelude::Linux, &["/work/project"]);
+        let held = plain.clone().with_filesystem(&listed(
+            &["/work/project/secret-path", "/work/project/other"],
+            &["/work/extra"],
+            &["/work/project/.env"],
+        ));
+        let cat = step("/bin/cat", &["file"]);
+
+        let described = held.describe(&[&cat]).filesystem;
+        let said = held.profile(&[&cat]);
+
+        assert_eq!(
+            (
+                described.deny_read,
+                described.allow_write,
+                described.deny_write
+            ),
+            (2, 1, 1)
+        );
+        assert!(
+            said.contains("2 denyRead") && said.contains("1 allowWrite"),
+            "{said}"
+        );
+        assert!(
+            !said.contains("secret-path") && !said.contains(".env"),
+            "{said}"
+        );
+        assert!(plain.describe(&[&cat]).filesystem.is_empty());
+        assert!(!plain.profile(&[&cat]).contains("denyRead"));
+    }
+
+    /// A session that names no home directory cannot read `~` as a path, so a refusal spelled with
+    /// it is not applied and the stage is not started, rather than started without the refusal.
+    #[test]
+    fn a_refusal_spelled_with_a_home_the_session_lacks_is_unapplied() {
+        let held = Confinement::new(
+            Prelude::Linux,
+            PathBuf::from("/tmp"),
+            None,
+            vec![PathBuf::from("/work/project")],
+            None,
+        )
+        .with_filesystem(&listed(&["~/notes"], &[], &[]));
+
+        assert!(held.filesystem().unapplied_denial().is_some());
     }
 
     /// A session that names no home directory grants no row under it, so it describes none.

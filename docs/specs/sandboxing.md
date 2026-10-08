@@ -1241,6 +1241,120 @@ environment injection in `confine.rs`, the prompt for an unlisted host, the trac
 `verified-by: bravebot_sandbox::proxy::the_environment_points_every_proxy_variable_at_the_loopback_port`
 `verified-by: bravebot_sandbox::proxy::dropping_the_proxy_stops_it_listening`
 
+<a id="SANDBOX-25"></a>
+### SANDBOX-25: a person may add to and take from what a stage reads and writes, with four lists of paths
+
+A session carries four lists, each of paths or globs, in the settings file under `sandbox.filesystem`
+and on the command line as `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`,
+`--sandbox-allow-write <path>` and `--sandbox-deny-write <path>`, each repeatable and each adding to
+what the settings say. `allowRead` lifts a refusal, one of the table in
+[SANDBOX-12](#SANDBOX-12) included. `denyRead` adds a refusal to every stage. `allowWrite` adds a write
+row that is read as well. `denyWrite` takes write access away under a path, a directory the
+session was opened on included, and leaves what is read as it was. All four are empty by default and
+a session that writes none is held to exactly the profile of [SANDBOX-18](#SANDBOX-18).
+
+A narrower path beats a wider one, so an `allowWrite` beneath a `denyWrite` is a row that stands and
+a `denyRead` beneath an `allowRead` is a refusal that holds. At one path a refusal wins over the
+person's own allowance. A refusal also wins over the rows a stage brings for itself at or beneath it,
+a credential scope's and a toolchain cache's among them: the person said no program reads `~/.config/gh`,
+and a program that is given its scope is still a program. A refusal with no grant above it holds back
+nothing and is not added.
+
+`denyRead` and `denyWrite` are read from every layer, since they only take reach away. `allowRead`
+and `allowWrite` are read from the person's own file, the file `--settings` names from outside the
+workspace, the command line and the managed file, and never from a project layer, a local layer or a
+named file inside the workspace, so a cloned repository cannot widen its own sandbox. A layer that
+tried names the file in `doctor`. The managed file may pin each list: a pinned `allowRead` or
+`allowWrite` is the whole list and the person's own entries are not read, and a pinned refusal is
+added to the person's and cannot be lifted by an entry at or beneath it.
+
+A path is absolute, `~/`-prefixed or relative to the first directory the session was opened on. An
+entry that climbs out of the directory it is read from, holds `..` where it is absolute, or starts
+with `~` in a session that names no home directory is refused. Each path is judged where it leads: the
+part of it that is on disk is resolved through its links. `~`, `/`, a drive root and the home directory
+or any directory above it are refused as `allowWrite` rows, since a stage that wrote there would be
+confined to nothing ([SANDBOX-2](#SANDBOX-2)). No list adds reach to `~/.ssh` or anything inside it,
+which is where a private key is ([SANDBOX-16](#SANDBOX-16)), and no list can set the `.git` writes
+[SANDBOX-14](#SANDBOX-14) withholds, since none of them reaches that setting. A write row of the
+person's above a location of the table does not write it, since Seatbelt's refusal of a read is not
+a refusal of a write. `*` and `?` in an entry of `allowRead` or `denyRead` are expanded when a call's
+confinement is built, by listing each directory once without following a link, within a bound of
+entries and of depth; a glob that matches nothing is not an error, and one that reaches the bound
+names nothing known and is refused. A file made after the listing is outside what a glob named. A
+wildcard in a write list is refused.
+
+An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
+`denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
+is, and the result names the key and the entry. Where the backend cannot subtract from a grant
+(Windows) a stage the refusal would reach is refused as [SANDBOX-1](#SANDBOX-1) requires. Where it
+grants a directory with everything beneath it (Landlock) a directory above a refused write is listed
+and granted entry by entry as [SANDBOX-12](#SANDBOX-12) does for a read, which leaves that directory
+without the right to make an entry directly in it: a program cannot create a new file beside a file
+the person denied it writing.
+
+Every stage of every line a turn starts is built by one function and so holds the lists, a stage
+of a pipeline, of a line left running and of a delegate's turn alike, in the terminal and in a
+window. `doctor` lists every entry with the file or flag that wrote it and each entry that is not in
+force with why. `/status` gives how many entries each list holds and the files that wrote them. The
+opening screen says only that the person's rules are in force. The run prompt says the counts once,
+and the sentence a failed step carries says them. None of them names a path, since a glob's matches
+are the machine's and a path is the person's.
+
+**Why.** The lists are how a person changes what a stage reads and writes without `/add-dir`, the
+only other way to move that reach, which also marks the directory trusted
+([TRUST-9](trust-map.md#TRUST-9)). Without them, a person with a file the program should not change,
+or a directory it should not read, can only keep the program out of the session or trust more than
+they meant to. Reach a checkout adds is reach the person did not choose, so only the lists that take
+reach away are read from one, which is the rule `run.network` follows. A refusal that does not
+outrank a stage's own rows is lifted by any stage that carries a scope for the path, a `gh` stage for
+`~/.config/gh`, so a refusal wins over those rows. A refusal that cannot be applied is not dropped,
+because the path it names is the one the person was protecting.
+
+`verified-by: bravebot_sandbox::rules::a_name_is_met_by_a_star_and_a_question_mark_and_nothing_looser`
+`verified-by: bravebot_sandbox::rules::an_entry_is_read_from_where_its_spelling_says`
+`verified-by: bravebot_sandbox::rules::a_link_is_judged_by_where_it_leads`
+`verified-by: bravebot_sandbox::rules::a_write_row_over_the_home_or_the_root_is_refused`
+`verified-by: bravebot_sandbox::rules::an_entry_that_adds_reach_inside_ssh_is_refused`
+`verified-by: bravebot_sandbox::rules::a_glob_is_expanded_by_listing_and_applies_to_reads`
+`verified-by: bravebot_sandbox::rules::a_glob_over_a_tree_deeper_than_the_walk_goes_is_refused_and_not_cut_short`
+`verified-by: bravebot_sandbox::rules::a_match_is_judged_where_it_leads_and_the_directory_it_is_read_from_is_not_a_pattern`
+`verified-by: bravebot_sandbox::rules::a_denial_decides_the_path_it_names_and_a_pinned_one_what_is_beneath`
+`verified-by: bravebot_sandbox::rules::a_denial_beats_the_stages_own_rows_and_a_narrower_row_of_the_persons_stands`
+`verified-by: bravebot_sandbox::rules::a_denial_with_no_grant_above_it_is_not_added`
+`verified-by: bravebot_sandbox::rules::a_write_row_above_a_credential_location_does_not_write_it`
+`verified-by: bravebot_sandbox::policy::a_write_row_above_a_write_refusal_is_spread_around_it`
+`verified-by: bravebot_sandbox::linux::a_stage_is_refused_a_write_the_policy_refuses_and_keeps_the_rest`
+`verified-by: bravebot_sandbox::macos::the_profile_orders_every_row_from_the_widest_path_to_the_narrowest`
+`verified-by: bravebot_sandbox::windows::a_policy_refusing_a_write_is_refused_rather_than_applied`
+`verified-by: bravebot_agent::confine::a_refusal_of_the_persons_is_not_lifted_by_the_scope_a_stage_carries`
+`verified-by: bravebot_agent::confine::every_kind_of_stage_holds_the_lists`
+`verified-by: bravebot_agent::confine::the_counts_reach_the_description_and_the_profile_and_no_path_does`
+`verified-by: bravebot_agent::confine::a_refusal_spelled_with_a_home_the_session_lacks_is_unapplied`
+`verified-by: bravebot_agent::confirm::the_persons_filesystem_lists_are_said_once_and_only_where_they_exist`
+`verified-by: bravebot_config::settings::the_home_layer_may_write_every_filesystem_list`
+`verified-by: bravebot_config::settings::a_checkout_may_add_a_refusal_and_never_an_allowance`
+`verified-by: bravebot_config::settings::a_named_file_may_widen_only_outside_the_workspace`
+`verified-by: bravebot_config::settings::a_misshapen_filesystem_list_is_reported_and_a_blank_entry_is_left_out`
+`verified-by: bravebot_config::settings::the_sandbox_block_is_unread_unless_it_holds_only_the_filesystem_lists`
+`verified-by: bravebot_config::managed::the_filesystem_lists_are_pinnable`
+`verified-by: bravebot_config::sandbox_filesystem::nobody_deciding_leaves_every_list_empty`
+`verified-by: bravebot_config::sandbox_filesystem::a_flag_adds_to_the_settings`
+`verified-by: bravebot_config::sandbox_filesystem::a_pinned_allow_list_replaces_the_persons`
+`verified-by: bravebot_config::sandbox_filesystem::a_pinned_refusal_is_added_to_the_persons_and_marked`
+`verified-by: bravebot_cli::main::the_sandbox_flags_are_taken_out_with_their_paths_into_their_lists`
+`verified-by: bravebot_tui::status::filesystem_rules_are_reported_by_count_and_file_and_never_by_path`
+`verified-by: bravebot_tui::logo::filesystem_rules_are_named_on_the_opening_screen_and_none_is_not`
+`verified-by: bravebot_agent::confine::a_denied_read_is_refused_by_name_and_by_glob_and_its_neighbour_is_not`
+`verified-by: bravebot_agent::confine::a_denied_read_holds_back_a_directory_the_base_reads`
+`verified-by: bravebot_agent::confine::an_allowed_read_lifts_the_table_and_never_reaches_a_private_key`
+`verified-by: bravebot_agent::confine::the_narrower_of_an_allowed_and_a_denied_write_decides`
+`verified-by: bravebot_agent::confine::a_denied_write_holds_back_a_file_inside_a_session_directory`
+`verified-by: bravebot_agent::confine::a_denied_read_written_through_a_link_holds_where_the_link_leads`
+`verified-by: bravebot_agent::confine::a_denial_that_cannot_be_applied_stops_the_stage`
+`verified-by: bravebot_cli::running::doctor_names_each_filesystem_rule_with_where_it_came_from`
+`verified-by: bravebot_cli::running::a_denied_write_reaches_the_programs_a_run_starts`
+`verified-by: bravebot_ui_bridge::sandbox_filesystem::a_denied_write_in_the_settings_reaches_the_programs_a_window_runs`
+
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is confined on Linux, macOS and Windows

@@ -25,6 +25,7 @@ pub mod mcp;
 mod obfuscate;
 mod run_network;
 pub mod sandbox;
+mod sandbox_filesystem;
 pub mod scrub;
 mod settings;
 #[cfg(test)]
@@ -34,6 +35,10 @@ pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_
 pub use run_network::{
     Decided, RunNetwork, resolve as resolve_run_network, run_network, settle_run_network,
     settle_run_network_in, settled_run_network,
+};
+pub use sandbox_filesystem::{
+    Filesystem, resolve as resolve_sandbox_filesystem, sandbox_filesystem,
+    settle_sandbox_filesystem, settle_sandbox_filesystem_in, settled_sandbox_filesystem,
 };
 pub use settings::{
     Attribution, Narrowing, NotADocument, PermissionLists, RunDeadlines, Settings, check_document,

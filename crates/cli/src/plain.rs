@@ -2316,6 +2316,7 @@ mod tests {
         request.confined = Some(bravebot_agent::Confined {
             directories: vec!["/work".into(), "/var/scratch/session".into()],
             network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
             carried: vec![bravebot_agent::Carried {
                 program: "docker".into(),
                 toolchain: None,

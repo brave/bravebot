@@ -32,6 +32,7 @@ pub mod network;
 pub mod policy;
 pub mod process;
 pub mod proxy;
+pub mod rules;
 pub mod scope;
 pub mod swap;
 // Compiled under test on every platform as well as on the one it confines, so what this

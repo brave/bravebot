@@ -264,6 +264,9 @@ pub struct Confined {
     pub directories: Vec<std::path::PathBuf>,
     /// What the session decided about the network for these stages.
     pub network: bravebot_sandbox::network::Network,
+    /// How many entries of the person's own filesystem lists are in force for these stages, which
+    /// is a count and never a path a glob turned up.
+    pub filesystem: bravebot_sandbox::rules::Counts,
     /// What a stage carries beyond them, in step order. A stage that carries nothing is absent.
     pub carried: Vec<Carried>,
 }
@@ -328,6 +331,18 @@ impl Confined {
         let mut sentences = Vec::new();
         if self.network.is_closed() {
             sentences.push(t!(run_network_closed).to_string());
+        }
+        if !self.filesystem.is_empty() {
+            sentences.push(
+                t!(
+                    run_filesystem_rules,
+                    allow_read = self.filesystem.allow_read,
+                    deny_read = self.filesystem.deny_read,
+                    allow_write = self.filesystem.allow_write,
+                    deny_write = self.filesystem.deny_write
+                )
+                .to_string(),
+            );
         }
         for stage in &self.carried {
             let program = stage.program.as_str();
@@ -2353,6 +2368,7 @@ mod tests {
             reads_the_machine: false,
             directories: Vec::new(),
             network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
             carried: vec![
                 carried("aws", Scope::Aws),
                 carried("kubectl", Scope::Kubernetes),
@@ -2401,6 +2417,7 @@ mod tests {
                 remembered: Vec::new(),
             }],
             network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
         };
 
         let sentences = confined.sentences();
@@ -2439,6 +2456,7 @@ mod tests {
             reads_the_machine: false,
             directories: Vec::new(),
             network,
+            filesystem: Default::default(),
             carried,
         };
 
@@ -2454,6 +2472,40 @@ mod tests {
             confined(Network::Open, Vec::new()).sentences().is_empty(),
             "an open network was announced"
         );
+    }
+
+    /// A person's own filesystem lists are said once with how many entries each holds, and nothing is
+    /// said where none is in force, so the prompt of a session that wrote none is the prompt it was.
+    #[test]
+    fn the_persons_filesystem_lists_are_said_once_and_only_where_they_exist() {
+        use bravebot_sandbox::rules::Counts;
+        let confined = |filesystem| Confined {
+            reads_the_machine: true,
+            directories: Vec::new(),
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem,
+            carried: Vec::new(),
+        };
+        let said = confined(Counts {
+            allow_read: 1,
+            deny_read: 2,
+            allow_write: 3,
+            deny_write: 4,
+        })
+        .sentences();
+        assert_eq!(said.len(), 1, "{said:?}");
+        for (key, count) in [
+            ("allowRead", 1),
+            ("denyRead", 2),
+            ("allowWrite", 3),
+            ("denyWrite", 4),
+        ] {
+            assert!(
+                said[0].contains(&format!("{count} {key}")),
+                "{key}: {said:?}"
+            );
+        }
+        assert!(confined(Counts::default()).sentences().is_empty());
     }
 
     fn a_run() -> RunRequest {

@@ -76,7 +76,16 @@ fn main() -> ExitCode {
         .find(|arg| {
             matches!(
                 arg.as_str(),
-                "--incognito" | "--safe" | "--vet" | "--settings" | "--run-network" | "--sandbox"
+                "--incognito"
+                    | "--safe"
+                    | "--vet"
+                    | "--settings"
+                    | "--run-network"
+                    | "--sandbox"
+                    | "--sandbox-allow-read"
+                    | "--sandbox-deny-read"
+                    | "--sandbox-allow-write"
+                    | "--sandbox-deny-write"
             )
         })
         .cloned();
@@ -138,6 +147,19 @@ fn main() -> ExitCode {
     match take_run_network(&mut args) {
         Ok(flag) => {
             bravebot_config::settle_run_network(flag);
+        }
+        Err(complaint) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+        }
+    }
+
+    // Settled with the network and for the same reason: the lists a stage is held to are a property
+    // of the session, and a line started under one answer and the next under another would make
+    // them a property of the line. The flags are the person's own act for this run, so they add to
+    // what their settings say.
+    match take_sandbox_filesystem(&mut args) {
+        Ok(lists) => {
+            bravebot_config::settle_sandbox_filesystem(&lists);
         }
         Err(complaint) => {
             return stopped_before_the_turn(as_json, Ending::Argument, complaint);
@@ -739,6 +761,52 @@ fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
     }
 }
 
+/// Take `--sandbox-allow-read`, `--sandbox-deny-read`, `--sandbox-allow-write` and
+/// `--sandbox-deny-write` out of the arguments, each with the path that follows it, answering with
+/// the lists they came to. Each may be given any number of times.
+///
+/// Removed before dispatch for the reason `--settings` is. A flag with nothing after it is refused,
+/// since a path read as the next flag would be an entry nobody wrote. The arguments are rewritten
+/// only once the whole scan has succeeded.
+fn take_sandbox_filesystem(
+    args: &mut Vec<String>,
+) -> Result<bravebot_sandbox::rules::Lists, String> {
+    use bravebot_sandbox::rules::{Entry, List};
+    const FLAGS: [(&str, List); 4] = [
+        ("--sandbox-allow-read", List::AllowRead),
+        ("--sandbox-deny-read", List::DenyRead),
+        ("--sandbox-allow-write", List::AllowWrite),
+        ("--sandbox-deny-write", List::DenyWrite),
+    ];
+    let mut lists = bravebot_sandbox::rules::Lists::default();
+    let mut kept = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        let Some((flag, list)) = FLAGS.iter().find(|(flag, _)| args[index] == *flag) else {
+            kept.push(args[index].clone());
+            index += 1;
+            continue;
+        };
+        let Some(path) = args.get(index + 1).filter(|path| !path.trim().is_empty()) else {
+            return Err(t!(cli_sandbox_flag_needs_a_path, flag = *flag).to_string());
+        };
+        let entry = Entry {
+            path: path.clone(),
+            by: None,
+            pinned: false,
+        };
+        match list {
+            List::AllowRead => lists.allow_read.push(entry),
+            List::DenyRead => lists.deny_read.push(entry),
+            List::AllowWrite => lists.allow_write.push(entry),
+            List::DenyWrite => lists.deny_write.push(entry),
+        }
+        index += 2;
+    }
+    *args = kept;
+    Ok(lists)
+}
+
 fn print_help() {
     /// Wide enough for the longest invocation below, so a translated description starts in the
     /// same column as every other one rather than wherever hand-counted spaces left it.
@@ -839,6 +907,22 @@ fn print_help() {
         ("--settings <path>", t!(cli_option_settings)),
         ("--run-network <open|closed>", t!(cli_option_run_network)),
         ("--sandbox <mode>", t!(cli_option_sandbox)),
+        (
+            "--sandbox-allow-read <path>",
+            t!(cli_option_sandbox_allow_read),
+        ),
+        (
+            "--sandbox-deny-read <path>",
+            t!(cli_option_sandbox_deny_read),
+        ),
+        (
+            "--sandbox-allow-write <path>",
+            t!(cli_option_sandbox_allow_write),
+        ),
+        (
+            "--sandbox-deny-write <path>",
+            t!(cli_option_sandbox_deny_write),
+        ),
         ("--agent <name>", t!(cli_option_agent)),
         ("--system-prompt <prompt>", t!(cli_option_system_prompt)),
         (
@@ -3014,6 +3098,96 @@ fn trust_already_answered(root: &Path) -> bravebot_core::TrustStore {
 }
 
 /// Report whether configuration is usable, without revealing the signing key.
+/// The `doctor` facts for `sandbox.filesystem`: each entry of the four lists with the file or flag
+/// that wrote it, and the ones that are not in force with why.
+///
+/// Resolved the way a session resolves them, against the profile directory and the working
+/// directory, so the report is the answer a stage would get; a glob is said by its entry and not by
+/// what it matched.
+fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Managed) {
+    let settled = bravebot_config::settled_sandbox_filesystem()
+        .cloned()
+        .unwrap_or_else(|| {
+            bravebot_config::resolve_sandbox_filesystem(
+                &bravebot_sandbox::rules::Lists::default(),
+                settings,
+                managed,
+            )
+        });
+    let profile = bravebot_agent::home::profile();
+    let directory = std::env::current_dir().unwrap_or_default();
+    let rules = bravebot_sandbox::rules::resolve(&settled.lists, profile.as_deref(), &directory);
+    let source = |entry: &bravebot_sandbox::rules::Entry| match &entry.by {
+        Some(path) => path.display().to_string(),
+        None => t!(doctor_sandbox_filesystem_source_flag).to_string(),
+    };
+    for item in rules.items() {
+        match item.state {
+            bravebot_sandbox::rules::State::InForce(_) => fact(
+                t!(doctor_sandbox_filesystem),
+                t!(
+                    doctor_sandbox_filesystem_entry,
+                    key = item.list.key(),
+                    path = item.entry.path.clone(),
+                    source = source(&item.entry)
+                ),
+            ),
+            bravebot_sandbox::rules::State::Refused(reason) => fact(
+                t!(doctor_sandbox_filesystem),
+                t!(
+                    doctor_sandbox_filesystem_refused,
+                    key = item.list.key(),
+                    path = item.entry.path.clone(),
+                    reason = bravebot_tui::status::filesystem_reason(reason),
+                    source = source(&item.entry)
+                ),
+            ),
+        }
+    }
+    let managed_file = bravebot_config::managed_file().display().to_string();
+    for (list, entry) in &settled.unread {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_managed_sandbox_unread,
+                key = list.key(),
+                path = entry.path.clone(),
+                managed = managed_file.clone()
+            ),
+        );
+    }
+    for (path, key) in settings.sandbox_filesystem_ignored() {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_sandbox_filesystem_ignored,
+                key = key,
+                path = path.display().to_string()
+            ),
+        );
+    }
+    for (path, key) in settings.sandbox_filesystem_misshapen() {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_sandbox_misshapen,
+                key = key,
+                path = path.display().to_string()
+            ),
+        );
+    }
+    for list in managed.filesystem_unreadable() {
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_managed_sandbox_misshapen,
+                key = list.key(),
+                path = managed_file.clone()
+            ),
+        );
+    }
+}
+
 fn doctor() -> ExitCode {
     // What the report ends on, rather than whether it passed: CLI-6 gives a configuration this
     // build cannot use a status of its own, and a report collapsing every way a machine can be
@@ -3239,6 +3413,11 @@ fn doctor() -> ExitCode {
                     ),
                 );
             }
+
+            // The lists of paths the programs `run` starts are held to, entry by entry with the
+            // file that wrote each, so a person finds what to edit; and each way an entry was not
+            // obeyed, since a refusal that is not in force holds back nothing and says nothing.
+            doctor_sandbox_filesystem(&settings, &managed);
 
             // The same, for the other name a checkout cannot answer on its own: an `allow` entry
             // stops a prompt, so one read out of a file that arrived with a clone would run a
@@ -6158,6 +6337,54 @@ mod tests {
         ] {
             let mut arguments = args(typed);
             assert!(take_run_network(&mut arguments).is_err(), "{typed:?}");
+            assert_eq!(arguments, args(typed), "a refusal rewrote the list");
+        }
+    }
+
+    /// Each of the four flags is taken out wherever it was typed, with its path, into the list it
+    /// names, any number of times, and what is left is the invocation without them. A flag with no
+    /// path after it, or a blank one, is refused and the arguments are left as they were: read as the
+    /// next flag, it would be an entry nobody wrote.
+    #[test]
+    fn the_sandbox_flags_are_taken_out_with_their_paths_into_their_lists() {
+        let mut arguments = args(&[
+            "--sandbox-deny-read",
+            "~/.config/gh",
+            "-p",
+            "--sandbox-allow-write",
+            "/data/out",
+            "do a thing",
+            "--sandbox-deny-read",
+            "**/*.env",
+            "--sandbox-allow-read",
+            "~/.aws",
+            "--sandbox-deny-write",
+            ".env",
+        ]);
+        let lists = take_sandbox_filesystem(&mut arguments).expect("well formed");
+        let paths = |entries: &[bravebot_sandbox::rules::Entry]| {
+            entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(arguments, args(&["-p", "do a thing"]));
+        assert_eq!(paths(&lists.deny_read), ["~/.config/gh", "**/*.env"]);
+        assert_eq!(paths(&lists.allow_read), ["~/.aws"]);
+        assert_eq!(paths(&lists.allow_write), ["/data/out"]);
+        assert_eq!(paths(&lists.deny_write), [".env"]);
+        assert!(lists.deny_read.iter().all(|entry| entry.by.is_none()));
+
+        for typed in [
+            &["-p", "x", "--sandbox-deny-read"][..],
+            &["--sandbox-allow-write", "  ", "-p", "x"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(
+                take_sandbox_filesystem(&mut arguments).is_err(),
+                "{typed:?}"
+            );
             assert_eq!(arguments, args(typed), "a refusal rewrote the list");
         }
     }

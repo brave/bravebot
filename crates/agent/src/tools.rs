@@ -1852,7 +1852,8 @@ impl<'a> Tools<'a> {
         let confinement =
             crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)?
                 .with_network(bravebot_config::run_network())
-                .with_mode(self.sandbox);
+                .with_mode(self.sandbox)
+                .with_filesystem(&bravebot_config::sandbox_filesystem());
         // Read only where a person is there to see the row it adds: a session with nobody to put
         // a prompt to reads no record, for the reason a remembered line is not read there.
         let grants = match (self.home, self.remembering) {

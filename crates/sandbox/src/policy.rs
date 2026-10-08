@@ -22,6 +22,13 @@ pub struct SandboxPolicy {
     /// lies beneath no read row refuses nothing, and a backend refuses the policy for holding it
     /// ([`SandboxPolicy::denial_without_a_grant`]).
     pub unreadable: Vec<PathBuf>,
+    /// Paths the process may not write although a write row above them grants it: a directory
+    /// with everything under it, or one file.
+    ///
+    /// A write row beneath one of these is a narrower row and stands, and a row equal to one is
+    /// withdrawn, so a person's refusal wins at the path it names. A read grant is not touched:
+    /// what is refused here is the right to change the path, not to read it.
+    pub unwritable: Vec<PathBuf>,
     /// Paths the process may write, each saying what it is where the caller means the
     /// program to create it. Empty means no filesystem writes.
     pub writable: Vec<WriteGrant>,
@@ -52,6 +59,7 @@ impl SandboxPolicy {
         Self {
             readable: Vec::new(),
             unreadable: Vec::new(),
+            unwritable: Vec::new(),
             writable: Vec::new(),
             allow_network: false,
             allow_subprocesses: false,
@@ -72,6 +80,16 @@ impl SandboxPolicy {
     /// read row at or beneath the path lifts the refusal for that row.
     pub fn deny_read(mut self, path: impl Into<PathBuf>) -> Self {
         self.unreadable.push(path.into());
+        self
+    }
+
+    /// Refuse writing a path that a write row above it grants.
+    ///
+    /// The write counterpart of [`SandboxPolicy::deny_read`]: `allow_write` of a session
+    /// directory followed by a row for the file inside it that a person keeps read-only. A write
+    /// row beneath the path is a narrower grant and stands.
+    pub fn deny_write(mut self, path: impl Into<PathBuf>) -> Self {
+        self.unwritable.push(path.into());
         self
     }
 
@@ -178,6 +196,7 @@ impl SandboxPolicy {
             policy: Self {
                 readable,
                 unreadable: self.unreadable.clone(),
+                unwritable: self.unwritable.clone(),
                 writable,
                 allow_network: self.allow_network,
                 allow_subprocesses: self.allow_subprocesses,
@@ -301,19 +320,28 @@ impl SandboxPolicy {
     ///
     /// Without a refusal this is the path of each row of [`SandboxPolicy::writable`].
     pub fn writable_by_enumeration(&self) -> Vec<PathBuf> {
-        if self.unreadable.is_empty() {
+        if self.unreadable.is_empty() && self.unwritable.is_empty() {
             return self.writable.iter().map(|row| row.path.clone()).collect();
         }
-        self.around_the_refusals(self.writable.iter().map(|row| &row.path))
+        let withdrawn = with_their_resolved_spelling(&self.unwritable);
+        let mut refused = with_their_resolved_spelling(&self.unreadable);
+        refused.extend(withdrawn.iter().cloned());
+        let mut granted: Vec<PathBuf> = Vec::new();
+        for row in self.writable.iter().map(|row| &row.path) {
+            // A row equal to a refusal of writes is the person's refusal of the row itself, and
+            // one beneath it is the narrower grant that stands.
+            if withdrawn.contains(row) {
+                continue;
+            }
+            spread_around(row, &refused, &mut granted);
+        }
+        granted.sort();
+        granted.dedup();
+        granted
     }
 
     fn around_the_refusals<'a>(&self, rows: impl Iterator<Item = &'a PathBuf>) -> Vec<PathBuf> {
-        let mut refused = self.unreadable.clone();
-        refused.extend(
-            self.unreadable
-                .iter()
-                .filter_map(|path| fs::canonicalize(path).ok()),
-        );
+        let refused = with_their_resolved_spelling(&self.unreadable);
 
         let mut granted: Vec<PathBuf> = Vec::new();
         for row in rows {
@@ -342,13 +370,21 @@ impl SandboxPolicy {
     }
 }
 
+/// `paths` and, for each that is on disk, where it leads, so a refusal written as a link is
+/// held where the link goes as well as where it stands.
+fn with_their_resolved_spelling(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut all = paths.to_vec();
+    all.extend(paths.iter().filter_map(|path| fs::canonicalize(path).ok()));
+    all
+}
+
 /// Whether a path resolves to the root of a filesystem: `/`, or on Windows a drive root
 /// such as `C:\`.
 ///
 /// An existing path is resolved through the filesystem, so a link that leads to the root
 /// counts. A path that is not there is folded by its text, where `.` is dropped and `..`
 /// removes the component before it.
-fn names_a_filesystem_root(path: &Path) -> bool {
+pub(crate) fn names_a_filesystem_root(path: &Path) -> bool {
     let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut rooted = false;
     let mut below_root = 0usize;
@@ -1280,6 +1316,38 @@ mod tests {
         assert!(rows.contains(&top.join("home/docs")), "{rows:?}");
         assert!(rows.contains(&top.join("home/.ssh")), "{rows:?}");
         assert!(rows.contains(&top.join("etc")), "{rows:?}");
+    }
+
+    /// The regression it rejects: a refusal of writes that leaves the row it narrows whole, which
+    /// is a file the person kept read-only that a program still changes. The same refusal must
+    /// leave the read rows alone, a row beneath it as the narrower grant, and a row at its own path
+    /// withdrawn.
+    #[test]
+    fn a_write_row_above_a_write_refusal_is_spread_around_it() {
+        let top = a_machine_with_a_home("sandbox-policy-unwritable");
+        let policy = SandboxPolicy::strict()
+            .allow_read(&top)
+            .allow_write(top.join("home"))
+            .allow_write(top.join("etc"))
+            .allow_write(top.join("home/docs/notes"))
+            .deny_write(top.join("home/docs"))
+            .deny_write(top.join("etc"));
+
+        let rows = policy.writable_by_enumeration();
+
+        assert!(!rows.contains(&top.join("home")), "{rows:?}");
+        assert!(!rows.contains(&top.join("home/docs")), "{rows:?}");
+        assert!(rows.contains(&top.join("home/.aws")), "{rows:?}");
+        assert!(rows.contains(&top.join("home/.ssh")), "{rows:?}");
+        assert!(
+            rows.contains(&top.join("home/docs/notes")),
+            "the narrower row was lost: {rows:?}"
+        );
+        assert!(
+            !rows.contains(&top.join("etc")),
+            "a row at the refused path was kept: {rows:?}"
+        );
+        assert_eq!(policy.readable_by_enumeration(), vec![top.clone()]);
     }
 
     #[test]

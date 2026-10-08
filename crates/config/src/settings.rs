@@ -387,6 +387,17 @@ pub struct Settings {
     /// Kept for the reason `narrowing_unreadable` is: a mistyped `"close"` leaves the network open,
     /// and the person who wrote it believes it is not.
     run_network_unreadable: Vec<PathBuf>,
+    /// The entries of `sandbox.filesystem`'s four lists the layers entitled to write them wrote, each
+    /// with the file it came from.
+    ///
+    /// Settled by [`Settings::layered`], because the layers are not equal here: a refusal may come
+    /// from any file, since it only takes reach away, and an `allowRead` or `allowWrite` only from
+    /// the person's own file, the one `--settings` names outside the workspace, and the managed layer.
+    sandbox_filesystem: bravebot_sandbox::rules::Lists,
+    /// The layers that wrote `allowRead` or `allowWrite` and were not obeyed, with the key.
+    sandbox_filesystem_ignored: Vec<(PathBuf, &'static str)>,
+    /// The layers that gave one of the four keys something that is not a list of strings.
+    sandbox_filesystem_misshapen: Vec<(PathBuf, &'static str)>,
     /// What `tui.wheelRows` said, if it said a whole positive count.
     ///
     /// `None` is the built-in count, which belongs to the interface that moves the view for the
@@ -641,6 +652,11 @@ impl Settings {
         let mut run_network_closed_by: Option<PathBuf> = None;
         let mut run_network_ignored: Vec<PathBuf> = Vec::new();
         let mut run_network_unreadable: Vec<PathBuf> = Vec::new();
+        // Settled per layer for the reason `run_network` is: a refusal is every layer's to write and
+        // an addition of reach is not a checkout's (see [`Settings::sandbox_filesystem`]).
+        let mut sandbox_filesystem = bravebot_sandbox::rules::Lists::default();
+        let mut sandbox_filesystem_ignored: Vec<(PathBuf, &'static str)> = Vec::new();
+        let mut sandbox_filesystem_misshapen: Vec<(PathBuf, &'static str)> = Vec::new();
         let mut model_above_home = false;
         let mut effort_above_home = false;
         for path in paths.into_iter().flatten() {
@@ -730,6 +746,27 @@ impl Settings {
                 Stated::Mode(SandboxMode::Strict) => sandbox_asked_strict.push(path.clone()),
                 Stated::Mode(mode) => sandbox_ignored.push((path.clone(), mode)),
             }
+            for list in FILESYSTEM_LISTS {
+                match filesystem_list(&root, list) {
+                    ListStated::Absent => {}
+                    ListStated::Unreadable => {
+                        sandbox_filesystem_misshapen.push((path.clone(), list.key()));
+                    }
+                    ListStated::Entries(_) if !list.is_a_denial() && !granting => {
+                        sandbox_filesystem_ignored.push((path.clone(), list.key()));
+                    }
+                    ListStated::Entries(entries) => {
+                        let target = filesystem_target(&mut sandbox_filesystem, list);
+                        target.extend(entries.into_iter().map(|entry| {
+                            bravebot_sandbox::rules::Entry {
+                                path: entry,
+                                by: Some(path.clone()),
+                                pinned: false,
+                            }
+                        }));
+                    }
+                }
+            }
             let directory = settings_directory(&path);
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
@@ -788,6 +825,9 @@ impl Settings {
         settings.sandbox_asked_strict = sandbox_asked_strict;
         settings.sandbox_ignored = sandbox_ignored;
         settings.sandbox_unreadable = sandbox_unreadable;
+        settings.sandbox_filesystem = sandbox_filesystem;
+        settings.sandbox_filesystem_ignored = sandbox_filesystem_ignored;
+        settings.sandbox_filesystem_misshapen = sandbox_filesystem_misshapen;
         // Overwritten for the same reason, and the merged block is what it replaces: `deny` and
         // `ask` keep every layer's entries because both only ever narrow, and this one is put back
         // to the entries a layer entitled to grant wrote.
@@ -915,6 +955,11 @@ impl Settings {
             run_network_by: None,
             run_network_ignored: Vec::new(),
             run_network_unreadable: Vec::new(),
+            // The lists one root states, there being no file to name and no layer to refuse it.
+            // [`Settings::layered`] overwrites them with what the layers come to.
+            sandbox_filesystem: filesystem_lists(root, None),
+            sandbox_filesystem_ignored: Vec::new(),
+            sandbox_filesystem_misshapen: Vec::new(),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -1242,6 +1287,29 @@ impl Settings {
         self.run_network_unreadable.iter().map(PathBuf::as_path)
     }
 
+    /// The four lists `sandbox.filesystem` holds across the layers: every layer's refusals and the
+    /// additions of reach the person's own file, the file `--settings` names outside the workspace
+    /// and the managed layer wrote. A project or local layer's addition is not here
+    /// ([`Settings::sandbox_filesystem_ignored`]), so a cloned repository cannot widen what the
+    /// programs it makes the session run may reach.
+    pub fn sandbox_filesystem(&self) -> &bravebot_sandbox::rules::Lists {
+        &self.sandbox_filesystem
+    }
+
+    /// The layers that wrote `allowRead` or `allowWrite` and were not obeyed, with the key.
+    pub fn sandbox_filesystem_ignored(&self) -> impl Iterator<Item = (&Path, &'static str)> {
+        self.sandbox_filesystem_ignored
+            .iter()
+            .map(|(path, key)| (path.as_path(), *key))
+    }
+
+    /// The layers that gave one of the four keys something other than a list of strings.
+    pub fn sandbox_filesystem_misshapen(&self) -> impl Iterator<Item = (&Path, &'static str)> {
+        self.sandbox_filesystem_misshapen
+            .iter()
+            .map(|(path, key)| (path.as_path(), *key))
+    }
+
     /// How many rows the settings in force move the view by for one wheel event.
     ///
     /// `None` where nobody named one, for the reason [`Settings::run_output_cap`] answers `None`:
@@ -1282,6 +1350,9 @@ impl Settings {
             && self.run_network.is_none()
             && self.run_network_ignored.is_empty()
             && self.run_network_unreadable.is_empty()
+            && self.sandbox_filesystem.is_empty()
+            && self.sandbox_filesystem_ignored.is_empty()
+            && self.sandbox_filesystem_misshapen.is_empty()
             && self.providers.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
@@ -1423,6 +1494,12 @@ impl Settings {
                     .then_some("run.maxSeconds"),
             )
             .chain(self.run_network.is_some().then_some("run.network"))
+            .chain(
+                FILESYSTEM_LISTS
+                    .into_iter()
+                    .filter(|list| !self.sandbox_filesystem.of(*list).is_empty())
+                    .map(|list| list.setting()),
+            )
             .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
             .chain(self.env.keys().map(String::as_str))
     }
@@ -1875,7 +1952,7 @@ fn unread_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String>
     let beside_the_mode = match root.get(SANDBOX_BLOCK) {
         Some(serde_json::Value::Object(block)) => block
             .keys()
-            .filter(|key| key.as_str() != crate::sandbox::MODE_KEY)
+            .filter(|key| !matches!(key.as_str(), crate::sandbox::MODE_KEY | "filesystem"))
             .map(|key| format!("{SANDBOX_BLOCK}.{key}"))
             .collect(),
         _ => Vec::new(),
@@ -2185,6 +2262,89 @@ pub(crate) fn network_word(root: &serde_json::Map<String, serde_json::Value>) ->
             }
         }
         Some(_) => NetworkStated::Unreadable,
+    }
+}
+
+/// The four lists of `sandbox.filesystem`, in the order they are reported.
+pub(crate) const FILESYSTEM_LISTS: [bravebot_sandbox::rules::List; 4] = [
+    bravebot_sandbox::rules::List::AllowRead,
+    bravebot_sandbox::rules::List::DenyRead,
+    bravebot_sandbox::rules::List::AllowWrite,
+    bravebot_sandbox::rules::List::DenyWrite,
+];
+
+/// What one root says about one of those lists.
+pub(crate) enum ListStated {
+    /// The key is not there.
+    Absent,
+    /// It is a list; the entries are its strings, blank ones left out.
+    Entries(Vec<String>),
+    /// It is there as something else: a string, an object, a list holding anything but strings.
+    Unreadable,
+}
+
+/// The `sandbox.filesystem.<key>` list in `root`.
+///
+/// A list that holds anything but strings is read as no list at all and reported, and not as the
+/// strings it holds: an entry that is not text cannot be a path, and silently dropping it would
+/// leave a refusal the person wrote unapplied with nothing to say so.
+pub(crate) fn filesystem_list(
+    root: &serde_json::Map<String, serde_json::Value>,
+    list: bravebot_sandbox::rules::List,
+) -> ListStated {
+    let Some(serde_json::Value::Object(sandbox)) = root.get("sandbox") else {
+        return ListStated::Absent;
+    };
+    let Some(serde_json::Value::Object(filesystem)) = sandbox.get("filesystem") else {
+        return ListStated::Absent;
+    };
+    match filesystem.get(list.key()) {
+        None => ListStated::Absent,
+        Some(serde_json::Value::Array(entries)) => {
+            let mut out = Vec::new();
+            for entry in entries {
+                match entry.as_str() {
+                    Some(text) if text.trim().is_empty() => {}
+                    Some(text) => out.push(text.to_string()),
+                    None => return ListStated::Unreadable,
+                }
+            }
+            ListStated::Entries(out)
+        }
+        Some(_) => ListStated::Unreadable,
+    }
+}
+
+/// The lists one root writes, each entry marked as written by `by`.
+pub(crate) fn filesystem_lists(
+    root: &serde_json::Map<String, serde_json::Value>,
+    by: Option<&Path>,
+) -> bravebot_sandbox::rules::Lists {
+    let mut lists = bravebot_sandbox::rules::Lists::default();
+    for list in FILESYSTEM_LISTS {
+        if let ListStated::Entries(entries) = filesystem_list(root, list) {
+            filesystem_target(&mut lists, list).extend(entries.into_iter().map(|path| {
+                bravebot_sandbox::rules::Entry {
+                    path,
+                    by: by.map(Path::to_path_buf),
+                    pinned: false,
+                }
+            }));
+        }
+    }
+    lists
+}
+
+fn filesystem_target(
+    lists: &mut bravebot_sandbox::rules::Lists,
+    list: bravebot_sandbox::rules::List,
+) -> &mut Vec<bravebot_sandbox::rules::Entry> {
+    use bravebot_sandbox::rules::List;
+    match list {
+        List::AllowRead => &mut lists.allow_read,
+        List::DenyRead => &mut lists.deny_read,
+        List::AllowWrite => &mut lists.allow_write,
+        List::DenyWrite => &mut lists.deny_write,
     }
 }
 
@@ -3471,6 +3631,90 @@ mod tests {
         assert_eq!(inside.run_network_ignored().count(), 1);
     }
 
+    const FILESYSTEM_WIDE: &str = r#"{"sandbox": {"filesystem": {
+        "allowRead": ["/wide/read"], "allowWrite": ["/wide/write"],
+        "denyRead": ["/deny/read"], "denyWrite": ["/deny/write"]}}}"#;
+
+    fn paths_of(entries: &[bravebot_sandbox::rules::Entry]) -> Vec<&str> {
+        entries.iter().map(|entry| entry.path.as_str()).collect()
+    }
+
+    /// The person's own file may write all four lists, and each entry names the file that wrote it.
+    #[test]
+    fn the_home_layer_may_write_every_filesystem_list() {
+        let settings = Layers::new("filesystem-home")
+            .global(FILESYSTEM_WIDE)
+            .read();
+        let lists = settings.sandbox_filesystem();
+        assert_eq!(paths_of(&lists.allow_read), ["/wide/read"]);
+        assert_eq!(paths_of(&lists.allow_write), ["/wide/write"]);
+        assert_eq!(paths_of(&lists.deny_read), ["/deny/read"]);
+        assert_eq!(paths_of(&lists.deny_write), ["/deny/write"]);
+        assert!(lists.allow_read[0].by.is_some());
+        assert_eq!(settings.sandbox_filesystem_ignored().count(), 0);
+    }
+
+    /// A checkout may refuse and never widen: a project or local layer's `allowRead` and
+    /// `allowWrite` are not in the lists and are named, while its refusals are, and the person's own
+    /// entries stand beside them. A repository that could widen its own sandbox would hold the
+    /// reach the person withheld.
+    #[test]
+    fn a_checkout_may_add_a_refusal_and_never_an_allowance() {
+        for layer in ["project", "local"] {
+            let layers = Layers::new(&format!("filesystem-{layer}"))
+                .global(r#"{"sandbox": {"filesystem": {"allowWrite": ["/mine"]}}}"#);
+            let layers = match layer {
+                "project" => layers.project(FILESYSTEM_WIDE),
+                _ => layers.local(FILESYSTEM_WIDE),
+            };
+            let settings = layers.read();
+            let lists = settings.sandbox_filesystem();
+            assert_eq!(paths_of(&lists.allow_write), ["/mine"], "{layer}");
+            assert!(lists.allow_read.is_empty(), "{layer}");
+            assert_eq!(paths_of(&lists.deny_read), ["/deny/read"], "{layer}");
+            assert_eq!(paths_of(&lists.deny_write), ["/deny/write"], "{layer}");
+            let ignored: Vec<&str> = settings
+                .sandbox_filesystem_ignored()
+                .map(|(_, key)| key)
+                .collect();
+            assert_eq!(ignored, ["allowRead", "allowWrite"], "{layer}");
+        }
+    }
+
+    /// A file the command line named outside the workspace is the person's act and may widen; one
+    /// inside the workspace is a checkout's file and may not.
+    #[test]
+    fn a_named_file_may_widen_only_outside_the_workspace() {
+        let outside = Layers::new("filesystem-named-outside")
+            .named(FILESYSTEM_WIDE)
+            .read();
+        assert_eq!(outside.sandbox_filesystem().allow_write.len(), 1);
+        assert_eq!(outside.sandbox_filesystem_ignored().count(), 0);
+        let inside = Layers::new("filesystem-named-inside")
+            .named_inside_the_workspace(FILESYSTEM_WIDE)
+            .read();
+        assert!(inside.sandbox_filesystem().allow_write.is_empty());
+        assert_eq!(inside.sandbox_filesystem_ignored().count(), 2);
+    }
+
+    /// A list that is not a list of strings is reported and not read, and a blank entry is left out
+    /// as it is in every other list, so a refusal the person wrote is never silently half of itself.
+    #[test]
+    fn a_misshapen_filesystem_list_is_reported_and_a_blank_entry_is_left_out() {
+        let settings = Layers::new("filesystem-misshapen")
+            .global(
+                r#"{"sandbox": {"filesystem": {"denyRead": "~/x", "denyWrite": ["a", 3], "allowRead": ["", "  ", "b"]}}}"#,
+            )
+            .read();
+        let keys: Vec<&str> = settings
+            .sandbox_filesystem_misshapen()
+            .map(|(_, key)| key)
+            .collect();
+        assert_eq!(keys, ["denyRead", "denyWrite"]);
+        assert_eq!(paths_of(&settings.sandbox_filesystem().allow_read), ["b"]);
+        assert!(settings.sandbox_filesystem().deny_read.is_empty());
+    }
+
     /// A word that is neither is not read as either, and is named so the person finds it.
     #[test]
     fn an_unreadable_network_word_is_reported_and_not_obeyed() {
@@ -4489,6 +4733,7 @@ mod tests {
                     "permissions": {"deny": ["Read(./.env)"]},
                     "provider": {"gw": {"options": {"baseURL": "https://example.invalid/v1"}}},
                     "run": {"maxOutput": 2048},
+                    "sandbox": {"filesystem": {"denyRead": ["~/.config/gh"]}},
                     "attribution": {"commit": ""},
                     "keybindings": {"submit": "ctrl+s"},
                     "search": {"maxFiles": 100},
@@ -4500,6 +4745,30 @@ mod tests {
             )
             .read();
         assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// `sandbox` is read for `mode` and its `filesystem` lists and for nothing else, so a block that
+    /// holds only those is not reported, and one pasted from the other tool with `enabled` beside
+    /// them is, since `enabled` configures nothing here and a report that dropped the key would hide
+    /// it. A block that is not an object is reported as an unreadable mode and not as a key.
+    #[test]
+    fn the_sandbox_block_is_unread_unless_it_holds_only_the_filesystem_lists() {
+        let read = |text: &str| {
+            Layers::new("unread-sandbox")
+                .global(text)
+                .read()
+                .unread_keys()
+                .count()
+        };
+        assert_eq!(
+            read(r#"{"sandbox": {"filesystem": {"denyRead": ["a"]}}}"#),
+            0
+        );
+        assert_eq!(
+            read(r#"{"sandbox": {"enabled": true, "filesystem": {"denyRead": ["a"]}}}"#),
+            1
+        );
+        assert_eq!(read(r#"{"sandbox": "on"}"#), 0);
     }
 
     /// The half of BACKEND-36 that was already honoured stays where it was: a variable nothing
