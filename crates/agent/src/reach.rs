@@ -86,17 +86,48 @@ pub fn operation_of(args: &[String]) -> Option<String> {
         .cloned()
 }
 
+/// The parts of a stage a grant is keyed on.
+struct Key<'a> {
+    binary: PathBuf,
+    args: &'a [String],
+    assigned: bool,
+}
+
+fn key_of(step: &Step) -> Key<'_> {
+    let Step {
+        program: _,
+        resolved,
+        started_as: _,
+        args,
+        environment,
+        routes: _,
+    } = step;
+    Key {
+        binary: resolved.clone(),
+        args,
+        assigned: !environment.is_empty(),
+    }
+}
+
 impl Grant {
     /// Whether this grant attaches to `step`.
     ///
     /// A step with an assignment in front of it is covered by none, as it carries no scope: every
     /// program a scope names reads a variable that moves the directory or names a program to run.
     pub fn covers(&self, step: &Step) -> bool {
-        step.environment.is_empty()
-            && step.resolved == self.binary
+        let Step {
+            program: _,
+            resolved,
+            started_as: _,
+            args,
+            environment,
+            routes: _,
+        } = step;
+        environment.is_empty()
+            && *resolved == self.binary
             && match &self.operation {
-                Some(operation) => operation_of(&step.args).as_ref() == Some(operation),
-                None => step.args.is_empty(),
+                Some(operation) => operation_of(args).as_ref() == Some(operation),
+                None => args.is_empty(),
             }
     }
 
@@ -421,21 +452,21 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
     else {
         return t!(reach_refused_line).to_string();
     };
-    let steps = plan.steps();
-    if steps.is_empty() || steps.iter().any(|step| !step.environment.is_empty()) {
+    let keys: Vec<Key> = plan.steps().into_iter().map(key_of).collect();
+    if keys.is_empty() || keys.iter().any(|key| key.assigned) {
         return t!(reach_refused_assignment).to_string();
     }
-    if steps
+    if keys
         .iter()
-        .any(|step| !step.args.is_empty() && operation_of(&step.args).is_none())
+        .any(|key| !key.args.is_empty() && operation_of(key.args).is_none())
     {
         return t!(reach_refused_option).to_string();
     }
     let mut made: Vec<Grant> = Vec::new();
-    for step in steps {
+    for key in keys {
         let grant = Grant {
-            binary: step.resolved.clone(),
-            operation: operation_of(&step.args),
+            binary: key.binary,
+            operation: operation_of(key.args),
             reached: reached.clone(),
             write,
             allowed: typed.today.to_string(),
