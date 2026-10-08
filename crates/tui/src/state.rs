@@ -696,7 +696,7 @@ pub enum Offered {
         commands: Vec<crate::app::Command>,
         skills: Vec<crate::skills::Skill>,
     },
-    Files(Vec<crate::entries::Entry>),
+    Files(Vec<bravebot_mentions::Entry>),
     /// Every key and marker, listed under the box. Not a completion: there is nothing to choose,
     /// which is why the keys that walk a list leave this one alone.
     Shortcuts,
@@ -5971,9 +5971,9 @@ impl Session {
         if !commands.is_empty() || !skills.is_empty() {
             return Offered::Slash { commands, skills };
         }
-        match crate::entries::typed_reference(&self.input) {
+        match bravebot_mentions::typed_reference(&self.input) {
             Some(typed) => {
-                let entries = crate::entries::matching(&self.workspace, &typed);
+                let entries = bravebot_mentions::matching(&self.workspace, &typed);
                 if entries.is_empty() {
                     Offered::Nothing
                 } else {
@@ -6016,7 +6016,7 @@ impl Session {
     }
 
     /// Which offered file is under the cursor, or `None` when no file is offered.
-    pub fn highlighted_entry(&self) -> Option<crate::entries::Entry> {
+    pub fn highlighted_entry(&self) -> Option<bravebot_mentions::Entry> {
         let Offered::Files(entries) = self.offered() else {
             return None;
         };
@@ -6059,24 +6059,16 @@ impl Session {
                     .zip(typed)
                     .is_some_and(|(skill, typed)| skill.name != typed)
             }
-            Offered::Files(_) => {
-                let Some(typed) = crate::entries::typed_reference(&self.input) else {
+            Offered::Files(entries) => {
+                let Some(typed) = bravebot_mentions::typed_reference(&self.input) else {
                     return false;
                 };
-                // A name the user finished typing is a finished sentence, whatever the list
-                // happens to be highlighting: `@test` names a file of its own while a `tests/`
-                // beside it sorts above. Walking the list with the arrows is a choice among the
-                // rows and still wins, which is why this asks the untouched cursor.
-                //
-                // Asked of the workspace rather than of `entries`, which is capped for display:
-                // forty directories sharing the prefix sort above the file and cut it from the
-                // list, and scanning the list would then complete a finished name away into a
-                // directory nobody chose.
-                if self.completion == 0 && crate::entries::names_a_file(&self.workspace, &typed) {
-                    return false;
-                }
-                self.highlighted_entry()
-                    .is_some_and(|entry| typed != entry.path)
+                bravebot_mentions::enter_completes(
+                    &self.workspace,
+                    &typed,
+                    &entries,
+                    self.completion,
+                )
             }
         }
     }
@@ -6138,14 +6130,14 @@ impl Session {
                 // not the last `@` in the line. A file may have one in its name, and cutting
                 // there rebuilds the line around a path nobody chose: `@logo@2` plus the
                 // offered `logo@2x.png` becomes `@logo@logo@2x.png`.
-                let start = crate::entries::last_word_starts_at(&self.input);
+                let start = bravebot_mentions::last_word_starts_at(&self.input);
                 if !self.input[start..].starts_with('@') {
                     return;
                 }
                 let kept = self.input[..start].to_string();
                 let trailing = if entry.is_directory { "" } else { " " };
                 // Escaped, so a name holding a space is still one word when the line is read back.
-                let path = crate::entries::escape(&entry.path);
+                let path = bravebot_mentions::escape(&entry.path);
                 self.put_in_the_box(format!("{kept}@{path}{trailing}"));
             }
             Offered::Nothing | Offered::Shortcuts => return,

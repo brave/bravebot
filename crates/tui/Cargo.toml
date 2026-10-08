@@ -18,6 +18,7 @@ bravebot-aichat = { path = "../aichat" }
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
 bravebot-i18n = { path = "../i18n" }
+bravebot-mentions = { path = "../mentions" }
 bravebot-net = { path = "../net" }
 bravebot-sandbox = { path = "../sandbox" }
 bravebot-session = { path = "../session" }

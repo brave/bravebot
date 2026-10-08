@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/workspace.rs
   - crates/agent/src/conversation.rs
+  - crates/filetype/src/lib.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
 
@@ -66,6 +67,11 @@ picture is the exception and is [READ-5](#READ-5): there is something to do with
 `verified-by: bravebot_agent::workspace::a_paged_read_of_a_binary_file_is_refused`
 `verified-by: bravebot_agent::workspace::text_files_are_not_mistaken_for_binary`
 `verified-by: bravebot_agent::workspace::an_empty_file_is_not_binary`
+`verified-by: bravebot_filetype::lib::a_null_byte_in_the_sniffed_head_is_binary`
+`verified-by: bravebot_filetype::lib::only_the_sniffed_head_is_judged`
+`verified-by: bravebot_filetype::lib::thirty_percent_control_characters_is_text_and_thirty_one_is_not`
+`verified-by: bravebot_filetype::lib::tab_newline_form_feed_and_carriage_return_are_text`
+`verified-by: bravebot_filetype::lib::an_empty_file_is_not_binary`
 
 <a id="READ-4"></a>
 ### READ-4: the planner may choose which file to read

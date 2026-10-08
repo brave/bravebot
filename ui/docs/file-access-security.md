@@ -58,12 +58,22 @@ path is the app's own and something else at it was arranged. The `.gitignore` be
 written only when absent, and a link or a directory in its place is left alone rather than
 failing the seed: nothing a memory read depends on is in that file.
 
+Attachment validation is an `attachment` operation on the same walk. It accepts a regular file
+whose first 8 KiB pass the agent's own binary test (no NUL, and no more than 30% control
+characters other than tab, newline, form feed and carriage return), and returns no bytes. Nothing
+caps a file's size or how many files a message carries, which are the terminal's limits for a
+file named with `@` or `--file`. The agent reads the file itself once the turn is sent, and a file
+that is not valid UTF-8 past those first bytes ends the turn there, as it does in the terminal.
+
 The briefing itself is written under the app's own data directory rather than a checkout, so
 it is not pinned to a project root. It is written to a name of its own and renamed into
 place, never opened by the name the turn will name, so a link left at the briefing's path is
 displaced instead of written through.
-Previews never send content to a model. Attachment selection still requires the native
-picker and a separate Send action.
+Previews never send content to a model. A file goes to a model only with a send, either
+picked through the native picker, which the `attachment` check above covers, or named with
+`@` in the prompt. The bridge reads those names back out of the prompt at `turn.send` and
+surveys each with the agent's own read, confined to the session's workspace, before the turn
+starts. See [security](security.md).
 
 Drafts are stored locally in `experience.json` with mode 0600; clearing a draft removes
 its saved text. Memory history retains up to 30 revisions. Reset preserves revisions for

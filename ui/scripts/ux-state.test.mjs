@@ -221,8 +221,9 @@ test('attachment grants are per session and revalidate changed files at send', a
     writeFileSync(selected, Buffer.from([0, 1, 2]))
     assert.throws(() => files.attachmentPaths('a', [file.id]))
     await assert.rejects(files.chooseAttachments({}, 'a'))
+    // No size cap, as the terminal has none for a named file.
     writeFileSync(selected, 'x'.repeat(300000))
-    assert.throws(() => files.attachmentPaths('a', [file.id]))
+    assert.deepEqual(files.attachmentPaths('a', [file.id]), ['notes.txt'])
     writeFileSync(selected, 'Text again')
     files.forgetRoot('a')
     assert.throws(() => files.attachmentPaths('a', [file.id]))

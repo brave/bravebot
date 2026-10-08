@@ -38,6 +38,11 @@ Sending a prompt that ends in a half-typed reference completes it rather than se
 A name containing a space is written with a backslash before the space, as in
 `@My\ Documents/notes.md`. Completing it from the picker writes that form for you.
 
+The desktop app's message box works the same way: `@` opens the list over the project, Tab and the
+arrows choose, and Enter completes a half-typed name or sends a finished one. A name that is not a
+text file inside the project stops the send and says which name it was, so nothing goes that you
+did not mean to send.
+
 :::caution
 Content you have not read is content you are vouching for. Be as careful naming a file as answering
 yes to a directory: the planner will act on what it says.

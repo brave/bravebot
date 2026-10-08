@@ -8524,7 +8524,7 @@ fn will_look_again(session: &Session, wrote: Wrote) -> bool {
 /// endorsement nobody gave.
 fn files_named_in(prompt: &str, wrote: Wrote) -> Vec<String> {
     match wrote {
-        Wrote::ThePerson => crate::entries::referenced(prompt),
+        Wrote::ThePerson => bravebot_mentions::referenced(prompt),
         Wrote::TheDriver => Vec::new(),
     }
 }

@@ -302,7 +302,7 @@ fn an_address_in_a_sentence_is_not_a_reference() {
 /// A directory is somewhere to type through, not a file to read, so naming one includes nothing.
 #[test]
 fn a_directory_reference_is_not_included_as_a_file() {
-    assert!(bravebot_tui::entries::referenced("look in @src/").is_empty());
+    assert!(bravebot_mentions::referenced("look in @src/").is_empty());
 }
 
 /// A prompt ending in a finished reference sends on Enter. It reads as still being completed, since
@@ -355,7 +355,7 @@ fn the_files_a_submitted_line_would_include() {
         other => panic!("the line was not sent: {other:?}"),
     };
     assert_eq!(
-        bravebot_tui::entries::referenced(&sent),
+        bravebot_mentions::referenced(&sent),
         vec!["src/main.rs".to_string(), "README.md".to_string()]
     );
 }
@@ -382,7 +382,7 @@ fn a_name_with_a_space_completes_to_a_reference_that_names_it() {
         other => panic!("the line was not sent: {other:?}"),
     };
     assert_eq!(
-        bravebot_tui::entries::referenced(&sent),
+        bravebot_mentions::referenced(&sent),
         vec!["My Documents/notes.md".to_string()]
     );
 }

@@ -38,6 +38,7 @@
     "drive:remembered-trust": "npm run bridge && electron-vite build && node scripts/drive-remembered-trust.mjs",
     "drive:run": "npm run bridge && electron-vite build && node scripts/drive-run.mjs",
     "drive:ask": "npm run bridge && electron-vite build && node scripts/drive-ask.mjs",
+    "drive:at-mentions": "npm run bridge && electron-vite build && node scripts/drive-at-mentions.mjs",
     "package": "npm run bridge && electron-vite build && node scripts/package.mjs",
     "drive:menu": "npm run bridge && electron-vite build && node scripts/drive-menu.mjs",
     "drive:session-list": "npm run bridge && electron-vite build && node scripts/drive-session-list.mjs",

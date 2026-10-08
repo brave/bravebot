@@ -12,6 +12,7 @@ bravebot-aichat = { path = "../aichat" }
 bravebot-bedrock = { path = "../bedrock" }
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
+bravebot-filetype = { path = "../filetype" }
 bravebot-i18n = { path = "../i18n" }
 bravebot-lsp = { path = "../lsp" }
 bravebot-mcp = { path = "../mcp" }

@@ -101,6 +101,14 @@ matter:
   edit conflicts, history deletion and bot recreation, without model calls. To verify packaging,
   build with `node scripts/package.mjs`, then set `SECURE_FILES_APP` to the packaged executable
   when running the same driver. Both `bravebot-rpc` and `bravebot-ui-files` must ship in Resources.
+- After building, `node scripts/drive-at-mentions.mjs` (`npm run drive:at-mentions`): the `@`
+  list, its keys and Enter's two meanings in the real app against the real bridge and a model
+  service the script serves, the file the model was sent, the **Read** row, `@../outside.txt`
+  refused at send, and a bot's conversation with no project reading and listing the bot's home
+  folder and refusing a name from the project. Disposable `HOME` and profile; screenshots of the
+  list in light and dark. The rules themselves are the terminal's, pinned in `crates/mentions`, and
+  the bridge's `mentions.offer`, `mentions.named` and `turn.send` refusals in
+  `crates/ui-bridge/tests/mentions.rs`.
 - For a change to the agent crates the bridge links, `cargo test --all --locked` from the
   repository root covers both sides in one run.
   On Apple Silicon with an Intel Rust toolchain, add `--target aarch64-apple-darwin`
@@ -200,7 +208,7 @@ credits from whatever backend is configured. `drive-columns`, `drive-panels`, `d
 
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
-`drive-about`, `drive-agent-settings`, `drive-bot-history`, `drive-conversation-workflow`,
+`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-conversation-workflow`,
 `drive-manual-walkthrough`, `drive-models`, `drive-models-live`, `drive-remembered-trust`,
 `drive-rewind`, `drive-secure-files`, `drive-session-list`, `drive-turn-details`, `drive-ux-acceptance`,
 `drive-vetting`, `drive-visual` and `drive-perf`.

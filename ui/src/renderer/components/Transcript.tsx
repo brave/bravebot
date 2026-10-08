@@ -59,6 +59,7 @@ interface Live {
   rules?: SettingsRules | null
   /** The points this session can be put back to, newest first. */
   rewind?: RewindPoint[]
+  sendRefused?: string | null
 }
 
 /**
@@ -94,6 +95,7 @@ interface Props {
   queuePaused: boolean
   onResumeQueued: () => void
   onRemoveQueued: (index: number) => void
+  onDismissRefusal: () => void
   live: Live | null
   /** A saved manifest run being read. Drawn in place of a session, which it is not. */
   reading?: SavedRun | null
@@ -268,7 +270,7 @@ export function Transcript({
   storageKey,
   onNew,
   onQueue,
-  queued, queuePaused, onResumeQueued,
+  queued, queuePaused, onResumeQueued, onDismissRefusal,
   onRemoveQueued,
   live,
   bot,
@@ -435,6 +437,7 @@ export function Transcript({
   const preview = useEvent((path: string) => setPreviewPath(path))
   const resumeQueued = useEvent(onResumeQueued)
   const removeQueued = useEvent(onRemoveQueued)
+  const dismissRefusal = useEvent(onDismissRefusal)
   const setup = useEvent(onSetup)
   const checkBackend = useEvent(onCheckBackend)
   const diagnostics = useEvent(onDiagnostics)
@@ -760,6 +763,8 @@ export function Transcript({
           queued={queued}
           queuePaused={queuePaused}
           onResumeQueued={resumeQueued}
+          refusal={live.sendRefused ?? null}
+          onDismissRefusal={dismissRefusal}
           onRemoveQueued={removeQueued}
           backendReady={backendReady}
           onSetup={setup}
