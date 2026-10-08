@@ -815,7 +815,7 @@ mod tests {
         let place = Place::new("refused-shape");
 
         let write = place.say("s", "aws write -- ls");
-        let assigned = place.say("s", "aws -- GIT_SSH_COMMAND=ssh git push");
+        let assigned = place.say("s", "aws -- GIT_SSH_COMMAND=ssh ls");
         let unparsed = place.say("s", "aws -- 'ls");
 
         assert_eq!(write, t!(reach_refused_write));
