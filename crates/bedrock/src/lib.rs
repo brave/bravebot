@@ -3075,6 +3075,68 @@ mod tests {
         );
     }
 
+    /// Serialises the tests that read the process-wide diagnostic log.
+    static DIAG_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A retry is a decision worth reading after the fact, so each of the two loops that make one
+    /// leaves the attempt it is and the wait before it, and nothing of the request. The backoffs
+    /// differ per loop so one loop's lines cannot stand in for the other's.
+    #[test]
+    fn a_retry_is_written_to_the_diagnostic_log() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().join("logs")));
+        for (streaming, base_ms) in [(false, 7), (true, 11)] {
+            let config = config();
+            let egress = Egress::new();
+            let (http, received) = refused_requests(vec![503; 3]);
+            let mut client =
+                BedrockClient::new(&config, &egress).with_backoff(Duration::from_millis(base_ms));
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let request = ChatRequest::new("opus-arn", vec![]);
+            let result = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            };
+            assert!(result.is_err(), "streaming={streaming}");
+            assert_eq!(client.attempts(), 3, "streaming={streaming}");
+            for _ in 0..3 {
+                received.recv_timeout(Duration::from_secs(2)).unwrap();
+            }
+        }
+        let log: String = std::fs::read_dir(dir.path().join("logs"))
+            .expect("a retry makes the log")
+            .flatten()
+            .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+            .collect();
+        bravebot_diag::configure(bravebot_diag::Level::Error, None);
+
+        for line in [
+            "INFO bedrock.retry attempt=2 backoff_ms=7",
+            "INFO bedrock.retry attempt=3 backoff_ms=14",
+            "INFO bedrock.retry attempt=2 backoff_ms=11",
+            "INFO bedrock.retry attempt=3 backoff_ms=22",
+        ] {
+            assert!(log.contains(line), "missing {line:?} in {log}");
+        }
+    }
+
     /// Real exception frames follow the existing retry policy and keep the final protocol kind.
     #[test]
     fn framed_service_exceptions_keep_their_kind_and_request_count() {

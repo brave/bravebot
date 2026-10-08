@@ -170,6 +170,7 @@ dependencies = [
  "bravebot-signing",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -184,6 +185,7 @@ dependencies = [
  "bravebot-signing",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -267,6 +269,7 @@ dependencies = [
  "bravebot-sandbox",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

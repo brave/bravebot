@@ -120,4 +120,8 @@ retried, did the server it needs start. Each is a fact about the program and non
 `verified-by: bravebot_net::lib::a_failed_request_is_logged_as_host_status_and_kind_only`
 `verified-by: bravebot_net::lib::a_stopped_request_is_not_a_failure_to_log`
 `verified-by: bravebot_aichat::client::a_retry_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_bedrock::lib::a_retry_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_mcp::stdio::a_launch_that_failed_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_mcp::stdio::a_handshake_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_lsp::server::a_missing_server_binary_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_lsp::server::a_servers_launch_and_exit_are_written_to_the_diagnostic_log`

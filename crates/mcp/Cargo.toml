@@ -15,3 +15,6 @@ bravebot-net = { path = "../net" }
 bravebot-sandbox = { path = "../sandbox" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1270,34 +1270,102 @@ mod tests {
         PathBuf::from("/workspace")
     }
 
+    /// Serialises the tests that read the process-wide diagnostic log.
+    static DIAG_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Launches Rust's server from `program` with the diagnostic log at `level`, drops what came
+    /// of it, and returns what the log held and whether the launch worked.
+    fn logged_launch(level: bravebot_diag::Level, program: &Path) -> (String, bool) {
+        let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().expect("a scratch directory");
+        let dir = tmp.path().to_path_buf();
+        bravebot_diag::configure(level, Some(dir.join("logs")));
+        let launched = Server::launch(Language::Rust, program, &dir, &dir.join("cache"), &[]);
+        let worked = launched.is_ok();
+        drop(launched);
+        bravebot_diag::configure(bravebot_diag::Level::Error, None);
+        let log = std::fs::read_dir(dir.join("logs"))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+                    .collect()
+            })
+            .unwrap_or_default();
+        (log, worked)
+    }
+
+    /// A language server that answers `initialize` and, when `orderly`, `shutdown` and `exit`.
+    /// Reads a chunk at a time because the framing leaves no newline for `read` to stop at.
+    #[cfg(unix)]
+    fn fake_language_server(dir: &Path, orderly: bool) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let ends = if orderly {
+            r#"*'"method":"shutdown"'*) reply "$id" 'null' ;;
+    *'"method":"exit"'*) exit 0 ;;"#
+        } else {
+            ""
+        };
+        let script = format!(
+            r#"#!/bin/sh
+reply() {{
+  body="{{\"jsonrpc\":\"2.0\",\"id\":$1,\"result\":$2}}"
+  printf 'Content-Length: %d\r\n\r\n%s' "${{#body}}" "$body"
+}}
+while :; do
+  chunk=$(dd bs=65536 count=1 2>/dev/null)
+  [ -n "$chunk" ] || exit 0
+  id=$(printf '%s' "$chunk" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$chunk" in
+    *'"method":"initialize"'*) reply "$id" '{{"capabilities":{{}}}}' ;;
+    {ends}
+  esac
+done
+"#
+        );
+        let path = dir.join(if orderly { "orderly.sh" } else { "stubborn.sh" });
+        std::fs::write(&path, script).expect("write the script");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
     /// A server that is not installed is the first thing asked about in a bug report, so the log
     /// says which language and that the binary was missing, and not the path that was tried.
     #[test]
     fn a_missing_server_binary_is_written_to_the_diagnostic_log() {
-        let tmp = tempfile::tempdir().expect("a scratch directory");
-        let dir = tmp.path().to_path_buf();
-        bravebot_diag::configure(bravebot_diag::Level::Error, Some(dir.join("logs")));
-
-        let launched = Server::launch(
-            Language::Rust,
+        let (log, worked) = logged_launch(
+            bravebot_diag::Level::Error,
             Path::new("/nonexistent/secret-dir/rust-analyzer"),
-            &dir,
-            &dir.join("cache"),
-            &[],
         );
-        let log: String = std::fs::read_dir(dir.join("logs"))
-            .expect("a failed launch makes the log")
-            .flatten()
-            .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
-            .collect();
-        bravebot_diag::configure(bravebot_diag::Level::Error, None);
 
-        assert!(matches!(launched, Err(LspError::NoBinary { .. })));
+        assert!(!worked);
         assert!(
             log.contains("ERROR lsp.launch language=Rust kind=no_binary"),
             "{log}"
         );
         assert!(!log.contains("secret-dir"), "{log}");
+    }
+
+    /// A server that started and one that was stopped are both facts a bug report wants: that it
+    /// came up, and whether it left when asked or had to be killed.
+    #[cfg(unix)]
+    #[test]
+    fn a_servers_launch_and_exit_are_written_to_the_diagnostic_log() {
+        let tmp = tempfile::tempdir().expect("a scratch directory");
+        for (orderly, how) in [(true, "shutdown"), (false, "killed")] {
+            let script = fake_language_server(tmp.path(), orderly);
+            let (log, worked) = logged_launch(bravebot_diag::Level::Info, &script);
+
+            assert!(worked, "the fake server did not start: {log}");
+            assert!(
+                log.contains("INFO lsp.launch language=Rust outcome=ok"),
+                "{log}"
+            );
+            assert!(
+                log.contains(&format!("INFO lsp.exit language=Rust how={how}")),
+                "orderly={orderly}: {log}"
+            );
+        }
     }
 
     /// LSP-5: nothing starts until a person says so, and a refusal is not a failure of the tool.
