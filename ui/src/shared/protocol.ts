@@ -690,6 +690,20 @@ export interface RunRequest {
    */
   releasesPrivate: boolean
   /**
+   * Credential scopes and toolchain lists the planner asked this line to be lent, by name.
+   *
+   * Empty for nearly every command.
+   */
+  requestedScopes?: string[]
+  /**
+   * Whether a standing answer exists for this line.
+   *
+   * False for a line that is asked about every time whatever is remembered: private input, an
+   * assignment, a file to write, a reference as input, or a requested scope. A front end offers
+   * "Trust" only when this is true and does not work the reasons out for itself.
+   */
+  canBeRemembered: boolean
+  /**
    * Access the command reaches that nothing in the agent holds.
    *
    * A container daemon, a tool that is already logged in, the ssh agent, the metadata service

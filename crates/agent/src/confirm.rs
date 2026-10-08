@@ -23,6 +23,7 @@ use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::remembered::RememberedLine;
 use bravebot_core::vetting::Verdict;
 use bravebot_i18n::t;
+use bravebot_sandbox::scope::Requested;
 use std::fmt;
 
 /// How a proposed write came about.
@@ -268,6 +269,10 @@ pub struct Confined {
     /// How many entries of the person's own filesystem lists are in force for these stages, which
     /// is a count and never a path a glob turned up.
     pub filesystem: bravebot_sandbox::rules::Counts,
+    /// What the planner asked this line to add to a stage, each with the stage's program, in step
+    /// order. Empty for a line that asked for nothing. Not part of what the stage carries because
+    /// it is the planner's request and not the stage's own argv, and it is drawn as that.
+    pub requested: Vec<(String, bravebot_sandbox::scope::Requested)>,
     /// What a stage carries beyond them, in step order. A stage that carries nothing is absent.
     pub carried: Vec<Carried>,
 }
@@ -344,6 +349,18 @@ impl Confined {
                 )
                 .to_string(),
             );
+        }
+        for (program, request) in &self.requested {
+            let sentence = match request {
+                Requested::Scope(scope) => self.scope_sentence(*scope, program),
+                Requested::Toolchain(toolchain) => t!(
+                    run_carries_toolchain,
+                    program = program.as_str(),
+                    toolchain = toolchain.name()
+                )
+                .to_string(),
+            };
+            sentences.push(t!(run_carries_requested, sentence = sentence).to_string());
         }
         for stage in &self.carried {
             let program = stage.program.as_str();
@@ -509,7 +526,35 @@ impl RunRequest {
     /// One question rather than a list of reasons repeated at each place that asks, so a reason
     /// added later cannot reach the drawing and miss the layer that acts on the answer.
     pub fn can_be_remembered(&self) -> bool {
-        self.plan.can_be_remembered()
+        self.plan.can_be_remembered() && !self.asks_for_scopes()
+    }
+
+    /// Whether the planner asked this line to carry a credential scope or a toolchain list.
+    ///
+    /// The fifth reason, and the one nothing recorded can account for: an entry and a remembered
+    /// line hold a program, its arguments and a tree, so `a` made for a line with `aws` asked for
+    /// would cover the same line with none, and one made for a line without would cover it with.
+    /// Asked apart from [`RunRequest::can_be_remembered`] for the reason
+    /// [`RunRequest::carries_an_assignment`] is.
+    pub fn asks_for_scopes(&self) -> bool {
+        self.confined
+            .as_ref()
+            .is_some_and(|confined| !confined.requested.is_empty())
+    }
+
+    /// The names the planner asked for, each once, in the menu's order.
+    pub fn requested_scopes(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = Vec::new();
+        for (_, request) in self
+            .confined
+            .iter()
+            .flat_map(|confined| &confined.requested)
+        {
+            if !names.contains(&request.name()) {
+                names.push(request.name());
+            }
+        }
+        names
     }
 
     /// Whether the prompt may offer to record this answer past the session.
@@ -561,6 +606,9 @@ impl RunRequest {
     /// list.
     pub fn would_vouch_for(&self) -> Vec<bravebot_core::programs::Command> {
         let mut named: Vec<bravebot_core::programs::Command> = Vec::new();
+        if self.asks_for_scopes() {
+            return named;
+        }
         for step in self.plan.steps() {
             let command = step.command(&self.plan.directory);
             if !named.contains(&command) {
@@ -2530,6 +2578,7 @@ mod tests {
             directories: Vec::new(),
             network: bravebot_sandbox::network::Network::Open,
             filesystem: Default::default(),
+            requested: Vec::new(),
             carried: vec![
                 carried("aws", Scope::Aws),
                 carried("kubectl", Scope::Kubernetes),
@@ -2569,6 +2618,7 @@ mod tests {
         let confined = Confined {
             reads_the_machine: true,
             directories: Vec::new(),
+            requested: Vec::new(),
             carried: vec![Carried {
                 program: "git".into(),
                 toolchain: None,
@@ -2618,6 +2668,7 @@ mod tests {
             directories: Vec::new(),
             network,
             filesystem: Default::default(),
+            requested: Vec::new(),
             carried,
         };
 
@@ -2645,6 +2696,7 @@ mod tests {
             directories: Vec::new(),
             network: bravebot_sandbox::network::Network::Open,
             filesystem,
+            requested: Vec::new(),
             carried: Vec::new(),
         };
         let said = confined(Counts {

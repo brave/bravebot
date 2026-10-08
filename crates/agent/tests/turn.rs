@@ -16446,6 +16446,435 @@ fn a_run_under_strict_cannot_read_what_standard_reads() {
     assert!(first.contains(TOLD_CONFINED), "{first}");
 }
 
+/// What a turn that made a `run` call with `scopes` left behind: the planner's second request,
+/// which holds the tool result, and the file the line would have written had it run.
+struct ScopedRun {
+    second: String,
+    ran: bool,
+    vouched: usize,
+    recorded: bool,
+}
+
+/// One `run` call carrying `arguments`, made in a confining turn under `mode` with a profile
+/// directory (a session with none is held to the listed rows whatever the mode). The line writes
+/// `marker` in the session, so `ran` says whether the program started at all.
+fn scoped_run<C: bravebot_agent::Confirmer + Send>(
+    name: &str,
+    arguments: serde_json::Value,
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    trust: bravebot_core::trust::TrustStore,
+    programs: impl FnOnce(&std::path::Path) -> bravebot_core::programs::TrustedPrograms,
+    confirmer: &mut C,
+) -> ScopedRun {
+    scoped_run_remembering(
+        name, arguments, mode, permission, trust, programs, confirmer, None,
+    )
+}
+
+/// [`scoped_run`] in a session that may record a line past itself, under `state`.
+#[allow(clippy::too_many_arguments)]
+fn scoped_run_remembering<C: bravebot_agent::Confirmer + Send>(
+    name: &str,
+    arguments: serde_json::Value,
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    trust: bravebot_core::trust::TrustStore,
+    programs: impl FnOnce(&std::path::Path) -> bravebot_core::programs::TrustedPrograms,
+    confirmer: &mut C,
+    state: Option<&std::path::Path>,
+) -> ScopedRun {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", &arguments.to_string()),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let programs = programs(&scratch.path);
+
+    let mut task = Task::new("run it")
+        .with_profile(Some(
+            bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
+        ))
+        .with_permission_mode(permission)
+        .with_confined_runs(true)
+        .with_sandbox_mode(mode);
+    if let Some(state) = state {
+        task = task
+            .with_home(Some(state.to_path_buf()))
+            .remembering(Some("a-session".to_string()));
+    }
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trust,
+        programs,
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    outcome.outcome.as_ref().expect("the turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    ScopedRun {
+        second,
+        ran: scratch.path.join("ran.txt").exists(),
+        vouched: outcome.decisions.programs.len(),
+        recorded: state.is_some_and(|state| {
+            !bravebot_agent::remembered::Store::new(state, workspace.root())
+                .read()
+                .is_empty()
+        }),
+    }
+}
+
+fn no_programs(_: &std::path::Path) -> bravebot_core::programs::TrustedPrograms {
+    bravebot_core::programs::TrustedPrograms::new()
+}
+
+const WRITES_A_MARKER: &str = "sh -c 'echo x > ran.txt'";
+
+/// SANDBOX-26: a line that asks for a scope is put to the person even where a vouched entry covers
+/// it, shows the names, and offers no standing answer. The control is the same vouched line with no
+/// request, which is not asked about. The regression it rejects is a request that rides on an
+/// approval given to the line without it.
+#[test]
+fn scopes_are_asked_about_on_a_vouched_line() {
+    if cannot_confine_here() {
+        return;
+    }
+    let vouch = |tree: &std::path::Path| {
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in("uname", &[], tree)])
+    };
+    let mut control = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let seen = control.seen.clone();
+    let unrequested = scoped_run(
+        "scopes-vouched-control",
+        serde_json::json!({ "command": "uname" }),
+        bravebot_sandbox::SandboxMode::Strict,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        vouch,
+        &mut control,
+    );
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "the vouched line was asked about without a request, so the test below proves nothing"
+    );
+    assert!(
+        message_from(&unrequested.second, "Result of run").contains("Darwin")
+            || message_from(&unrequested.second, "Result of run").contains("Linux"),
+        "the vouched control's output was not shown, so the label check below proves nothing"
+    );
+
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = asked.seen.clone();
+    let result = scoped_run(
+        "scopes-vouched",
+        serde_json::json!({ "command": "uname", "scopes": ["cargo", "aws"] }),
+        bravebot_sandbox::SandboxMode::Strict,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        vouch,
+        &mut asked,
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        seen.len(),
+        1,
+        "a vouched line asking for a scope was not asked about"
+    );
+    assert_eq!(seen[0].requested_scopes(), ["aws", "cargo"]);
+    assert!(seen[0].asks_for_scopes());
+    assert!(
+        !seen[0].can_be_remembered(),
+        "a standing answer was offered for a request"
+    );
+    assert!(seen[0].would_vouch_for().is_empty());
+    assert!(
+        seen[0]
+            .confined
+            .as_ref()
+            .is_some_and(|confined| confined.requested.len() == 2),
+        "the prompt did not carry what was asked for"
+    );
+    assert!(message_from(&result.second, "Result of run").contains("It exited 0."));
+    // A vouch was for the programs as they ran without the credential, so what a line lent one
+    // prints is quarantined where the same vouched line's output is shown.
+    let said = message_from(&result.second, "Result of run");
+    assert!(said.contains("[ref:1]"), "{said}");
+    assert!(
+        !said.contains("Darwin") && !said.contains("Linux"),
+        "{said}"
+    );
+}
+
+/// SANDBOX-26: a front end answering `a` and `r` to a question that offered neither remembers
+/// nothing. What an entry holds is a program, its arguments and a tree, so one made here would
+/// cover the same line asking for no scope, and the same line asking for any other.
+#[test]
+fn a_standing_answer_to_a_request_remembers_nothing() {
+    if cannot_confine_here() {
+        return;
+    }
+    let state = Scratch::new("scopes-standing-state");
+    let mut person = AskedAboutRuns::answering(bravebot_agent::RunDecision {
+        decision: bravebot_agent::Decision::Approve,
+        remember: true,
+        record: true,
+        record_family: false,
+    });
+    let seen = person.seen.clone();
+    let control = scoped_run_remembering(
+        "scopes-standing-control",
+        serde_json::json!({ "command": "uname" }),
+        bravebot_sandbox::SandboxMode::Strict,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut person,
+        Some(&state.path),
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert!(
+        control.recorded && control.vouched == 1,
+        "the line without a request kept neither answer, so the request below proves nothing"
+    );
+
+    let state = Scratch::new("scopes-standing-state-asked");
+    let result = scoped_run_remembering(
+        "scopes-standing",
+        serde_json::json!({ "command": "uname", "scopes": ["aws"] }),
+        bravebot_sandbox::SandboxMode::Strict,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut person,
+        Some(&state.path),
+    );
+    assert!(result.second.contains("It exited 0."), "{}", result.second);
+    let seen = seen.lock().unwrap();
+    assert!(
+        seen[0].record.is_some(),
+        "the line without a request was not offered a record, so the one below proves nothing"
+    );
+    assert!(
+        seen[1].record.is_none(),
+        "a record was offered for a request"
+    );
+    assert_eq!(result.vouched, 0, "a request vouched for the program");
+    assert!(!result.recorded, "a request was written to the record");
+}
+
+/// SANDBOX-26: the request is refused, and the program does not start, where the mode accepts
+/// none. `standard` already reads the machine and `off` has no profile to add to. The planner is
+/// told, in the same words, that nothing was added; no prompt is raised.
+#[test]
+fn scopes_are_refused_under_standard_and_under_off() {
+    if cannot_confine_here() {
+        return;
+    }
+    for mode in [
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_sandbox::SandboxMode::Off,
+    ] {
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        let seen = confirmer.seen.clone();
+        let result = scoped_run(
+            &format!("scopes-refused-{mode}"),
+            serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["aws"] }),
+            mode,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            no_programs,
+            &mut confirmer,
+        );
+        assert!(
+            message_from(&result.second, "Result of run").contains("does not accept a request"),
+            "{mode}: {}",
+            result.second
+        );
+        assert!(!result.ran, "{mode}: the line ran");
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "{mode}: a prompt was raised"
+        );
+    }
+}
+
+/// SANDBOX-26, TRUST-7: the request is refused in a workspace the person declined to trust, where
+/// the files the line names are content nobody vouched for and a credential lent to a script a
+/// checkout wrote is the case a scope is kept from. The control is the same call in a trusted
+/// workspace, which is asked about and runs.
+#[test]
+fn scopes_are_refused_in_a_workspace_the_person_declined_to_trust() {
+    if cannot_confine_here() {
+        return;
+    }
+    let call = serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["aws"] });
+    let mut trusted = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let control = scoped_run(
+        "scopes-trusted-control",
+        call.clone(),
+        bravebot_sandbox::SandboxMode::Strict,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut trusted,
+    );
+    assert!(control.ran, "the control did not run: {}", control.second);
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+    let result = scoped_run(
+        "scopes-untrusted",
+        call,
+        bravebot_sandbox::SandboxMode::Strict,
+        bravebot_agent::PermissionMode::default(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        no_programs,
+        &mut confirmer,
+    );
+    assert!(
+        message_from(&result.second, "Result of run").contains("does not accept a request"),
+        "{}",
+        result.second
+    );
+    assert!(!result.ran);
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+/// SANDBOX-26: nobody is there to ask in a `-p` run, so the request is refused, and the program
+/// does not start. The mode that asks nothing is the one way through: it approves the run, which
+/// the person chose for the whole session by choosing it. The control is that mode with a
+/// confirmer that refuses everything.
+#[test]
+fn scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given() {
+    if cannot_confine_here() {
+        return;
+    }
+    // Vouched, so the bare line runs with nobody asked and the refusal below can only be the request.
+    let vouch = |tree: &std::path::Path| {
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in("uname", &[], tree)])
+    };
+    let call = serde_json::json!({ "command": "uname", "scopes": ["aws"] });
+    let bare = scoped_run(
+        "scopes-unattended-control",
+        serde_json::json!({ "command": "uname" }),
+        bravebot_sandbox::SandboxMode::Strict,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        vouch,
+        &mut bravebot_agent::confirm::Unattended,
+    );
+    assert!(
+        message_from(&bare.second, "Result of run").contains("It exited 0."),
+        "the vouched line did not run unasked, so the refusal below proves nothing"
+    );
+    let refused = scoped_run(
+        "scopes-unattended",
+        call.clone(),
+        bravebot_sandbox::SandboxMode::Strict,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        vouch,
+        &mut bravebot_agent::confirm::Unattended,
+    );
+    assert!(
+        !message_from(&refused.second, "Result of run").contains("It exited 0."),
+        "an unattended run was lent a scope: {}",
+        refused.second
+    );
+
+    let mut unattended = bravebot_agent::confirm::Unattended;
+    let mut confirmer = bravebot_agent::Confining::new(
+        &mut unattended,
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+    );
+    let allowed = scoped_run(
+        "scopes-bypass",
+        call,
+        bravebot_sandbox::SandboxMode::Strict,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        vouch,
+        &mut confirmer,
+    );
+    assert!(
+        message_from(&allowed.second, "Result of run").contains("It exited 0."),
+        "the mode that asks nothing did not run it: {}",
+        allowed.second
+    );
+}
+
+/// SANDBOX-26: a name outside the menu is an error, not a request for less. `root` is a user,
+/// `Remote` is a near miss and the empty string would match anything that matched by prefix; a
+/// typo that was dropped would run the line without the credential and report the failure as the
+/// program's. Nothing is asked and nothing runs.
+#[test]
+fn a_scope_outside_the_menu_is_an_error() {
+    if cannot_confine_here() {
+        return;
+    }
+    for name in ["root", "Remote", ""] {
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        let seen = confirmer.seen.clone();
+        let result = scoped_run(
+            "scopes-outside-the-menu",
+            serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["aws", name] }),
+            bravebot_sandbox::SandboxMode::Strict,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            no_programs,
+            &mut confirmer,
+        );
+        let said = message_from(&result.second, "Result of run");
+        assert!(said.contains("not on this list"), "{name:?}: {said}");
+        assert!(said.contains("kubernetes"), "{name:?}: {said}");
+        assert!(!result.ran, "{name:?}: the line ran");
+        assert!(seen.lock().unwrap().is_empty(), "{name:?}: asked");
+    }
+}
+
+/// SANDBOX-19: the sentence that follows a failure names the menu in a session that accepts
+/// requests, and is the same words for exit 1 and exit 2, since it is built from the session and
+/// the steps and not from what the program did.
+#[test]
+fn the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu() {
+    if cannot_confine_here() {
+        return;
+    }
+    let sentence = |code: u8| {
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        let result = scoped_run(
+            "scopes-failure-sentence",
+            serde_json::json!({ "command": format!("sh -c 'exit {code}'") }),
+            bravebot_sandbox::SandboxMode::Strict,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            no_programs,
+            &mut confirmer,
+        );
+        let said = message_from(&result.second, "Result of run").to_string();
+        assert!(said.contains(&format!("exited {code}")), "{said}");
+        said[said.find("Confinement:").expect("a confinement sentence")..].to_string()
+    };
+    let (one, two) = (sentence(1), sentence(2));
+    assert_eq!(one, two);
+    for name in ["remote", "aws", "kubernetes", "docker", "cargo", "gradle"] {
+        assert!(one.contains(name), "{name} missing from {one}");
+    }
+}
+
 /// A job's failure reaches the planner in a later round, from the turn's own account of it, and
 /// that is a second place the line has to be attached.
 #[test]

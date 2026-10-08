@@ -155,6 +155,46 @@ fn a_confined_program_reads_the_machine_and_not_a_credential_location() {
     }
 }
 
+/// SANDBOX-26: a strict stage that asked for `aws` reads the aws credential directory and nothing
+/// else of the home, under the kernel. The controls are the same line with no request, which is
+/// refused, and one that asked for another scope, which is too. The regression it rejects is a
+/// request recorded and prompted for that never reaches the profile, or one that lifts every
+/// credential.
+#[cfg(unix)]
+#[test]
+fn a_strict_stage_that_asked_for_a_scope_reads_that_credential_only() {
+    use bravebot_sandbox::SandboxMode;
+    use bravebot_sandbox::scope::{Requested, Scope};
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("requested-scope");
+    let strict = places.confinement().with_mode(SandboxMode::Strict);
+    let read = |path: &str, confinement: &Confinement| {
+        places.run(
+            &format!("sh -c 'cat {}'", places.home.join(path).display()),
+            Some(confinement),
+        )
+    };
+    let asked = |scope| strict.clone().with_requested(&[Requested::Scope(scope)]);
+
+    assert!(
+        !read(".aws/credentials", &strict).ended_well,
+        "the control read the credential with nothing asked for"
+    );
+    let lent = read(".aws/credentials", &asked(Scope::Aws));
+    assert!(lent.ended_well, "{lent:?}");
+    assert_eq!(lent.stdout, "aws secret\n");
+    assert!(
+        !read(".aws/credentials", &asked(Scope::Docker)).ended_well,
+        "another scope lifted the aws directory"
+    );
+    assert!(
+        !read(".ssh/id_ed25519", &asked(Scope::Aws)).ended_well,
+        "a request for aws read a private key"
+    );
+}
+
 /// The regression it rejects: a profile built once and kept, so a file created after the first
 /// stage started cannot be read by the second, or a listing made at one moment that a path made
 /// later in a directory holding a credential location escapes.

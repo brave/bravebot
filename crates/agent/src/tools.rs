@@ -915,6 +915,17 @@ fn table(
                                         not use it with background: true. What comes back is \
                                         quarantined the same way any other run's output is."
                     },
+                    "scopes": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": bravebot_sandbox::scope::Requested::MENU },
+                        "description": "Credential scopes and toolchain lists to add to every \
+                                        stage of this one line, by name from the list given, for \
+                                        a script that runs `gh`, `aws` or a build inside it and \
+                                        so shows no operation of its own. Only where the session \
+                                        is told it accepts them. The user is asked about the line \
+                                        every time with the names shown, and no answer to it is \
+                                        remembered. A name outside the list is an error."
+                    },
                     "directory": {
                         "type": "string",
                         "description": "Directory to run the command in, relative to the \
@@ -6727,6 +6738,60 @@ fn credential_refusal_after_a_line(displayed: &str, left: &Left<'_>, stuck: &[St
     Produced::refused_with_a_note(text, note)
 }
 
+/// What a refused request says, whatever refused it: the planner learns that no credential was
+/// added and not which setting withheld it.
+const NOT_ACCEPTING_REQUESTS: &str = "refused: this session does not accept a request for a \
+     credential scope or toolchain list. Run the line without 'scopes', and say what it needs \
+     for the person to add.";
+
+/// The names `scopes` holds, each a word of the fixed menu and compared exactly, once each.
+///
+/// Absent, null and an empty array ask for nothing. Anything else that is not an array of menu
+/// words is an error rather than a request for less: a typo that quietly dropped `aws` would run
+/// the line without the credential and report the failure as the program's.
+fn requested_from(arguments: &Value) -> Result<Vec<bravebot_sandbox::scope::Requested>, String> {
+    use bravebot_sandbox::scope::Requested;
+    let menu = Requested::MENU.join(", ");
+    let named = match arguments.get("scopes") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(named)) => named,
+        Some(_) => {
+            return Err(format!(
+                "error: 'scopes' must be an array of names from this list: {menu}"
+            ));
+        }
+    };
+    let mut requested: Vec<Requested> = Vec::new();
+    for name in named {
+        let Some(request) = name.as_str().and_then(Requested::named) else {
+            return Err(format!(
+                "error: 'scopes' holds a name that is not on this list: {menu}"
+            ));
+        };
+        if !requested.contains(&request) {
+            requested.push(request);
+        }
+    }
+    Ok(requested)
+}
+
+/// Whether this turn may be asked for a credential scope at all.
+///
+/// Only in the strict sandbox mode, where the profile is the whole of what a program reaches and a
+/// name from the menu is the one way to widen it; `standard` already reads the machine and `off`
+/// has no profile to add to. Not in a workspace the person has not trusted, where the files the
+/// line names are content nobody vouched for and a credential lent to a script a checkout wrote is
+/// the case SANDBOX-16 keeps scopes from. A turn nobody is at to ask is refused by the confirmer
+/// the prompt goes to, since a request is always asked about.
+fn requests_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> Result<(), String> {
+    let strict = tools.confine_runs && tools.sandbox == bravebot_sandbox::SandboxMode::Strict;
+    let trusted = policy.trusts_path(&tools.workspace.trust_key("."));
+    match strict && trusted {
+        true => Ok(()),
+        false => Err(NOT_ACCEPTING_REQUESTS.to_string()),
+    }
+}
+
 /// Run a program, after a person approves the exact arguments.
 ///
 /// The order is the whole of the safety argument, and it is the same order a write goes through:
@@ -6814,6 +6879,19 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             "error: a background command has printed nothing into this result, so there is \
              nothing in it to read. Leave 'read' out, or run it in the foreground.",
         );
+    }
+
+    // What the planner asks every stage of this line to carry, by name from a fixed menu. Refused
+    // rather than dropped where it cannot be honoured, so a planner that believed it had a
+    // credential is told it has none and not handed a failure it would chase as a fault.
+    let requested = match requested_from(arguments) {
+        Ok(requested) => requested,
+        Err(diagnostic) => return Produced::problem(diagnostic),
+    };
+    if !requested.is_empty()
+        && let Err(refusal) = requests_accepted(policy, tools)
+    {
+        return Produced::problem(refusal);
     }
 
     // Assembled from the planner's own words, which are untrusted. A person reading the line at
@@ -7012,12 +7090,18 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         policy.recall(lines.clone());
     }
 
-    let confinement = tools.confinement();
+    let confinement = tools
+        .confinement()
+        .map(|confinement| confinement.with_requested(&requested));
+    if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
+        return Produced::problem(NOT_ACCEPTING_REQUESTS.to_string());
+    }
     if tools.confine_runs {
         policy.record_sandbox_mode(tools.sandbox.name());
     }
 
-    let asking = policy.plan_needs_approval(&plan);
+    let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
+    let asking = policy.plan_needs_approval_requesting(&plan, &names);
     // Whether the record is what stopped the question. Read where the result is quarantined: the
     // advice about vouching is advice about a prompt, and no prompt will return here for this line
     // until somebody deletes the entry.
@@ -7039,7 +7123,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             // endorse a record they were not shown.
             record: record
                 .as_ref()
-                .filter(|_| policy.may_remember(&plan))
+                .filter(|_| policy.may_remember(&plan) && requested.is_empty())
                 .filter(|_| crate::remembered::may_be_added_to())
                 .map(|store| store.path().to_path_buf()),
             // Said only where a key at this prompt will not finish the asking, only where a rule
@@ -7052,7 +7136,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             // than this session's.
             pattern: tools
                 .home
-                .filter(|_| varied && policy.a_rule_could_answer(&plan))
+                .filter(|_| varied && policy.a_rule_could_answer(&plan) && requested.is_empty())
                 .map(bravebot_config::user_settings_file),
             // The reference, so the person reads what is going in as well as that something is.
             // The driver's own name for a slot, never a byte of what the slot holds.
@@ -7105,6 +7189,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         // the store, for the mode that adds nothing to the state directory. The family answer of
         // RUN-20 is asked of the table again by `line_to_record`.
         if policy.may_remember(&plan)
+            && requested.is_empty()
             && let (Some(store), Some(session), Some(line)) = (
                 record.as_ref(),
                 tools.remembering,
@@ -7124,6 +7209,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     let label = match checked {
         Ok(label) => label,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    // A vouch was for the programs as they ran without the credential, so what a line lent one
+    // prints is not trusted on its account.
+    let label = match bravebot_core::capability::Capability::ShellExec.output_label() {
+        Some(opaque) if !requested.is_empty() => opaque,
+        _ => label,
     };
 
     // The tree comes with the line wherever the line is said, and only where it is not the root.
@@ -7153,6 +7244,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         .and_then(|confinement| confinement.network_for_the_trail(&plan.steps()))
     {
         policy.record_run_network(detail);
+    }
+    if let Some(detail) = confinement
+        .as_ref()
+        .and_then(|confinement| confinement.requested_for_the_trail(&plan.steps()))
+    {
+        policy.record_requested_scopes(detail);
     }
 
     if in_the_background {
@@ -10704,7 +10801,8 @@ mod tests {
     /// `background` says what to do with the line rather than what it is, `deadline_seconds` says
     /// how long to wait for it, `directory` names where to run it, `stdin_ref` names a
     /// reference to feed it ([RUN-3]), which is a source rather than a second way to say what
-    /// runs, and `read` asks for what it printed in the same result ([RUN-22]).
+    /// runs, `read` asks for what it printed in the same result ([RUN-22]), and `scopes` names what
+    /// the line is lent beyond the profile, from a fixed menu (SANDBOX-26).
     ///
     /// [RUN-3]: ../../../docs/specs/tools/run.md
     /// [RUN-22]: ../../../docs/specs/tools/run.md
@@ -10730,11 +10828,18 @@ mod tests {
                 "deadline_seconds",
                 "directory",
                 "read",
+                "scopes",
                 "stdin_ref",
                 "why"
             ],
             "run gained a field beside the command line, whether to wait for it, how long, \
-             where, what to feed it, whether to read it, and why it was run"
+             where, what to feed it, whether to read it, what it is lent, and why it was run"
+        );
+        assert_eq!(properties["scopes"]["type"], "array");
+        assert_eq!(properties["scopes"]["items"]["type"], "string");
+        assert_eq!(
+            properties["scopes"]["items"]["enum"],
+            serde_json::json!(bravebot_sandbox::scope::Requested::MENU)
         );
         assert_eq!(properties["command"]["type"], "string");
         assert_eq!(properties["background"]["type"], "boolean");

@@ -5758,11 +5758,39 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// change inherit an approval given for a different binary. See [`crate::programs`] for what the
     /// list is and what it deliberately is not.
     pub fn plan_needs_approval(&mut self, plan: &crate::command::Plan) -> bool {
+        self.plan_needs_approval_requesting(plan, &[])
+    }
+
+    /// [`Policy::plan_needs_approval`] for a line the planner asked to carry the credential scopes
+    /// or toolchain lists `requested` names, each a word of the fixed menu.
+    ///
+    /// A request is asked about every time, before any rule and any standing answer is read: a
+    /// vouched entry and a remembered line hold a program, its arguments and a tree, so one made
+    /// for a line that asked for nothing would otherwise cover the same line asking for `aws`, and
+    /// a rule written knowing which commands may run was not written knowing which credentials a
+    /// command was lent. The refusal is the one a line fed a reference gets.
+    pub fn plan_needs_approval_requesting(
+        &mut self,
+        plan: &crate::command::Plan,
+        requested: &[&str],
+    ) -> bool {
         if plan.releases_private() {
             self.allow(
                 "approval",
                 "private input into a program, which releases it past this policy, asking"
                     .to_string(),
+            );
+            return true;
+        }
+
+        if !requested.is_empty() {
+            self.allow(
+                "approval",
+                format!(
+                    "the planner asked for {} on this line, which no vouched entry, remembered line or rule \
+                     records, asking",
+                    requested.join(", ")
+                ),
             );
             return true;
         }
@@ -6027,6 +6055,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// every line saying the ordinary thing would bury the ones that say something.
     pub fn record_run_network(&mut self, detail: String) {
         self.allow("run_network", detail);
+    }
+
+    /// Record the credential scopes and toolchain lists the planner asked one `run` to add, and
+    /// the stages each was added to.
+    ///
+    /// `detail` is built from menu words and stage numbers, so it holds nothing the plan or a
+    /// program wrote.
+    pub fn record_requested_scopes(&mut self, detail: String) {
+        self.allow("requested_scopes", detail);
     }
 
     /// Record the permission mode a turn begins with, by its name.
@@ -10116,6 +10153,69 @@ five
         assert!(!policy.may_remember(&fed));
         assert!(!fed.can_be_remembered());
         assert!(policy.a_rule_could_answer(&fed));
+    }
+
+    /// SANDBOX-26: a line that asks for a credential scope is asked about whatever covers the same
+    /// line without the request. A vouched entry holds a program, its arguments and a tree, so
+    /// without this the entry made for `gh pr list` would lend `aws` to the same line, unasked.
+    #[test]
+    fn a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_programs(crate::programs::TrustedPrograms::from_iter([vouched(
+                "/usr/bin/git",
+                &["apply"],
+            )]));
+        let plan = plan_of(vec![step_named("git", &["apply"])]);
+        assert!(
+            !policy.plan_needs_approval_requesting(&plan, &[]),
+            "the bare line was not covered, so the requesting one below proves nothing"
+        );
+        assert!(policy.plan_needs_approval_requesting(&plan, &["aws"]));
+    }
+
+    /// SANDBOX-26: the same for a line remembered past the session. The record holds the line and
+    /// not the credentials it was lent.
+    #[test]
+    fn a_remembered_line_that_asks_for_a_scope_is_asked_about_anyway() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&a_plan()));
+        assert!(
+            !policy.plan_needs_approval_requesting(&a_plan(), &[]),
+            "the bare line was not covered, so the requesting one below proves nothing"
+        );
+        assert!(policy.plan_needs_approval_requesting(&a_plan(), &["aws", "cargo"]));
+    }
+
+    /// SANDBOX-26: the question is audited with the names, and the scopes a run was given are
+    /// recorded under their own gate.
+    #[test]
+    fn a_requested_scope_leaves_a_trail() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        assert!(policy.plan_needs_approval_requesting(&a_plan(), &["docker"]));
+        policy.record_requested_scopes("the planner asked for docker".to_string());
+        drop(policy);
+        let events = sink.events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "approval", detail } if detail.contains("docker")
+            )),
+            "{events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::GatePassed {
+                    gate: "requested_scopes",
+                    ..
+                }
+            )),
+            "{events:?}"
+        );
     }
 
     /// RUN-19: a line naming a file to write is asked about however often it was answered, since a

@@ -76,6 +76,20 @@ impl Toolchain {
         }
     }
 
+    /// The toolchain a person or the planner names by the word [`Toolchain::name`] gives.
+    pub fn named(word: &str) -> Option<Self> {
+        [
+            Self::Cargo,
+            Self::Node,
+            Self::Python,
+            Self::Go,
+            Self::Maven,
+            Self::Gradle,
+        ]
+        .into_iter()
+        .find(|toolchain| toolchain.name() == word)
+    }
+
     /// `policy` with this toolchain's list added to it, for the account whose home is `home`.
     ///
     /// An install is read and never written: a confined stage able to replace the `cargo` or the

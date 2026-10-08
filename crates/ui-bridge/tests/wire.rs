@@ -766,6 +766,70 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     // list and draws nothing. The field is sent either way: a front end reading it has to be able
     // to tell a line that reaches nothing from a build that does not send the field at all.
     assert_eq!(value["ambient"], json!([]));
+    assert_eq!(value["requestedScopes"], json!([]));
+    // This line writes a file, so no standing answer exists for it, and the front end is told so
+    // rather than working it out from the fields above.
+    assert_eq!(value["canBeRemembered"], json!(false));
+}
+
+/// SANDBOX-26: the desktop draws no `confined`, so the names a line asked for cross as their own
+/// field, or the desktop would approve a grant it never showed. Empty is sent for a line that
+/// asked for nothing, in the test above, so a missing field means an old build.
+#[test]
+fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
+    use bravebot_agent::confirm::{Confined, RunRequest};
+    use bravebot_core::command::{Plan, Step, Steps};
+    use bravebot_sandbox::scope::{Requested, Scope};
+    let request = RunRequest {
+        confined: Some(Confined {
+            reads_the_machine: false,
+            directories: vec![],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: vec![
+                ("sh".into(), Requested::Scope(Scope::Aws)),
+                ("sh".into(), Requested::Scope(Scope::Docker)),
+            ],
+            carried: vec![],
+        }),
+        record: None,
+        pattern: None,
+        stdin: None,
+        plan: Plan {
+            line: "sh deploy.sh".into(),
+            directory: "/tmp".into(),
+            steps: Steps::Pipeline(vec![Step {
+                program: "sh".into(),
+                resolved: "/bin/sh".into(),
+                started_as: "/bin/sh".into(),
+                args: vec!["deploy.sh".into()],
+                environment: vec![],
+                routes: vec![],
+            }]),
+            writes: vec![],
+            reads: vec![],
+            stdin: None,
+        },
+    };
+    let value = wire::run_request(2, &request);
+    assert_eq!(value["requestedScopes"], json!(["aws", "docker"]));
+    assert_eq!(value["canBeRemembered"], json!(false));
+    assert_eq!(value["vouches"], json!([]));
+}
+
+/// A line with nothing that forces a question every time has a standing answer, so the front end
+/// is told it may offer one.
+#[test]
+fn a_plain_run_prompt_says_it_can_be_remembered() {
+    use bravebot_agent::confirm::RunRequest;
+    let pipeline = bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+        "git",
+        vec!["log".into()],
+    )]);
+    let request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/git".into()], "/w");
+    let value = wire::run_request(1, &request);
+    assert_eq!(value["canBeRemembered"], json!(true));
+    assert_eq!(value["requestedScopes"], json!([]));
 }
 
 /// A reader given only the plan has nothing to compare it against, and comparing the two is what

@@ -14,6 +14,7 @@
 
 use crate::base::under;
 use crate::policy::SandboxPolicy;
+use crate::toolchain::Toolchain;
 use std::path::{Component, Path, PathBuf};
 
 /// A credential scope a stage of a plan carries.
@@ -27,6 +28,45 @@ pub enum Scope {
     Kubernetes,
     /// `~/.docker`.
     Docker,
+}
+
+/// What the planner may ask a `run` to add to every stage of one line: a name from a fixed menu of
+/// the credential scopes and the toolchain lists, and never a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Requested {
+    Scope(Scope),
+    Toolchain(Toolchain),
+}
+
+impl Requested {
+    /// Every name the planner may use, in the order it is told them.
+    pub const MENU: [&'static str; 10] = [
+        "remote",
+        "aws",
+        "kubernetes",
+        "docker",
+        "cargo",
+        "node",
+        "python",
+        "go",
+        "maven",
+        "gradle",
+    ];
+
+    /// The request a word names, compared exactly: `Remote`, ` aws` and the empty string name none.
+    pub fn named(word: &str) -> Option<Self> {
+        Scope::named(word)
+            .map(Self::Scope)
+            .or_else(|| Toolchain::named(word).map(Self::Toolchain))
+    }
+
+    /// The word the menu, the prompt and the trail know it by.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Scope(scope) => scope.name(),
+            Self::Toolchain(toolchain) => toolchain.name(),
+        }
+    }
 }
 
 impl Scope {
@@ -463,6 +503,39 @@ mod tests {
     const THE_SESSIONS_TEMPORARY_DIRECTORY: &str = "/scratch/tmp-of-this-session";
 
     const EVERY_SCOPE: [Scope; 4] = [Scope::Remote, Scope::Aws, Scope::Kubernetes, Scope::Docker];
+
+    /// SANDBOX-26: a request is a word of the fixed menu compared exactly. `root` is a user, not a
+    /// scope; `Remote` and the empty string are near misses that a case-folding or empty-matching
+    /// lookup would accept and so lend a credential the planner did not name.
+    #[test]
+    fn a_request_is_a_word_of_the_menu_and_nothing_near_it() {
+        for word in ["root", "Remote", "", " aws", "aws ", "all", "*", "ssh"] {
+            assert_eq!(Requested::named(word), None, "{word:?} named a request");
+        }
+        for word in Requested::MENU {
+            let request = Requested::named(word).unwrap_or_else(|| panic!("{word} is not named"));
+            assert_eq!(request.name(), word);
+        }
+    }
+
+    /// SANDBOX-26: the menu is every scope and every toolchain, so a name the prompt offers cannot
+    /// fail to parse and a scope cannot exist that the planner has no word for.
+    #[test]
+    fn the_menu_is_every_scope_and_every_toolchain() {
+        let scopes = EVERY_SCOPE.map(Scope::name);
+        assert!(scopes.iter().all(|name| Requested::MENU.contains(name)));
+        for toolchain in [
+            Toolchain::Cargo,
+            Toolchain::Node,
+            Toolchain::Python,
+            Toolchain::Go,
+            Toolchain::Maven,
+            Toolchain::Gradle,
+        ] {
+            assert!(Requested::MENU.contains(&toolchain.name()));
+        }
+        assert_eq!(Requested::MENU.len(), scopes.len() + 6);
+    }
 
     const GIT: &str = "/usr/bin/git";
 

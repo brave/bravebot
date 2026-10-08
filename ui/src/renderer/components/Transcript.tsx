@@ -1863,6 +1863,7 @@ function Card({
     case 'run': {
       const { request, decision, remember } = entry
       const commands = request.stages.length
+      const lent = request.requestedScopes ?? []
       return (
         <DecisionCard
           className={`confirm run ${request.releasesPrivate ? 'releases' : ''}`}
@@ -1881,13 +1882,15 @@ function Card({
             {/* Separate from "Run once" rather than a checkbox beside it: remembering
                 answers every later question about these programs, so it should take its
                 own deliberate press. The tooltip says exactly what it would cover. */}
-            <Button
-              kind="outline" size="small" className="approve always"
-              data-tooltip={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}`}
-              onClick={() => onDecide('run', request.request, true, true)}
-            >
-              Trust command and output
-            </Button>
+            {request.canBeRemembered && (
+              <Button
+                kind="outline" size="small" className="approve always"
+                data-tooltip={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}`}
+                onClick={() => onDecide('run', request.request, true, true)}
+              >
+                Trust command and output
+              </Button>
+            )}
             <Button kind="filled" size="small" className="approve" onClick={() => onDecide('run', request.request, true)}>
               Run once
             </Button>
@@ -1919,6 +1922,14 @@ function Card({
           </ol>
 
           <AmbientNotice ambient={request.ambient} />
+          {!!lent.length && (
+            <Alert type="warning" className="card-alert warn">
+              <Icon name="shield-alert" slot="icon" />
+              The model asked for <strong>{lent.join(', ')}</strong> to be added to every
+              command in this line. Each lets a program use credentials or caches it would
+              otherwise be refused. You are asked every time, and no answer is remembered.
+            </Alert>
+          )}
           {request.releasesPrivate && (
             <Alert type="warning" className="card-alert warn">
               <Icon name="shield-alert" slot="icon" />
@@ -1928,7 +1939,7 @@ function Card({
           )}
           {/* Outside the fold: "Trust command and output" is a standing grant, and what it covers
               has to be readable at the moment it can be pressed, not only on hover or after a click. */}
-          {answerable && decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
+          {answerable && decision === null && request.canBeRemembered && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
           <Collapse className="card-details" title="Details" isOpen={undefined}>
             <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
           </Collapse>

@@ -1173,6 +1173,9 @@ fn draw_run(
         if request.feeds_a_reference() {
             why.push(t!(run_stdin_not_remembered));
         }
+        if request.asks_for_scopes() {
+            why.push(t!(run_scopes_not_remembered));
+        }
         for reason in why {
             lines.push(Line::from(Span::styled(
                 format!("  {reason}"),
@@ -4199,6 +4202,7 @@ mod tests {
             ],
             network: bravebot_sandbox::network::Network::Open,
             filesystem: Default::default(),
+            requested: Vec::new(),
             carried: vec![
                 bravebot_agent::Carried {
                     program: "git".into(),
@@ -4263,6 +4267,7 @@ mod tests {
             directories: vec!["/home/someone/project".into()],
             network,
             filesystem: Default::default(),
+            requested: Vec::new(),
             carried: vec![bravebot_agent::Carried {
                 program: "git".into(),
                 toolchain: None,
@@ -4794,6 +4799,46 @@ mod tests {
             &a_run_writing_a_file(),
         );
         assert_eq!(shouted, None, "the shifted spelling still answered");
+    }
+
+    /// A line the planner asked to carry a scope asks every time whatever is remembered, so the
+    /// prompt names that reason and `a` does not answer.
+    #[test]
+    fn a_run_asking_for_a_scope_offers_no_standing_permission() {
+        let mut request = a_run(false);
+        request.confined = Some(bravebot_agent::Confined {
+            reads_the_machine: false,
+            directories: vec!["/home/someone/project".into()],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: vec![(
+                "git".into(),
+                bravebot_sandbox::scope::Requested::Scope(bravebot_sandbox::scope::Scope::Aws),
+            )],
+            carried: Vec::new(),
+        });
+        assert!(request.asks_for_scopes());
+
+        let drawn = rendered_run(&request);
+        assert!(
+            drawn.contains("cannot be remembered"),
+            "the prompt offered to remember a run that will always ask: {drawn}"
+        );
+        assert!(
+            drawn.contains("credential scope or a toolchain list"),
+            "the prompt did not say which of the reasons this is: {drawn}"
+        );
+
+        for key in ['a', 'A'] {
+            let pressed = run_answer_for(
+                KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                &request,
+            );
+            assert_eq!(
+                pressed, None,
+                "`{key}` answered a prompt that does not offer it"
+            );
+        }
     }
 
     /// A compiled plan that redirects its output to a file, as `sh check.sh > out.txt` compiles.
