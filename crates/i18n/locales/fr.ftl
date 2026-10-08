@@ -2469,6 +2469,8 @@ delegate-memory-in-home =
     { $definition } ne garde aucune mémoire ici : dans ce répertoire, sa mémoire serait dans ~/.bravebot, qu'aucune écriture ne peut laisser non fiable
 delegate-isolation-not-read =
     { $definition } est chargé sans copie de travail à part : sa ligne isolation indique { $value }, et seuls checkout et worktree en demandent une
+delegate-effort-not-a-level =
+    { $definition } demande l'effort { $effort }, qui n'est aucun de { $levels }, donc son délégué garde l'effort du tour qui le lance
 delegate-checkout-reader =
     { $definition } est chargé sans copie de travail à part : c'est un reader, et un reader n'en reçoit jamais
 delegate-memory-in-checkout =

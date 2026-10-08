@@ -2947,6 +2947,12 @@ delegate-memory-in-home = { $definition } keeps no memory here: in this director
 # value is that file's own words, both from a vouched-for file. "isolation", "checkout" and
 # "worktree" are the key and its values, and stay as they are.
 delegate-isolation-not-read = { $definition } is loaded without a checkout: its isolation line says { $value }, and only checkout and worktree ask for one
+# A definition's effort line names none of the five levels, so the definition loads and its
+# delegate asks for the level the spawning turn runs at. The definition is its file's path and the
+# effort is that file's own words, both from a vouched-for file. The levels are this program's own
+# names for them, joined with a comma, and are not translated: they are what a file has to write to
+# be understood.
+delegate-effort-not-a-level = { $definition } asks for effort { $effort }, which is none of { $levels }, so its delegate keeps the effort of the turn that spawns it
 # A definition asks for a checkout and is loaded as a reader, either as its own kind line says or
 # because a definition of the same name narrowed it. A reader is never given a checkout. The
 # definition is its file's path.

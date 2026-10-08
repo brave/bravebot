@@ -23715,6 +23715,98 @@ fn a_delegate_uses_the_model_its_definition_selected() {
     );
 }
 
+/// DELEGATE-27. A definition can name the effort level its delegate runs at, and that level
+/// reaches the delegate's requests rather than the spawning turn's. Where it names none, the
+/// delegate asks for the level the turn runs at, so `/effort` reaches delegates.
+#[test]
+fn a_delegate_asks_for_the_effort_its_definition_named() {
+    let scratch = Scratch::new("delegate-definition-effort");
+    let home = Scratch::new("delegate-definition-effort-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("cheap-reader.md"),
+        "---\nname: cheap-reader\ndescription: Reads cheaply.\nkind: reader\neffort: low\n---\n\nREAD-CHEAP\n",
+    )
+    .expect("write the cheap definition");
+    std::fs::write(
+        home.path.join("agents").join("plain-reader.md"),
+        "---\nname: plain-reader\ndescription: Reads at the turn's level.\nkind: reader\n---\n\nREAD-PLAIN\n",
+    )
+    .expect("write the plain definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-FOR-EFFORT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"cheap-reader","task":"CHECK-WITH-LOW-EFFORT"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"plain-reader","task":"CHECK-WITH-TURN-EFFORT"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        ("CHECK-WITH-LOW-EFFORT", vec![reply_with("low clear")]),
+        ("CHECK-WITH-TURN-EFFORT", vec![reply_with("turn clear")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-FOR-EFFORT")
+            .with_home(Some(home.path.clone()))
+            .with_effort(Some(bravebot_aichat::protocol::Effort::Xhigh)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let parent = requests
+        .iter()
+        .find(|body| body.contains("DELEGATE-FOR-EFFORT"))
+        .expect("parent request sent");
+    assert!(
+        parent.contains(r#""reasoning_effort":"xhigh""#),
+        "the parent turn did not ask for its own level: {parent}"
+    );
+
+    let named = requests
+        .iter()
+        .find(|body| {
+            body.contains("CHECK-WITH-LOW-EFFORT") && !body.contains("DELEGATE-FOR-EFFORT")
+        })
+        .expect("the named delegate's request was sent");
+    assert!(
+        named.contains(r#""reasoning_effort":"low""#),
+        "the delegate did not ask for the level its definition named: {named}"
+    );
+
+    let inherited = requests
+        .iter()
+        .find(|body| {
+            body.contains("CHECK-WITH-TURN-EFFORT") && !body.contains("DELEGATE-FOR-EFFORT")
+        })
+        .expect("the plain delegate's request was sent");
+    assert!(
+        inherited.contains(r#""reasoning_effort":"xhigh""#),
+        "a definition naming no level did not inherit the turn's: {inherited}"
+    );
+}
+
 /// The endpoint substitutes a model it will not serve rather than refusing, so a definition naming
 /// one is told so. Compared as a session's own model is: against the name that was sent, and not
 /// for the automatic name, which is answered by whichever model it routed to.
@@ -25506,6 +25598,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
         &config,
         &egress,
         &workspace,
+        None,
         None,
         None,
         None,
