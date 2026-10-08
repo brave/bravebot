@@ -1251,9 +1251,16 @@ is not there is no list. A list that is set, even an empty one, is one, and a la
 not read does not make one. A value that is not a list of strings, or an `onUnlisted` that is
 neither word, is reported and read as absent.
 
-Half built. The list, its defaults, the proxy and the settings that carry the list through the
-layers are written and tested, and nothing starts a proxy for a session. Unbuilt: the managed layer
-pinning the keys, policy rows that allow only the proxy's port, the environment injection in
+The managed layer pins the keys it writes. Its `allowedHosts` is the whole allowed set and nothing a
+person wrote is added to it, so a person's entry cannot widen it and `doctor` lists the pinned keys.
+An empty one pins a list that refuses every host, and filters a session that set none. Its
+`deniedHosts` is added to the person's and nothing lifts it. Its `onUnlisted` is the answer whatever
+a person said. A managed value that is not a list of strings, or an `onUnlisted` that is neither
+word, pins nothing and `doctor` names it.
+
+Half built. The list, its defaults, the proxy, the settings that carry the list through the
+layers and the managed pin are written and tested, and nothing starts a proxy for a session. Unbuilt:
+policy rows that allow only the proxy's port, the environment injection in
 `confine.rs`, the prompt for an unlisted host, the trace record and the `/status` line, and refusing
 the stage with the SANDBOX-19 sentence naming the setting.
 
@@ -1279,6 +1286,11 @@ the stage with the SANDBOX-19 sentence naming the setting.
 `verified-by: bravebot_config::settings::a_checkouts_list_alone_does_not_start_filtering`
 `verified-by: bravebot_config::settings::a_named_file_may_list_hosts_only_outside_the_workspace`
 `verified-by: bravebot_config::settings::a_misshapen_host_key_is_reported_and_not_read`
+`verified-by: bravebot_config::sandbox_network::a_pinned_allowed_list_replaces_the_persons`
+`verified-by: bravebot_config::sandbox_network::a_pinned_empty_list_filters_a_session_that_set_none`
+`verified-by: bravebot_config::sandbox_network::a_pinned_denial_is_added_and_a_pinned_answer_wins`
+`verified-by: bravebot_config::sandbox_network::a_misshapen_pin_pins_nothing_and_is_reported`
+`verified-by: bravebot_config::sandbox_network::no_managed_file_leaves_the_settings_as_they_are`
 
 <a id="SANDBOX-25"></a>
 ### SANDBOX-25: a person may add to and take from what a stage reads and writes, with four lists of paths

@@ -7,6 +7,7 @@
 //! setting `allowedHosts` is no list, and no list is no proxy; a list that is set, even an empty
 //! one, filters.
 
+use crate::{Managed, Settings};
 use std::path::{Path, PathBuf};
 
 pub const BLOCK: &str = "network";
@@ -143,5 +144,134 @@ pub(crate) fn unread_inside(root: &serde_json::Map<String, serde_json::Value>) -
             .map(|key| format!("sandbox.{BLOCK}.{key}"))
             .collect(),
         None => Vec::new(),
+    }
+}
+
+/// What the three keys came to once the managed file is applied, and what it left unread.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Resolved {
+    pub hosts: Hosts,
+    /// The keys the managed file wrote, so a report can say a person's own were not read.
+    pub pinned: Vec<&'static str>,
+    /// The person's own allowed entries a pinned `allowedHosts` left out, for a report.
+    pub unread: Vec<HostEntry>,
+}
+
+/// The answer for the settings layers and the managed layer, none read from the machine here.
+///
+/// A managed `allowedHosts` is the whole allowed set, so a person's entries are not added to it,
+/// and a managed `onUnlisted` is the answer whichever the person said. A managed `deniedHosts`
+/// is added to theirs and nothing they wrote lifts it.
+pub fn resolve(settings: &Settings, managed: &Managed) -> Resolved {
+    let mut hosts = settings.sandbox_hosts().clone();
+    let pin = managed.sandbox_hosts();
+    let mut out = Resolved::default();
+    if let Some(allowed) = &pin.allowed {
+        out.pinned.push("sandbox.network.allowedHosts");
+        out.unread = hosts.allowed.take().unwrap_or_default();
+        hosts.allowed = Some(allowed.clone());
+    }
+    if !pin.denied.is_empty() {
+        out.pinned.push("sandbox.network.deniedHosts");
+        hosts.denied.extend(pin.denied.iter().cloned());
+    }
+    if let Some(answer) = pin.on_unlisted {
+        out.pinned.push("sandbox.network.onUnlisted");
+        hosts.on_unlisted = Some(answer);
+    }
+    out.hosts = hosts;
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spelled(entries: &[HostEntry]) -> Vec<&str> {
+        entries.iter().map(|entry| entry.entry.as_str()).collect()
+    }
+
+    fn own() -> Settings {
+        Settings::parse(
+            r#"{"sandbox": {"network": {"allowedHosts": ["mine.example"], "deniedHosts": ["bad.example"], "onUnlisted": "ask"}}}"#,
+        )
+    }
+
+    /// Nothing pinned leaves the person's own lists as they are.
+    #[test]
+    fn no_managed_file_leaves_the_settings_as_they_are() {
+        let answer = resolve(&own(), &Managed::default());
+        assert_eq!(answer.hosts, own().sandbox_hosts().clone());
+        assert!(answer.pinned.is_empty() && answer.unread.is_empty());
+    }
+
+    /// A pinned `allowedHosts` is the whole allowed set: the person's entry is not added to it and
+    /// is reported unread. The regression it rejects is a union, which lets a person widen what an
+    /// administrator narrowed.
+    #[test]
+    fn a_pinned_allowed_list_replaces_the_persons() {
+        let managed = crate::managed::scratch(
+            "hosts-pin-allowed",
+            r#"{"sandbox": {"network": {"allowedHosts": ["corp.example"]}}}"#,
+        );
+        let answer = resolve(&own(), &managed);
+        assert_eq!(
+            spelled(answer.hosts.allowed.as_ref().unwrap()),
+            ["corp.example"]
+        );
+        assert_eq!(spelled(&answer.unread), ["mine.example"]);
+        assert_eq!(answer.pinned, ["sandbox.network.allowedHosts"]);
+        assert!(
+            managed
+                .pinned()
+                .any(|name| name == "sandbox.network.allowedHosts")
+        );
+    }
+
+    /// A pinned empty list is a list: it refuses every host and still replaces the person's, and
+    /// a person with no list of their own is filtered by it. The regression it rejects is an empty
+    /// pin read as no pin.
+    #[test]
+    fn a_pinned_empty_list_filters_a_session_that_set_none() {
+        let managed = crate::managed::scratch(
+            "hosts-pin-empty",
+            r#"{"sandbox": {"network": {"allowedHosts": []}}}"#,
+        );
+        let answer = resolve(&Settings::default(), &managed);
+        assert_eq!(answer.hosts.allowed, Some(Vec::new()));
+    }
+
+    /// A pinned denial is added to the person's and a pinned `onUnlisted` wins over `ask`.
+    /// The regression it rejects is the person's `ask` surviving a pinned `refuse`.
+    #[test]
+    fn a_pinned_denial_is_added_and_a_pinned_answer_wins() {
+        let managed = crate::managed::scratch(
+            "hosts-pin-deny",
+            r#"{"sandbox": {"network": {"deniedHosts": ["pinned.example"], "onUnlisted": "refuse"}}}"#,
+        );
+        let answer = resolve(&own(), &managed);
+        assert_eq!(
+            spelled(&answer.hosts.denied),
+            ["bad.example", "pinned.example"]
+        );
+        assert_eq!(answer.hosts.on_unlisted, Some(OnUnlisted::Refuse));
+        assert_eq!(
+            spelled(answer.hosts.allowed.as_ref().unwrap()),
+            ["mine.example"]
+        );
+    }
+
+    /// A value that is not a list pins nothing and is reported.
+    #[test]
+    fn a_misshapen_pin_pins_nothing_and_is_reported() {
+        let managed = crate::managed::scratch(
+            "hosts-pin-misshapen",
+            r#"{"sandbox": {"network": {"allowedHosts": "x"}}}"#,
+        );
+        assert!(resolve(&own(), &managed).pinned.is_empty());
+        assert_eq!(
+            managed.sandbox_hosts_unreadable().collect::<Vec<_>>(),
+            ["allowedHosts"]
+        );
     }
 }

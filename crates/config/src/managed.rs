@@ -278,6 +278,15 @@ pub struct Managed {
     /// The lists it gave something other than a list of strings, for `doctor` to report for the
     /// reason `narrowing_unreadable` is.
     filesystem_unreadable: Vec<bravebot_sandbox::rules::List>,
+    /// What it wrote of `sandbox.network`'s three host keys (SANDBOX-24).
+    ///
+    /// A list it wrote is pinned: its `allowedHosts` is the whole allowed set and nothing a person
+    /// wrote is added to it, its `deniedHosts` is added to theirs and nothing lifts it, and its
+    /// `onUnlisted` is the answer whatever a person said. `Some` of an empty `allowedHosts` pins a
+    /// list that refuses every host.
+    hosts: crate::sandbox_network::Hosts,
+    /// The host keys it gave a value they cannot read, which pin nothing.
+    hosts_unreadable: Vec<&'static str>,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -328,9 +337,18 @@ impl Managed {
                 crate::settings::ListStated::Unreadable => filesystem_unreadable.push(list),
             }
         }
+        let mut hosts = crate::sandbox_network::Hosts::default();
+        let mut hosts_unreadable = Vec::new();
+        {
+            let mut misshapen = Vec::new();
+            hosts.absorb(&root, Some(path), true, &mut Vec::new(), &mut misshapen);
+            hosts_unreadable.extend(misshapen.into_iter().map(|(_, key)| key));
+        }
         Self {
             narrowing,
             narrowing_unreadable,
+            hosts,
+            hosts_unreadable,
             network,
             network_unreadable,
             sandbox: match sandbox {
@@ -477,6 +495,16 @@ impl Managed {
         self.filesystem_unreadable.iter().copied()
     }
 
+    /// What this layer wrote of `sandbox.network`'s host keys, which pin the list (SANDBOX-24).
+    pub fn sandbox_hosts(&self) -> &crate::sandbox_network::Hosts {
+        &self.hosts
+    }
+
+    /// The host keys the file gave a value they cannot read, which pin nothing.
+    pub fn sandbox_hosts_unreadable(&self) -> impl Iterator<Item = &'static str> {
+        self.hosts_unreadable.iter().copied()
+    }
+
     /// The names it pinned, for `doctor` to report.
     ///
     /// Names rather than values, for the reason the settings report gives: everyone on the machine
@@ -494,6 +522,7 @@ impl Managed {
             .chain(self.narrowing.named())
             .chain(self.network.is_some().then_some(RUN_NETWORK))
             .chain(self.sandbox.is_some().then_some("sandbox.mode"))
+            .chain(self.hosts.keys())
             .chain(
                 crate::settings::FILESYSTEM_LISTS
                     .into_iter()
