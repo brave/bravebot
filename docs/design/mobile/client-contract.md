@@ -59,8 +59,9 @@ These tests do not establish TypeScript adapter behavior or native rendering.
 This block supplies no saved-history import, late subscription, reconnect, controller state,
 send deduplication, persistent listener, networking or embedded bindings. Session identity lasts
 for the connection. Closing detaches the view without claiming worker termination or save
-success. Legacy reply targets are unchanged; stage 3a still supplies stronger stale-action
-protection.
+success. Question numbers last the session, a cancel can name its turn, and the trust answer is taken once
+(RPCVIEW-6); a runtime that does not advertise these keeps its older, weaker targets. A cancel issued
+while a send is unanswered names no turn, since the turn it starts is not yet known.
 
 ## Implemented TypeScript client
 
@@ -169,7 +170,7 @@ a scratch project. They show:
 **Not established.** The local program cancelling a question of an unsupported kind (written, not
 exercised), native rendering, remote security, reconnect and recovery, send deduplication,
 qualifying a session by target and runtime instance (a session object belongs to one connection and
-ends with it, but carries no identity a caller could store across restarts), controller ownership, a stronger stale-action guarantee than the bridge's, a persistent host, and
+ends with it, but carries no identity a caller could store across restarts), controller ownership, a stale-action guarantee beyond the targets RPCVIEW-6 gives, a persistent host, and
 operating systems other than macOS.
 
 ## Common interface

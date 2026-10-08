@@ -8,6 +8,7 @@ import {
   SESSION_VIEW_VERSION,
   SUPPORTED_APPROVALS,
   decodeUpdate,
+  readActionTargets,
   readSessionViewCapability,
   type BridgeEvent,
   type JsonValue,
@@ -51,6 +52,10 @@ class Session implements AgentSession {
   private trust: JsonValue | null = null
   private readonly listeners = new Set<ViewListener>()
   private readonly replying = new Set<number>()
+  /** The latest turn this session sent, which the view may not show yet. */
+  private sent = 0
+  /** Sends whose answer has not arrived, so the turn they will be numbered is not yet known. */
+  private sending = 0
   /** Why the view could not start, when a malformed event arrived before it existed. */
   refused: string | null = null
 
@@ -59,6 +64,8 @@ class Session implements AgentSession {
     private readonly connection: RpcConnection,
     private readonly forget: (id: string) => void,
     private readonly report: (message: string) => void,
+    /** Whether the runtime names the turn a cancel is for. */
+    private readonly namesTurns: boolean,
   ) {}
 
   get view(): ViewState {
@@ -133,8 +140,16 @@ class Session implements AgentSession {
 
   async send(text: string): Promise<SendResult> {
     this.live('send')
-    const result = await this.connection.request('turn.send', this.params({ prompt: text }))
+    this.sending++
+    let result: unknown
+    try {
+      result = await this.connection.request('turn.send', this.params({ prompt: text }))
+    } finally {
+      this.sending--
+    }
     if (!isRecord(result) || typeof result.turn !== 'number') throw new ProtocolError('turn.send did not report a turn')
+    // The latest send, not the largest: turn numbers go back after a rewind.
+    this.sent = result.turn
     return { turn: result.turn }
   }
 
@@ -180,7 +195,12 @@ class Session implements AgentSession {
   }
 
   async cancel(): Promise<void> {
-    await this.connection.request('turn.cancel', this.params(), undefined, { control: true })
+    // Name the turn to stop when the runtime can use it, so a cancel that arrives late cannot reach a
+    // turn that began after the one meant. While a send is unanswered the number of the turn it
+    // starts is not known, so the cancel names none and stops whatever is running, as Stop always has.
+    const turn = Math.max(this.sent, this.current?.turn ?? 0)
+    const named = this.namesTurns && this.sending === 0
+    await this.connection.request('turn.cancel', this.params(named ? { turn } : {}), undefined, { control: true })
   }
 
   async close(): Promise<CloseOutcome> {
@@ -314,6 +334,7 @@ export class RpcAgentClient implements AgentClient {
       configured: record.configured === true,
       defaultModel: typeof record.defaultModel === 'string' ? record.defaultModel : null,
       sessionView: view,
+      actionTargets: readActionTargets(info),
     }
   }
 
@@ -328,11 +349,11 @@ export class RpcAgentClient implements AgentClient {
   async createSession(options: { workspace: string }): Promise<AgentSession> {
     const workspace = this.configured.find((candidate) => candidate.id === options.workspace)
     if (!workspace) throw new RpcError('unknown_workspace', 'that workspace is not configured', 'rejected')
-    await this.describe()
+    const described = await this.describe()
     let created: Session | null = null
     const opened = (outcome: Outcome): void => {
       if (!('ok' in outcome) || !isRecord(outcome.ok) || typeof outcome.ok.session !== 'string') return
-      const session = new Session(outcome.ok.session, this.#connection, (id) => this.sessions.delete(id), (message) => this.report(message))
+      const session = new Session(outcome.ok.session, this.#connection, (id) => this.sessions.delete(id), (message) => this.report(message), described.actionTargets)
       created = session
       this.sessions.set(session.id, session)
       const held = this.early.get(session.id) ?? []

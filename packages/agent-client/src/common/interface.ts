@@ -8,6 +8,8 @@ export interface TargetInfo {
   configured: boolean
   defaultModel: string | null
   sessionView: SessionViewCapability
+  /** Whether the runtime names the turn a cancel is for, so a late cancel cannot stop a later turn. */
+  actionTargets: boolean
 }
 
 export interface SendResult {

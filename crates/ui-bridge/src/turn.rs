@@ -26,6 +26,7 @@ use bravebot_core::delegate::DelegateId;
 use bravebot_core::event::Sink;
 use bravebot_core::todo::Row;
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
@@ -424,6 +425,18 @@ impl Sink for BridgeSink {
 
 // ---------------------------------------------------------------- asking
 
+/// The next number in a session's sequence of question numbers, or nothing once it is used up.
+fn next_question(ids: &AtomicU64) -> Option<u64> {
+    let mut last = ids.load(Ordering::SeqCst);
+    loop {
+        let next = last.checked_add(1)?;
+        match ids.compare_exchange_weak(last, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return Some(next),
+            Err(seen) => last = seen,
+        }
+    }
+}
+
 /// Carries a write to whoever is watching, and waits.
 ///
 /// Everything about this type is arranged so that the answer is either an explicit
@@ -434,7 +447,7 @@ pub struct BridgeConfirmer {
     session: String,
     pending: Pending,
     answers: Receiver<Reply>,
-    next: u64,
+    ids: Arc<AtomicU64>,
     cancel: bravebot_core::cancel::Cancel,
     /// Whether a plan was put to the person and not approved. See [`Self::declined_a_plan`].
     declined_a_plan: bool,
@@ -446,6 +459,7 @@ impl BridgeConfirmer {
         session: impl Into<String>,
         pending: Pending,
         answers: Receiver<Reply>,
+        ids: Arc<AtomicU64>,
         cancel: bravebot_core::cancel::Cancel,
     ) -> Self {
         Self {
@@ -453,7 +467,7 @@ impl BridgeConfirmer {
             session: session.into(),
             pending,
             answers,
-            next: 0,
+            ids,
             cancel,
             declined_a_plan: false,
         }
@@ -486,8 +500,9 @@ impl BridgeConfirmer {
         if self.cancel.is_cancelled() {
             return None;
         }
-        self.next += 1;
-        let id = self.next;
+        // From the session's own counter, so a later turn does not reuse a number. A counter with
+        // nothing left refuses the question, like every other way of not asking.
+        let id = next_question(&self.ids)?;
 
         // Registered before the question goes out, so an answer that arrives immediately
         // has something to match against. The other order has a race the front-end wins.
