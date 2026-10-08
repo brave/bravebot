@@ -6376,6 +6376,61 @@ fn a_search_for_a_regular_expression_finds_what_it_describes() {
     );
 }
 
+/// The call a planner tries first for one known file. Through the tool and not only the workspace,
+/// so the routing gates that vouch for `directory` are shown to accept a file, and the result is
+/// labelled by that file alone: a vouched file's line reaches the planner while an unvouched file
+/// beside it, which a search of the parent would have read, does not.
+#[test]
+fn a_search_may_name_one_file_as_its_target_through_the_tool() {
+    const VOUCHED: &str = "NEEDLE-IN-THE-NAMED-FILE";
+    const BESIDE: &str = "NEEDLE-IN-A-SIBLING";
+
+    let scratch = Scratch::new("search-one-file");
+    std::fs::create_dir_all(scratch.path.join("mine")).unwrap();
+    std::fs::write(
+        scratch.path.join("mine/a.rs"),
+        format!("needle {VOUCHED}\n"),
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("mine/b.rs"), format!("needle {BESIDE}\n")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("search", r#"{"pattern":"needle","directory":"mine/a.rs"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Only the named file is vouched for, so the result is readable only if the search read that
+    // file and nothing else.
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust("mine/a.rs");
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find it"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(VOUCHED),
+        "the named file was vouched for and its line was not shown: {second}"
+    );
+    assert!(
+        !second.contains(BESIDE),
+        "a file beside the named one was read: {second}"
+    );
+}
+
 /// A pattern the engine cannot compile has to say so. Reported as an empty result it would read
 /// as proof the tree holds nothing matching, which is the confusion literal matching used to
 /// cause and the reason a syntax error is worth a sentence of its own.

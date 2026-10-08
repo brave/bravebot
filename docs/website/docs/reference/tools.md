@@ -154,7 +154,7 @@ Finds lines matching a **regular expression** in workspace files.
 | Parameter | |
 |---|---|
 | `pattern` | a regular expression. May be a list, in which case a line matches if it matches any of them |
-| `directory` | workspace-relative, defaults to `.` |
+| `directory` | workspace-relative, defaults to `.`. May name one file, which is then the only file searched and `include` is not consulted |
 | `include` | optional glob limiting which files are searched: `*`, `?`, `**` and brace groups like `**/*.{cc,h,mm}`. One with a `/` may be written from `directory` or from the workspace root |
 | `offset` | which match to resume from, to read past the match cap ([below](#a-capped-search-can-be-asked-past-its-cap)) |
 | `case_sensitive` | defaults to true. `(?i)` in the pattern asks for the same thing |
