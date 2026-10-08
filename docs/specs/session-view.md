@@ -19,7 +19,8 @@ documented-by: none (internal: the local RPC view is documented in ui/docs/phase
 
 The opt-in Rust display view for fresh local bridge sessions, and the standalone TypeScript client
 that applies it over stdio. The view has no listener, native binding, recovery, or controller
-model. The view does not grant authority or change the existing reply and cancellation targets.
+model. The view does not grant authority. Exact action targets (RPCVIEW-6) apply to every client of
+the bridge, and a client that does not name its turn keeps the cancel it always had.
 
 ## Clauses
 
@@ -57,8 +58,8 @@ session-local ID, turn number, typed kind, original event name or null for a pro
 status fields; they do not derive busy state or approval state from text or legacy events.
 
 The connection lifetime, session handle, turn, and row ID identify a displayed item. These are
-not durable identities. Request IDs retain their existing per-turn meaning; the view adds no
-stale-action protection to legacy reply operations.
+not durable identities. A request ID is unique within its session (RPCVIEW-6); the view adds no
+stale-action protection beyond the targets that clause describes.
 
 Accepted prompts produce rows before worker events. Rejected sends produce none. Composed prompts
 use the same tag-only projection as saved history. Narration, quarantined previews, tool starts
@@ -116,6 +117,40 @@ rendering surface and does not trigger extraction.
 
 `verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::view::approval_replacements_preserve_the_payload_and_kind`
+
+<a id="RPCVIEW-6"></a>
+### RPCVIEW-6: an old answer or cancel cannot act on a later turn
+
+A question's number is allocated from a counter that belongs to its session and is never reused,
+so an answer meant for one question cannot match a later question in any turn or run of that
+session. A session whose counter is spent asks no more questions, and a question not asked is
+refused.
+
+`turn.cancel` may name the turn it is for. A cancel that names a turn other than the one running,
+or one that has ended, stops nothing and answers `{ "cancelled": false }`; one that names the
+running turn answers `{ "cancelled": true }`. A cancel that names no turn stops whatever is
+running and answers `{}`, as before. A `turn` that is not a number is refused.
+
+`trust.reply` is taken once, while the session's startup question is waiting. A repeat, and any
+answer to a session that was never asked, is refused with `no_such_request` before the session's
+state is touched, so it neither replaces the trust already given nor waits behind a running turn.
+
+`agent.info` and `agent.ready` advertise this as `capabilities.actionTargets`, version 1, with
+`questionIds: session`, `cancel: expected_turn` and `trust: once`. A bridge that does not
+advertise it numbers questions per turn, takes a cancel for whatever is running, and accepts a
+repeated trust answer, and a client talking to one must not claim the stronger protection.
+
+`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_another_turn_stops_nothing`
+`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_the_running_turn_stops_it`
+`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_a_finished_turn_stops_nothing`
+`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_no_turn_stops_whatever_is_running`
+`verified-by: bravebot_ui_bridge::targets_tests::a_turn_that_is_not_a_number_is_refused_and_stops_nothing`
+`verified-by: bravebot_ui_bridge::targets_tests::the_bridge_advertises_what_it_promises_about_targets`
+`verified-by: bravebot_ui_bridge::refusal::question_numbers_are_not_reused_by_a_later_turn_of_the_same_session`
+`verified-by: bravebot_ui_bridge::refusal::a_session_with_no_question_numbers_left_refuses_to_ask`
+`verified-by: bravebot_ui_bridge::fetch::a_later_turn_does_not_reuse_an_earlier_questions_number`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_repeated_trust_answer_is_refused_and_the_first_stands`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_trust_answer_cannot_be_changed_after_a_turn_has_used_it`
 
 <a id="RPCVIEW-5"></a>
 ### RPCVIEW-5: the TypeScript client applies the view and decides nothing

@@ -274,6 +274,66 @@ describe('a real bravebot-rpc process through the typed client', () => {
     assert.equal(existsSync(join(made.project, 'skipped.txt')), false, 'a rejected command must not run')
   })
 
+  test('a cancel delayed past the end of its turn does not stop the next turn', async () => {
+    const made = await rig({ 'plan:first': [{ say: 'first reply' }], 'plan:second': [{ say: 'second reply', hold: 'second' }] })
+    const session = await trusted(made)
+    assert.deepEqual(await session.send('plan:first'), { turn: 1 })
+    await until(session, 'the first turn to end', (view) => view.status === 'completed')
+    assert.deepEqual(await session.send('plan:second'), { turn: 2 })
+    await made.stub.reached('second')
+    // The cancel meant for turn 1, arriving while turn 2 runs.
+    assert.deepEqual(await rawOn(made.rpc, 'turn.cancel', { session: session.id, turn: 1 }), { cancelled: false })
+    assert.equal(session.view.status, 'running', 'the delayed cancel stopped the later turn')
+    made.stub.release('second')
+    const done = await until(session, 'the second turn to end', (view) => view.status === 'completed' && view.turn === 2)
+    assert.equal((done.rows.at(-1)?.data as { reply: string }).reply, 'second reply')
+  })
+
+  test('cancel stops the turn that was just sent, before the view shows it', async () => {
+    const made = await rig({ 'plan:first': [{ say: 'first reply' }], 'plan:second': [{ say: 'late', hold: 'second' }] })
+    const session = await trusted(made)
+    await session.send('plan:first')
+    await until(session, 'the first turn to end', (view) => view.status === 'completed')
+    await session.send('plan:second')
+    await session.cancel()
+    await until(session, 'the second turn to be cancelled', (view) => view.status === 'cancelled' && view.turn === 2)
+    made.stub.release('second')
+  })
+
+  test('an answer meant for an earlier turn cannot match a later turn question, whose number is new', async () => {
+    const made = await rig({ 'plan:a': write('a.txt', 'a'), 'plan:b': write('b.txt', 'b') })
+    const session = await trusted(made, false)
+    await session.send('plan:a')
+    const first = pendingOf(await until(session, 'the first question', (view) => view.status === 'waiting'))
+    await session.decide(first.request, 'approve')
+    await until(session, 'the first turn to end', (view) => view.status === 'completed')
+
+    await session.send('plan:b')
+    const second = pendingOf(await until(session, 'the second question', (view) => view.status === 'waiting' && view.turn === 2))
+    assert.ok(second.request > first.request, `turn two reused number ${first.request}`)
+    await assert.rejects(
+      rawOn(made.rpc, 'confirm.reply', { session: session.id, request: first.request, decision: 'approve' }),
+      (error: RpcError) => error.code === 'no_such_request',
+    )
+    assert.equal(existsSync(join(made.project, 'b.txt')), false, 'the old answer approved the later write')
+    assert.equal(session.view.pending?.request, second.request, 'the later question is still waiting')
+    await session.decide(second.request, 'approve')
+    await until(session, 'the second turn to end', (view) => view.status === 'completed' && view.turn === 2)
+    assert.equal(readFileSync(join(made.project, 'b.txt'), 'utf8'), 'b')
+  })
+
+  test('the trust question is answered once: a repeat is refused and the first answer stands', async () => {
+    const made = await rig({ 'plan:w': write('w.txt', 'w') })
+    const session = await made.rpc.client.createSession({ workspace: 'project' })
+    await session.answerTrust(false)
+    await assert.rejects(session.answerTrust(true), (error: RpcError) => error.code === 'no_such_request' && error.outcome === 'rejected')
+    await until(session, 'trust to be recorded', (view) => view.status === 'idle')
+    await session.send('plan:w')
+    const asked = await until(session, 'the write to be asked about', (view) => view.status === 'waiting')
+    assert.equal(pendingOf(asked).kind, 'confirm', 'the repeated answer trusted the workspace')
+    assert.equal(existsSync(join(made.project, 'w.txt')), false)
+  })
+
   test('cancelling a waiting turn grants nothing, resolves the question, and a late approval is refused', async () => {
     const made = await rig({ 'plan:cancel': write('cancelled.txt', 'must not be written') })
     const session = await trusted(made, false)

@@ -107,8 +107,14 @@ pub(crate) fn walk(walk: Walk) {
         .with_permission_mode(permission_mode);
 
     let mut reporter = BridgeReporter::new(emitter.clone(), &session);
-    let mut asking =
-        BridgeConfirmer::new(emitter.clone(), &session, pending, answers, cancel.clone());
+    let mut asking = BridgeConfirmer::new(
+        emitter.clone(),
+        &session,
+        pending,
+        answers,
+        Arc::clone(&state.question_ids),
+        cancel.clone(),
+    );
     // Screening off the task, which asks for none: nothing fills in a verdict before the plan is
     // fixed, so a confirmer told to screen would refuse on a word nobody made.
     let mut confirmer = Confining::new(&mut asking, permission_mode, task.auto_vetting);

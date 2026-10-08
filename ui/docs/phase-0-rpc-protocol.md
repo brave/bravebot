@@ -687,8 +687,16 @@ flight errors `turn_in_flight`. Different sessions run concurrently.
 #### `turn.cancel`
 
 ```json
-{ "id": 6, "method": "turn.cancel", "params": { "session": "s1" } }
+{ "id": 6, "method": "turn.cancel", "params": { "session": "s1", "turn": 3 } }
 ```
+
+`turn` is optional and names the turn the cancel is for. Absent, the cancel stops whatever is
+running and returns `{}`, as it always has. Present, it stops that turn and no other: it returns
+`{ "cancelled": true }` for the running turn, and `{ "cancelled": false }` when the named turn is
+not the one running or has ended, in which case nothing is stopped, the watches included. A `turn`
+that is not a number is refused with `bad_request`. A client that holds a turn number should send
+it, so a cancel that arrives late cannot stop the turn after.
+
 
 Calls `Cancel::cancel()` on that turn's token — a fresh token per turn, never reused,
 matching the upstream cancellation model. Returns `{}` immediately; the turn ends with
@@ -797,6 +805,9 @@ except `connectors.preview` returns what `connectors.list` returns.
 
 Records the user's answer to the startup question into that session's `TrustStore`,
 before the first `turn.send`. See §9. Returns `{ "trusted": true, "kept": null }`.
+
+The question is answered once. A repeat, and a reply to a session that was never asked, is refused
+with `no_such_request`, and the trust already given stands.
 
 `remember` is optional, and `true` keeps the answer for later sessions in the directory. It is
 refused with `bad_request`, and nothing is recorded, with `trusted: false` or where the
@@ -1449,13 +1460,14 @@ A resolved approval replacement retains its event name and payload.
 `pending` holds `row`, `request`, `kind`, `supported`, and `data`. Supported kinds are `confirm`,
 `run`, `fetch`, and `ask`; use their existing reply operations. Unsupported kinds require a capable
 local surface or cancellation. Startup trust uses the existing local operation. The view never
-authorizes an action, and does not strengthen legacy request targeting.
+authorizes an action. Question numbers last the session, a cancel can name its turn, and a trust
+answer is taken once, as `capabilities.actionTargets` advertises (RPCVIEW-6).
 
 Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
 `detached`. Session close emits `detached`, which means the view ended, not that the worker stopped
 or saving succeeded. A gap or lost connection ends the view: version 1 has no reconnect or history
-recovery. IDs are scoped to the current connection lifetime and session, with request IDs also
-qualified by turn. Keep drafts and optimistic UI separate until an accepted prompt row arrives.
+recovery. IDs are scoped to the current connection lifetime and session. A request ID is also unique
+within its session, across turns. Keep drafts and optimistic UI separate until an accepted prompt row arrives.
 
 The [shared session view spec](../../docs/specs/session-view.md) defines the supported rows, ordering,
 approval transitions, label preservation and limits. This is the Rust part of the first mobile

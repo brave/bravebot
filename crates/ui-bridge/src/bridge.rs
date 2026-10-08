@@ -240,7 +240,7 @@ impl Bridge {
     /// it.
     fn info(&self) -> Value {
         json!({
-            "capabilities": { "sessionView": crate::view::capability() },
+            "capabilities": { "sessionView": crate::view::capability(), "actionTargets": crate::view::action_targets() },
             "build": crate::agent_build(),
             "version": env!("CARGO_PKG_VERSION"),
             "defaultModel": crate::settings::config(None, self.settings.as_deref()).ok().map(|config| config.default_model),
@@ -1306,10 +1306,36 @@ impl Bridge {
     /// Cancellation never sends an approval or authorises a write.
     fn cancel_turn(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
+        // The turn the caller meant to stop (RPCVIEW-6). Absent, the request means whatever is
+        // running, as it always has. Present, it stops that turn and no other.
+        let expected = match request.params.get("turn") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .ok_or_else(|| Failure::bad_request("`turn` must be a number"))?,
+            ),
+        };
         let open = self
             .open
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
+        if let Some(expected) = expected {
+            let running = open
+                .running
+                .as_ref()
+                .filter(|running| !running.is_finished() && running.turn as u64 == expected);
+            let Some(running) = running else {
+                // An old cancel for a turn that is over reaches a later turn as nothing at all, and
+                // does not stop the watches either.
+                return Ok(json!({ "cancelled": false }));
+            };
+            running.cancel.cancel();
+            if let Ok(mut watches) = open.watches.lock() {
+                watches.stop_firing();
+            }
+            return Ok(json!({ "cancelled": true }));
+        }
         if let Some(running) = &open.running {
             running.cancel.cancel();
         }
@@ -1423,6 +1449,14 @@ impl Bridge {
             .open
             .get_mut(&handle)
             .ok_or_else(Failure::no_such_session)?;
+        // The question is answered once (RPCVIEW-6). A repeat is refused before the session's
+        // state is touched, so it cannot replace the trust map, or hold up a cancel behind the lock.
+        if open.answered_trust {
+            return Err(Failure::new(
+                ErrorCode::NoSuchRequest,
+                "the trust question is not waiting for an answer",
+            ));
+        }
         // Kept only where the question offered it, so an answer the window was never shown the
         // record for, or one given where it may not be kept, writes nothing (TRUST-23).
         if remember && open.keeping.is_none() {
@@ -2021,8 +2055,14 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
-    let mut confirmer =
-        BridgeConfirmer::new(emitter.clone(), &session, pending, answers, cancel.clone());
+    let mut confirmer = BridgeConfirmer::new(
+        emitter.clone(),
+        &session,
+        pending,
+        answers,
+        Arc::clone(&state.question_ids),
+        cancel.clone(),
+    );
 
     // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
     // Here rather than when the session opened, so that the questions about them come after the
@@ -3201,6 +3241,10 @@ mod watch_tests {
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_tests;
+
+#[cfg(test)]
+#[path = "targets_tests.rs"]
+mod targets_tests;
 
 #[cfg(test)]
 #[path = "../tests/retention/worker.rs"]

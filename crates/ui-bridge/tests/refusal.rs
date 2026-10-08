@@ -19,7 +19,7 @@ use bravebot_ui_bridge::emit::Emitter;
 use bravebot_ui_bridge::protocol::Event;
 use bravebot_ui_bridge::running::Running;
 use bravebot_ui_bridge::turn::{BridgeConfirmer, Kind, Pending, Question, Reply};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -71,6 +71,7 @@ fn harness() -> Harness {
             "s1",
             Arc::clone(&pending),
             answers_rx,
+            Arc::new(AtomicU64::new(0)),
             cancel.clone(),
         ),
         events,
@@ -1234,4 +1235,96 @@ fn refusing_a_pending_exposure_reaches_the_turn_as_an_exposure() {
     let decision = harness.confirmer.confirm_exposing_read(&an_exposure());
     answerer.join().expect("the answerer should not panic");
     assert_eq!(decision, Decision::Reject);
+}
+
+/// Two turns of one session put their questions to the same person, and an answer meant for the
+/// first must not match the second: the numbers come from the session, not from each turn.
+#[test]
+fn question_numbers_are_not_reused_by_a_later_turn_of_the_same_session() {
+    fn question_number(ids: &Arc<AtomicU64>) -> u64 {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let emitter = Emitter::new(Box::new(move |event| {
+            sink.lock().expect("not poisoned").push(event);
+        }));
+        let pending: Pending = Arc::new(Mutex::new(None));
+        let (answers_tx, answers_rx) = mpsc::channel();
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut confirmer = BridgeConfirmer::new(
+            emitter,
+            "s1",
+            Arc::clone(&pending),
+            answers_rx,
+            Arc::clone(ids),
+            cancel.clone(),
+        );
+        let running = Running {
+            cancel,
+            answers: answers_tx,
+            pending: Arc::clone(&pending),
+            turn: 1,
+            finished: Arc::new(AtomicBool::new(false)),
+        };
+        let answerer = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while std::time::Instant::now() < deadline {
+                let waiting = *running.pending.lock().expect("not poisoned");
+                if let Some(question) = waiting {
+                    running.answer(question.id, Reply::Write(Decision::Reject));
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            panic!("never pending");
+        });
+        confirmer.confirm_write(&a_write());
+        answerer.join().expect("answerer");
+        let events = events.lock().expect("not poisoned");
+        events
+            .iter()
+            .find(|event| event.name == "confirm.request")
+            .and_then(|event| event.data["request"].as_u64())
+            .expect("the question carried a number")
+    }
+
+    let session = Arc::new(AtomicU64::new(0));
+    let first = question_number(&session);
+    let second = question_number(&session);
+    assert!(second > first, "turn two reused number {first}");
+
+    // Counters of their own, as each turn had before, are what this guards against.
+    let one = question_number(&Arc::new(AtomicU64::new(0)));
+    let other = question_number(&Arc::new(AtomicU64::new(0)));
+    assert_eq!(
+        one, other,
+        "the control no longer shows the reuse it is meant to catch"
+    );
+}
+
+/// A session that has used every number asks no more questions, and a question not asked is a no.
+#[test]
+fn a_session_with_no_question_numbers_left_refuses_to_ask() {
+    let harness = harness();
+    let mut confirmer = harness.confirmer;
+    let spent = Arc::new(AtomicU64::new(u64::MAX));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    let emitter = Emitter::new(Box::new(move |event| {
+        sink.lock().expect("not poisoned").push(event);
+    }));
+    let (_answers_tx, answers_rx) = mpsc::channel();
+    let mut exhausted = BridgeConfirmer::new(
+        emitter,
+        "s1",
+        Arc::new(Mutex::new(None)),
+        answers_rx,
+        spent,
+        bravebot_core::cancel::Cancel::new(),
+    );
+    assert_eq!(exhausted.confirm_write(&a_write()), WriteDecision::reject());
+    assert!(
+        events.lock().expect("not poisoned").is_empty(),
+        "a question went out with no number"
+    );
+    let _ = &mut confirmer;
 }

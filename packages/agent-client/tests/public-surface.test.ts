@@ -9,7 +9,7 @@ import * as node from '@brave/agent-client/node'
 const COMMON = [
   'CapabilityError', 'ConnectionLostError', 'ProtocolError', 'ROW_KINDS', 'RpcAgentClient', 'RpcError', 'StaleActionError',
   'SESSION_VIEW_START', 'SESSION_VIEW_VERSION', 'STATUSES', 'SUPPORTED_APPROVALS', 'UnsupportedError',
-  'decodeIncoming', 'decodeUpdate', 'readSessionViewCapability',
+  'decodeIncoming', 'decodeUpdate', 'readActionTargets', 'readSessionViewCapability',
 ]
 
 test('the package entry points export only the intended names', () => {
