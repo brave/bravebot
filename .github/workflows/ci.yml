@@ -81,6 +81,11 @@ jobs:
       - name: Test
         run: cargo test --all --locked
 
+      # The same test again with its output, to put the number of workflows skipped for want of a
+      # tool in the log.
+      - name: Report the everyday workflows under the sandbox default
+        run: cargo test -p bravebot-agent --test usability --locked -- --nocapture
+
       # A runner starts with no ~/.bravebot, so anything in its session store now is a record a
       # test saved into the person's home instead of the profile `in_isolated_profile` makes.
       - name: Check the tests left the session store empty
@@ -121,6 +126,11 @@ jobs:
 
       - name: Test
         run: cargo test --all --locked
+
+      # The same test again with its output, to put the number of workflows skipped for want of a
+      # tool in the log.
+      - name: Report the everyday workflows under the sandbox default
+        run: cargo test -p bravebot-agent --test usability --locked -- --nocapture
 
       - name: Check the tests left the session store empty
         run: |
