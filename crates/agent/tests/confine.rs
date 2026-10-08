@@ -155,9 +155,6 @@ fn a_confined_program_reads_the_machine_and_not_a_credential_location() {
     }
 }
 
-/// The regression it rejects: a profile built once and kept, so a file created after the first
-/// stage started cannot be read by the second, or a listing made at one moment that a path made
-/// later in a directory holding a credential location escapes.
 /// SANDBOX-26: a strict stage that asked for `aws` reads the aws credential directory and nothing
 /// else of the home, under the kernel. The controls are the same line with no request, which is
 /// refused, and one that asked for another scope, which is too. The regression it rejects is a
@@ -198,6 +195,9 @@ fn a_strict_stage_that_asked_for_a_scope_reads_that_credential_only() {
     );
 }
 
+/// The regression it rejects: a profile built once and kept, so a file created after the first
+/// stage started cannot be read by the second, or a listing made at one moment that a path made
+/// later in a directory holding a credential location escapes.
 #[cfg(unix)]
 #[test]
 fn a_file_created_between_two_stages_is_readable_by_the_second() {
