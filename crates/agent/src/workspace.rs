@@ -3335,32 +3335,44 @@ impl Workspace {
             let root = self.resolve(&relative)?;
 
             let mut paths = Vec::new();
-            // Whether every file was reached, which the count cannot answer: a tree of exactly the
-            // cap fills `paths` without a single file being left out.
-            let mut ignored = Vec::new();
-            // Expanded once for the whole walk, not once per path.
-            let expanded = glob.as_deref().map(crate::glob::expand);
-            let under = self.relative_display(&root);
-            let wanted = expanded.as_deref().map(|patterns| Wanted {
-                patterns,
-                under: &under,
-            });
-            let denied = |path: &str| policy.read_is_denied(path);
-            let mut collected = Collected {
-                files: &mut paths,
-                stopped_at: &mut ignored,
-                withheld: false,
-                unreadable: false,
+            let (unvisited, withheld) = if root.is_file() {
+                // A file named as the target is the whole walk. `resolve` has already confined it
+                // to the workspace, and `include` selects among files a walk reaches, so it is not
+                // consulted for the one file the call named. A rule covers it as it covers a read
+                // of it by name.
+                let denied = self.rule_denies_reading(policy, &relative);
+                if !denied {
+                    paths.push(self.relative_display(&root));
+                }
+                (false, denied)
+            } else {
+                // Whether every file was reached, which the count cannot answer: a tree of exactly
+                // the cap fills `paths` without a single file being left out.
+                let mut ignored = Vec::new();
+                // Expanded once for the whole walk, not once per path.
+                let expanded = glob.as_deref().map(crate::glob::expand);
+                let under = self.relative_display(&root);
+                let wanted = expanded.as_deref().map(|patterns| Wanted {
+                    patterns,
+                    under: &under,
+                });
+                let denied = |path: &str| policy.read_is_denied(path);
+                let mut collected = Collected {
+                    files: &mut paths,
+                    stopped_at: &mut ignored,
+                    withheld: false,
+                    unreadable: false,
+                };
+                let unvisited = self.walk_filtered(
+                    &root,
+                    wanted,
+                    None,
+                    self.search_files,
+                    &denied,
+                    &mut collected,
+                )?;
+                (unvisited, collected.withheld)
             };
-            let unvisited = self.walk_filtered(
-                &root,
-                wanted,
-                None,
-                self.search_files,
-                &denied,
-                &mut collected,
-            )?;
-            let withheld = collected.withheld;
             paths.sort();
             let considered = paths.len();
 

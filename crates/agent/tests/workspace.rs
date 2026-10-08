@@ -4670,6 +4670,153 @@ fn a_search_says_when_its_include_selected_no_files() {
     assert_eq!(found.searched, 1);
 }
 
+/// A search aimed at `directory` under `permissions`, for the tests that name a path other than the
+/// root.
+fn search_at(
+    workspace: &Workspace,
+    permissions: bravebot_core::permissions::Permissions,
+    directory: &str,
+    include: Option<&str>,
+) -> Result<bravebot_agent::workspace::Matches, WorkspaceError> {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_permissions(permissions);
+    let found = workspace.grep(
+        &mut policy,
+        std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+        &Labelled::trusted(directory.to_string()),
+        include.map(|g| Labelled::trusted(g.to_string())).as_ref(),
+        true,
+        1,
+    )?;
+    let proof = policy.authorise_content_release("test", "matches");
+    Ok(found.declassify(&proof))
+}
+
+/// SEARCH-11: `directory` may name one file. Aiming at the file's parent with an `include` for its
+/// name is the call this replaces, and it fails for a planner that tries the file first. The
+/// sibling and the nested file hold the needle too, so a walk of the parent, or of the whole tree,
+/// shows up as extra matches; the `include` selects nothing in the named file, so a search that
+/// still consulted it would find nothing.
+#[test]
+fn a_search_may_name_one_file_as_its_target() {
+    let scratch = Scratch::new("grep-one-file");
+    std::fs::create_dir_all(scratch.path.join("src/inner")).unwrap();
+    std::fs::write(scratch.path.join("src/a.rs"), "one needle\nnothing\n").unwrap();
+    std::fs::write(scratch.path.join("src/b.rs"), "another needle\n").unwrap();
+    std::fs::write(scratch.path.join("src/inner/c.rs"), "deep needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let found = search_at(&workspace, denying(&[]), "src/a.rs", Some("*.py")).expect("grep");
+
+    let hits: Vec<(&str, usize, &str)> = found
+        .matches
+        .iter()
+        .map(|m| (m.path.as_str(), m.line, m.text.as_str()))
+        .collect();
+    assert_eq!(hits, [("src/a.rs", 1, "one needle")]);
+    assert_eq!(found.considered, 1);
+    assert_eq!(found.searched, 1);
+    assert!(!found.withheld);
+    assert!(!found.unvisited);
+}
+
+/// SEARCH-5 for a file target: a file that holds the needle but has no match in it is a search that
+/// read something, and one that was never opened is not. A target with no needle must read as the
+/// first.
+#[test]
+fn a_search_of_a_named_file_without_the_pattern_reports_that_it_was_read() {
+    let scratch = Scratch::new("grep-one-file-absent");
+    std::fs::write(scratch.path.join("a.rs"), "nothing here\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let found = search_at(&workspace, denying(&[]), "a.rs", None).expect("grep");
+
+    assert!(found.matches.is_empty());
+    assert_eq!(found.considered, 1);
+    assert_eq!(found.searched, 1);
+}
+
+/// A rule covers a file whether the call named it or a walk reached it. A named target is read
+/// without a walk, so a check that lived only in the walk would let the call quote the line back.
+/// The result says a rule is the reason, as for a walk a rule emptied (SEARCH-5).
+#[test]
+fn a_search_of_a_named_file_a_deny_rule_covers_reads_nothing() {
+    let scratch = Scratch::new("grep-one-file-denied");
+    std::fs::write(scratch.path.join(".env"), "SECRET=needle\n").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let found = search_at(&workspace, denying(&["Read(./.env)"]), ".env", None).expect("grep");
+
+    assert!(found.matches.is_empty(), "a denied file was quoted back");
+    assert_eq!(found.considered, 0, "a denied file was opened");
+    assert!(
+        found.withheld,
+        "the rule emptied the search and the result does not say so"
+    );
+
+    let found = search_at(&workspace, denying(&["Read(./.env)"]), "notes.md", None).expect("grep");
+    assert_eq!(found.matches.len(), 1, "a rule on another file was applied");
+    assert!(!found.withheld);
+}
+
+/// A name that lands on a covered file is the file (PERM-7): a link inside the workspace to a
+/// denied file must not be a way to search it.
+#[cfg(unix)]
+#[test]
+fn a_search_of_a_link_to_a_denied_file_reads_nothing() {
+    let scratch = Scratch::new("grep-one-file-denied-link");
+    std::fs::write(scratch.path.join(".env"), "SECRET=needle\n").unwrap();
+    std::os::unix::fs::symlink(scratch.path.join(".env"), scratch.path.join("alias.txt")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let found = search_at(&workspace, denying(&["Read(./.env)"]), "alias.txt", None).expect("grep");
+
+    assert!(found.matches.is_empty(), "a denied file was quoted back");
+    assert_eq!(found.considered, 0);
+    assert!(found.withheld);
+}
+
+/// A file outside the workspace is refused as a directory outside it is, however it is named:
+/// absolute, climbing out, or through a link inside the tree.
+#[cfg(unix)]
+#[test]
+fn a_search_cannot_name_a_file_outside_the_workspace() {
+    let scratch = Scratch::new("grep-one-file-outside");
+    let outside = scratch
+        .path
+        .parent()
+        .unwrap()
+        .join("bravebot-grep-outside-target.txt");
+    std::fs::write(&outside, "outside needle\n").unwrap();
+    std::os::unix::fs::symlink(&outside, scratch.path.join("link.txt")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for named in [
+        outside.to_string_lossy().into_owned(),
+        "../bravebot-grep-outside-target.txt".to_string(),
+        "link.txt".to_string(),
+    ] {
+        let refused = search_at(&workspace, denying(&[]), &named, None);
+        assert!(
+            matches!(
+                refused,
+                Err(WorkspaceError::Escapes { .. } | WorkspaceError::Invalid { .. })
+            ),
+            "{named} was searched: {:?}",
+            refused.map(|found| found.matches.len())
+        );
+    }
+    let _ = std::fs::remove_file(&outside);
+}
+
 /// Brace groups are the spelling everybody writes. Matched literally they select nothing,
 /// which is the failure above wearing a different hat.
 #[test]

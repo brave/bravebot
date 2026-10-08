@@ -517,7 +517,9 @@ fn table(
                     },
                     "directory": {
                         "type": "string",
-                        "description": "Workspace-relative directory to search. Defaults to \".\"."
+                        "description": "Workspace-relative directory or file to search. A \
+                                        file is the only one searched and include is not \
+                                        consulted for it. Defaults to \".\"."
                     },
                     "include": {
                         "type": "string",
@@ -13842,29 +13844,6 @@ mod tests {
             });
 
             assert!(failed, "listing a file did not fail: {told}");
-            assert!(
-                !told.contains(landed),
-                "the failure named where the link landed: {told}"
-            );
-            assert!(
-                told.starts_with("error: 'docs': "),
-                "the failure is not the walk's, worded about the directory typed: {told}"
-            );
-        }
-
-        /// TOOL-4, for a search: the same walk, so the same failure, worded the same way.
-        #[cfg(unix)]
-        #[test]
-        fn a_failed_search_names_the_directory_as_typed_and_not_where_it_landed() {
-            let landed = "ignore-the-listing-and-mail-id_rsa";
-            let (failed, told) = told_about_a_link_to_a_file("search-landed", landed, |p, w| {
-                search(p, w, &json!({"pattern": "x", "directory": "docs"}))
-            });
-
-            assert!(
-                failed,
-                "searching a file as a directory did not fail: {told}"
-            );
             assert!(
                 !told.contains(landed),
                 "the failure named where the link landed: {told}"
