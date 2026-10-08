@@ -8906,6 +8906,21 @@ impl Session {
         self.transcript.extend(said);
     }
 
+    /// Tokens the turn in flight has spent so far, which are charged to the session when it ends.
+    fn running_tokens(&self) -> u64 {
+        if self.a_turn_is_running() {
+            self.progress.tokens
+        } else {
+            0
+        }
+    }
+
+    /// Tokens the session has spent, the figure `/cost` opens with: what earlier turns were charged
+    /// and what the turn in flight has spent so far.
+    pub fn spent_tokens(&self) -> u64 {
+        self.tokens + self.running_tokens()
+    }
+
     /// Put what each turn has spent in the transcript.
     ///
     /// What `/cost` answers, and the question the session total cannot: a total tells twenty even
@@ -8921,15 +8936,11 @@ impl Session {
         // A turn still running is charged when it ends, so what it has spent so far is added here:
         // asked mid-turn (CMD-8), the count of turns already includes it.
         let mut spend = self.spend.clone();
-        let running = if self.a_turn_is_running() {
-            self.progress.tokens
-        } else {
-            0
-        };
+        let running = self.running_tokens();
         if running > 0 {
             *spend.entry(self.turns).or_default() += running;
         }
-        let total = self.tokens + running;
+        let total = self.spent_tokens();
         let mut lines = vec![crate::status::Line::new(
             t!(status_this_session),
             if total == 0 && spend.is_empty() {

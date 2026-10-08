@@ -2455,6 +2455,7 @@ caffeinate-unavailable = /caffeinate est indisponible : `{ $program }` n'a pas p
 # /caffeinate.
 caffeinate-ended = /caffeinate est désactivé : `{ $program }` a cessé de garder l'ordinateur éveillé
 panel-session = Session
+panel-model = Modèle
 panel-goal = Objectif
 panel-goal-paused = suspendu
 panel-context = Contexte
@@ -2465,6 +2466,8 @@ panel-links = Liens
 # Les lignes de la section Liens du panneau d'informations, chacune suivie du lien.
 panel-pull-request = Pull request
 panel-issue = Ticket
+panel-effort = effort { $level }
+panel-spent = { $tokens } cette session
 panel-cache-read = cache lu { $tokens }
 panel-cache-written = cache écrit { $tokens }
 panel-more = +{ $count } de plus
