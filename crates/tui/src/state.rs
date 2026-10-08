@@ -7838,14 +7838,14 @@ impl Session {
     /// How long the goal has run and what the session has spent since it was armed, in words, or
     /// `None` where there is no goal.
     ///
-    /// Tokens are counted as each turn ends, as `/status` counts them, so a turn still running is
-    /// not in the figure yet.
+    /// A turn is charged to the session only when it ends, so what the turn in flight has spent so
+    /// far is added, or the figure would sit still until the turn is over.
     fn goal_usage(&self) -> Option<String> {
         let goal = self.goal.as_ref()?;
         Some(t!(
             goal_usage,
             elapsed = crate::indicator::format_elapsed(goal.elapsed(Instant::now())),
-            tokens = crate::status::tokens(goal.spent(self.tokens))
+            tokens = crate::status::tokens(goal.spent(self.spent_tokens()))
         ))
     }
 
@@ -8987,7 +8987,7 @@ impl Session {
     }
 
     /// Tokens the turn in flight has spent so far, which are charged to the session when it ends.
-    fn running_tokens(&self) -> u64 {
+    pub fn running_tokens(&self) -> u64 {
         if self.a_turn_is_running() {
             self.progress.tokens
         } else {
@@ -14779,6 +14779,37 @@ mod tests {
         s.tokens = 1_500;
         spend(&mut s, "still nothing");
         assert_eq!(spent(&s).len(), 1, "giving up did not say the cost");
+    }
+
+    /// The moment a person asks what a goal has cost is often while its turn is running, and a turn
+    /// is charged to the session only when it ends. The figure has to include what that turn has
+    /// spent so far, or it sits still until the turn is over.
+    #[test]
+    fn the_goal_report_counts_what_the_turn_in_flight_has_spent() {
+        let mut s = session();
+        s.complete("before the goal", Vec::new(), 1_000);
+        s.start_goal("cargo test exits 0".to_string());
+        s.complete("under the goal", Vec::new(), 3_500);
+        s.begin_turn("carry on".to_string(), (Vec::new(), Vec::new()), Vec::new());
+        s.progressed(bravebot_agent::Spent {
+            tokens: 700,
+            ..Default::default()
+        });
+
+        s.report_goal();
+
+        let usage = s
+            .transcript
+            .iter()
+            .rev()
+            .find(|entry| entry.text.starts_with("it has run for"))
+            .expect("the report said what the goal had cost")
+            .text
+            .clone();
+        assert!(
+            usage.contains(&crate::status::tokens(4_200)),
+            "the report left out what the running turn had spent: {usage:?}"
+        );
     }
 
     /// Send the work back with the same reason every round until the goal gives up, and say how

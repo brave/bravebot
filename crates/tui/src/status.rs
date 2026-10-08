@@ -151,6 +151,9 @@ pub struct Facts<'a> {
     pub auto_vetting: bool,
     pub turns: usize,
     pub tokens: u64,
+    /// What the turn in flight has spent so far, which `tokens` does not hold until the turn ends.
+    /// Added to the goal's spend, since `/status` is answered while a turn runs.
+    pub tokens_in_flight: u64,
     /// Where the session's wall clock went, every turn added together.
     ///
     /// Beside the token count because it is the other half of what a session cost. A person
@@ -508,7 +511,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
             status_goal_usage,
             note = note,
             elapsed = crate::indicator::format_elapsed(goal.elapsed(std::time::Instant::now())),
-            tokens = tokens(goal.spent(facts.tokens))
+            tokens = tokens(goal.spent(facts.tokens + facts.tokens_in_flight))
         );
         lines.push(Line::new(t!(status_goal), goal.condition()).with_note(note));
     }
@@ -925,6 +928,7 @@ mod tests {
             auto_vetting: false,
             turns: 4,
             tokens: 12_400,
+            tokens_in_flight: 0,
             // Nothing measured, which is what a session looks like before its first turn. Tests
             // about the time report set this themselves.
             timing: bravebot_agent::timing::Timing::default(),
@@ -1204,6 +1208,26 @@ mod tests {
             .find(|line| line.label.trim() == t!(status_goal))
             .expect("the goal is on the report");
         assert!(line.note.ends_with(" · 2.4k tokens"), "{:?}", line.note);
+    }
+
+    /// `/status` is answered at once during a turn, and a turn is charged to the session only when
+    /// it ends, so the goal's spend adds what the running turn has spent.
+    #[test]
+    fn the_goal_spend_includes_the_turn_in_flight() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut facts = facts(&config, &trust);
+        let goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 10_000);
+        facts.goal = Some(&goal);
+        facts.tokens_in_flight = 500;
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_goal))
+            .expect("the goal is on the report");
+        assert!(line.note.ends_with(" · 2.9k tokens"), "{:?}", line.note);
     }
 
     /// CLI-17. The note saying a session works under a definition scrolls away, and the input box
