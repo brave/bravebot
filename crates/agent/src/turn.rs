@@ -814,6 +814,13 @@ pub struct Task {
     /// fine. So the interface passes `None`, and an unattended run passes
     /// [`MAX_TOOL_ROUNDS`], where nothing else can end a loop.
     pub rounds: Option<usize>,
+    /// The session's spend limit, which the turn asks about before a request that would go past it
+    /// (TURN-8). Empty unless a caller with a person in front of it sets one, for the reason
+    /// `rounds` is the caller's: only that caller can put the question.
+    pub spend_limit: crate::spend_limit::SpendLimit,
+    /// What the session had spent before this turn, which the limit is read against together with
+    /// what the turn has spent so far.
+    pub spent_before: u64,
     /// The token a person sets to stop this one delegate, where the task is a delegate's.
     ///
     /// Read at a round boundary and treated as that round's limit: the delegate loses its tools
@@ -1072,6 +1079,8 @@ impl Task {
             // and a default cannot know whether anybody is, so the default is the one that is
             // wrong in the cheaper direction.
             rounds: Some(MAX_TOOL_ROUNDS),
+            spend_limit: crate::spend_limit::SpendLimit::default(),
+            spent_before: 0,
             stop: None,
             // The built-in cap, which is a caller that read no settings file saying nothing about
             // what a command's output may spend.
@@ -1252,6 +1261,19 @@ impl Task {
     /// [`Task::rounds`].
     pub fn with_rounds(mut self, rounds: Option<usize>) -> Self {
         self.rounds = rounds;
+        self
+    }
+
+    /// Hold the turn to the session's spend limit, given what the session had spent before it began.
+    ///
+    /// See [`Task::spend_limit`].
+    pub fn with_spend_limit(
+        mut self,
+        limit: crate::spend_limit::SpendLimit,
+        spent_before: u64,
+    ) -> Self {
+        self.spend_limit = limit;
+        self.spent_before = spent_before;
         self
     }
 
@@ -3969,6 +3991,25 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         conversation,
                         &mut reporter,
                     )?;
+
+                    // Before anything new is sent, compaction included, since a summary is a request that
+                    // spends tokens (TURN-8). A delegate's own task carries no limit: what it spends
+                    // reaches this total when it is collected, and the person is asked once, here.
+                    {
+                        let mut asking = crate::confirm::Timed::new(&mut confirmer);
+                        let held = crate::spend_limit::hold(
+                            &task.spend_limit,
+                            task.spent_before + tokens,
+                            steps,
+                            &mut policy,
+                            &mut asking,
+                            &mut reporter,
+                        );
+                        spent.stalled += asking.waited();
+                        if held == crate::spend_limit::Held::Stop {
+                            return Err(TurnError::Cancelled { attempts: Some(0) });
+                        }
+                    }
 
                     // Before the request rather than after the reply that overflowed. The figure being
                     // compared is the last round's, so this is one round late by construction, which is why

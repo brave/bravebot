@@ -21,6 +21,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
+| `/limit` | `[tokens \| off]` | Show the session's spend limit, set it in tokens, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
@@ -182,6 +183,23 @@ advisor's tokens and is counted in the turn's.
 
 Typed while a turn runs with nothing waiting, it is taken at once and the next turn is the first
 to use it.
+
+## `/limit [tokens | off]`
+
+Sets the most tokens this session may spend. `/limit 500k` or `/limit 2m` sets it, with `k` for
+thousands and `m` for millions, `/limit off` removes it, and `/limit` alone says what it is and what
+has been spent. The `limit` key in [the settings file](../customize/configuration.md#limit) starts a
+session under one.
+
+When the session has spent as many tokens as the limit, the next request is not sent. You are asked
+whether to stop, to go on without a limit, or to go on under a new one: choose the last by answering
+in your own words with a figure above what is spent, such as `2m`. Nothing else answers for you, so
+the question appears in every permission mode, including the one that asks about nothing. A
+`/loop` or `/goal` run ends there. The figure is the usage the model service reports, in tokens. It
+is not money, and a service that reports no usage is never stopped by it. The round that reaches the
+limit has already been paid for, so the total can end a little above it.
+
+Typed while a turn runs it is taken at once, and the running turn's next request is held to it.
 
 ## `/style [name | off]`
 
@@ -996,7 +1014,7 @@ beside the line. A command that cannot carry it gets words in place of a picture
 place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, so a marker stays in
 it and the picture or file goes with it.
 
-**While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/copy`,
+**While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/limit`, `/copy`,
 `/watch`, `/panel`, `/caffeinate`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop

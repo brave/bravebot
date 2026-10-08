@@ -4,7 +4,9 @@ title: What bounds a turn
 status: normative
 governs:
   - crates/agent/src/turn.rs
+  - crates/agent/src/spend_limit.rs
 documented-by:
+  - docs/website/docs/customize/configuration.md
   - docs/website/docs/troubleshooting.md
   - docs/website/docs/reference/cli.md
   - docs/website/docs/using/transcript.md
@@ -15,7 +17,8 @@ documented-by:
 How long a turn may go on, what happens when it does not stop, and what is said when it goes on
 without producing anything or ends without checking anything. What completed requests cost survives
 a later failure or stop. What happens when the model's reply says nothing at all, and when it runs
-into its output ceiling.
+into its output ceiling. What a session does when it has spent as many tokens as the person said
+it may.
 
 ## Clauses
 
@@ -278,3 +281,59 @@ what says whether the work wanted splitting.
 `verified-by: bravebot_agent::turn::the_person_is_told_what_a_ceiling_stop_asked_for`
 `verified-by: bravebot_agent::turn::a_ceiling_stop_between_two_empty_replies_is_not_two_empty_replies_in_a_row`
 `verified-by: bravebot_agent::turn::the_trail_says_what_each_ceiling_stop_was_writing_and_what_the_turn_did`
+
+<a id="TURN-8"></a>
+### TURN-8: a session that has spent its limit asks before the next request
+
+A session may carry a limit, a number of tokens, from the `limit` setting or from `/limit`. Before a
+turn sends a request, the driver compares the tokens the session has spent with it: what earlier
+turns were charged, plus what this turn's completed requests reported ([TURN-5](#TURN-5)). Once the
+spent total is at or over the limit, the request is not sent and the person is asked one question
+with three answers: stop, go on without a limit, or go on under a new limit, typed in their own
+words. A new limit has to be above what is spent. A figure that is not asks again, up to three
+times in all, and then the turn stops.
+
+**Stopping is the default.** A stop, a declined question, an answer that is none of the three, and
+an interface that cannot ask all end the turn as a stop. The first row of the question is the stop,
+so a bare Enter is the safe answer. A loop ends and a goal stays set, as they do for any stop, so a
+`/loop` or `/goal` run ends at the limit and the person is told so.
+
+**No rule and no mode answers it.** The question goes to the person through the same channel as a
+question the planner asks, and every permission mode passes it on, bypassing included: a mode that
+asks about nothing still stops here, unless the person set no limit. A new limit or going on without
+one is the session's from then on, including for a turn already running when `/limit` is typed.
+
+**The figure is a count and the stop depends on no content.** It is the sum of the usage the
+backends reported ([BACKEND-31](backends.md#BACKEND-31), [BACKEND-40](backends.md#BACKEND-40)). A
+request that reported nothing adds nothing, so a backend that reports no usage is never stopped by
+this. The question is built from that count, the limit and fixed words, and reads no reply or tool
+result.
+
+**Asked each time.** The question carries a key of its own on every ask, because an interface may
+remember an answer by key, and the same figures can come back after a stop.
+
+**Recorded.** The trail gets a line with the round, the spent total, the limit and what the person
+chose, which carries no content ([TRACE-2](trace.md#TRACE-2)).
+
+**Only where a person is in front of it.** The terminal session sets the limit on the turns it
+starts. A one-shot run, a manifest run and the desktop window set none, for the reason
+[TURN-2](#TURN-2) gives, so none of them is asked.
+
+**Known costs.** The check comes before a request, so a limit is passed by the round that reached it
+and by whatever a delegate in flight spends before it is collected. A limit counted in tokens says
+nothing about money: it is not a per-model price and not a count of Leo Premium credentials.
+
+`verified-by: bravebot_agent::turn::a_turn_under_its_limit_is_not_asked_about`
+`verified-by: bravebot_agent::turn::a_turn_that_reaches_its_limit_asks_before_the_next_request_and_stops_on_a_stop`
+`verified-by: bravebot_agent::turn::a_session_already_past_its_limit_is_asked_before_the_first_request`
+`verified-by: bravebot_agent::turn::what_the_session_spent_before_the_turn_counts_towards_the_limit`
+`verified-by: bravebot_agent::turn::a_new_limit_typed_at_the_question_lets_the_turn_go_on_under_it`
+`verified-by: bravebot_agent::turn::a_figure_that_is_not_above_what_was_spent_is_asked_about_again`
+`verified-by: bravebot_agent::turn::unusable_figures_three_times_in_a_row_stop_the_turn`
+`verified-by: bravebot_agent::turn::going_on_without_a_limit_clears_it`
+`verified-by: bravebot_agent::turn::a_question_nobody_answers_stops_the_turn`
+`verified-by: bravebot_agent::turn::no_permission_mode_answers_the_limit_question`
+`verified-by: bravebot_agent::turn::two_questions_about_the_same_figures_are_different_questions`
+`verified-by: bravebot_agent::turn::a_session_with_no_limit_is_never_asked`
+`verified-by: bravebot_tui::app::a_turn_shares_the_sessions_limit_and_carries_what_was_spent`
+`verified-by: bravebot_config::settings::only_a_positive_count_is_a_session_limit`

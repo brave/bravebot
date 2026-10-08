@@ -44424,3 +44424,385 @@ fn the_view_of_the_request_labels_a_finished_jobs_held_back_output_by_its_refere
         "the job's output is in the view: {account:?}"
     );
 }
+
+/// TURN-8: a session spend limit, and the question put when a turn reaches it.
+mod spend_limit {
+    use super::*;
+    use bravebot_agent::confirm::*;
+    use bravebot_agent::spend_limit::SpendLimit;
+    use bravebot_core::ask::{Answer, Asking};
+
+    /// Answers the limit question from a list, one reply per ask, and keeps what it was asked.
+    /// Asked more times than it has replies, it says nothing, as an interface that cannot ask does.
+    struct Replies {
+        replies: std::collections::VecDeque<Vec<Answer>>,
+        asked: Vec<Asking>,
+    }
+
+    impl Replies {
+        fn new(replies: Vec<Vec<Answer>>) -> Self {
+            Self {
+                replies: replies.into(),
+                asked: Vec::new(),
+            }
+        }
+    }
+
+    impl Confirmer for Replies {
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            ApproveWrites.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            ApproveWrites.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            ApproveWrites.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            ApproveWrites.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
+            ApproveWrites.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
+            ApproveWrites.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            ApproveWrites.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            ApproveWrites.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
+            ApproveWrites.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+            ApproveWrites.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(&mut self, _: &McpCallRequest) -> CallDecision {
+            CallDecision::reject()
+        }
+        fn confirm_move(&mut self, _: &MoveRequest) -> Decision {
+            Decision::Reject
+        }
+        fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
+            self.asked.push(asking.clone());
+            self.replies.pop_front().unwrap_or_default()
+        }
+        fn interjection(&mut self) -> Option<String> {
+            None
+        }
+    }
+
+    fn stop() -> Vec<Answer> {
+        vec![Answer::Chosen(vec![0])]
+    }
+
+    fn without_a_limit() -> Vec<Answer> {
+        vec![Answer::Chosen(vec![1])]
+    }
+
+    fn typed(text: &str) -> Vec<Answer> {
+        vec![Answer::Typed(text.to_string())]
+    }
+
+    struct Ran {
+        ended: Result<turn::Outcome, bravebot_agent::TurnError>,
+        asked: Vec<Asking>,
+        requests: usize,
+        notices: Vec<String>,
+        trail: Vec<String>,
+    }
+
+    /// A two-round turn: the first round spends 500 tokens and asks for a tool, the second answers.
+    fn run(
+        name: &str,
+        limit: &SpendLimit,
+        spent_before: u64,
+        replies: Vec<Vec<Answer>>,
+        wrap: Option<bravebot_agent::PermissionMode>,
+    ) -> Ran {
+        let scratch = Scratch::new(name);
+        std::fs::write(scratch.path.join("a.txt"), "body\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_with_usage("read_file", r#"{"path":"a.txt"}"#, 400, 100),
+            reply_with_usage("done", 10, 5),
+        ]);
+        let config = config_for(&endpoint);
+        let mut confirmer = Replies::new(replies);
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let mut sink = RecordingSink::new();
+        let task = Task::new("read a.txt").with_spend_limit(limit.clone(), spent_before);
+        let ended = match wrap {
+            Some(mode) => {
+                let mut confining = bravebot_agent::Confining::new(&mut confirmer, mode, false);
+                turn::resume(
+                    &config,
+                    &bravebot_net::Egress::new(),
+                    &workspace,
+                    &task,
+                    &mut bravebot_agent::Conversation::new(),
+                    &mut confining,
+                    &mut reporter,
+                    &mut sink,
+                    trusting_the_workspace(),
+                    bravebot_core::programs::TrustedPrograms::new(),
+                    None,
+                    &bravebot_core::cancel::Cancel::new(),
+                )
+            }
+            None => turn::resume(
+                &config,
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &task,
+                &mut bravebot_agent::Conversation::new(),
+                &mut confirmer,
+                &mut reporter,
+                &mut sink,
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            ),
+        }
+        .outcome;
+        let trail = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed { gate, detail } if *gate == "spend_limit" => {
+                    Some(detail.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        Ran {
+            ended,
+            asked: confirmer.asked,
+            requests: received.try_iter().count(),
+            notices: reporter.notices,
+            trail,
+        }
+    }
+
+    fn stopped(ended: &Result<turn::Outcome, bravebot_agent::TurnError>) -> bool {
+        matches!(
+            ended,
+            Err(bravebot_agent::TurnError::Cancelled { attempts: Some(0) })
+        )
+    }
+
+    /// A limit above what the turn spends changes nothing: nobody is asked, and the turn finishes.
+    #[test]
+    fn a_turn_under_its_limit_is_not_asked_about() {
+        let limit = SpendLimit::new(Some(10_000));
+        let ran = run("limit-under", &limit, 0, vec![], None);
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(ran.asked.is_empty());
+        assert_eq!(ran.requests, 2);
+        assert!(ran.trail.is_empty());
+    }
+
+    /// The question comes before the next request, and a stop sends no more. A check made after the
+    /// reply that went over would still send the second request.
+    #[test]
+    fn a_turn_that_reaches_its_limit_asks_before_the_next_request_and_stops_on_a_stop() {
+        let limit = SpendLimit::new(Some(500));
+        let ran = run("limit-stop", &limit, 0, vec![stop()], None);
+        assert!(stopped(&ran.ended), "{:?}", ran.ended.err());
+        assert_eq!(ran.requests, 1, "a request went out past the limit");
+        assert_eq!(ran.asked.len(), 1);
+        let prompt = &ran.asked[0].prompts[0];
+        assert!(
+            prompt
+                .question
+                .contains("500 tokens, which reaches its limit of 500"),
+            "{}",
+            prompt.question
+        );
+        assert_eq!(limit.tokens(), Some(500), "a stop moved the limit");
+        assert!(
+            ran.notices
+                .iter()
+                .any(|said| said.contains("stopped at the session limit")),
+            "{:?}",
+            ran.notices
+        );
+    }
+
+    /// What earlier turns spent counts: the same replies ask when the session had spent 900 before
+    /// the turn, and ask nothing when it had spent nothing.
+    #[test]
+    fn what_the_session_spent_before_the_turn_counts_towards_the_limit() {
+        let limit = SpendLimit::new(Some(1_300));
+        let fresh = run("limit-before-0", &limit, 0, vec![], None);
+        assert!(fresh.ended.is_ok());
+        assert!(fresh.asked.is_empty());
+        let later = run("limit-before-900", &limit, 900, vec![stop()], None);
+        assert!(stopped(&later.ended));
+        assert_eq!(later.requests, 1);
+        assert!(
+            later.asked[0].prompts[0].question.contains("1400 tokens"),
+            "{}",
+            later.asked[0].prompts[0].question
+        );
+    }
+
+    /// A session already past its limit is asked before the first request of a turn, not after it.
+    #[test]
+    fn a_session_already_past_its_limit_is_asked_before_the_first_request() {
+        let limit = SpendLimit::new(Some(500));
+        let ran = run("limit-first", &limit, 2_000, vec![stop()], None);
+        assert!(stopped(&ran.ended));
+        assert_eq!(ran.requests, 0, "a request went out past the limit");
+        assert_eq!(ran.asked.len(), 1);
+    }
+
+    /// A figure above what was spent becomes the session's limit and the turn goes on under it.
+    #[test]
+    fn a_new_limit_typed_at_the_question_lets_the_turn_go_on_under_it() {
+        let limit = SpendLimit::new(Some(500));
+        let ran = run("limit-raise", &limit, 0, vec![typed("5k")], None);
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert_eq!(ran.requests, 2);
+        assert_eq!(limit.tokens(), Some(5_000));
+        assert_eq!(ran.asked.len(), 1);
+        assert!(
+            ran.trail
+                .iter()
+                .any(|line| line.contains("new limit of 5000 tokens")),
+            "{:?}",
+            ran.trail
+        );
+    }
+
+    /// A figure at or below what is spent would stop the turn at the next request, so it is not a
+    /// limit: the person is asked again, with the figure named, and a usable one is taken.
+    #[test]
+    fn a_figure_that_is_not_above_what_was_spent_is_asked_about_again() {
+        let limit = SpendLimit::new(Some(500));
+        let ran = run(
+            "limit-reject",
+            &limit,
+            0,
+            vec![typed("400"), typed("lots"), typed("2m")],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert_eq!(ran.asked.len(), 3);
+        assert!(
+            !ran.asked[0].prompts[0]
+                .question
+                .contains("400 is not a limit")
+        );
+        assert!(
+            ran.asked[1].prompts[0]
+                .question
+                .contains("400 is not a limit")
+        );
+        assert!(
+            ran.asked[2].prompts[0]
+                .question
+                .contains("lots is not a limit")
+        );
+        assert_eq!(limit.tokens(), Some(2_000_000));
+    }
+
+    /// Figures that keep being unusable end the turn rather than asking for ever.
+    #[test]
+    fn unusable_figures_three_times_in_a_row_stop_the_turn() {
+        let limit = SpendLimit::new(Some(500));
+        let ran = run(
+            "limit-reject-forever",
+            &limit,
+            0,
+            vec![typed("1"), typed("2"), typed("3"), typed("4m")],
+            None,
+        );
+        assert!(stopped(&ran.ended));
+        assert_eq!(ran.asked.len(), 3);
+        assert_eq!(limit.tokens(), Some(500));
+    }
+
+    /// Going on without a limit clears it for the session, not only for this request.
+    #[test]
+    fn going_on_without_a_limit_clears_it() {
+        let limit = SpendLimit::new(Some(500));
+        let ran = run("limit-lift", &limit, 0, vec![without_a_limit()], None);
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert_eq!(limit.tokens(), None);
+        assert_eq!(ran.requests, 2);
+        assert!(
+            ran.trail
+                .iter()
+                .any(|line| line.contains("without a limit"))
+        );
+    }
+
+    /// Nobody to ask, or an answer that is none of the three, is a stop. A turn that went on would
+    /// spend the money the limit was set to protect.
+    #[test]
+    fn a_question_nobody_answers_stops_the_turn() {
+        for (name, replies) in [
+            ("limit-silent", vec![]),
+            ("limit-declined", vec![vec![Answer::Declined]]),
+            ("limit-both-rows", vec![vec![Answer::Chosen(vec![0, 1])]]),
+        ] {
+            let limit = SpendLimit::new(Some(500));
+            let ran = run(name, &limit, 0, replies, None);
+            assert!(stopped(&ran.ended), "{name}");
+            assert_eq!(ran.requests, 1, "{name}");
+            assert_eq!(limit.tokens(), Some(500), "{name}");
+            assert!(
+                ran.trail
+                    .iter()
+                    .any(|line| line.contains("nobody answered")),
+                "{name}: {:?}",
+                ran.trail
+            );
+        }
+    }
+
+    /// The question is the person's in every permission mode: the mode that asks about nothing
+    /// still puts it, and an unwatched mode does not answer in their place.
+    #[test]
+    fn no_permission_mode_answers_the_limit_question() {
+        for mode in [
+            bravebot_agent::PermissionMode::Ask,
+            bravebot_agent::PermissionMode::AcceptEdits,
+            bravebot_agent::PermissionMode::Plan,
+            bravebot_agent::PermissionMode::Bypass,
+        ] {
+            let limit = SpendLimit::new(Some(500));
+            let ran = run("limit-mode", &limit, 0, vec![stop()], Some(mode));
+            assert_eq!(ran.asked.len(), 1, "{mode:?} did not reach the person");
+            assert!(stopped(&ran.ended), "{mode:?}");
+        }
+    }
+
+    /// The same question twice in a row is two questions: an interface remembers an answer by the
+    /// question's key, and drawing nothing the second time would answer for the person.
+    #[test]
+    fn two_questions_about_the_same_figures_are_different_questions() {
+        let limit = SpendLimit::new(Some(500));
+        let ran = run("limit-keys", &limit, 0, vec![typed("100"), stop()], None);
+        assert_eq!(ran.asked.len(), 2);
+        assert_ne!(ran.asked[0].prompts[0].key, ran.asked[1].prompts[0].key);
+    }
+
+    /// With no limit set, nothing is asked however much is spent.
+    #[test]
+    fn a_session_with_no_limit_is_never_asked() {
+        let ran = run(
+            "limit-none",
+            &SpendLimit::default(),
+            u64::MAX / 2,
+            vec![],
+            None,
+        );
+        assert!(ran.ended.is_ok());
+        assert!(ran.asked.is_empty());
+    }
+}

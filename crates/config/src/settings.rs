@@ -136,6 +136,7 @@ const READ_KEYS: &[&str] = &[
     "env",
     "fallbackModel",
     "keybindings",
+    "limit",
     "mcp",
     "mcpServers",
     "model",
@@ -250,6 +251,8 @@ pub struct Settings {
     /// not recognise has to reach the interface to be reported there rather than be dropped here as
     /// though the file had said nothing.
     editor_mode: Option<String>,
+    /// The session spend limit the top-level `limit` key named, in tokens, if it named a usable one.
+    limit: Option<u64>,
     /// What the top-level `terminalTitle` key said, if it said a boolean.
     terminal_title: Option<bool>,
     /// What the top-level `updateCheck` key said, if it said a boolean.
@@ -945,6 +948,13 @@ impl Settings {
             model_outranks_a_pick: false,
             effort_outranks_a_pick: false,
             editor_mode: word(root, "editorMode"),
+            limit: match root.get("limit") {
+                Some(serde_json::Value::Number(count)) => {
+                    count.as_u64().filter(|tokens| *tokens > 0)
+                }
+                Some(serde_json::Value::String(text)) => crate::limit::parse_tokens(text),
+                _ => None,
+            },
             terminal_title: match root.get("terminalTitle") {
                 Some(serde_json::Value::Bool(on)) => Some(*on),
                 _ => None,
@@ -1118,6 +1128,14 @@ impl Settings {
     /// wins. This is what answers for somebody who has never made one.
     pub fn editor_mode(&self) -> Option<&str> {
         self.editor_mode.as_deref()
+    }
+
+    /// The most tokens a session may spend before it asks, if the settings in force name one.
+    ///
+    /// A whole number, or a string such as `"500k"`. Anything else, and zero, is absence: a
+    /// misspelt limit leaves the session unbounded, as it was without the key.
+    pub fn limit(&self) -> Option<u64> {
+        self.limit
     }
 
     /// Whether the settings in force let the interface set the terminal's title, if they said.
@@ -1407,6 +1425,7 @@ impl Settings {
             && self.effort.is_none()
             && self.prompt_cache_ttl.is_none()
             && self.editor_mode.is_none()
+            && self.limit.is_none()
             && self.terminal_title.is_none()
             && self.update_check.is_none()
             && self.vetting.is_none()
@@ -1549,6 +1568,7 @@ impl Settings {
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
+            .chain(self.limit.is_some().then_some("limit"))
             .chain(self.terminal_title.is_some().then_some("terminalTitle"))
             .chain(self.update_check.is_some().then_some("updateCheck"))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
@@ -5245,6 +5265,38 @@ mod tests {
         let reported: Vec<&str> = settings.names().collect();
         assert_eq!(reported, ["vetting.auto"]);
         assert!(!settings.is_empty());
+    }
+
+    /// A limit that cannot be read must leave the session unbounded rather than bounded by a
+    /// guess, so only a positive whole number or a count string such as `"500k"` is a limit.
+    #[test]
+    fn only_a_positive_count_is_a_session_limit() {
+        for (written, expected) in [
+            (r#"{"limit": 250000}"#, Some(250_000)),
+            (r#"{"limit": "500k"}"#, Some(500_000)),
+            (r#"{"limit": "2m"}"#, Some(2_000_000)),
+            (r#"{"limit": 0}"#, None),
+            (r#"{"limit": -5}"#, None),
+            (r#"{"limit": 1.5}"#, None),
+            (r#"{"limit": "lots"}"#, None),
+            (r#"{"limit": true}"#, None),
+            ("{}", None),
+        ] {
+            assert_eq!(Settings::parse(written).limit(), expected, "{written}");
+        }
+    }
+
+    /// The nearer layer wins, as for every other key, so a project can set a ceiling for its own
+    /// sessions and a person can still move it in their own files.
+    #[test]
+    fn the_nearest_layer_names_the_session_limit() {
+        let settings = Layers::new("limit-layers")
+            .global(r#"{"limit": "1m"}"#)
+            .project(r#"{"limit": "200k"}"#)
+            .read();
+        assert_eq!(settings.limit(), Some(200_000));
+        assert_eq!(settings.unread_keys().count(), 0);
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["limit"]);
     }
 
     /// The key exists to turn the title off, so only a real `false` may do it. A quoted `"false"`

@@ -251,6 +251,19 @@ pub enum AfterCeilingStop {
     Ended,
 }
 
+/// What a turn did when the session had spent its limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterSpendLimit {
+    /// The person gave a new limit, in tokens.
+    Raised(u64),
+    /// The person asked to go on without one.
+    Lifted,
+    /// The person chose to stop.
+    Stopped,
+    /// Nobody answered, which is a stop.
+    Unanswered,
+}
+
 /// The reference monitor for exactly one turn.
 ///
 /// Not `Clone`. [`Policy::finish`] takes `self`, so a policy cannot outlive its turn.
@@ -2324,6 +2337,37 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             format!(
                 "round {round}: stopped at the output limit of {ceiling} tokens; {open}; \
                  {reasoning}; {then}"
+            ),
+        );
+    }
+
+    /// Record that the session had spent its limit, what the person was asked, and what came of it
+    /// (TURN-8).
+    ///
+    /// Counts and the person's own choice, so the line carries no content. A turn that went on past
+    /// the limit leaves nothing else saying it was allowed to, and by whom.
+    pub fn record_spend_limit(
+        &mut self,
+        round: usize,
+        spent: u64,
+        limit: u64,
+        then: AfterSpendLimit,
+    ) {
+        let then = match then {
+            AfterSpendLimit::Raised(raised) => {
+                format!("the person set a new limit of {raised} tokens and the turn went on")
+            }
+            AfterSpendLimit::Lifted => {
+                "the person went on without a limit and the turn went on".to_string()
+            }
+            AfterSpendLimit::Stopped => "the person chose to stop and the turn ended".to_string(),
+            AfterSpendLimit::Unanswered => "nobody answered, so the turn ended".to_string(),
+        };
+        self.allow(
+            "spend_limit",
+            format!(
+                "round {round}: {spent} tokens spent against a limit of {limit}; the person was \
+                 asked and {then}"
             ),
         );
     }

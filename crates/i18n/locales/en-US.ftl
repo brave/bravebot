@@ -697,6 +697,16 @@ ceiling-stop-in-call = the model reached its output limit of { $tokens } tokens 
 ceiling-stop-in-a-call = the model reached its output limit of { $tokens } tokens while writing a tool call, so the call was not made; asking it to do the work in smaller parts
 ceiling-stop-thinking = the model reached its output limit of { $tokens } tokens while thinking, before it wrote anything; asking it again
 ceiling-stop-silent = the model reached its output limit of { $tokens } tokens before it wrote anything; asking it again
+# The question put when a session has spent as many tokens as its limit allows.
+spend-limit-header = Limit
+spend-limit-reached = This session has spent { $spent } tokens, which reaches its limit of { $limit }.
+spend-limit-how-to-raise = To go on under a new limit, answer in your own words with a figure in tokens, such as 2m.
+spend-limit-not-a-limit = { $text } is not a limit above the { $spent } tokens spent. Use a whole number, with k or m after it for thousands or millions.
+spend-limit-stop = Stop here
+spend-limit-without-a-limit = Go on without a limit
+spend-limit-raised = the session limit is now { $limit } tokens
+spend-limit-lifted = the session has no limit
+spend-limit-stopped = stopped at the session limit: { $spent } tokens spent against a limit of { $limit }
 # Said when a turn's model kept failing and the person's fallbackModel takes over for the rest of it.
 fallback-model-in-use = { $from } failed as { $category }; this turn moves to { $to }
 # Said instead where the turn has no tools left, so the model is asked for an answer rather than
@@ -1942,6 +1952,12 @@ cost-turn = Turn { $number }
 # number.
 cost-before-the-first-turn = Before turn 1
 cost-nothing-spent = nothing spent yet
+session-limit-none = this session has no spend limit
+session-limit-in-force = the session limit is { $limit } tokens, and { $spent } are spent
+session-limit-set = the session limit is { $limit } tokens, and { $spent } are spent
+session-limit-set-below-spent = the session limit is { $limit } tokens, and { $spent } are already spent, so the next request asks whether to go on
+session-limit-cleared = the session has no spend limit
+session-limit-unknown = { $figure } is not a limit. Use a whole number of tokens, with k or m after it for thousands or millions, or off to remove the limit
 request-none-yet = No request has been sent to the model in this session yet.
 # The first row of the view /request opens. The words below it are the request as it went.
 request-title = The last request sent to { $model }, read from the request itself
@@ -2231,6 +2247,7 @@ jobs-command-takes =
 
 command-status = Report this session, what it may touch, and what it has spent
 command-cost = Show what each turn of this session has spent
+command-limit = Show the session's spend limit, set it in tokens, or remove it
 command-request = Show the last request sent to the model, and where each part of it came from
 command-model = Choose which model to think with
 command-theme = Choose which theme paints the interface

@@ -101,6 +101,12 @@ const STYLE_COMMAND: &str = "/style";
 /// The word after `/style` that clears the session's pick.
 const STYLE_OFF: &str = "off";
 
+/// The line that reports the session's spend limit, sets it, or removes it.
+const LIMIT_COMMAND: &str = "/limit";
+
+/// The word after `/limit` that removes the limit.
+const LIMIT_OFF: &str = "off";
+
 /// The line that opens the panel of preferences about the interface itself.
 const CONFIG_COMMAND: &str = "/config";
 
@@ -283,7 +289,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 39] {
+pub fn commands() -> [Command; 40] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -344,6 +350,12 @@ pub fn commands() -> [Command; 39] {
             argument: "[model | off]",
             description: t!(command_advisor),
             mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: LIMIT_COMMAND,
+            argument: "[tokens | off]",
+            description: t!(command_limit),
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: STYLE_COMMAND,
@@ -1917,6 +1929,10 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if line.trim() == COST_COMMAND {
         session.report_spend();
+        return Action::Redraw;
+    }
+    if let Some(figure) = argument_to(line, LIMIT_COMMAND) {
+        set_limit(session, figure);
         return Action::Redraw;
     }
     if line.trim() == REQUEST_COMMAND {
@@ -3854,6 +3870,7 @@ fn event_loop(
     // ranks higher. Read once beside the rest: a file edited mid-session describes the next one,
     // and `/effort` is how this one is changed.
     session.adopt_effort(&settings);
+    session.adopt_limit(&settings);
     // Settled here too, and once, for the reason the mode is read once per turn: what decides
     // whether somebody is asked must not change under a prompt already on the screen. The command
     // line's switch is read here and nowhere else in the interface.
@@ -5689,6 +5706,34 @@ fn set_advisor(session: &mut Session, config: &Config, word: &str) {
                 session.choose_advisor(Some(model));
             }
         }
+    }
+}
+
+/// Say what the session's spend limit is, set it from a figure, or remove it.
+///
+/// The figure is read as a count and never sent anywhere. A limit already below what the session
+/// has spent is accepted, and the note says the next request will ask about it.
+fn set_limit(session: &mut Session, figure: &str) {
+    let figure = figure.trim();
+    let spent = session.spent_tokens();
+    if figure.is_empty() {
+        let note = match session.spend_limit().tokens() {
+            Some(limit) => t!(session_limit_in_force, limit = limit, spent = spent),
+            None => t!(session_limit_none).to_string(),
+        };
+        session.note(note);
+    } else if figure == LIMIT_OFF {
+        session.spend_limit().set(None);
+        session.note(t!(session_limit_cleared));
+    } else if let Some(limit) = bravebot_config::limit::parse_tokens(figure) {
+        session.spend_limit().set(Some(limit));
+        session.note(if limit > spent {
+            t!(session_limit_set, limit = limit, spent = spent)
+        } else {
+            t!(session_limit_set_below_spent, limit = limit, spent = spent)
+        });
+    } else {
+        session.note(t!(session_limit_unknown, figure = figure));
     }
 }
 
@@ -7909,6 +7954,7 @@ fn run_turn_animated(
     task = with_submitted_attachments(task, session);
     task = with_session_advisor(task, session);
     task = with_session_style(task, session);
+    task = with_session_limit(task, session);
     // The worker shares file decisions so errors cannot return the pre-write map.
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
@@ -8442,6 +8488,14 @@ fn finish_turn(
 /// The output style `/style` chose, carried on the turn so it opens the system prompt (CLI-19).
 fn with_session_style(task: Task, session: &Session) -> Task {
     task.with_style(session.style())
+}
+
+/// The session's spend limit and what the session had spent before this turn, carried on the turn
+/// so it asks before a request that would go past the limit (TURN-8).
+///
+/// The limit is the session's own handle, so a `/limit` typed while the turn runs reaches it.
+fn with_session_limit(task: Task, session: &Session) -> Task {
+    task.with_spend_limit(session.spend_limit().clone(), session.spent_tokens())
 }
 
 /// The model `/advisor` named, carried on the turn so the planner is offered it (ADVISOR-9).
@@ -15258,6 +15312,101 @@ mod tests {
         assert_eq!(with_session_style(Task::new("p"), &session).style, None);
     }
 
+    /// What `/limit` says is what the next turn is held to: a bare word reports, a figure sets,
+    /// `off` clears, and a figure that is not a count leaves the limit as it was.
+    #[test]
+    fn the_limit_command_sets_what_the_next_turn_is_held_to() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            with_session_limit(Task::new("p"), &session)
+                .spend_limit
+                .tokens(),
+            None
+        );
+
+        for (line, expected) in [
+            ("/limit 500k", Some(500_000)),
+            ("/limit 2m", Some(2_000_000)),
+            ("/limit 1500", Some(1_500)),
+            ("/limit lots", Some(1_500)),
+            ("/limit 0", Some(1_500)),
+            ("/limit", Some(1_500)),
+            ("/limit off", None),
+        ] {
+            assert_eq!(
+                dispatch_command(&mut session, commanded(line)),
+                Action::Redraw,
+                "{line}"
+            );
+            assert_eq!(
+                with_session_limit(Task::new("p"), &session)
+                    .spend_limit
+                    .tokens(),
+                expected,
+                "{line}"
+            );
+        }
+    }
+
+    /// The turn holds the session's own handle, so a limit typed while it runs reaches its next
+    /// request, and the figure the person gives at the question is the session's afterwards. It
+    /// also carries what the session had spent, which the limit is read against.
+    #[test]
+    fn a_turn_shares_the_sessions_limit_and_carries_what_was_spent() {
+        let mut session = Session::new("none");
+        session.spend_limit().set(Some(700));
+        session.tokens = 300;
+        let task = with_session_limit(Task::new("p"), &session);
+        assert_eq!(task.spent_before, 300);
+
+        session.spend_limit().set(Some(900));
+        assert_eq!(task.spend_limit.tokens(), Some(900));
+        task.spend_limit.set(None);
+        assert_eq!(session.spend_limit().tokens(), None);
+    }
+
+    /// The `limit` setting is where a session starts, and a session without one starts unbounded.
+    #[test]
+    fn a_session_starts_under_the_limit_the_settings_name() {
+        let mut session = Session::new("none");
+        session.adopt_limit(&bravebot_config::Settings::parse(r#"{"limit": "250k"}"#));
+        assert_eq!(session.spend_limit().tokens(), Some(250_000));
+
+        let mut unbounded = Session::new("none");
+        unbounded.adopt_limit(&bravebot_config::Settings::parse("{}"));
+        assert_eq!(unbounded.spend_limit().tokens(), None);
+    }
+
+    /// Typed while a turn runs, `/limit` answers at once, as the limit is a figure the turn reads at
+    /// its own next step and holds nothing else.
+    #[test]
+    fn the_limit_command_is_carried_out_while_a_turn_runs() {
+        let mut session = a_turn_running_on("first");
+        assert_eq!(
+            type_while_working(&mut session, "/limit 800k"),
+            Action::Redraw
+        );
+        assert_eq!(session.spend_limit().tokens(), Some(800_000));
+        assert!(session.queued.is_empty(), "/limit waited behind the turn");
+    }
+
+    /// Asking the planner about the limit is a question, not a command.
+    #[test]
+    fn a_prompt_containing_the_limit_command_or_a_longer_word_is_still_a_prompt() {
+        for line in ["what does /limit do", "/limits are useful"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line}"
+            );
+            assert_eq!(session.spend_limit().tokens(), None);
+        }
+    }
+
     /// A run given `--system-prompt` keeps its own opening, so `/style` says the pick does not show
     /// rather than reporting a style that no turn will carry.
     #[test]
@@ -20053,6 +20202,7 @@ mod tests {
                 GOAL_COMMAND,
                 ISSUE_COMMAND,
                 JOBS_COMMAND,
+                LIMIT_COMMAND,
                 LOOP_COMMAND,
                 PANEL_COMMAND,
                 PR_COMMAND,
