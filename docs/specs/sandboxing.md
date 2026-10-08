@@ -1127,6 +1127,14 @@ process environment, and nothing else. In particular:
 - Write is a directory's. A scope is never written by a grant, and `/reach` refuses one.
 - A stage with an assignment in front of it is covered by no grant, and a line with one is refused,
   for the reason an assignment removes a scope ([SANDBOX-16](#SANDBOX-16)).
+- A grant records the workspace root it was typed in, with the identity of that directory
+  ([TRUST-23](trust-map.md#TRUST-23) records the same), and applies only while the session's
+  workspace root is that directory: not after `/cd` into another, not in a session started in
+  another, and not in a directory later made at the same path. `always` means always in that
+  directory. The exception is a credential scope for a program the scope table
+  ([SANDBOX-16](#SANDBOX-16)) names for that scope, which a person gave for the tool and not for the
+  checkout and which applies in every workspace. A scope typed for any other program is bound. A row
+  with no recorded workspace, written before this, is read only where it would be global now.
 - A stage that starts with an option (`sh -c ...`, `git -C dir push`) has no operation to key on,
   so `/reach` refuses the line, and a grant for a command given no arguments covers it only while
   it is given none. Otherwise a grant made for one script would follow every script.
@@ -1157,6 +1165,10 @@ the planner chose in front of a person to approve, and none is decided here.
 `verified-by: bravebot_agent::reach::a_grant_is_read_back_by_the_sessions_it_was_made_for`
 `verified-by: bravebot_agent::reach::a_revoked_grant_is_gone_until_it_is_allowed_again`
 `verified-by: bravebot_agent::reach::a_line_that_is_not_a_grant_grants_nothing`
+`verified-by: bravebot_agent::reach::a_directory_granted_in_one_workspace_is_absent_in_another`
+`verified-by: bravebot_agent::reach::a_scope_is_global_only_for_a_program_the_table_names_for_it`
+`verified-by: bravebot_agent::reach::a_grant_bound_to_a_directory_no_longer_there_is_dropped`
+`verified-by: bravebot_agent::reach::a_row_with_no_workspace_is_read_only_where_it_would_be_global_now`
 `verified-by: bravebot_agent::reach::a_grant_made_for_one_command_is_made_for_that_command_only`
 `verified-by: bravebot_agent::reach::a_pipeline_gets_one_grant_for_each_distinct_stage`
 `verified-by: bravebot_agent::reach::a_command_that_starts_with_an_option_carries_no_grant`

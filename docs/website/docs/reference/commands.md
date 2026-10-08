@@ -300,6 +300,12 @@ unless you add `always`. Each program of the line gets it, on its own: a grant f
 one for `git pull`, and a grant for one `make` is not one for another. A program started with a
 `NAME=value` in front of it gets none.
 
+A grant applies in the workspace you typed it in, and `always` means always there: after `/cd` into
+another checkout, or in a session started in one, it is not carried. The exception is a credential
+scope for a program that scope belongs to (`git` and `gh` for `remote`, `aws`, `kubectl`,
+`docker`), which applies in every project. A grant made by an earlier version, which recorded no
+workspace, applies only if it is of that kind.
+
 The reach is shown with the command in the plan you are asked to approve, with the day you
 allowed it. A directory must exist and is refused if it is your home or above it, `~/.ssh` or
 inside it, and it is checked again each time it is used. A credential scope is never writable. What

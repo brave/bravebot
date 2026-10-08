@@ -1857,7 +1857,9 @@ impl<'a> Tools<'a> {
         // Read only where a person is there to see the row it adds: a session with nobody to put
         // a prompt to reads no record, for the reason a remembered line is not read there.
         let grants = match (self.home, self.remembering) {
-            (Some(home), Some(session)) => crate::reach::Store::new(home).read(Some(session)),
+            (Some(home), Some(session)) => {
+                crate::reach::Store::new(home).read(Some(session), self.workspace.root())
+            }
             _ => Vec::new(),
         };
         Some(confinement.with_grants(grants))
@@ -14387,6 +14389,7 @@ mod tests {
                 write: false,
                 allowed: "2026-10-07".to_string(),
                 lifetime,
+                bound: crate::reach::Bound::of(workspace.root()),
             };
             assert!(Store::new(&state.path).allow(&grant(Lifetime::Session("mine".into()))));
             for directory in [

@@ -16102,14 +16102,13 @@ fn a_failed_run_on_a_confining_turn_says_what_it_ran_under() {
 /// with `profile` standing for the person's home. Returns what the person was asked and what the
 /// planner was sent after the run.
 fn one_confined_run_keeping_state(
-    name: &str,
+    workspace_root: &std::path::Path,
     command: &str,
     state: &std::path::Path,
     profile: &std::path::Path,
     session: &str,
 ) -> (bravebot_agent::RunRequest, String) {
-    let scratch = Scratch::new(name);
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let workspace = Workspace::new(workspace_root).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
         tool_request("run", &format!(r#"{{"command":"{command}"}}"#)),
         reply_with("done"),
@@ -16166,14 +16165,15 @@ fn a_refused_run_whose_stderr_names_a_path_adds_no_row() {
     // carry it: only what the program printed does.
     let command = "sh -c 'p=/else; echo ${p}where/chosen; echo ${p}where/chosen >&2; exit 1'";
 
+    let checkout = Scratch::new("reach-stderr-checkout");
     let (first, told) =
-        one_confined_run_keeping_state("reach-stderr-1", command, &state.path, &profile.path, "s");
+        one_confined_run_keeping_state(&checkout.path, command, &state.path, &profile.path, "s");
     let (second, _) =
-        one_confined_run_keeping_state("reach-stderr-2", command, &state.path, &profile.path, "s");
+        one_confined_run_keeping_state(&checkout.path, command, &state.path, &profile.path, "s");
 
     let store = bravebot_agent::reach::Store::new(&state.path);
     assert!(!store.path().exists(), "a refusal left a record");
-    assert!(store.read(Some("s")).is_empty());
+    assert!(store.read(Some("s"), &checkout.path).is_empty());
     assert!(!told.contains("/elsewhere"), "{told}");
     for request in [&first, &second] {
         let confined = request.confined.as_ref().expect("a confined plan");
@@ -16188,7 +16188,8 @@ fn a_refused_run_whose_stderr_names_a_path_adds_no_row() {
 /// SANDBOX-23: a remembered scope is in the plan the person endorses, named with the day it was
 /// allowed, and the failure line of the step that ran under it names the scope. A session that did
 /// not make a session grant sees neither. The regressions it rejects: a row the plan never showed,
-/// and a session grant applied to every session.
+/// a session grant applied to every session, and a grant that follows the session to another
+/// workspace.
 #[test]
 fn a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only() {
     if cannot_confine_here() {
@@ -16196,6 +16197,8 @@ fn a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only() 
     }
     let state = Scratch::new("reach-plan-state");
     let profile = Scratch::new("reach-plan-profile");
+    let checkout = Scratch::new("reach-plan-checkout");
+    let elsewhere = Scratch::new("reach-plan-elsewhere");
     let command = "false";
     let plan = bravebot_agent::cmdline::compile(
         command,
@@ -16210,7 +16213,7 @@ fn a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only() 
             home: &state.path,
             profile: Some(&profile.path),
             session: "mine",
-            directory: &profile.path,
+            directory: &checkout.path,
             today: "2026-10-07",
         },
         &format!("docker -- {command}"),
@@ -16218,26 +16221,28 @@ fn a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only() 
     assert!(said.contains("docker"), "{said}");
     assert_eq!(
         bravebot_agent::reach::Store::new(&state.path)
-            .read(Some("mine"))
+            .read(Some("mine"), &checkout.path)
             .iter()
             .filter(|grant| grant.covers(step))
             .count(),
         1
     );
 
-    let (mine, told) = one_confined_run_keeping_state(
-        "reach-plan-mine",
-        command,
-        &state.path,
-        &profile.path,
-        "mine",
-    );
+    let (mine, told) =
+        one_confined_run_keeping_state(&checkout.path, command, &state.path, &profile.path, "mine");
     let (other, other_told) = one_confined_run_keeping_state(
-        "reach-plan-other",
+        &checkout.path,
         command,
         &state.path,
         &profile.path,
         "another",
+    );
+    let (moved, moved_told) = one_confined_run_keeping_state(
+        &elsewhere.path,
+        command,
+        &state.path,
+        &profile.path,
+        "mine",
     );
 
     let sentences = mine.confined.as_ref().expect("confined").sentences();
@@ -16255,6 +16260,19 @@ fn a_remembered_reach_is_in_the_plan_and_the_failure_line_of_its_session_only() 
     assert!(
         other_told.contains("credential scopes: none"),
         "{other_told}"
+    );
+    assert!(
+        moved
+            .confined
+            .as_ref()
+            .expect("confined")
+            .sentences()
+            .is_empty(),
+        "a grant typed in one workspace was in the plan in another"
+    );
+    assert!(
+        moved_told.contains("credential scopes: none"),
+        "{moved_told}"
     );
 }
 

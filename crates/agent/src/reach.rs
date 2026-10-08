@@ -9,6 +9,12 @@
 //! a grant is spelled on disk, which are read back, and what the command that makes and removes
 //! them does.
 //!
+//! # Bound to a workspace
+//!
+//! A grant carries the workspace root it was typed in and the identity of that directory, and is
+//! read back only in that workspace. A credential scope of a program the scope table names for it
+//! is the one grant that is global.
+//!
 //! # One line per change, appended
 //!
 //! `reach.jsonl` in the state directory is JSON, one object per line, appended for the reasons
@@ -21,6 +27,7 @@
 //! No state directory, an unreadable file or a failed write each mean no grant, and a plan with no
 //! grant is the plan a session had before this existed. Nothing here fails a run.
 
+use crate::trusted::Identity;
 use bravebot_core::command::Step;
 use bravebot_i18n::t;
 use bravebot_sandbox::scope::{Scope, judged_directory};
@@ -58,6 +65,43 @@ pub enum Lifetime {
     Always,
 }
 
+/// The workspace a grant was made in: its root, and which directory was at that path then.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bound {
+    /// The workspace root the grant was typed in.
+    pub root: PathBuf,
+    /// What the filesystem said about it, so another directory made at the same path is not it.
+    pub identity: Identity,
+}
+
+impl Bound {
+    /// The workspace at `root` as it is now, or `None` where the filesystem cannot identify it.
+    pub fn of(root: &Path) -> Option<Self> {
+        Some(Self {
+            root: root.to_path_buf(),
+            identity: Identity::of(root)?,
+        })
+    }
+
+    /// Whether `root` is the directory this was made in.
+    fn is(&self, root: &Path) -> bool {
+        self.root == root && Identity::of(root) == Some(self.identity)
+    }
+}
+
+/// Whether a grant of `scope` for this program and operation applies in every workspace.
+///
+/// Only where the closed table of [`Scope::of`] gives the program that scope: `gh` needs its
+/// configuration directory in every project. Any other grant is about what the checkout's own files
+/// make the program do, so it applies in the workspace it was made in.
+fn is_global(binary: &Path, operation: &Option<String>, reached: &Reached) -> bool {
+    let Reached::Scope(scope) = reached else {
+        return false;
+    };
+    let args: Vec<String> = operation.iter().cloned().collect();
+    Scope::of(binary, &args, &[]) == Some(*scope)
+}
+
 /// Reach attached to every step of one shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
@@ -73,6 +117,9 @@ pub struct Grant {
     pub allowed: String,
     /// How long it applies.
     pub lifetime: Lifetime,
+    /// The workspace it applies in, or `None` for a credential scope of a program the table names
+    /// for that scope, which applies everywhere.
+    pub bound: Option<Bound>,
 }
 
 /// The operation word of an argument vector: its first argument, unless that is an option.
@@ -151,6 +198,7 @@ impl Grant {
             && self.reached == other.reached
             && self.write == other.write
             && self.lifetime == other.lifetime
+            && self.bound == other.bound
     }
 
     /// The directory to open, judged again against `home` now. A link that has since been pointed
@@ -206,6 +254,16 @@ struct Written {
     write: bool,
     allowed: String,
     session: Option<String>,
+    /// Absent on a row written before grants were bound, and on a global one.
+    #[serde(default)]
+    workspace: Option<WrittenBound>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WrittenBound {
+    root: String,
+    identity: Identity,
 }
 
 impl Written {
@@ -226,6 +284,13 @@ impl Written {
                 Lifetime::Session(id) => Some(id.clone()),
                 Lifetime::Always => None,
             },
+            workspace: match &grant.bound {
+                Some(bound) => Some(WrittenBound {
+                    root: bound.root.to_str()?.to_string(),
+                    identity: bound.identity,
+                }),
+                None => None,
+            },
         })
     }
 
@@ -239,10 +304,28 @@ impl Written {
             }
             _ => return None,
         };
+        let binary = PathBuf::from(self.binary);
+        let bound = match self.workspace {
+            Some(bound) => {
+                let root = PathBuf::from(bound.root);
+                root.is_absolute().then_some(())?;
+                Some(Bound {
+                    root,
+                    identity: bound.identity,
+                })
+            }
+            // A row with no workspace is global only where it would be made global now, which
+            // leaves a directory row and a scope of a program the table does not name for it,
+            // written before grants were bound, granting nothing.
+            None => {
+                is_global(&binary, &self.operation, &reached).then_some(())?;
+                None
+            }
+        };
         Some((
             self.action,
             Grant {
-                binary: PathBuf::from(self.binary),
+                binary,
                 operation: self.operation,
                 reached,
                 write: self.write,
@@ -251,6 +334,7 @@ impl Written {
                     Some(id) => Lifetime::Session(id),
                     None => Lifetime::Always,
                 },
+                bound,
             },
         ))
     }
@@ -276,11 +360,12 @@ impl Store {
         &self.path
     }
 
-    /// The grants in force for `session`: every `always` grant and those made in that session.
+    /// The grants in force for `session` in the workspace at `root`: every `always` grant and those
+    /// made in that session, less those bound to another workspace.
     ///
     /// Read afresh on every call, so a grant removed in another session stops applying here at the
     /// next plan. `None` is a session with nobody to put a prompt to, which reads no session grant.
-    pub fn read(&self, session: Option<&str>) -> Vec<Grant> {
+    pub fn read(&self, session: Option<&str>, root: &Path) -> Vec<Grant> {
         let Ok(contents) = std::fs::read_to_string(&self.path) else {
             return Vec::new();
         };
@@ -299,6 +384,7 @@ impl Store {
             Lifetime::Always => true,
             Lifetime::Session(id) => session == Some(id.as_str()),
         });
+        held.retain(|grant| grant.bound.as_ref().is_none_or(|bound| bound.is(root)));
         held
     }
 
@@ -343,7 +429,7 @@ pub struct Typed<'a> {
     pub profile: Option<&'a Path>,
     /// The session a `session` grant belongs to.
     pub session: &'a str,
-    /// The working directory the command line is compiled in.
+    /// The workspace root, where the command line is compiled and a directory grant is bound.
     pub directory: &'a Path,
     /// The day the grant is dated.
     pub today: &'a str,
@@ -358,11 +444,11 @@ pub fn command(typed: &Typed<'_>, argument: &str) -> String {
     let store = Store::new(typed.home);
     let argument = argument.trim();
     if argument.is_empty() {
-        return listing(&store.read(Some(typed.session)));
+        return listing(&store.read(Some(typed.session), typed.directory));
     }
     if let Some(number) = argument.strip_prefix("remove") {
         return match number.trim().parse::<usize>() {
-            Ok(number) => remove(&store, typed.session, number),
+            Ok(number) => remove(&store, typed.session, typed.directory, number),
             Err(_) => t!(reach_usage).to_string(),
         };
     }
@@ -391,8 +477,8 @@ fn listing(held: &[Grant]) -> String {
         .join("\n")
 }
 
-fn remove(store: &Store, session: &str, number: usize) -> String {
-    let held = store.read(Some(session));
+fn remove(store: &Store, session: &str, root: &Path, number: usize) -> String {
+    let held = store.read(Some(session), root);
     let Some(grant) = number.checked_sub(1).and_then(|at| held.get(at)) else {
         return t!(reach_refused_number, number = number.to_string()).to_string();
     };
@@ -464,9 +550,17 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
     }
     let mut made: Vec<Grant> = Vec::new();
     for key in keys {
+        let operation = operation_of(key.args);
+        let bound = match is_global(&key.binary, &operation, &reached) {
+            true => None,
+            false => match Bound::of(typed.directory) {
+                Some(bound) => Some(bound),
+                None => return t!(reach_refused_workspace).to_string(),
+            },
+        };
         let grant = Grant {
             binary: key.binary,
-            operation: operation_of(key.args),
+            operation,
             reached: reached.clone(),
             write,
             allowed: typed.today.to_string(),
@@ -474,6 +568,7 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
                 true => Lifetime::Always,
                 false => Lifetime::Session(typed.session.to_string()),
             },
+            bound,
         };
         if !made.iter().any(|held| held.same_as(&grant)) {
             made.push(grant);
@@ -522,14 +617,31 @@ mod tests {
         }
     }
 
+    /// A workspace root that is not removed and made again, so its identity is the same on every
+    /// call and in every test.
+    fn fixed_root() -> PathBuf {
+        let path = scratch_dir("reach-fixed-root");
+        std::fs::create_dir_all(&path).expect("create the fixed root");
+        std::fs::canonicalize(path).expect("canonical fixed root")
+    }
+
+    /// An `aws` scope for `binary`, bound to [`fixed_root`] unless the table gives that program the
+    /// scope, as `/reach` would make it.
     fn scope_grant(binary: &str, operation: Option<&str>, lifetime: Lifetime) -> Grant {
+        let (binary, operation) = (PathBuf::from(binary), operation.map(str::to_string));
+        let reached = Reached::Scope(Scope::named("aws").expect("a scope"));
+        let bound = match is_global(&binary, &operation, &reached) {
+            true => None,
+            false => Bound::of(&fixed_root()),
+        };
         Grant {
-            binary: PathBuf::from(binary),
-            operation: operation.map(str::to_string),
-            reached: Reached::Scope(Scope::named("aws").expect("a scope")),
+            binary,
+            operation,
+            reached,
             write: false,
             allowed: "2026-10-07".to_string(),
             lifetime,
+            bound,
         }
     }
 
@@ -560,12 +672,16 @@ mod tests {
         }
 
         fn say(&self, session: &str, argument: &str) -> String {
+            self.say_in(&self.profile, session, argument)
+        }
+
+        fn say_in(&self, directory: &Path, session: &str, argument: &str) -> String {
             command(
                 &Typed {
                     home: &self.home,
                     profile: Some(&self.profile),
                     session,
-                    directory: &self.profile,
+                    directory,
                     today: "2026-10-07",
                 },
                 argument,
@@ -573,7 +689,7 @@ mod tests {
         }
 
         fn held(&self, session: &str) -> Vec<Grant> {
-            Store::new(&self.home).read(Some(session))
+            Store::new(&self.home).read(Some(session), &self.profile)
         }
     }
 
@@ -622,9 +738,15 @@ mod tests {
         let once = scope_grant("/usr/bin/kubectl", None, Lifetime::Session("one".into()));
         assert!(store.allow(&always) && store.allow(&once));
 
-        assert_eq!(store.read(Some("one")), [always.clone(), once.clone()]);
-        assert_eq!(store.read(Some("two")), std::slice::from_ref(&always));
-        assert_eq!(store.read(None), [always]);
+        assert_eq!(
+            store.read(Some("one"), &fixed_root()),
+            [always.clone(), once.clone()]
+        );
+        assert_eq!(
+            store.read(Some("two"), &fixed_root()),
+            std::slice::from_ref(&always)
+        );
+        assert_eq!(store.read(None, &fixed_root()), [always]);
     }
 
     /// A removed grant stays removed, and a grant allowed again after it comes back. The
@@ -640,10 +762,10 @@ mod tests {
 
         dropped.allowed = "2030-01-01".to_string();
         assert!(store.revoke(&dropped));
-        assert_eq!(store.read(None), std::slice::from_ref(&kept));
+        assert_eq!(store.read(None, &fixed_root()), std::slice::from_ref(&kept));
 
         assert!(store.allow(&dropped));
-        assert_eq!(store.read(None), [kept, dropped]);
+        assert_eq!(store.read(None, &fixed_root()), [kept, dropped]);
     }
 
     /// A line that is not a grant this build understands grants nothing, and the lines around it
@@ -667,7 +789,7 @@ mod tests {
         ];
         std::fs::write(store.path(), format!("{}\n{before}", bad.join("\n"))).expect("seed");
 
-        assert_eq!(store.read(None), [good]);
+        assert_eq!(store.read(None, &fixed_root()), [good]);
     }
 
     /// A grant made for one command is attached to that command. The regression it rejects: a grant
@@ -907,5 +1029,109 @@ mod tests {
 
         assert_eq!(said, t!(reach_refused_no_home));
         assert!(place.held("s").is_empty());
+    }
+
+    /// A directory a person granted in one workspace is not in force in another, for the session
+    /// that made it or for `always`. The regression it rejects: a row keyed on the program and its
+    /// operation alone, which makes `make check` in a second checkout carry what was said about the
+    /// first one's Makefile.
+    #[test]
+    fn a_directory_granted_in_one_workspace_is_absent_in_another() {
+        let place = Place::new("directory-binding");
+        let other = place.profile.join("other-checkout");
+        std::fs::create_dir_all(&other).expect("a second workspace");
+        let cache = place.project.display().to_string();
+        place.say_in(&place.profile, "s", &format!("{cache} write -- make check"));
+        place.say_in(&place.profile, "s", &format!("{cache} always -- make test"));
+
+        let here = Store::new(&place.home).read(Some("s"), &place.profile);
+        assert_eq!(here.len(), 2, "{here:?}");
+        assert!(here.iter().all(|grant| grant.bound.is_some()));
+        for session in ["s", "a-later-session"] {
+            assert!(
+                Store::new(&place.home)
+                    .read(Some(session), &other)
+                    .is_empty(),
+                "a grant followed /cd into another workspace, in {session}"
+            );
+        }
+        let later = Store::new(&place.home).read(Some("a-later-session"), &place.profile);
+        assert_eq!(later.len(), 1, "{later:?}");
+        assert_eq!(later[0].lifetime, Lifetime::Always);
+    }
+
+    /// A scope of a program the table names for it is global, and the same scope typed for any other
+    /// program is bound. The regressions it rejects: binding every row, which asks for `gh`'s
+    /// configuration in each project, and leaving a scope for `make` global.
+    #[test]
+    fn a_scope_is_global_only_for_a_program_the_table_names_for_it() {
+        let place = Place::new("scope-binding");
+        let other = place.profile.join("other-checkout");
+        std::fs::create_dir_all(&other).expect("a second workspace");
+        place.say("s", "remote always -- git push");
+        place.say("s", "remote always -- make check");
+
+        let here = Store::new(&place.home).read(Some("s"), &place.profile);
+        assert_eq!(here.len(), 2, "{here:?}");
+        let there = Store::new(&place.home).read(Some("s"), &other);
+        assert_eq!(there.len(), 1, "{there:?}");
+        assert_eq!(there[0].command(), "git push");
+        assert!(there[0].bound.is_none());
+    }
+
+    /// A row bound to a directory is dropped when another directory has been made at that path. The
+    /// regression it rejects: comparing the path alone, so a checkout deleted and cloned again, or
+    /// replaced by a different one, inherits what was said about the first.
+    #[test]
+    fn a_grant_bound_to_a_directory_no_longer_there_is_dropped() {
+        let place = Place::new("identity-binding");
+        let checkout = place.profile.join("checkout");
+        std::fs::create_dir_all(&checkout).expect("a workspace");
+        place.say_in(
+            &checkout,
+            "s",
+            &format!("{} -- make", place.project.display()),
+        );
+        assert_eq!(Store::new(&place.home).read(Some("s"), &checkout).len(), 1);
+
+        std::fs::remove_dir_all(&checkout).expect("remove it");
+        std::fs::create_dir_all(&checkout).expect("make another at the path");
+
+        assert!(
+            Store::new(&place.home)
+                .read(Some("s"), &checkout)
+                .is_empty()
+        );
+    }
+
+    /// A row written before grants were bound is global only where it would be made global now. The
+    /// regression it rejects: reading an old directory row, or an old scope row for `make`, as
+    /// applying everywhere, which is the defect for every row already on a machine.
+    #[test]
+    fn a_row_with_no_workspace_is_read_only_where_it_would_be_global_now() {
+        let place = Place::new("legacy-rows");
+        let store = Store::new(&place.home);
+        let row = |binary: &str, operation: &str, scope: &str, directory: &str| {
+            format!(
+                r#"{{"action":"allow","binary":"{binary}","operation":{operation},"scope":{scope},"directory":{directory},"write":false,"allowed":"2026-10-07","session":null}}"#
+            )
+        };
+        let directory = format!("\"{}\"", place.project.display());
+        std::fs::write(
+            store.path(),
+            [
+                row("/usr/bin/gh", "\"pr\"", "\"remote\"", "null"),
+                row("/usr/bin/make", "\"check\"", "\"remote\"", "null"),
+                row("/usr/bin/make", "\"check\"", "null", &directory),
+            ]
+            .join("\n")
+                + "\n",
+        )
+        .expect("seed a record");
+
+        let held = store.read(Some("s"), &place.profile);
+
+        assert_eq!(held.len(), 1, "{held:?}");
+        assert_eq!(held[0].command(), "gh pr");
     }
 }

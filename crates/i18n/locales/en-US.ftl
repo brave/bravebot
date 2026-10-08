@@ -1506,6 +1506,7 @@ reach-refused-assignment = a command with NAME=value in front of it carries no r
 reach-refused-option = a command that starts with an option, such as `sh -c ...` or `git -C dir push`, cannot carry a remembered reach. Name the operation first, as in `git push`.
 reach-refused-incognito = this session adds nothing to ~/.bravebot, so nothing was remembered
 reach-refused-no-home = this session has no home directory to judge a reach against
+reach-refused-workspace = this workspace cannot be identified, so a reach cannot be remembered for it
 reach-refused-number = no reach is numbered { $number }
 run-filesystem-rules = your own filesystem rules apply to these programs: { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 # Said above the list of what a line reaches that nothing here holds: no credential is handed

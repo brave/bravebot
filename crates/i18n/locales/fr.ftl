@@ -1308,6 +1308,7 @@ reach-refused-assignment = une commande précédée de NOM=valeur ne reçoit auc
 reach-refused-option = une commande qui commence par une option, comme `sh -c ...` ou `git -C dir push`, ne peut pas recevoir d'accès retenu. Nommez d'abord l'opération, comme dans `git push`.
 reach-refused-incognito = cette session n'ajoute rien à ~/.bravebot, rien n'a donc été retenu
 reach-refused-no-home = cette session n'a pas de répertoire personnel pour juger un accès
+reach-refused-workspace = cet espace de travail ne peut pas être identifié, donc un accès ne peut pas y être mémorisé
 reach-refused-number = aucun accès n'est numéroté { $number }
 run-filesystem-rules = vos propres règles de système de fichiers s'appliquent à ces programmes : { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 run-spends-authority =

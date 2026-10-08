@@ -210,14 +210,15 @@ fn a_rule_an_earlier_session_granted_is_still_honoured() {
 /// A grant of reach to a command, in the shape the two tests below use.
 fn a_reach() -> bravebot_agent::reach::Grant {
     bravebot_agent::reach::Grant {
-        binary: PathBuf::from("/usr/bin/make"),
-        operation: None,
+        binary: PathBuf::from("/usr/bin/git"),
+        operation: Some("push".to_string()),
         reached: bravebot_agent::reach::Reached::Scope(
             bravebot_sandbox::scope::Scope::named("remote").expect("a scope"),
         ),
         write: false,
         allowed: "2026-10-07".to_string(),
         lifetime: bravebot_agent::reach::Lifetime::Always,
+        bound: None,
     }
 }
 
@@ -239,11 +240,15 @@ fn no_remembered_reach_is_written_down() {
             directory: Path::new("/work"),
             today: "2026-10-07",
         },
-        "remote -- ls",
+        "remote -- git push",
     );
 
     assert!(!store.path().exists(), "an incognito session wrote a grant");
-    assert!(store.read(Some("a-private-session")).is_empty());
+    assert!(
+        store
+            .read(Some("a-private-session"), Path::new("/work"))
+            .is_empty()
+    );
     assert_eq!(said, bravebot_i18n::t!(reach_refused_incognito));
 }
 
@@ -256,7 +261,7 @@ fn a_reach_an_earlier_session_remembered_is_still_honoured() {
     std::fs::write(
         store.path(),
         concat!(
-            r#"{"action":"allow","binary":"/usr/bin/make","operation":null,"scope":"remote","#,
+            r#"{"action":"allow","binary":"/usr/bin/git","operation":"push","scope":"remote","#,
             r#""directory":null,"write":false,"allowed":"2026-10-07","session":null}"#,
             "\n"
         ),
@@ -264,7 +269,7 @@ fn a_reach_an_earlier_session_remembered_is_still_honoured() {
     .expect("seed a record");
 
     assert_eq!(
-        store.read(Some("a-private-session")),
+        store.read(Some("a-private-session"), Path::new("/work")),
         [a_reach()],
         "an incognito session read no reach back"
     );
