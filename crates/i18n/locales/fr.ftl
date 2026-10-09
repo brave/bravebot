@@ -91,6 +91,13 @@ cli-plain-takes-nothing-else =
 # Dit lorsque la question de démarrage n'est pas posée parce qu'une session antérieure ici a reçu
 # l'ordre de retenir la réponse (TRUST-23). Une session en lignes n'a pas de commandes à barre
 # oblique, donc les moyens de se faire reposer la question sont ceux qu'elle peut nommer.
+# Dit sur stderr par une exécution unique qui s'ouvre avec une réponse retenue sur son répertoire de
+# travail ou sur la racine de l'arbre git qui l'entoure, et qui nomme le répertoire concerné.
+cli-trusting-kept =
+    { $directory } approuvé (vous avez demandé de le retenir { $when } ; pour que la question
+    soit reposée, lancez /forget-trust dans bravebot, ou supprimez de { $path } les lignes qui le
+    nomment)
+
 cli-plain-trusting-kept =
     { $directory } approuvé (vous avez demandé de le retenir { $when } ; pour que la question
     soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
@@ -111,6 +118,7 @@ mode-bypass = ⏵⏵ permissions contournées
 cli-options-heading = Options :
 cli-option-file = Inclure un fichier de l'espace de travail comme contexte (répétable)
 cli-option-add-dir = Accéder à un répertoire hors de celui de travail (répétable)
+cli-option-trust-workspace = Approuver le répertoire de travail pour cette exécution, comme le fait un oui à la question du démarrage
 cli-option-settings = Lire ce fichier de réglages pour cette exécution, au-dessus de ceux trouvés sur le disque
 cli-option-run-network =
     Si les programmes lancés par `run` peuvent joindre le réseau. closed le refuse à tous sauf à la

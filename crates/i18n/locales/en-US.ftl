@@ -83,6 +83,12 @@ cli-plain-takes-nothing-else =
 # the answer (TRUST-23). A session in lines has no slash commands, so the ways to be asked again are
 # the ones it can name: the command in the interface that draws, or the lines in the file. The
 # lines rather than the file, since a directory whose path is spelled alike shares the file.
+# Said on stderr by a one-shot run that opens with a kept answer about its working directory
+# or the root of the git worktree around it, naming the directory the answer was about.
+cli-trusting-kept =
+    trusting { $directory } (you said to remember it { $when }; to be asked again, run
+    /forget-trust in bravebot, or delete the lines naming it from { $path })
+
 cli-plain-trusting-kept =
     trusting { $directory } (you said to remember it { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming it from { $path })
@@ -108,6 +114,7 @@ mode-bypass = ⏵⏵ bypass permissions on
 cli-options-heading = Options:
 cli-option-file = Include a workspace file as context (repeatable)
 cli-option-add-dir = Reach into a directory outside the working one (repeatable)
+cli-option-trust-workspace = Trust the working directory for this run, as answering yes to the startup question does
 cli-option-settings = Read this settings file for this run, above the ones found on disk
 cli-option-run-network =
     Whether programs `run` starts may reach the network. closed denies it to every one except a package

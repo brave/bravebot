@@ -1125,8 +1125,12 @@ root and of the home directory apply when reading, so a line written by hand is 
 
 **What answers first.** A resume that brought its own map takes it (TRUST-6), and the mode that
 asks about nothing answers before the record is read and never writes it (TRUST-7). A one-shot run
-reads no record and writes none: it asks no question to keep an answer to, and a run nobody is
-watching has answered nothing. In an incognito session the record is read, as the other records are
+reads the record and writes none: it asks no question to keep an answer to, and `--trust-workspace`
+([TRUST-26](#TRUST-26)) answers before the record is read. Where the record holds an answer that
+settles a session here, about this directory or the root of its git worktree, the run opens
+trusting this directory, as a session in lines does, and says so on stderr with
+when it was kept and how to take it back. Where it holds none the run trusts nothing. In an
+incognito session the record is read, as the other records are
 ([incognito.md](incognito.md#INCOG-5)), and remembering is not offered.
 
 **Why.** See TRUST-6: a fresh yes already trusts whatever arrived since the last session, so asking
@@ -1170,6 +1174,10 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_cli::plain::a_remembered_answer_settles_a_session_in_lines_without_asking`
 `verified-by: bravebot_cli::plain::an_answer_in_lines_is_asked_for_and_never_kept`
 `verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
+`verified-by: bravebot_cli::main::a_kept_answer_trusts_a_one_shot_run_there_and_says_so`
+`verified-by: bravebot_cli::main::a_kept_answer_about_another_directory_trusts_a_one_shot_run_nowhere`
+`verified-by: bravebot_cli::main::a_kept_answer_about_the_repository_root_trusts_a_one_shot_run_in_a_package`
+`verified-by: bravebot_cli::running::a_one_shot_run_in_a_directory_with_a_kept_answer_reads_a_project_file_as_trusted`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_offering_to_remember_names_the_record_it_writes`
 `verified-by: bravebot_tui::trust_prompt::r_remembers_nothing_until_the_record_it_writes_has_been_on_the_screen`
 `verified-by: bravebot_tui::trust_prompt::a_question_not_offering_to_remember_never_takes_r`
@@ -1212,6 +1220,35 @@ the file would still say they had vouched for it.
 `verified-by: bravebot_agent::trusted::forgetting_the_last_answer_removes_the_file`
 `verified-by: bravebot_agent::trusted::a_line_cut_inside_a_character_is_skipped_like_any_half_written_line`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the permissions list is pinned instead by ui/scripts/remembered-trust-list.test.mjs, which renders the real list row through react-dom and asserts that it gives when the answer was kept, from the time the bridge sends, the file it is kept in and a Forget button; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
+
+## Trusting the directory of a run nobody is watching
+
+<a id="TRUST-26"></a>
+### TRUST-26: `--trust-workspace` gives a one-shot run the map a yes to the startup question writes
+
+`--trust-workspace` on the command line of a one-shot run starts it from the rule a yes writes
+([TRUST-7](#TRUST-7)): the working directory and everything beneath it, and nothing else. The
+directories `--add-dir` opens stay vouched for by nothing ([CLI-11](cli.md#CLI-11)), and nothing is
+written: no line is added under `~/.bravebot/trusted`. A run carrying on an earlier session
+([CLI-25](cli.md#CLI-25)) keeps the map that session recorded and adds the rule to it. Given twice
+it is given once.
+
+It is read from the command line and from nothing else: no settings file, environment variable or
+file in the directory carries it, so a checkout cannot turn it on for the person who runs a task
+there. A path the run writes with untrusted content is still marked untrusted when it is written
+([TRUST-4](#TRUST-4)), so what the run fetched and wrote is not read back as trusted.
+
+**Why.** Nobody can be asked in a run nobody is watching, and an empty map quarantines every file in
+the project, so the planner reads project files only through a processor or a file named with
+`--file`. [CLI-1](cli.md#CLI-1) refuses to answer in a person's place. A flag the person typed is not
+an answer in their place: it is the answer, given before the run and for the one run, as
+`--dangerously-skip-permissions` is, and it grants trust alone, approving no effect.
+
+`verified-by: bravebot_cli::main::a_flagged_run_trusts_its_directory_and_nothing_outside_it`
+`verified-by: bravebot_cli::main::a_flagged_run_writes_no_record_and_says_nothing`
+`verified-by: bravebot_cli::main::the_workspace_flag_is_read_from_the_command_line_and_may_repeat`
+`verified-by: bravebot_cli::running::a_run_given_the_workspace_flag_reads_a_project_file_as_trusted_and_writes_no_record`
+`verified-by: bravebot_cli::running::a_run_without_the_workspace_flag_reads_a_project_file_quarantined`
 
 ## What a killed session leaves
 
@@ -1315,7 +1352,8 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   above apply to it: what landed in the tree since is trusted, and what an earlier session marked
   untrusted is forgotten. What it loses beyond a yes is the question itself, the moment a person who
   has just pulled a branch or added a dependency might have answered `n`. The line the session opens
-  with, `/status` and `/forget-trust` are what is left of it. Keeping the paths earlier sessions
+  with, `/status` and `/forget-trust` are what is left of it. A one-shot run in the directory is
+  the same case without even the opening line on a screen, so it says the same on stderr. Keeping the paths earlier sessions
   marked untrusted beside the answer would close the second half, and is not built.
   [MEMORY-5](definition-memory.md#MEMORY-5) keeps it for definitions' memories alone.
 - **A directory is told from the one before it at the same path by what the filesystem keeps.**
