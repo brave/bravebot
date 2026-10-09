@@ -1118,11 +1118,15 @@ impl Server {
     /// Reaching the bound is not a failure: the caller answers from what the index has and says the
     /// answer is partial, which is LSP-7.
     fn settle(&mut self) {
+        self.settle_for(MAX_INDEX_WAIT);
+    }
+
+    fn settle_for(&mut self, bound: Duration) {
         if self.indexed || self.waited {
             return;
         }
         self.waited = matches!(self.served, Served::Declared(_));
-        let deadline = Instant::now() + MAX_INDEX_WAIT;
+        let deadline = Instant::now() + bound;
         while !self.indexed {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -3171,13 +3175,19 @@ while IFS= read -r header; do
     *'"initialize"'*)
       printf 'init:%s\n' "$body" >> "$FAKE_LSP_LOG"
       reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
-      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"work","value":{"kind":"begin"}}}'
-      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"work","value":{"kind":"end"}}}'
+      if [ -z "$REPORTS_NO_PROGRESS" ]; then
+        reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"work","value":{"kind":"begin"}}}'
+        reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"work","value":{"kind":"end"}}}'
+      fi
       ;;
     *'"textDocument/didOpen"'*)
       printf 'open:%s\n' "$body" >> "$FAKE_LSP_LOG"
       ;;
     *'"textDocument/definition"'*)
+      if [ -n "$BEGINS_WORK_ON_THE_SECOND_QUESTION" ] && [ -e "$FAKE_LSP_LOG.asked" ]; then
+        reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"later","value":{"kind":"begin"}}}'
+      fi
+      : > "$FAKE_LSP_LOG.asked"
       reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[{\"uri\":\"file:///elsewhere/a.zz\",\"range\":{\"start\":{\"line\":3,\"character\":2},\"end\":{\"line\":3,\"character\":5}}}]}"
       ;;
     *'"shutdown"'*)
@@ -3410,6 +3420,89 @@ done
             0,
             "a declaration taken out stops its server"
         );
+    }
+
+    /// A declared server started on its own, as a set starts one, with `extra` added to what its
+    /// declaration sets in its environment.
+    #[cfg(unix)]
+    fn a_launched_declared_server(
+        scratch: &Path,
+        mut declared: Declared,
+        extra: &[(&str, &str)],
+    ) -> Server {
+        declared
+            .env
+            .extend(extra.iter().map(|(n, v)| (n.to_string(), v.to_string())));
+        Server::launch_declared(
+            &declared,
+            &scratch.join("server"),
+            scratch,
+            &scratch.join("cache"),
+            &[],
+        )
+        .expect("the declared server starts")
+    }
+
+    /// LSP-7: a declared server that reports no progress is waited on for the bound once. Every
+    /// answer is partial, and none after the first waits again.
+    #[cfg(unix)]
+    #[test]
+    fn a_declared_server_that_reports_no_progress_is_waited_on_once() {
+        let (_launching, scratch, _log, declared) = a_workspace_with_a_declared_server();
+        let mut server =
+            a_launched_declared_server(&scratch, declared, &[("REPORTS_NO_PROGRESS", "1")]);
+        let file = scratch.join("a.zz");
+        let file = file.to_str().expect("a utf-8 path");
+
+        let bound = Duration::from_millis(500);
+        let waiting = Instant::now();
+        server.settle_for(bound);
+        assert!(
+            waiting.elapsed() >= bound,
+            "the first wait lasts the whole bound"
+        );
+        assert!(!server.is_indexed(), "no progress was ever reported");
+
+        let asking = Instant::now();
+        let answer = server
+            .ask(&definition_in(file))
+            .expect("the declared server answers");
+        assert!(
+            asking.elapsed() < MAX_INDEX_WAIT / 2,
+            "a question after the one wait does not wait the bound again"
+        );
+        assert!(answer.partial, "a server that never settled says so");
+        assert_eq!(answer.locations.len(), 1);
+    }
+
+    /// LSP-7: work a declared server begins after it settled unsettles it, so an answer given
+    /// meanwhile says it may be short.
+    #[cfg(unix)]
+    #[test]
+    fn work_a_declared_server_begins_after_settling_makes_the_next_answer_partial() {
+        let (_launching, scratch, _log, declared) = a_workspace_with_a_declared_server();
+        let mut server = a_launched_declared_server(
+            &scratch,
+            declared,
+            &[("BEGINS_WORK_ON_THE_SECOND_QUESTION", "1")],
+        );
+        let file = scratch.join("a.zz");
+        let file = file.to_str().expect("a utf-8 path");
+
+        let settled = server
+            .ask(&definition_in(file))
+            .expect("the declared server answers");
+        assert!(!settled.partial, "its progress began and ended");
+        assert!(server.is_indexed());
+
+        let unsettled = server
+            .ask(&definition_in(file))
+            .expect("the declared server answers");
+        assert!(
+            unsettled.partial,
+            "work begun after settling makes the answer partial"
+        );
+        assert!(!server.is_indexed());
     }
 
     /// LSP-11: a declaration is the person's word about a language, so it wins over the table, and

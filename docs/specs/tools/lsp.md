@@ -345,6 +345,8 @@ nothing to show for it is [RUN-11](run.md#RUN-11)'s problem arriving by another 
 
 `verified-by: bravebot_lsp::server::an_answer_during_indexing_is_marked_partial`
 `verified-by: bravebot_lsp::server::a_settled_index_makes_no_partial_claim`
+`verified-by: bravebot_lsp::server::a_declared_server_that_reports_no_progress_is_waited_on_once`
+`verified-by: bravebot_lsp::server::work_a_declared_server_begins_after_settling_makes_the_next_answer_partial`
 `verified-by: bravebot_agent::lsp::a_partial_answer_says_so_even_when_quarantined`
 
 <a id="LSP-8"></a>
@@ -543,7 +545,7 @@ table server ([RUN-12](run.md#RUN-12)); a value is never repeated by a log line 
   [LSP-11](#LSP-11) says that it is unknown. A person who declares a server wrapping a build tool
   approves one that may run the dependency tree's code as [LSP-5](#LSP-5) describes for the table,
   and nothing here can tell them whether it does. A declaration file that cannot be read, or an
-  entry that cannot be used, leaves its extensions unconfigured without a diagnostic yet.
+  entry that cannot be used, leaves its extensions unconfigured, and nothing reports it.
 
 - **A location is attention, and attention can be steered.** An
   attacker who owns a file in a tree the user vouched for decides which paths and lines come back from a query about
