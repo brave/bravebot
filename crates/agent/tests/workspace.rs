@@ -9273,6 +9273,9 @@ fn a_summary_past_the_listing_cap_keeps_the_whole_total() {
     assert_eq!(
         found.matched, 500,
         "the total stopped where the listing did"
+    );
+}
+
 /// A repository map of `directory`, with `trust` as the trust map and `permissions` as the rules.
 fn map_of(
     workspace: &Workspace,
