@@ -7,7 +7,8 @@
     pr-fix.py comments <pr>             the review threads and reviews still waiting on a change
     pr-fix.py check <pr> [--target T]   run the checks the changed files call for, or the make
                                         targets named, printing only a failure
-    pr-fix.py push <pr>                 push over the head `start` fetched, and nothing newer
+    pr-fix.py push <pr>                 push over the head `start` fetched, and nothing newer; refuses to
+                                        make a signed pull request unsigned
     pr-fix.py review <pr>               ask netzenbot-reviewer to review the pull request again
 
 Every step that needs no judgement is decided here, so what it prints is only what a model has to
@@ -271,6 +272,18 @@ def mark_base(tree):
     base_marker(tree).write_text(git("rev-parse", "HEAD", cwd=tree), encoding="utf-8")
 
 
+def signed(sha, cwd):
+    """Whether the commit carries a signature, which needs no key to tell."""
+    headers = git("cat-file", "commit", sha, cwd=cwd).split("\n\n", 1)[0]
+    return any(line.startswith("gpgsig") for line in headers.splitlines())
+
+
+def signatures(onto, head, cwd):
+    """(signed, unsigned) counts for the commits on `head` that `onto` lacks."""
+    flags = [signed(sha, cwd) for sha in git("rev-list", f"{onto}..{head}", cwd=cwd).splitlines()]
+    return flags.count(True), flags.count(False)
+
+
 def changed(tree):
     """What a check is chosen from: the files resolved in the rebase and those changed since."""
     names = set(resolved(tree))
@@ -493,6 +506,15 @@ def push(pr):
     if now == tip:
         print(f"{pr.url} is already at {now[:8]}; nothing to push")
         return 0
+    had_signed, had_unsigned = signatures(pr.onto, tip, tree)
+    unsigned = signatures(pr.onto, now, tree)[1]
+    if had_signed and unsigned > had_unsigned:
+        die(
+            f"{pr.tip} has signed commits and the push would leave {unsigned} commit(s) unsigned, so it "
+            "would replace the author's signed commits with unsigned ones or add unsigned commits to them. "
+            "Report the signing error to the person. Do not rebase the pull request on GitHub with "
+            "`update-branch`, which also leaves its commits unsigned."
+        )
     # The lease is the head `start` fetched, so a push made since is refused rather than lost.
     git(
         "push",
