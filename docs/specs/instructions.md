@@ -453,6 +453,7 @@ which file is read.
 `verified-by: bravebot_agent::skills::a_nested_skill_is_offered_after_the_session_works_in_its_directory`
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_and_not_named`
 `verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_read`
+`verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_written`
 `verified-by: bravebot_agent::workspace::moving_the_working_directory_forgets_the_directories_worked_in`
 `verified-by: bravebot_agent::safe::a_safe_session_offers_no_nested_skill`
 `verified-by: bravebot_agent::safe::a_safe_session_reads_no_nested_agents_file`

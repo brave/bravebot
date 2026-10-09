@@ -13282,6 +13282,59 @@ fn a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_read() {
     );
 }
 
+/// INSTR-14 for the tools that write: a file written or edited in a package makes that package's
+/// `AGENTS.md` part of the next turn, as a read does.
+#[test]
+fn a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_written() {
+    for (tool, arguments) in [
+        ("write_file", r#"{"path":"pkg/new.txt","contents":"x"}"#),
+        (
+            "edit_file",
+            r#"{"path":"pkg/todo.txt","old_text":"milk","new_text":"eggs"}"#,
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("agents-nested-after-{tool}"));
+        std::fs::create_dir_all(scratch.path.join("pkg")).unwrap();
+        std::fs::write(scratch.path.join("pkg/AGENTS.md"), "PKG-CONVENTION").unwrap();
+        std::fs::write(scratch.path.join("pkg/todo.txt"), "milk\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request(tool, arguments),
+            reply_with("done"),
+            reply_with("again"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+
+        for task in ["change a file in pkg", "carry on"] {
+            let mut sink = RecordingSink::new();
+            turn::run_with_trust(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new(task),
+                &mut bravebot_agent::confirm::ApproveWrites,
+                &mut sink,
+                trusting_the_workspace(),
+            )
+            .expect("turn runs");
+        }
+
+        let first = received.recv().expect("first request");
+        let _second = received.recv().expect("second request");
+        let third = received.recv().expect("third request");
+        assert!(
+            !first.contains("PKG-CONVENTION"),
+            "{tool}: read before the path was touched"
+        );
+        assert!(
+            third.contains("PKG-CONVENTION"),
+            "{tool}: not read by the turn after the file beside it was written"
+        );
+    }
+}
+
 /// An instructions file is read by the driver before anything is asked, so it is a read nobody
 /// named, and a link from it to a denied file would put that file in the system prompt of a
 /// workspace the person trusted. The rule is asked about the file the name lands on.
