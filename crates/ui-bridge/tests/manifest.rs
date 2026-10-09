@@ -522,6 +522,52 @@ fn a_run_the_person_stopped_runs_nothing_and_leaves_no_record() {
     assert_eq!(front.recorded_runs(&scratch), Vec::<String>::new());
 }
 
+/// A run is stopped by the target it was started with and by no other, so a cancel meant for a
+/// turn that ended does not stop it (RPCVIEW-6).
+#[test]
+fn a_run_is_stopped_by_its_own_target_and_by_no_other() {
+    let scratch = Scratch::new("bridge-manifest-target");
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    let started = front.call("manifest.run", json!({"session": session, "task": TASK}));
+    let target = started["target"].as_u64().expect("a target");
+    let question = front.question_or_the_end();
+    assert_eq!(question["event"], "manifest.request", "{question}");
+
+    let other = front.call(
+        "turn.cancel",
+        json!({"session": session, "target": target + 1}),
+    );
+    assert_eq!(other, json!({"cancelled": false}));
+    let own = front.call("turn.cancel", json!({"session": session, "target": target}));
+    assert_eq!(own, json!({"cancelled": true}));
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "manifest.error", "{ended}");
+    assert_eq!(ended["data"]["stopped"], true, "{ended}");
+}
+
+/// A session with a view has no way to name a run's target, so it cannot start one. Without
+/// this, the view's target would stay at the last turn's and a cancel from the view would miss
+/// the run (RPCVIEW-6).
+#[test]
+fn a_session_with_a_view_cannot_start_a_run() {
+    let scratch = Scratch::new("bridge-manifest-view");
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+    front.call(
+        "session.view.start",
+        json!({"session": session, "version": 1}),
+    );
+
+    let refused = front.answered("manifest.run", json!({"session": session, "task": TASK}));
+
+    assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+    assert_eq!(front.recorded_runs(&scratch), Vec::<String>::new());
+}
+
 /// Approving a plan is not approving its writes (MANIFEST-10). In a directory nobody vouched for
 /// the write is put to the person when its step is reached, and a no there writes nothing.
 #[test]

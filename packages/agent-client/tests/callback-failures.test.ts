@@ -133,7 +133,7 @@ async function describedRig(options: ConstructorParameters<typeof RpcAgentClient
   return made
 }
 
-const initial = { sequence: 0, turn: 0, status: 'awaiting_trust', pending: null, rows: [] }
+const initial = { sequence: 0, turn: 0, target: 0, status: 'awaiting_trust', pending: null, rows: [] }
 
 /** Create a session through the scripted bridge. `during` runs after the request and before its response. */
 async function open(made: Awaited<ReturnType<typeof describedRig>>, id: string, trust?: unknown, during?: () => void) {

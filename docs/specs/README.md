@@ -39,7 +39,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [terminal-input.md](terminal-input.md) | `INPUT` | 40 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 17 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, how `/resume` leaves for another session, what `/request` opens, what `/recap` asks for, and how a prompt file is expanded |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 27 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
-| [session-view.md](session-view.md) | `RPCVIEW` | 6 | the opt-in shared Rust view for fresh local bridge sessions, and the stdio TypeScript client that applies it |
+| [session-view.md](session-view.md) | `RPCVIEW` | 7 | the opt-in shared Rust view for fresh local bridge sessions, and the stdio TypeScript client that applies it |
 | [watching.md](watching.md) | `WATCH` | 23 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
 | [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |

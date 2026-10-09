@@ -25,7 +25,7 @@ for (const failure of ['write', 'reply'] as const) {
             break
           case 'session.view.start':
             client.receive(JSON.stringify({ event: 'session.view.initial', session: 's1', data: {
-              sequence: 0, turn: 0, status: 'idle', pending: null, rows: [],
+              sequence: 0, turn: 0, target: 0, status: 'idle', pending: null, rows: [],
             } }) + '\n')
             break
           case 'session.close':
@@ -33,7 +33,7 @@ for (const failure of ['write', 'reply'] as const) {
             client.receive(JSON.stringify({ id: request.id, error: { code: 'bad_request', message: 'close refused' } }) + '\n')
             return
           case 'turn.send':
-            ok = { turn: 1 }
+            ok = { turn: 1, target: 1 }
             break
           default:
             assert.fail(`unexpected method ${request.method}`)
@@ -44,9 +44,9 @@ for (const failure of ['write', 'reply'] as const) {
     const session = await client.createSession({ workspace: 'work' })
     await assert.rejects(session.close(), (error: RpcError) =>
       error.code === (failure === 'write' ? 'write_failed' : 'bad_request'))
-    assert.deepEqual(await session.send('still open'), { turn: 1 })
+    assert.deepEqual(await session.send('still open'), { turn: 1, target: 1 })
     client.receive(JSON.stringify({ event: 'session.view.update', session: 's1', data: {
-      sequence: 1, turn: 1, status: 'running', pending: null, rows: [],
+      sequence: 1, turn: 1, target: 1, status: 'running', pending: null, rows: [],
     } }) + '\n')
     assert.equal(session.view.sequence, 1)
     assert.equal(session.view.status, 'running')
@@ -71,7 +71,7 @@ for (const failure of ['listener', 'formatting', 'diagnostic'] as const) {
         else if (request.method === 'session.new') ok = { session: `s${++handle}` }
         else if (request.method === 'session.view.start') {
           client.receive(JSON.stringify({ event: 'session.view.initial', session: request.params.session, data: {
-            sequence: 0, turn: 0, status: 'idle', pending: null, rows: [],
+            sequence: 0, turn: 0, target: 0, status: 'idle', pending: null, rows: [],
           } }) + '\n')
         } else return
         client.receive(JSON.stringify({ id: request.id, ok }) + '\n')
@@ -91,7 +91,7 @@ for (const failure of ['listener', 'formatting', 'diagnostic'] as const) {
     first.subscribe((view) => seen.push(view.ended?.reason ?? null))
     const updates = [first, second].map((session) => JSON.stringify({
       event: 'session.view.update', session: session.id,
-      data: { sequence: 1, turn: 1, status: 'running', pending: null, rows: [] },
+      data: { sequence: 1, turn: 1, target: 1, status: 'running', pending: null, rows: [] },
     })).join('\n') + '\n'
     assert.doesNotThrow(() => client.receive(updates))
     assert.equal(first.view.sequence, 1)
@@ -136,7 +136,7 @@ function startingWith(events: Startup[], options: { onDiagnostic?: (message: str
   return client
 }
 
-const initial = (sequence: number, status = 'idle'): Startup => ({ data: { sequence, turn: 0, status, pending: null, rows: [] } })
+const initial = (sequence: number, status = 'idle'): Startup => ({ data: { sequence, turn: 0, target: 0, status, pending: null, rows: [] } })
 
 test('a startup that broke the protocol is refused even when a valid initial view follows', async () => {
   const open = (events: Startup[]) => startingWith(events).createSession({ workspace: 'work' })
@@ -161,7 +161,7 @@ test('an async view listener or diagnostic hook that rejects is reported and doe
     })
     const session = await client.createSession({ workspace: 'work' })
     session.subscribe(async () => { throw new Error('async listener failure') })
-    client.receive(JSON.stringify({ event: 'session.view.update', session: 's1', data: { sequence: 1, turn: 1, status: 'running', pending: null, rows: [] } }) + '\n')
+    client.receive(JSON.stringify({ event: 'session.view.update', session: 's1', data: { sequence: 1, turn: 1, target: 1, status: 'running', pending: null, rows: [] } }) + '\n')
     client.receive('not json\n')
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(session.view.sequence, 1, 'delivery continued past the failing listener')
@@ -183,7 +183,7 @@ test('a close the bridge answers with no_such_session unregisters the session', 
       }
       if (request.method === 'session.view.start') {
         client.receive(JSON.stringify({ event: 'session.view.initial', session: 's1', data: {
-          sequence: 0, turn: 0, status: 'idle', pending: null, rows: [],
+          sequence: 0, turn: 0, target: 0, status: 'idle', pending: null, rows: [],
         } }) + '\n')
       }
       const ok = request.method === 'agent.info' ? { capabilities: { sessionView: contract.capability } }
@@ -194,7 +194,7 @@ test('a close the bridge answers with no_such_session unregisters the session', 
   const session = await client.createSession({ workspace: 'work' })
   await assert.rejects(session.close(), (error: RpcError) => error.code === 'no_such_session')
   client.receive(JSON.stringify({ event: 'session.view.update', session: 's1', data: {
-    sequence: 1, turn: 1, status: 'running', pending: null, rows: [],
+    sequence: 1, turn: 1, target: 1, status: 'running', pending: null, rows: [],
   } }) + '\n')
   assert.equal(session.view.sequence, 0, 'a session the bridge no longer has receives no updates')
 })
@@ -203,7 +203,7 @@ test('after a close, the detach ends the view and later events for the session a
   const diagnostics: string[] = []
   const send = (client: RpcAgentClient, event: string, data: unknown): void =>
     client.receive(JSON.stringify({ event, session: 's1', data }) + '\n')
-  const view = (sequence: number, status: string): unknown => ({ sequence, turn: 0, status, pending: null, rows: [] })
+  const view = (sequence: number, status: string): unknown => ({ sequence, turn: 0, target: 0, status, pending: null, rows: [] })
   let client: RpcAgentClient
   client = new RpcAgentClient({
     write(line) {

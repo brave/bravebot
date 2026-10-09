@@ -1,10 +1,10 @@
 {
-  "name": "cancel-names-its-turn",
-  "description": "Against a runtime that names turns, a cancel carries the turn it is for, including one just sent that the view does not show yet.",
+  "name": "cancel-without-action-targets-names-no-target",
+  "description": "Against a runtime that does not advertise action targets, a cancel names only the session, as that runtime understands it.",
   "steps": [
     {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
     {"expectRequest": "info", "method": "agent.info", "params": {}},
-    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}, "actionTargets": {"cancel": "expected_turn", "questionIds": "session", "trust": "once", "version": 1}}}}]},
+    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}}}}]},
     {"expectRequest": "new", "method": "session.new", "params": {"directory": "/work"}},
     {"send": [{"event": "trust.request", "session": "s1", "data": {"directory": "/work", "keeping": null}}, {"id": "$new", "ok": {"session": "s1"}}]},
     {"expectRequest": "view", "method": "session.view.start", "params": {"session": "s1", "version": 1}},
@@ -12,11 +12,11 @@
     {"await": "a", "bindSession": "a"},
     {"start": "send", "call": "send", "session": "a", "args": {"text": "go"}},
     {"expectRequest": "send", "method": "turn.send", "params": {"session": "s1", "prompt": "go"}},
-    {"send": [{"id": "$send", "ok": {"turn": 5}}]},
-    {"await": "send", "result": {"turn": 5}},
+    {"send": [{"id": "$send", "ok": {"turn": 1}}]},
+    {"await": "send", "result": {"turn": 1, "target": 0}},
     {"start": "cancel", "call": "cancel", "session": "a"},
-    {"expectRequest": "c", "method": "turn.cancel", "params": {"session": "s1", "turn": 5}},
-    {"send": [{"id": "$c", "ok": {"cancelled": true}}]},
-    {"await": "cancel"}
+    {"expectRequest": "c", "method": "turn.cancel", "params": {"session": "s1"}},
+    {"send": [{"id": "$c", "ok": {}}]},
+    {"await": "cancel", "result": {"cancelled": null}}
   ]
 }

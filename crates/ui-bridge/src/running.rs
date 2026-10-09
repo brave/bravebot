@@ -329,16 +329,23 @@ pub struct Running {
     pub answers: Sender<Reply>,
     /// Which question is waiting, if any.
     pub pending: crate::turn::Pending,
-    pub turn: usize,
-    /// Whether this is a manifest run, which takes the session's last turn number but is not a
-    /// turn, so a cancel that names a turn never stops it (RPCVIEW-6).
-    pub run: bool,
+    /// What a cancel names to stop this turn or run and nothing else (RPCVIEW-6). Never reused,
+    /// unlike a turn number, which repeats after `session.rewind` and which a manifest run does
+    /// not have.
+    pub target: u64,
     /// Set by the worker on its way out.
     ///
     /// The dispatch thread needs to know a turn has ended without joining on it, and it
     /// must not learn this by probing the answer channel: sending anything down that to
     /// see whether it is still connected would deliver a real decision to a real write.
     pub finished: Arc<AtomicBool>,
+}
+
+/// The next number for a turn or run to be stopped by. It counts across sessions, which is
+/// harmless and keeps one source of numbers that nothing resets.
+pub fn next_target() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::SeqCst) + 1
 }
 
 impl Running {

@@ -667,7 +667,7 @@ Spawns the worker thread and calls `turn::resume` with an
 RPC `Confirmer`, an RPC `Reporter`, and a `Trail` sink — the same call shape as
 the upstream TUI, differing only in where the three handles send.
 
-Returns immediately: `{ "turn": 5 }`, the turn number within the session. Progress
+Returns immediately: `{ "turn": 5, "target": 12 }`, the turn number within the session and the target a `turn.cancel` names to stop it. Progress
 arrives as events; completion as `turn.done` or `turn.error`.
 
 The prompt is appended to `~/.bravebot/history` (via `store::append_history`), so
@@ -687,22 +687,21 @@ flight errors `turn_in_flight`. Different sessions run concurrently.
 #### `turn.cancel`
 
 ```json
-{ "id": 6, "method": "turn.cancel", "params": { "session": "s1", "turn": 3 } }
+{ "id": 6, "method": "turn.cancel", "params": { "session": "s1", "target": 12 } }
 ```
 
-`turn` is optional and names the turn the cancel is for. Absent, the cancel stops whatever is
-running and returns `{}`, as it always has. Present, it stops that turn and no other: it returns
-`{ "cancelled": true }` for the running turn, and `{ "cancelled": false }` when the named turn is
-not the one running or has ended, in which case nothing is stopped, the watches included. A `turn`
-that is not a number is refused with `bad_request`. A manifest run is never stopped by a cancel
-that names a turn, and turn numbers repeat after `session.rewind`. A client that holds a turn number should send
-it, so a cancel that arrives late cannot stop the turn after.
+`target` is optional and names what the cancel is for: the `target` that `turn.send` or
+`manifest.run` returned, which the session view also carries. Absent, the cancel stops whatever is
+running and returns `{}`, as it always has. Present, it stops that turn or run and no other. It
+returns `{ "cancelled": true }` for the running one, and `{ "cancelled": false }` when the named
+one is not running or has ended, in which case nothing is stopped, the watches included. A
+`target` that is not a number is refused with `bad_request`, as is the old `turn` parameter. A target is never handed out twice,
+unlike a turn number, which repeats after `session.rewind`, so a cancel that arrives late cannot
+stop what came after. A target is unique within one bridge process, so a restarted bridge counts again. A client that holds a target should send it.
 
-
-Calls `Cancel::cancel()` on that turn's token — a fresh token per turn, never reused,
-matching the upstream cancellation model. Returns `{}` immediately; the turn ends with
-`turn.error` / `Cancelled` when the engine notices. Cancelling when nothing is running is
-not an error.
+Calls `Cancel::cancel()` on that turn's token, a fresh token per turn, never reused, matching the
+upstream cancellation model. The turn ends with `turn.error` / `Cancelled` when the engine
+notices. Cancelling when nothing is running is not an error.
 
 A pending confirmation checks cancellation at most every 50 ms and resolves to refusal.
 No approval is sent, and no additional client reply is required. Cancellation also
@@ -856,7 +855,7 @@ version; `home` and `defaultModel` may be null. Sent as the
 |---|---|
 | `bad_request` | malformed envelope, unknown method, missing or ill-typed params |
 | `no_such_session` | unknown session handle |
-| `no_such_request` | unknown or already-answered confirmation id |
+| `no_such_request` | unknown or already-answered confirmation id, or a repeated `trust.reply` |
 | `turn_in_flight` | a turn is already running on that session |
 | `not_a_directory` | the path given to `session.new` is not a directory |
 | `no_home` | `~/.bravebot` could not be located or created |
@@ -1444,6 +1443,7 @@ session. Clients that do not subscribe keep their existing stream.
   "data": {
     "sequence": 1,
     "turn": 0,
+    "target": 0,
     "status": "idle",
     "pending": null,
     "rows": []
@@ -1461,8 +1461,9 @@ A resolved approval replacement retains its event name and payload.
 `pending` holds `row`, `request`, `kind`, `supported`, and `data`. Supported kinds are `confirm`,
 `run`, `fetch`, and `ask`; use their existing reply operations. Unsupported kinds require a capable
 local surface or cancellation. Startup trust uses the existing local operation. The view never
-authorizes an action. Question numbers last the session, a cancel can name its turn, and a trust
-answer is taken once, as `capabilities.actionTargets` advertises (RPCVIEW-6).
+authorizes an action. Question numbers last the session, a cancel can name its target (the update's `target`), and a trust
+answer is taken once, as `capabilities.actionTargets` advertises (RPCVIEW-6): `{ "version": 1,
+"questionIds": "session", "cancel": "expected_target", "trust": "once" }`.
 
 Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
 `detached`. Session close emits `detached`, which means the view ended, not that the worker stopped

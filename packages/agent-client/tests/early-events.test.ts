@@ -28,11 +28,11 @@ test('late events from closed sessions do not displace a fresh startup trust que
         ok = { session }
       } else if (method === 'session.view.start') {
         emit('session.view.initial', params.session, {
-          sequence: 0, turn: 0, status: 'awaiting_trust', pending: null, rows: [],
+          sequence: 0, turn: 0, target: 0, status: 'awaiting_trust', pending: null, rows: [],
         })
       } else if (method === 'session.close') {
         emit('session.view.update', params.session, {
-          sequence: 1, turn: 0, status: 'detached', pending: null, rows: [],
+          sequence: 1, turn: 0, target: 0, status: 'detached', pending: null, rows: [],
         })
         closed.push(params.session)
       } else assert.fail(`unexpected method ${method}`)
