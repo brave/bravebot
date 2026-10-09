@@ -260,6 +260,32 @@ what the path was for and can say so; the turn cannot.
 `verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
 `verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/sanitise.test.mjs pins its half: a window's turn.send reaches the agent with no dropped, attachments or images list of its own, a path where an attachment id goes sends nothing, and a manifest run forwards a task and a model and nothing else; make check-ui runs it)`
 
+<a id="DROP-11"></a>
+### DROP-11: a dropped picture is sent with its path beside it
+
+Every request carrying a dropped picture or PDF sends the path first, as `Dropped file: <path>` in
+a text part, and the bytes in the part after it. A withheld file is the sentence naming it, which
+already carries the path. The three requests a drop can travel in send it the same way: a turn's
+prompt, a question asked beside the work, and the task a plan is made from.
+
+**Why.** The marker in the line is `[Image #2]`, and the path it stands for is on the person's
+screen and nowhere in the request. Bytes alone say that a picture arrived and not which file it
+came from, so a planner told to look at a dropped file could neither name it nor read it, and a
+turn that can read had no path to read.
+
+**Why it settles the numbering.** One counter numbers the markers in the order the gestures
+happened, while every request puts the dropped files before the pasted pictures, so on a line that
+both pastes and drops the numbers and the parts disagree. A path beside each dropped picture
+answers what the number was for: `[Image #2]` is matched by the file this part names rather than by
+counting parts. A pasted picture has no path and is still only its position, so the mismatch is
+narrowed to pastes rather than removed.
+
+`verified-by: bravebot_agent::attached::a_dropped_picture_is_carried_with_its_path_named_before_the_bytes`
+`verified-by: bravebot_agent::attached::a_withheld_drop_is_the_sentence_naming_it_and_no_bytes`
+`verified-by: bravebot_agent::turn::a_dropped_picture_reaches_the_model_with_its_path`
+`verified-by: bravebot_agent::turn::a_picture_dropped_onto_a_question_reaches_the_model_with_it`
+`verified-by: bravebot_agent::manifest::a_picture_dropped_onto_the_task_reaches_the_planner`
+
 ## Known costs
 
 - **A front end's word is the whole of a protocol drop's justification.** The checks
@@ -279,9 +305,11 @@ what the path was for and can say so; the turn cannot.
   queued mid-turn all hand over such a path, and confinement refuses the read when something acts
   on it. What the alternative costs is the reason: admitting the contents means a context message,
   and the requests that would need one fixed the shape of their context before the line was sent.
-- **A line that both pastes and drops sends its pictures in one order and numbers them in
+- **A line that both pastes and drops numbers its pasted pictures in one order and sends them in
   another.** Every request puts the dropped files first and the pasted pictures after them, while
   one counter numbers the markers in the order the gestures happened, so `[Image #1]` from a paste
-  and `[Image #2]` from a later drop arrive the other way round. A picture travels as bytes with
-  nothing beside it to say which marker it answers, so the planner has the order and nothing else.
-  Doing better means a part per marker, which is a shape the model API does not offer for a picture.
+  and `[Image #2]` from a later drop arrive the other way round. The dropped one is still
+  identifiable, because [DROP-11](#DROP-11) sends its path beside its bytes. The pasted one is not:
+  it travels as bytes with nothing beside it to say which marker it answers, so for a paste the
+  planner has the order and nothing else. Doing better means a part per marker, which is a shape
+  the model API does not offer for a picture.

@@ -180,10 +180,10 @@ impl Question {
     ///
     /// Dropped files first and pasted pictures after them, which is the order a turn puts them in,
     /// so one line sends the same request whichever of the three carries it. On a line that both
-    /// pasted and dropped that order is not the order its markers number them, which is a cost
-    /// `dropping.md` carries rather than one this fixes: a picture travels as bytes with nothing
-    /// beside it to say which marker it answers, so ordering differently here would mean the same
-    /// line reaching the planner one way from a prompt and another from a question.
+    /// pasted and dropped that order is not the order its markers number them, which `dropping.md`
+    /// DROP-11 answers for the dropped half: each dropped picture is sent with its path beside it,
+    /// so the marker is matched by the file the part names rather than by counting parts. A pasted
+    /// picture carries no path and is still only its position, which is a cost `pasting.md` holds.
     ///
     /// The record `pasting.md` PASTE-8 asks for is not taken here. This runs wherever the request is
     /// assembled and the gate belongs to the policy, so [`ask`] takes it before calling this.
@@ -194,7 +194,11 @@ impl Question {
             (true, true) => Message::user(text),
             _ => Message::user_parts(
                 std::iter::once(Part::Text { text })
-                    .chain(self.dropped.iter().map(crate::attached::Carried::part))
+                    .chain(
+                        self.dropped
+                            .iter()
+                            .flat_map(crate::attached::Carried::parts),
+                    )
                     .chain(self.pasted.iter().map(crate::turn::PastedImage::part))
                     .collect(),
             ),

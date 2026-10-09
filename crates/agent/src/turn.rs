@@ -3725,17 +3725,24 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 // The kernel decides, from the label alone, whether the bytes go. Quarantined means
                 // the planner gets the reference and nothing else, which is of little use to it for a
                 // picture, but the alternative is handing over bytes the label says it may not have.
-                parts.push(match &presented {
-                    Presentation::Visible(uri) => Part::ImageUrl {
-                        image_url: ImageUrl { url: uri.clone() },
-                    },
-                    Presentation::Quarantined(reference) => Part::Text {
-                        text: format!(
-                            "{path} could not be shown to you.\n\n{}",
-                            reference.describe()
-                        ),
-                    },
-                });
+                //
+                // Shaped by `attached::parts` rather than here, so a dropped file reaches a planner
+                // the same way whether it came with a prompt, a question or a task (DROP-11).
+                parts.extend(
+                    match &presented {
+                        Presentation::Visible(uri) => crate::attached::Carried::Shown {
+                            path: path.clone(),
+                            uri: uri.clone(),
+                        },
+                        Presentation::Quarantined(reference) => {
+                            crate::attached::Carried::Described {
+                                path: path.clone(),
+                                said: reference.describe(),
+                            }
+                        }
+                    }
+                    .parts(),
+                );
             }
 
             // A pasted picture takes no such route. A dropped file is read out of the workspace, so it
