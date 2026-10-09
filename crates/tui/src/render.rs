@@ -48,8 +48,10 @@ fn dim() -> Style {
 /// Draw a task list beneath whatever it belongs to.
 ///
 /// The first row carries a branch so the block attaches to the line above rather than floating.
-/// Finished tasks are struck through and dimmed, which is what makes progress legible at a
-/// glance: the eye finds the unstruck lines.
+/// Tasks no longer outstanding are struck through and dimmed, which is what makes progress
+/// legible at a glance: the eye finds the unstruck lines. A cancelled one is struck too, with its
+/// marker in the muted colour rather than the success one, so dropped work does not read as
+/// finished work.
 fn todo_lines(todos: &[bravebot_core::todo::Row]) -> Vec<Line<'static>> {
     todos
         .iter()
@@ -60,7 +62,9 @@ fn todo_lines(todos: &[bravebot_core::todo::Row]) -> Vec<Line<'static>> {
             } else {
                 "    ".to_string()
             };
-            let (marker, text) = if row.struck() {
+            let (marker, text) = if row.status == bravebot_core::todo::Status::Cancelled {
+                (dim(), dim().add_modifier(Modifier::CROSSED_OUT))
+            } else if row.struck() {
                 (
                     Style::default().fg(theme::ok()),
                     dim().add_modifier(Modifier::CROSSED_OUT),
@@ -10673,6 +10677,60 @@ mod tests {
                 .iter()
                 .any(|cell| cell.modifier.contains(Modifier::CROSSED_OUT));
             assert!(!struck, "an unfinished task was drawn struck through");
+        }
+
+        /// TODO-3. A dropped task is struck, because it is no longer outstanding, and neither its
+        /// marker nor its colour is the one finished work gets: those two are the whole of what
+        /// the states can be told apart by on a terminal.
+        #[test]
+        fn a_cancelled_task_is_struck_without_the_finished_colour() {
+            let drawn = |status| {
+                let session = working_with(list(&[("rewrite the parser", status)]));
+                let mut terminal = Terminal::new(TestBackend::new(60, 16)).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        draw(frame, &session);
+                    })
+                    .expect("draw succeeds");
+                let buffer = terminal.backend().buffer().clone();
+                let struck = buffer
+                    .content()
+                    .iter()
+                    .any(|cell| cell.modifier.contains(Modifier::CROSSED_OUT));
+                // The marker is the cell before the task's text on the row the task is drawn on.
+                let width = buffer.area.width as usize;
+                let row: Vec<_> = buffer
+                    .content()
+                    .chunks(width)
+                    .find(|row| {
+                        row.iter()
+                            .map(|cell| cell.symbol())
+                            .collect::<String>()
+                            .contains("rewrite the parser")
+                    })
+                    .expect("the task was drawn")
+                    .to_vec();
+                let text_at = row
+                    .iter()
+                    .position(|cell| cell.symbol() == "r")
+                    .expect("the text starts somewhere");
+                let marker = &row[text_at - 2];
+                (struck, marker.symbol().to_string(), marker.fg)
+            };
+
+            let (done_struck, done_marker, done_colour) = drawn(Status::Done);
+            let (gone_struck, gone_marker, gone_colour) = drawn(Status::Cancelled);
+
+            assert!(done_struck, "a finished task was not struck through");
+            assert!(gone_struck, "a cancelled task was not struck through");
+            assert_ne!(
+                gone_marker, done_marker,
+                "a cancelled task carries the marker finished work gets"
+            );
+            assert_ne!(
+                gone_colour, done_colour,
+                "a cancelled task was drawn in the colour finished work gets"
+            );
         }
 
         /// The list stays visible after the turn, attached to the reply it belongs to.

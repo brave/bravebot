@@ -840,7 +840,8 @@ Records the task list for what the planner is doing.
 | `todos` | the complete list, each with `content` and `status` |
 
 The whole list every time: it replaces the previous one. There is no routing here, because nothing is
-touched. An unrecognised status reads as outstanding work.
+touched. An unrecognised status reads as outstanding work. A task marked `cancelled` is struck
+through and counted apart from the finished ones.
 
 ## `schedule_next`
 

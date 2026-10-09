@@ -362,6 +362,21 @@ fn a_todo_row_sends_its_status_not_its_glyph() {
     );
 }
 
+/// TODO-3. A dropped task crosses as itself. Sent as `done` the window would strike it with the
+/// finished tick, and sent as `pending` it would read as work still to come.
+#[test]
+fn a_cancelled_task_crosses_as_cancelled() {
+    assert_eq!(wire::status(Status::Cancelled), "cancelled");
+    assert_eq!(
+        wire::row(&Row {
+            content: "rewrite the parser".into(),
+            marker: "✗",
+            status: Status::Cancelled,
+        }),
+        json!({ "content": "rewrite the parser", "status": "cancelled" })
+    );
+}
+
 /// CHECKOUT-14. A front-end is told the working directory's file was written since the checkout the
 /// body comes from was made, so the desktop's question says what the terminal's does.
 #[test]

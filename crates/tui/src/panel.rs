@@ -295,7 +295,9 @@ fn plan_rows(plan: &[bravebot_core::todo::Row], width: usize, room: usize) -> Ve
     let mut lines: Vec<Line<'static>> = plan[start..start + shown]
         .iter()
         .map(|task| {
-            let (marker, text) = if task.struck() {
+            let (marker, text) = if task.status == bravebot_core::todo::Status::Cancelled {
+                (dim(), dim().add_modifier(Modifier::CROSSED_OUT))
+            } else if task.struck() {
                 (
                     Style::default().fg(theme::ok()),
                     dim().add_modifier(Modifier::CROSSED_OUT),
@@ -1211,6 +1213,68 @@ mod tests {
         assert!(
             !cleared.contains(&t!(panel_plan).to_string()),
             "/clear left a plan: {cleared:#?}"
+        );
+    }
+
+    /// TODO-3 in the panel, which draws the plan a second time and from its own branch. The
+    /// transcript test beside this one draws neither, so without this the panel could show a
+    /// cancelled task with the finished tick and nothing would fail.
+    ///
+    /// Asserted against a done row in the same plan rather than against a colour named here: what
+    /// matters is that the two are told apart, and pinning the literal colour would fail on a
+    /// theme change that kept them distinct.
+    #[test]
+    fn a_cancelled_task_in_the_panel_is_struck_and_marked_apart_from_a_done_one() {
+        let drawn = lines(
+            &working_on(plan(&[
+                ("finished it", Status::Done),
+                ("dropped it", Status::Cancelled),
+                ("still to do", Status::Pending),
+            ])),
+            WIDTH,
+            14,
+        );
+        let row_for = |needle: &str| -> Line<'static> {
+            drawn
+                .iter()
+                .find(|line| line.to_string().contains(needle))
+                .unwrap_or_else(|| panic!("no panel row holds {needle}: {:#?}", texts(&drawn)))
+                .clone()
+        };
+
+        let done = row_for("finished it");
+        let cancelled = row_for("dropped it");
+        let pending = row_for("still to do");
+
+        // Struck through, as a done row is: the task is over either way.
+        for (name, line) in [("done", &done), ("cancelled", &cancelled)] {
+            assert!(
+                line.spans[1]
+                    .style
+                    .add_modifier
+                    .contains(Modifier::CROSSED_OUT),
+                "the {name} row's text is not struck through: {:?}",
+                line.spans[1].style
+            );
+        }
+        assert!(
+            !pending.spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::CROSSED_OUT),
+            "a task still to do was struck through: {:?}",
+            pending.spans[1].style
+        );
+
+        // And told apart at the marker, which is the whole point: a cancelled task is not a win.
+        assert_ne!(
+            cancelled.spans[0].style.fg, done.spans[0].style.fg,
+            "a cancelled task's marker is the same colour as a finished one's, so a dropped step \
+             reads as a completed one"
+        );
+        assert_ne!(
+            cancelled.spans[0].content, done.spans[0].content,
+            "a cancelled task carries the finished marker"
         );
     }
 

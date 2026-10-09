@@ -44,7 +44,7 @@ use crate::lsp::LanguageServers;
 use crate::workspace::{Listing, Page, Paging, Workspace};
 
 /// The statuses the schema advertises, taken from the kernel so the two cannot drift.
-const TODO_STATUSES: [&str; 3] = Status::NAMES;
+const TODO_STATUSES: [&str; 4] = Status::NAMES;
 
 /// What a turn may say about when it runs again.
 ///
@@ -482,7 +482,9 @@ fn table(
                                     "type": "string",
                                     "enum": TODO_STATUSES,
                                     "description": "Mark exactly one task in_progress while \
-                                                    work remains on it."
+                                                    work remains on it. Use cancelled for a \
+                                                    task you have decided not to do, rather \
+                                                    than dropping it or marking it completed."
                                 }
                             },
                             "required": ["content", "status"]
@@ -5664,16 +5666,32 @@ fn todo_write<S: Sink, R: Reporter>(
             .map(|item| format!("[{}] {}", item.status, item.content))
             .collect::<Vec<_>>()
             .join("\n");
-        format!("{} of {} done\n{lines}", list.done(), list.len())
+        format!("{}\n{lines}", counted(&list))
     });
 
-    let note = note_for(policy, "todo_write", &list, |list| {
-        format!("{} of {} done", list.done(), list.len())
-    });
+    let note = note_for(policy, "todo_write", &list, |list| counted(&list));
 
     let mut produced = Produced::new(summary, "", note);
     produced.task_list = true;
     produced
+}
+
+/// How far the list has got, in one line.
+///
+/// Cancelled tasks are counted apart from finished ones and only where there are any: a plan
+/// nobody dropped anything from reads as it always did, and "1 of 3 done" where one of the three
+/// was abandoned would report work that never happened.
+fn counted(list: &List) -> String {
+    let cancelled = list.cancelled();
+    if cancelled == 0 {
+        format!("{} of {} done", list.done(), list.len())
+    } else {
+        format!(
+            "{} of {} done, {cancelled} cancelled",
+            list.done(),
+            list.len()
+        )
+    }
 }
 
 /// Say when this turn should be asked again.
@@ -13438,6 +13456,47 @@ mod tests {
             let (reporter, _) = call(list(&[("something", "nearly done")]));
             let rows = reporter.updates.last().expect("told");
             assert!(!rows[0].struck());
+        }
+
+        /// TODO-3. The planner reads its own list back to know what is next, so a dropped task
+        /// has to be struck and counted apart from the finished ones. Folded into "done" it would
+        /// say the turn achieved work it abandoned.
+        #[test]
+        fn a_cancelled_task_is_counted_apart_from_the_finished_ones() {
+            let (reporter, text) = call(list(&[
+                ("Read the file", "completed"),
+                ("Rewrite the parser", "cancelled"),
+                ("Make the change", "pending"),
+            ]));
+            let released = released(&text);
+            assert!(
+                released.contains("1 of 3 done, 1 cancelled"),
+                "the summary did not count the cancelled task apart: {released}"
+            );
+            assert!(
+                released.contains("[cancelled] Rewrite the parser"),
+                "the line did not name the status the planner sent: {released}"
+            );
+
+            let rows = reporter.updates.last().expect("told");
+            assert!(rows[1].struck(), "a cancelled task was not struck through");
+            assert_ne!(
+                rows[1].marker, rows[0].marker,
+                "a cancelled task carries the finished marker"
+            );
+            assert!(!rows[2].struck());
+        }
+
+        /// A list nobody dropped anything from reads as it always did.
+        #[test]
+        fn a_list_with_nothing_cancelled_says_nothing_about_cancelling() {
+            let (_, text) = call(list(&[
+                ("Read the file", "completed"),
+                ("Make the change", "pending"),
+            ]));
+            let released = released(&text);
+            assert!(released.contains("1 of 2 done"), "{released}");
+            assert!(!released.contains("cancelled"), "{released}");
         }
 
         /// Every other tool answers "what would a person be approving?" with a path, a program or
