@@ -262,6 +262,12 @@ const MEMORY_COMMAND: &str = "/memory";
 /// project` stays a prompt (CMD-2). See [`crate::init_command`] and CMD-13.
 const INIT_COMMAND: &str = "/init";
 
+/// The line that has the planner review local changes or a pull request.
+///
+/// Starts an ordinary turn with words the driver wrote around the target the person named. See
+/// [`crate::review_command`] and CMD-18.
+const REVIEW_COMMAND: &str = "/review";
+
 /// The line that sets plan mode, and with a task starts a turn on it.
 ///
 /// The same endorsement as the key that cycles to plan mode (MODE-12): it only narrows what is
@@ -309,7 +315,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 40] {
+pub fn commands() -> [Command; 41] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -513,6 +519,12 @@ pub fn commands() -> [Command; 40] {
             name: INIT_COMMAND,
             argument: "",
             description: t!(command_init),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: REVIEW_COMMAND,
+            argument: "[target] [focus]",
+            description: t!(command_review),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -2065,6 +2077,17 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         return match session.start_init() {
             Some(prompt) => Action::Submit(prompt),
             None => Action::Redraw,
+        };
+    }
+    // The same kind of turn, with the target named after the word. A target that names nothing usable
+    // is a usage note and no turn.
+    if let Some(argument) = argument_to(line, REVIEW_COMMAND) {
+        return match crate::review_command::parse(argument) {
+            Some(asked) => Action::Submit(session.start_review(&asked)),
+            None => {
+                session.note(t!(review_usage));
+                Action::Redraw
+            }
         };
     }
     // Carried unparsed, because which names exist is read from the workspace and the trust map,
@@ -7995,7 +8018,7 @@ fn run_turn_animated(
     for file in files_named_in(prompt, wrote) {
         task = task.with_file(file);
     }
-    if session.take_init_prompt() || wrote == Wrote::TheDriver {
+    if session.take_driver_prompt() || wrote == Wrote::TheDriver {
         task = task.written_by_the_driver();
     }
     task = with_submitted_attachments(task, session);
@@ -15135,6 +15158,62 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// CMD-18: `/review` starts a turn whose prompt is the driver's text for the target named, and
+    /// that prompt is what the transcript shows as sent.
+    #[test]
+    fn the_review_command_starts_a_turn_with_the_drivers_own_prompt() {
+        let mut session = Session::new("none");
+        let asked = crate::review_command::parse("staged locking").expect("a target");
+        let prompt = crate::review_command::prompt(&asked);
+        assert_eq!(
+            enter_line(&mut session, "/review staged locking"),
+            Action::Submit(prompt.clone())
+        );
+        assert_eq!(session.turns, 1);
+        assert_eq!(session.transcript.last().expect("the prompt").text, prompt);
+        assert!(session.take_driver_prompt());
+    }
+
+    /// CMD-18: a target that names nothing usable is a usage note and no turn.
+    #[test]
+    fn the_review_command_starts_no_turn_for_a_target_it_cannot_use() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            enter_line(&mut session, "/review since --output=x"),
+            Action::Redraw
+        );
+        assert_eq!(session.turns, 0);
+        assert_eq!(
+            session.transcript.last().expect("a note").text,
+            t!(review_usage)
+        );
+        assert!(!session.take_driver_prompt());
+    }
+
+    /// CMD-18, CMD-2: a longer word starting with the command's name is a prompt, not a review.
+    #[test]
+    fn a_prompt_containing_the_review_command_or_a_longer_word_is_still_a_prompt() {
+        for line in ["/reviewer please look", "/reviews"] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                enter_line(&mut session, line),
+                Action::Submit(line.to_string())
+            );
+            assert!(!session.take_driver_prompt());
+        }
+    }
+
+    /// CMD-18, CMD-8: typed during a turn it waits, so it neither interrupts the turn nor starts a
+    /// second one beside it.
+    #[test]
+    fn the_review_command_waits_for_a_running_turn() {
+        let row = commands()
+            .into_iter()
+            .find(|c| c.name == REVIEW_COMMAND)
+            .expect("in the table");
+        assert!(matches!(row.mid_turn, MidTurn::Waits));
+    }
+
     /// `/request` opens the last request built, and nothing else: no turn starts and no prompt is
     /// recorded.
     #[test]
@@ -15219,10 +15298,10 @@ mod tests {
     fn a_prompt_file_expands_into_the_box_and_is_sent_by_the_next_enter() {
         let mut session = with_prompt_files(
             "prompt-files-key",
-            &[("review.md", "Review $ARGUMENTS closely\n")],
+            &[("triage.md", "Review $ARGUMENTS closely\n")],
         );
 
-        assert_eq!(enter_line(&mut session, "/review the diff"), Action::Redraw);
+        assert_eq!(enter_line(&mut session, "/triage the diff"), Action::Redraw);
         assert_eq!(session.input(), "Review the diff closely");
         assert_eq!(session.status, Status::Idle, "the expansion began a turn");
 
@@ -15236,7 +15315,7 @@ mod tests {
     /// no directory was adopted.
     #[test]
     fn a_slash_word_with_no_file_is_sent_as_typed() {
-        let mut session = with_prompt_files("prompt-files-none", &[("review.md", "Review")]);
+        let mut session = with_prompt_files("prompt-files-none", &[("triage.md", "Review")]);
         assert_eq!(
             enter_line(&mut session, "/missing some words"),
             Action::Submit("/missing some words".to_string())
@@ -15244,8 +15323,8 @@ mod tests {
 
         let mut unset = Session::new("none");
         assert_eq!(
-            enter_line(&mut unset, "/review the diff"),
-            Action::Submit("/review the diff".to_string())
+            enter_line(&mut unset, "/triage the diff"),
+            Action::Submit("/triage the diff".to_string())
         );
     }
 
@@ -15283,12 +15362,12 @@ mod tests {
     /// CMD-17: in shell mode the line is a command line and a file is not consulted.
     #[test]
     fn a_prompt_file_is_not_expanded_in_shell_mode() {
-        let mut session = with_prompt_files("prompt-files-shell", &[("review.md", "Review")]);
+        let mut session = with_prompt_files("prompt-files-shell", &[("triage.md", "Review")]);
         session.shell = true;
-        type_line(&mut session, "/review x");
+        type_line(&mut session, "/triage x");
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Run("/review x".to_string())
+            Action::Run("/triage x".to_string())
         );
     }
 
@@ -15313,12 +15392,12 @@ mod tests {
     /// CMD-17: mid-turn the expansion also waits in the box, and only the Enter after it queues.
     #[test]
     fn a_prompt_file_expands_while_a_turn_is_running_before_it_is_queued() {
-        let mut session = with_prompt_files("prompt-files-working", &[("review.md", "Review $1")]);
+        let mut session = with_prompt_files("prompt-files-working", &[("triage.md", "Review $1")]);
         type_line(&mut session, "first");
         handle_key(&mut session, key(KeyCode::Enter));
         assert_eq!(session.status, Status::Working);
 
-        for c in "/review parser".chars() {
+        for c in "/triage parser".chars() {
             handle_key_while_working(&mut session, key(KeyCode::Char(c)));
         }
         assert_eq!(
@@ -18981,7 +19060,7 @@ mod tests {
         [
             ("review-pr", Source::Home),
             ("release-notes", Source::Workspace),
-            ("review", Source::Home),
+            ("retro", Source::Home),
             ("mode", Source::Home),
         ]
         .into_iter()
@@ -19023,7 +19102,7 @@ mod tests {
         assert_eq!(commands, completions("/re"));
         assert_eq!(
             skill_names(&skills),
-            ["release-notes", "review", "review-pr"]
+            ["release-notes", "retro", "review-pr"]
         );
     }
 

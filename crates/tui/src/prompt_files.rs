@@ -192,17 +192,17 @@ mod tests {
     fn arguments_and_positions_are_filled_from_what_followed_the_name() {
         let directory = scratch("prompt-files-fill");
         std::fs::write(
-            directory.join("review.md"),
+            directory.join("triage.md"),
             "Review $1 for $2.\nAll: $ARGUMENTS\nThird: [$3]\n",
         )
         .unwrap();
 
         assert_eq!(
-            expanded(&directory, "/review the diff  races"),
+            expanded(&directory, "/triage the diff  races"),
             "Review the for diff.\nAll: the diff  races\nThird: [races]"
         );
         assert_eq!(
-            expanded(&directory, "/review"),
+            expanded(&directory, "/triage"),
             "Review  for .\nAll: \nThird: []"
         );
         let _ = std::fs::remove_dir_all(&directory);

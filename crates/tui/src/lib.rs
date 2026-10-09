@@ -46,6 +46,7 @@ pub mod reasoning;
 pub mod remote_confirm;
 pub mod render;
 pub mod resume;
+pub mod review_command;
 pub mod select;
 pub mod skills;
 pub mod state;

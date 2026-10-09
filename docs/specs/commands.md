@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/skills.rs
   - crates/tui/src/caffeinate.rs
   - crates/tui/src/init_command.rs
+  - crates/tui/src/review_command.rs
   - crates/tui/src/prompt_files.rs
 guards:
   - symbol: commands
@@ -26,7 +27,8 @@ conversation never sees, and where its answer is drawn is [watching.md](watching
 `/manifest` starts the other kind of run, which is [manifest.md](manifest.md)'s. The `!` prompt is
 a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has no other spec to
 belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12. `/init` starts an ordinary turn, but the words that turn is given and
-when it is refused are CMD-13. `/request` shows the request a turn built, which is
+when it is refused are CMD-13. `/review` is the same kind of turn, and what it is given and what
+it may not do are CMD-18. `/request` shows the request a turn built, which is
 [TRACE-9](trace.md#TRACE-9)'s.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
@@ -632,6 +634,55 @@ offering a write over a file somebody wrote, and keeps the check from depending 
 `verified-by: bravebot_tui::init_command::a_link_with_no_target_is_there`
 `verified-by: bravebot_tui::init_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
 `verified-by: bravebot_agent::turn::a_file_the_planner_may_not_see_is_reserved_rather_than_opened`
+
+<a id="CMD-18"></a>
+### CMD-18: `/review` asks the planner to review a diff, and the diff reaches no model that may not see it
+
+`/review` starts an ordinary turn whose prompt is a fixed text written in this program, about one of
+five targets: the uncommitted changes (the bare command), `staged`, `since <ref>`, `commit <ref>`,
+or `pr <number or address>`. Words after the target, or after the command where it names none, are
+carried into the prompt as what the person wants looked at. The four target words are reserved only
+as the first word, so `/review the staged changes` reviews the uncommitted changes with that focus.
+The prompt is what the transcript shows as sent, and typed during a turn the line waits (CMD-8).
+
+A `<ref>` is accepted only if it cannot be read by `git` as something else: not empty, at most 200
+characters, no leading `-`, no `..`, and only letters, digits and `. _ / - ~ ^`. A pull request is
+digits or a `https://github.com/<owner>/<repo>/pull/<number>` address. Anything else is a usage note
+and no turn starts.
+
+The prompt tells the planner to fetch the diff with `run`, and the turn reads what any turn may
+read: `run` returns lines or a reference by the same rules as any output
+([TOOL-1](tools/tool-surface.md#TOOL-1)), the prompt adds no reach, and it names no path with `@`, so sending it
+vouches for nothing. Where the diff comes back as a reference, the prompt tells the planner to hand
+the reference to `spawn_processor` and not to read it another way, so the findings are the
+processor's remark, drawn for the person as untrusted content ([PROC-7](processors.md#PROC-7),
+[PROC-11](processors.md#PROC-11)) and shown to no
+model. The prompt forbids writes, commits, pushes and comments; the tool surface is what enforces
+that, as for every turn, and the prompt asks only. Nothing the driver does branches on the diff,
+the findings or a verdict: no part of the turn reads them.
+
+A `/review` is a command, so a prompt file or skill of that name is shadowed by it (CMD-17).
+
+**Why.** A review exists to read changes the planner may not be allowed to see, and the answer to
+that elsewhere is a processor whose output goes to the person. A typed record of findings that the
+planner could act on would be the driver branching on processor output, which the design reserves for
+the three exceptions in [labels.md](labels.md) and which needs the maintainers' agreement
+before it is built. This command is the part that needs none of that.
+
+`verified-by: bravebot_tui::app::the_review_command_starts_a_turn_with_the_drivers_own_prompt`
+`verified-by: bravebot_tui::app::the_review_command_starts_no_turn_for_a_target_it_cannot_use`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_review_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::the_review_command_waits_for_a_running_turn`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::review_command::a_bare_command_reviews_the_uncommitted_changes`
+`verified-by: bravebot_tui::review_command::each_reserved_word_names_its_target`
+`verified-by: bravebot_tui::review_command::words_after_the_target_are_the_focus`
+`verified-by: bravebot_tui::review_command::a_reserved_word_only_counts_as_the_first_word`
+`verified-by: bravebot_tui::review_command::a_target_word_without_a_usable_name_is_refused`
+`verified-by: bravebot_tui::review_command::a_ref_that_git_would_read_as_something_else_is_refused`
+`verified-by: bravebot_tui::review_command::the_prompt_names_the_target_and_carries_the_focus`
+`verified-by: bravebot_tui::review_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
+`verified-by: bravebot_tui::review_command::the_prompt_sends_a_diff_it_may_not_see_to_a_processor`
 
 ## Picking up another session
 

@@ -1940,6 +1940,7 @@ command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'
 command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
 command-memory = Lister la mémoire de chaque définition, où elle est gardée et si elle est retenue
 command-init = Faire rédiger par le planificateur un AGENTS.md pour ce projet
+command-review = Faire examiner par le planificateur des modifications locales ou une pull request
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-copy = Copier la dernière réponse dans le presse-papiers, ou une plus ancienne en reculant d'autant de réponses
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
@@ -2445,6 +2446,9 @@ manifest-failed = l'exécution s'est arrêtée : { $problem }
 manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume { $id }
 # Ce que /init dit quand le projet a déjà le fichier qu'il écrirait.
 init-already-there = { $file } existe déjà ici, donc /init n'y touche pas
+
+# Ce que /review dit quand la cible donnée ne désigne rien d'utilisable.
+review-usage = Usage : /review [staged | since <réf> | commit <réf> | pr <numéro ou URL>] [ce qu'il faut examiner]
 
 # Ce que la session dit d'une définition qu'une personne a désignée avec /agent. Chaque nom ici a
 # été résolu par la session depuis une source que quelqu'un a approuvée ; il peut donc être affiché,
