@@ -147,6 +147,14 @@ walk stopped at are entries too, and each reference says which of the two it sta
 nothing behind a directory to read, and the way to what is inside it is another listing with a
 greater depth.
 
+A walk does not enter a fixed list of directories, at any depth, and its result does not say that it
+left them out: version control (`.git`, `.hg`, `.svn`), build output and caches (`target`, `dist`,
+`build`, `coverage`, `__pycache__` and similar), dependencies (`node_modules`, `vendor`,
+`third_party`, `site-packages`, virtual environments and similar) and linked worktrees (`.worktrees`,
+`.claude/worktrees`). A project with a `vendor` or `build` directory therefore lists as though it had
+none. The tool description gives the planner the full list, and naming one of them as `directory`
+lists it.
+
 The glob is literal and the matcher does not backtrack. A truncated listing says it was truncated.
 
 ## `search`
