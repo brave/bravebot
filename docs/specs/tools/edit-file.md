@@ -10,8 +10,8 @@ documented-by: docs/website/docs/reference/tools.md
 
 ## Scope
 
-Replacing an exact passage in a file. `path` and `replace_all` are routing; `old_text` and
-`new_text` are content. The result is a confirmation.
+Replacing an exact passage in a file, or several in one call. `path` and `replace_all` are routing;
+`old_text`, `new_text` and `edits` are content. The result is a confirmation.
 
 ## Why this exists rather than a whole-file write
 
@@ -110,3 +110,25 @@ inconsistent and a diff that looks right.
 `verified-by: bravebot_agent::turn::an_edit_to_a_crlf_file_keeps_its_line_endings`
 `verified-by: bravebot_agent::confirm::an_edit_that_keeps_crlf_says_so`
 `verified-by: bravebot_agent::confirm::a_write_that_swaps_the_terminators_says_which_way`
+
+<a id="EDIT-6"></a>
+### EDIT-6: several passages in one file are one call, one diff and all or nothing
+
+`edits` is a non-empty array of `old_text` and `new_text` pairs for the one file `path` names, given
+instead of a top-level `old_text` and `new_text` and never beside them. The pairs apply in order to
+the text read once, each to the text the pair before it left, so a later pair may match text an
+earlier one wrote. `replace_all` applies to every pair. [EDIT-1](#EDIT-1) holds for each pair, and a
+call whose pairs together leave the file as it was is refused as unchanged. A refusal names the
+pair, as `edit 2 of 3`, and no pair is applied: the file is edited in full or not at all.
+
+The person is asked once, about one diff of the combined result, and [EDIT-4](#EDIT-4) shows each
+changed region of it. [EDIT-2](#EDIT-2) and the planner-argument gate apply to every pair.
+
+**Why.** Five changes to a file were five calls, five prompts and five diffs, and no point at which
+the person saw the whole change. Editing several files in one call is not offered: each path is a
+routing value a person approves alone ([TOOL-2](tool-surface.md)).
+
+`verified-by: bravebot_agent::turn::several_edits_to_one_file_are_approved_once_as_one_diff`
+`verified-by: bravebot_agent::turn::a_missing_passage_among_several_changes_nothing_and_names_the_pair`
+`verified-by: bravebot_agent::turn::a_later_edit_matches_the_text_an_earlier_one_wrote`
+`verified-by: bravebot_agent::turn::edits_beside_a_single_pair_or_cancelling_out_are_refused`

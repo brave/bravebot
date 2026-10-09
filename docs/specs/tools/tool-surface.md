@@ -7,7 +7,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 203
+      - crates/agent/src/tools.rs: 204
   - symbol: Produced::refused_with_a_note
     sites:
       - crates/agent/src/tools.rs: 8
@@ -35,7 +35,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`read_git`](read-git.md) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | the answer, or a reference |
 | [`lsp`](lsp.md) | `operation`, `path`, `line`, `character`, `query` | none | locations, with their text shown or referenced |
 | [`write_file`](write-file.md) | `path`, `path_ref`, `contents_ref` | `contents` | confirmation |
-| [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | confirmation |
+| [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text`, `edits` | confirmation |
 | [`apply_checkout`](../checkouts.md#CHECKOUT-14) | `checkout`, `paths` | none | the files brought back, one confirmation each |
 | [`spawn_processor`](spawn-processor.md) | `reads`, `about` | `instruction` | a reference |
 | [`spawn_agent`](spawn-agent.md) | `kind`, `mcp_servers` | `task`, `each` | one report per delegate |

@@ -47602,3 +47602,121 @@ fn the_tool_is_offered_where_runs_are_confined() {
         turn.first
     );
 }
+
+/// Runs one `edit_file` call against `a.txt` holding `contents`, where a rule makes every edit
+/// to it ask. Returns the file afterwards, what the confirmer was shown and the planner's next
+/// request, which carries the result.
+fn run_one_edit(
+    name: &str,
+    contents: &str,
+    arguments: &str,
+) -> (String, Vec<bravebot_agent::WriteRequest>, String) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("a.txt"), contents).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    // The arguments travel inside a JSON string, which cannot hold the layout they are written in.
+    let one_line: String = arguments.lines().map(str::trim).collect();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("edit_file", &one_line),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+    let task = Task::new("edit a.txt").with_permissions(rules(&[], &["Edit(a.txt)"], &[]));
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    let _first = received.recv().unwrap();
+    let second = received.recv().unwrap();
+    let after = std::fs::read_to_string(scratch.path.join("a.txt")).unwrap();
+    (after, confirmer.seen, second)
+}
+
+/// Several passages in one call are one question about one diff, and each lands in place.
+#[test]
+fn several_edits_to_one_file_are_approved_once_as_one_diff() {
+    let (after, seen, _) = run_one_edit(
+        "edit-many",
+        "one\ntwo\nthree\nfour\nfive\n",
+        r#"{"path":"a.txt","edits":[
+            {"old_text":"one","new_text":"ONE"},
+            {"old_text":"three","new_text":"THREE"},
+            {"old_text":"five","new_text":"FIVE"}]}"#,
+    );
+    assert_eq!(after, "ONE\ntwo\nTHREE\nfour\nFIVE\n");
+    assert_eq!(seen.len(), 1, "each passage asked on its own");
+    assert_eq!(
+        seen[0].existing.as_deref(),
+        Some("one\ntwo\nthree\nfour\nfive\n")
+    );
+    assert_eq!(seen[0].contents, "ONE\ntwo\nTHREE\nfour\nFIVE\n");
+}
+
+/// A pair that does not match refuses the whole call: nobody is asked, the earlier pairs are not
+/// written, and the planner is told which pair it was.
+#[test]
+fn a_missing_passage_among_several_changes_nothing_and_names_the_pair() {
+    let (after, seen, second) = run_one_edit(
+        "edit-many-missing",
+        "one\ntwo\nthree\n",
+        r#"{"path":"a.txt","edits":[
+            {"old_text":"one","new_text":"ONE"},
+            {"old_text":"absent","new_text":"x"},
+            {"old_text":"three","new_text":"THREE"}]}"#,
+    );
+    assert_eq!(after, "one\ntwo\nthree\n");
+    assert!(seen.is_empty(), "a refused call reached the prompt");
+    assert!(second.contains("edit 2 of 3"), "{second}");
+    assert!(
+        second.contains("No edit in this call was applied"),
+        "{second}"
+    );
+}
+
+/// Pairs run in order on the running text, so a later pair can match what an earlier one wrote.
+#[test]
+fn a_later_edit_matches_the_text_an_earlier_one_wrote() {
+    let (after, _, _) = run_one_edit(
+        "edit-many-chained",
+        "alpha\n",
+        r#"{"path":"a.txt","edits":[
+            {"old_text":"alpha","new_text":"beta"},
+            {"old_text":"beta","new_text":"gamma"}]}"#,
+    );
+    assert_eq!(after, "gamma\n");
+}
+
+/// `edits` and a single pair together do not say which was meant, and edits that cancel each
+/// other would be approved as a change that is not one.
+#[test]
+fn edits_beside_a_single_pair_or_cancelling_out_are_refused() {
+    let (after, seen, second) = run_one_edit(
+        "edit-many-both",
+        "alpha\n",
+        r#"{"path":"a.txt","old_text":"alpha","new_text":"beta",
+            "edits":[{"old_text":"alpha","new_text":"gamma"}]}"#,
+    );
+    assert_eq!(after, "alpha\n");
+    assert!(seen.is_empty());
+    assert!(second.contains("not both"), "{second}");
+
+    let (after, seen, second) = run_one_edit(
+        "edit-many-cancel",
+        "alpha\n",
+        r#"{"path":"a.txt","edits":[
+            {"old_text":"alpha","new_text":"beta"},
+            {"old_text":"beta","new_text":"alpha"}]}"#,
+    );
+    assert_eq!(after, "alpha\n");
+    assert!(seen.is_empty());
+    assert!(second.contains("would change nothing"), "{second}");
+}
