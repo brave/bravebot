@@ -6753,7 +6753,8 @@ impl Session {
         // words before the turn is built, this marker is sent as it stands: the planner reads
         // "[Image #2]" and counts to the picture that answers it. Translating it would change
         // what the model is given, which is the one thing a change of language must not do.
-        let marker = format!("[Image #{}]", self.attachments_made);
+        let noun = bravebot_filetype::by_name::Kind::Attachment(image.media_type).noun();
+        let marker = format!("[{noun} #{}]", self.attachments_made);
         self.paste(&marker);
         // The bytes are the user's own paste, taken from their clipboard a moment ago. A picture
         // that will not decode, or a terminal that draws none, just has no thumbnail.

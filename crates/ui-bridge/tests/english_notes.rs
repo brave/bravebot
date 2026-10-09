@@ -30,29 +30,39 @@ fn a_note_for_the_window_is_in_english_whatever_the_machine_says() {
     let mut stdin = child.stdin.take().expect("stdin");
     let mut stdout = BufReader::new(child.stdout.take().expect("stdout"));
 
-    let request = json!({"id": 1, "method": "drops.classify", "params": {
-        "files": [{"path": "/a/scan.pdf", "bytes": 9 * 1024 * 1024}]
-    }});
-    writeln!(stdin, "{request}").expect("the request is written");
-    let answer = loop {
-        let mut line = String::new();
-        assert_ne!(
-            stdout.read_line(&mut line).expect("a line"),
-            0,
-            "bravebot-rpc ended without answering"
-        );
-        let message: Value = serde_json::from_str(&line).expect("a JSON line");
-        if message["id"] == 1 {
-            break message;
+    let mut ask = |id: u64, method: &str, params: Value| -> Value {
+        let request = json!({"id": id, "method": method, "params": params});
+        writeln!(stdin, "{request}").expect("the request is written");
+        loop {
+            let mut line = String::new();
+            assert_ne!(
+                stdout.read_line(&mut line).expect("a line"),
+                0,
+                "bravebot-rpc ended without answering"
+            );
+            let message: Value = serde_json::from_str(&line).expect("a JSON line");
+            if message["id"] == id {
+                break message;
+            }
         }
     };
+    let dropped = ask(
+        1,
+        "drops.classify",
+        json!({"files": [{"path": "/a/scan.pdf", "bytes": 9 * 1024 * 1024}]}),
+    );
+    let pasted = ask(2, "pastes.check", json!({"bytes": 20 * 1024 * 1024}));
     drop(stdin);
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&home);
 
     assert_eq!(
-        answer["ok"]["files"][0]["note"],
+        dropped["ok"]["files"][0]["note"],
         "scan.pdf is 9.0 MB, and an attachment carries at most 8.0 MB",
-        "{answer}"
+        "{dropped}"
+    );
+    assert_eq!(
+        pasted["ok"]["note"], "that picture is 20.0 MB, and a paste carries at most 10.0 MB",
+        "{pasted}"
     );
 }

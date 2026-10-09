@@ -62,6 +62,27 @@ fn pasted_image(entry: &Value) -> Result<PastedImage, Failure> {
     Ok(PastedImage { media_type, bytes })
 }
 
+/// The type a front end that re-encodes a pasted picture writes it as. PNG, because it is lossless
+/// and every clipboard offers a picture as one.
+const REENCODED: &str = "image/png";
+
+/// Whether a front end may stage a pasted picture of `bytes` (PASTE-11): `{ "ok": true }` with the
+/// type to name it by once re-encoded and the noun its marker uses, or `{ "ok": false }` with the
+/// note to show for one too large. The cap is the one [`pasted`] holds a send to and the terminal's
+/// clipboard reader stages by, the note is the terminal's, and the noun is the one the terminal
+/// writes, so a picture one front end takes the other takes under the same marker.
+pub fn paste_check(request: &Request) -> Result<Value, Failure> {
+    let Some(bytes) = request.param("bytes").as_u64() else {
+        return Err(Failure::bad_request("`bytes` must be a whole number"));
+    };
+    let most = MAX_PASTED_IMAGE_BYTES as u64;
+    Ok(if bytes > most {
+        json!({ "ok": false, "note": bravebot_i18n::sizes::paste_too_large(bytes, most) })
+    } else {
+        json!({ "ok": true, "media": REENCODED, "noun": Kind::Attachment(REENCODED).noun() })
+    })
+}
+
 fn too_large(size: usize) -> Failure {
     Failure::bad_request(format!(
         "a pasted picture of {size} bytes is over the {MAX_PASTED_IMAGE_BYTES} a paste may be"

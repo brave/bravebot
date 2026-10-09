@@ -8,13 +8,17 @@
  * draft is edited, only when it is sent.
  *
  * One counter numbers everything staged in a composer, so no two markers share a number and a
- * number is never reused. A pasted picture is numbered from the same counter.
+ * number is never reused. A pasted picture is numbered from the same counter, as the terminal's
+ * `attachments_made` numbers both (PASTE-6).
  */
 
 import type { DropOutcome, DroppedFile } from '../shared/drops'
+import type { PastedPicture } from '../shared/pastes'
 
-/** One staged thing and the marker that stands for it. Only drops for now; a paste is the next. */
-export type Staged = { marker: string; via: 'drop'; file: DroppedFile }
+/** One staged thing and the marker that stands for it. */
+export type Staged =
+  | { marker: string; via: 'drop'; file: DroppedFile }
+  | { marker: string; via: 'paste'; picture: PastedPicture }
 
 export interface Staging {
   /** How many markers this composer has ever written. */
@@ -55,15 +59,32 @@ export function stageDrop(staging: Staging, outcomes: DropOutcome[], draft: stri
     }
   }
   if (written.length === 0) return { staging, draft, caret, skipped }
+  return { staging: { made, staged }, ...writtenAt(draft, caret, written), skipped }
+}
+
+/** What a paste did to the composer: the new draft and where the caret goes. */
+export type StagedPaste = Omit<StagedDrop, 'skipped'>
+
+/** Write a pasted picture's marker into `draft` at `caret`, numbered from the counter drops share. */
+export function stagePaste(staging: Staging, picture: PastedPicture, draft: string, caret: number): StagedPaste {
+  const made = staging.made + 1
+  const marker = `[${picture.noun} #${made}]`
+  return { staging: { made, staged: [...staging.staged, { marker, via: 'paste', picture }] }, ...writtenAt(draft, caret, [marker]) }
+}
+
+function writtenAt(draft: string, caret: number, written: string[]): { draft: string; caret: number } {
   const at = Math.max(0, Math.min(caret, draft.length))
   const before = draft.slice(0, at)
   const lead = before.length > 0 && !/\s$/.test(before) ? ' ' : ''
   const text = `${lead}${written.join(' ')} `
+  return { draft: before + text + draft.slice(at), caret: at + text.length }
+}
+
+/** The grants a send names, split the way the main process takes them: `drops` and `pastes`. */
+export function grantsOf(items: Staged[]): { drops: string[]; pastes: string[] } {
   return {
-    staging: { made, staged },
-    draft: before + text + draft.slice(at),
-    caret: at + text.length,
-    skipped,
+    drops: items.flatMap((item) => item.via === 'drop' ? [item.file.id] : []),
+    pastes: items.flatMap((item) => item.via === 'paste' ? [item.picture.id] : []),
   }
 }
 

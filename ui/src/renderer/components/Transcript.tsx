@@ -35,8 +35,9 @@ import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconNam
 import { middleTruncate } from '../truncate'
 import { pointForPrompt, undoRow } from '../rewind'
 import { showToast } from '../toasts'
-import { EMPTY_STAGING, named, stageDrop, withoutMarker, type Staging } from '../staging'
+import { EMPTY_STAGING, named, stageDrop, stagePaste, withoutMarker, type Staging } from '../staging'
 import type { Drop } from '../../shared/drops'
+import type { Paste } from '../../shared/pastes'
 
 interface Live {
   model: string | null
@@ -89,7 +90,7 @@ interface Props {
   attachments: FileAttachment[]
   onAttach: () => void
   onRemoveAttachment: (id: string) => void
-  /** Record what a drop staged in a session's composer. */
+  /** Record what a drop or a paste staged in a session's composer. */
   onStaging: (session: string, staging: Staging) => void
   backendReady: boolean | null
   onCheckBackend: () => void
@@ -443,23 +444,35 @@ export function Transcript({
   const attach = useEvent(onAttach)
   const removeAttachment = useEvent(onRemoveAttachment)
   const removeStaged = useEvent((marker: string) => onDraft(withoutMarker(draft, marker)))
-  const dropped = useEvent((drop: Drop) => {
-    if (!live || drop.session !== live.handle) return
-    const field = input.current?.shadowRoot?.querySelector('textarea')
-    const next = stageDrop(live.staging ?? EMPTY_STAGING, drop.outcomes, draft, field?.selectionEnd ?? draft.length)
-    for (const left of next.skipped) {
-      if (left.why === 'too-large') showToast('Too large to attach', left.note, 'note')
-      else showToast(SKIPPED[left.why], left.name, 'note')
-    }
-    if (next.draft === draft) return
-    onStaging(live.handle, next.staging)
+  const caret = (): number => input.current?.shadowRoot?.querySelector('textarea')?.selectionEnd ?? draft.length
+  /** Put what a drop or a paste wrote into the draft, and the caret after it. */
+  const restage = (handle: string, next: { staging: Staging; draft: string; caret: number }) => {
+    onStaging(handle, next.staging)
     onDraft(next.draft)
     requestAnimationFrame(() => {
       input.current?.focus()
       input.current?.shadowRoot?.querySelector('textarea')?.setSelectionRange(next.caret, next.caret)
     })
+  }
+  const dropped = useEvent((drop: Drop) => {
+    if (!live || drop.session !== live.handle) return
+    const next = stageDrop(live.staging ?? EMPTY_STAGING, drop.outcomes, draft, caret())
+    for (const left of next.skipped) {
+      if (left.why === 'too-large') showToast('Too large to attach', left.note, 'note')
+      else showToast(SKIPPED[left.why], left.name, 'note')
+    }
+    if (next.draft !== draft) restage(live.handle, next)
   })
   useEffect(() => window.bravebot.onDrop(dropped), [dropped])
+  const pasted = useEvent((paste: Paste) => {
+    if (!live || paste.session !== live.handle) return
+    if (paste.outcome.kind === 'too-large') {
+      showToast('Too large to paste', paste.outcome.note, 'note')
+      return
+    }
+    restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))
+  })
+  useEffect(() => window.bravebot.onPaste(pasted), [pasted])
   // Entered and left once per element crossed, so counted rather than toggled.
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
