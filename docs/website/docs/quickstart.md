@@ -141,6 +141,43 @@ earlier, so the notice keeps showing until the registry answers with something e
 included. An [incognito session](using/sessions.md#a-session-that-leaves-nothing-behind) still
 reads an answer an ordinary session left, and neither records one nor asks.
 
+## Uninstall
+
+Remove it the way it was installed.
+
+An npm install goes with npm:
+
+```sh
+npm uninstall -g @brave/bravebot
+```
+
+A script install is one binary, and the script wrote down where it put it:
+
+```sh
+cat ~/.bravebot/installed-by
+```
+
+That file holds the full path. It is `/usr/local/bin/bravebot` unless `INSTALL_DIR` named somewhere
+else, and a machine with no home directory has no record to read. Remove that path, with `sudo` where
+the directory is not yours to write to:
+
+```sh
+sudo rm /usr/local/bin/bravebot
+```
+
+Neither route touches `~/.bravebot`. It holds your settings, prompt history, session records, themes,
+MCP declarations and any imported subscription, so removing the binary leaves all of that for a later
+install to find. To remove it too:
+
+```sh
+rm -rf ~/.bravebot
+```
+
+Two things are added by hand and are removed by hand: an `eval "$(bravebot completion …)"` or
+`eval "$(bravebot shell-init …)"` line in `~/.bashrc`, `~/.zshrc` or `~/.config/fish/config.fish`,
+and `~/.config/fish/completions/bravebot.fish` where a fish completion was written there. See
+[`completion`](reference/cli.md#completion) and [`shell-init`](reference/cli.md#shell-init).
+
 ## The first question: do you trust this directory?
 
 Brave Bot asks whether you trust the working directory before anything else.
