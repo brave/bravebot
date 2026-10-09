@@ -150,7 +150,8 @@ edit in a large file shows only the change. An empty output says so, and so does
 and a file with nothing to preview. A diff that cannot be computed says so rather than showing nothing. A plan longer
 than the box is scrolled to rather than cut short, and the question stays on screen while it is.
 The questions a session opens with keep their question and their keys on screen the same way, with
-what lies between scrolled by the keys the write and run prompts use, a page moving one row fewer
+what lies between scrolled by the keys the write and run prompts use (Up, Down, `k`, `j`, PageUp, PageDown, Home and
+End, as [SCROLL-3](scroller.md#SCROLL-3) sets out), a page moving one row fewer
 than the box shows, and none of them takes a yes at a draw that cuts either off.
 A run prompt keeps its question and its keys on screen the same way and pages the same way. While a
 row of its plan, down to the access the line spends, has not been on the screen during this

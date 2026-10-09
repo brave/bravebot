@@ -253,7 +253,7 @@ pub struct RunRequest {
     /// Where an answer that remembers the reach the planner asked for would be written, where one
     /// may be.
     ///
-    /// `Some` exactly where the prompt may offer `m` and `k`: a session that keeps a record of
+    /// `Some` exactly where the prompt may offer `m` and `e`: a session that keeps a record of
     /// reach at all, with a session to key a session-long answer to. The path rather than a flag,
     /// for the reason [`RunRequest::record`] carries one.
     pub reach_record: Option<std::path::PathBuf>,
@@ -615,7 +615,7 @@ impl RunRequest {
         names
     }
 
-    /// The programs, each with its operation word, that `m` and `k` would remember the requested
+    /// The programs, each with its operation word, that `m` and `e` would remember the requested
     /// credential scopes for. Empty where neither is offered.
     ///
     /// Computed from the plan and the closed table the way the acting layer computes what it writes,

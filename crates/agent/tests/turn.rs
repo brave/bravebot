@@ -17017,8 +17017,8 @@ fn keeping_a_request_for_the_session_remembers_the_scope_for_that_session_only()
     );
 }
 
-/// SANDBOX-27: `k` writes a grant that lasts, so a later session in the checkout is not asked for
-/// the same scope again. The regressions it rejects: `k` written as a session grant, which the next
+/// SANDBOX-27: `e` writes a grant that lasts, so a later session in the checkout is not asked for
+/// the same scope again. The regressions it rejects: `e` written as a session grant, which the next
 /// session cannot read, and a lasting grant that is written but not read back by another session.
 #[test]
 fn keeping_a_request_for_every_session_is_read_by_another_session() {

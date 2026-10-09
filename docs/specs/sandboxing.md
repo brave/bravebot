@@ -1617,7 +1617,7 @@ for a different line.
 ### SANDBOX-27: a person may answer a request for a credential scope by remembering it as reach for the programs it was added to
 
 At the confirmation for a line that asked for a credential scope ([SANDBOX-26](#SANDBOX-26)), `m`
-runs the line and remembers each requested scope, read only, for the session, and `k` does the same
+runs the line and remembers each requested scope, read only, for the session, and `e` does the same
 for every session started in this checkout. What is remembered is what `/reach` writes
 ([SANDBOX-23](#SANDBOX-23)): one grant for each distinct program and operation word among the line's
 stages and each requested scope, so the next plan for those programs carries the scope as a row the

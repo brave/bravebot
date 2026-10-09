@@ -329,8 +329,8 @@ fn pressed(key: KeyEvent, page: i16) -> Option<Response> {
         KeyCode::Char('y' | 'Y') => Some(Response::Answer(Answer::Approve)),
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(Response::Answer(Answer::Reject)),
         // A diff longer than the box is the one most worth reading before answering.
-        KeyCode::Up => Some(Response::Scroll(-1)),
-        KeyCode::Down => Some(Response::Scroll(1)),
+        KeyCode::Up | KeyCode::Char('k') => Some(Response::Scroll(-1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(Response::Scroll(1)),
         KeyCode::PageUp => Some(Response::Scroll(-page)),
         KeyCode::PageDown => Some(Response::Scroll(page)),
         KeyCode::Home => Some(Response::Scroll(i16::MIN)),
@@ -746,12 +746,13 @@ fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunResponse> {
         KeyCode::Char('m' | 'M') if request.offers_to_keep_reach() => {
             Some(RunResponse::Answer(RunAnswer::KeepReach))
         }
-        KeyCode::Char('k' | 'K') if request.offers_to_keep_reach() => {
+        // Not `k`: that scrolls up at every prompt, and a person scrolling must not write a grant.
+        KeyCode::Char('e' | 'E') if request.offers_to_keep_reach() => {
             Some(RunResponse::Answer(RunAnswer::KeepReachEverySession))
         }
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(RunResponse::Answer(RunAnswer::Reject)),
-        KeyCode::Up => Some(RunResponse::Scroll(-1)),
-        KeyCode::Down => Some(RunResponse::Scroll(1)),
+        KeyCode::Up | KeyCode::Char('k') => Some(RunResponse::Scroll(-1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(RunResponse::Scroll(1)),
         KeyCode::PageUp => Some(RunResponse::Page(-1)),
         KeyCode::PageDown => Some(RunResponse::Page(1)),
         KeyCode::Home => Some(RunResponse::Scroll(i16::MIN)),
@@ -791,7 +792,7 @@ struct RunDrawn {
     record_unread: usize,
     /// Rows saying what `f` grants besides running the line, not on the screen yet.
     family_unread: usize,
-    /// Rows saying what `m` and `k` remember, not on the screen yet.
+    /// Rows saying what `m` and `e` remember, not on the screen yet.
     reach_unread: usize,
 }
 
@@ -1273,7 +1274,7 @@ fn draw_run(
         family.end = measure(&lines);
     }
 
-    // What `m` and `k` would remember, where they are offered: the programs by name, the scopes, and
+    // What `m` and `e` would remember, where they are offered: the programs by name, the scopes, and
     // the place the record is written. The second sentence is the half a person is most likely to
     // assume the other way round, since the plan they are looking at asked for the scope: it is
     // asked about again next time, with the scope on it, and nothing is vouched for.
@@ -1494,7 +1495,7 @@ fn run_keys(
         for (key, answer, label) in [
             ("m", RunAnswer::KeepReach, t!(run_keep_reach)),
             (
-                "k",
+                "e",
                 RunAnswer::KeepReachEverySession,
                 t!(run_keep_reach_always),
             ),
@@ -1859,8 +1860,8 @@ fn vetting_answer_for(key: KeyEvent, verdict: Verdict, drawn: &Drawn) -> Option<
             Some(VetResponse::Answer(VetAnswer::ApproveAlways))
         }
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(VetResponse::Answer(VetAnswer::Reject)),
-        KeyCode::Up => Some(VetResponse::Scroll(-1)),
-        KeyCode::Down => Some(VetResponse::Scroll(1)),
+        KeyCode::Up | KeyCode::Char('k') => Some(VetResponse::Scroll(-1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(VetResponse::Scroll(1)),
         KeyCode::PageUp => Some(VetResponse::Scroll(-page)),
         KeyCode::PageDown => Some(VetResponse::Scroll(page)),
         KeyCode::Home => Some(VetResponse::Scroll(i16::MIN)),
@@ -3379,8 +3380,8 @@ fn call_answer_for(key: KeyEvent, request: &McpCallRequest, drawn: &Drawn) -> Op
             Some(CallResponse::Answer(CallAnswer::Reject))
         }
         KeyCode::Char('e' | 'E') => Some(CallResponse::Expand),
-        KeyCode::Up => Some(CallResponse::Scroll(-1)),
-        KeyCode::Down => Some(CallResponse::Scroll(1)),
+        KeyCode::Up | KeyCode::Char('k') => Some(CallResponse::Scroll(-1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(CallResponse::Scroll(1)),
         KeyCode::PageUp => Some(CallResponse::Scroll(-page)),
         KeyCode::PageDown => Some(CallResponse::Scroll(page)),
         KeyCode::Home => Some(CallResponse::Scroll(i16::MIN)),
@@ -5370,9 +5371,9 @@ mod tests {
         )])
     }
 
-    /// SANDBOX-27: `m` and `k` approve the line and ask for the requested reach to be remembered
+    /// SANDBOX-27: `m` and `e` approve the line and ask for the requested reach to be remembered
     /// for this session or for every one, and for nothing else. The regressions it rejects: a key
-    /// that also vouches for the programs or records the line, and `k` lasting only the session.
+    /// that also vouches for the programs or records the line, and `e` lasting only the session.
     #[test]
     fn the_keep_keys_approve_and_remember_the_reach_only() {
         let request = a_run_keeping_remote();
@@ -5381,7 +5382,7 @@ mod tests {
             Some(RunResponse::Answer(RunAnswer::KeepReach))
         );
         assert_eq!(
-            run_answer_for(press(KeyCode::Char('k')), &request),
+            run_answer_for(press(KeyCode::Char('e')), &request),
             Some(RunResponse::Answer(RunAnswer::KeepReachEverySession))
         );
         for (answer, lasting) in [
@@ -5439,7 +5440,7 @@ mod tests {
             toolchain_only,
             option_first,
         ] {
-            for key in ['m', 'M', 'k', 'K'] {
+            for key in ['m', 'M', 'e', 'E'] {
                 assert_eq!(
                     run_answer_for(press(KeyCode::Char(key)), &request),
                     None,
@@ -8894,5 +8895,89 @@ mod tests {
             "{}",
             bottom.join("\n")
         );
+    }
+
+    /// PROMPT-4, SCROLL-3: `j` and `k` scroll the write, output, vetting, call and plan prompts a
+    /// line, as Down and Up do, and answer nothing. The faults it rejects: a prompt left on the
+    /// arrows alone, the two keys swapped, and a key pressed with Ctrl scrolling.
+    #[test]
+    fn j_and_k_scroll_each_prompt_a_line_as_the_arrows_do() {
+        let drawn = Drawn::taking_yes();
+        let write = request("x", None);
+        let vet = a_vetting(Verdict::Unsafe, None, "x");
+        let output = an_output("Darwin");
+        let call = call(true, None);
+        let ctrl = |letter| KeyEvent::new(KeyCode::Char(letter), KeyModifiers::CONTROL);
+
+        for (letter, arrow, by) in [('j', KeyCode::Down, 1), ('k', KeyCode::Up, -1)] {
+            let key = press(KeyCode::Char(letter));
+            let arrow = press(arrow);
+            assert_eq!(
+                write_answer_for(key, &write, &drawn),
+                Some(WriteResponse::Scroll(by)),
+                "write, {letter}"
+            );
+            assert_eq!(
+                write_answer_for(key, &write, &drawn),
+                write_answer_for(arrow, &write, &drawn)
+            );
+            assert_eq!(
+                vet_answer_for(key, &vet, &drawn),
+                Some(VetResponse::Scroll(by)),
+                "vet, {letter}"
+            );
+            assert_eq!(
+                output_answer_for(key, &output, &drawn),
+                Some(VetResponse::Scroll(by)),
+                "output, {letter}"
+            );
+            assert_eq!(
+                call_answer_for(key, &call, &drawn),
+                Some(CallResponse::Scroll(by)),
+                "call, {letter}"
+            );
+            assert_eq!(
+                call_answer_for(key, &call, &drawn),
+                call_answer_for(arrow, &call, &drawn)
+            );
+            assert_eq!(
+                answer_for(key, &drawn),
+                Some(Response::Scroll(by)),
+                "plan, {letter}"
+            );
+
+            assert_eq!(write_answer_for(ctrl(letter), &write, &drawn), None);
+            assert_eq!(vet_answer_for(ctrl(letter), &vet, &drawn), None);
+            assert_eq!(call_answer_for(ctrl(letter), &call, &drawn), None);
+        }
+    }
+
+    /// PROMPT-4, SCROLL-3, SANDBOX-27: `j` and `k` scroll the run prompt whether or not it offers
+    /// to keep reach. The fault is a prompt that scrolls only where nothing is offered: the same
+    /// key then scrolls at one prompt and writes a standing grant at the next. Neither letter in
+    /// capitals does either.
+    #[test]
+    fn j_and_k_scroll_the_run_prompt_where_keep_reach_is_offered_too() {
+        for request in [a_run(false), a_run_keeping_remote()] {
+            assert_eq!(
+                run_answer_for(press(KeyCode::Char('j')), &request),
+                Some(RunResponse::Scroll(1))
+            );
+            assert_eq!(
+                run_answer_for(press(KeyCode::Char('k')), &request),
+                Some(RunResponse::Scroll(-1))
+            );
+            for letter in ['J', 'K'] {
+                assert_eq!(
+                    run_answer_for(press(KeyCode::Char(letter)), &request),
+                    None,
+                    "{letter}"
+                );
+            }
+            for letter in ['j', 'k'] {
+                let ctrl = KeyEvent::new(KeyCode::Char(letter), KeyModifiers::CONTROL);
+                assert_eq!(run_answer_for(ctrl, &request), None, "ctrl-{letter}");
+            }
+        }
     }
 }
