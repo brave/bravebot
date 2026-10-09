@@ -559,8 +559,14 @@ impl Confinement {
     /// Composed from this confinement and the compiled steps, which a person read, and from
     /// nothing a program printed or exited with: the same line follows a refusal, a failing test
     /// and a typo. It names the directories the session owns and the lists by name, and no path a
-    /// program chose, since a program's error text is not where the profile is decided.
+    /// program chose, since a program's error text is not where the profile is decided. It ends
+    /// with the fixed sentence about credential locations.
     pub fn profile(&self, steps: &[&Step]) -> String {
+        format!("{}{CREDENTIAL_LOCATIONS_SENTENCE}", self.reach(steps))
+    }
+
+    /// What the programs of `steps` could reach, by name, without the closing fixed sentence.
+    fn reach(&self, steps: &[&Step]) -> String {
         let mut directories: Vec<String> = Vec::new();
         for directory in self.roots.iter().chain(self.scratch.as_ref()) {
             let shown = directory.display().to_string();
@@ -858,6 +864,11 @@ pub fn stated_to_the_planner(confine_runs: bool, mode: SandboxMode) -> Option<St
         mode,
     )
 }
+
+/// Fixed text that ends every profile line, so the line is the same for every failure.
+const CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location such as `~/.ssh`, `~/.aws` \
+     or `~/.kube` cannot be added with `/add-dir` or `--add-dir`. Where the mode accepts a \
+     request, a credential scope is how a line reaches one.";
 
 /// The sentence that names the menu, for the planner, and the person is asked about every time.
 fn requests_menu_sentence() -> String {
@@ -2654,6 +2665,74 @@ mod tests {
 
         assert_eq!(one, two);
         assert!(!one.contains("/elsewhere"), "{one}");
+    }
+
+    /// SANDBOX-19: every profile line ends with one fixed sentence saying a credential location
+    /// cannot be added and a credential scope is the way to reach one. It is the same words in each
+    /// mode, on each platform that confines, with or without a home to apply a request under, and
+    /// for any step, and it names no mode, so it stays true whichever modes accept a request.
+    #[test]
+    fn the_profile_line_ends_with_the_fixed_sentence_about_credential_locations() {
+        let roots = ["/work/project"];
+        let no_home = Confinement::new(
+            Prelude::Linux,
+            PathBuf::from("/tmp"),
+            None,
+            roots.iter().map(PathBuf::from).collect(),
+            Some(Path::new("/var/scratch")),
+        );
+        let confinements = [
+            ("windows", confinement(&roots)),
+            ("strict", confinement(&roots).with_mode(SandboxMode::Strict)),
+            (
+                "standard linux",
+                reading_confinement(Prelude::Linux, &roots),
+            ),
+            (
+                "standard macos",
+                reading_confinement(Prelude::MacOs, &roots),
+            ),
+            (
+                "strict macos",
+                reading_confinement(Prelude::MacOs, &roots).with_mode(SandboxMode::Strict),
+            ),
+            ("no home", no_home),
+        ];
+        let failing = step("/bin/sh", &["-c", "false"]);
+        let building = step("/usr/bin/make", &["build"]);
+
+        for (name, confined) in &confinements {
+            let lines = [
+                confined.profile(&[&failing]),
+                confined.profile(&[&building]),
+                confined.profile(&[&failing, &building]),
+            ];
+            for line in lines {
+                assert!(
+                    line.ends_with(CREDENTIAL_LOCATIONS_SENTENCE),
+                    "{name}: {line}"
+                );
+                assert_eq!(line.matches("cannot be added").count(), 1, "{name}: {line}");
+            }
+        }
+
+        let sentence = CREDENTIAL_LOCATIONS_SENTENCE;
+        for needle in [
+            "`~/.ssh`",
+            "`~/.aws`",
+            "`~/.kube`",
+            "`/add-dir`",
+            "`--add-dir`",
+            "credential scope",
+        ] {
+            assert!(
+                sentence.contains(needle),
+                "{needle} missing from {sentence}"
+            );
+        }
+        for mode in ["strict", "standard", "off"] {
+            assert!(!sentence.contains(mode), "{mode} named in {sentence}");
+        }
     }
 
     /// The line and the policy read the same table: a step the policy gives the cargo cache and

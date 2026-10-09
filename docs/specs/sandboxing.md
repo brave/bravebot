@@ -932,6 +932,13 @@ A result whose steps all
 exited zero carries no such sentence. The sentence is composed from the same two decisions the policy is
 ([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
 
+The sentence ends with fixed text, in every mode that produces it, saying that a credential
+location such as `~/.ssh`, `~/.aws` or `~/.kube` cannot be added with `/add-dir` or `--add-dir`,
+and that where the mode accepts a request, a credential scope is how a line reaches one. A planner
+that meets a refusal on such a location otherwise has no other account of it, and asks the person
+for an `/add-dir` that does nothing. The text is the same for every failure and for exit 1 and
+exit 2.
+
 **Why.** A refused step reports `exited 1` and its standard error is quarantined, so the planner
 cannot see that the sandbox refused it. Without this sentence it cannot tell a sandbox refusal from
 a fault in the machine, so it chases causes that do not apply and sends the person to run
@@ -950,6 +957,9 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::confine::a_step_with_no_list_and_no_scope_says_none_for_both`
 `verified-by: bravebot_agent::confine::the_profile_line_is_the_same_whatever_paths_the_step_was_given`
 `verified-by: bravebot_agent::confine::the_profile_line_agrees_with_the_policy_on_the_lists_and_the_scope`
+`verified-by: bravebot_agent::confine::the_profile_line_ends_with_the_fixed_sentence_about_credential_locations`
+`verified-by: bravebot_agent::turn::a_failed_run_says_a_credential_location_cannot_be_added_whatever_the_mode_and_exit`
+`verified-by: bravebot_agent::turn::a_run_that_worked_or_was_not_confined_does_not_say_a_credential_location_cannot_be_added`
 `verified-by: bravebot_agent::tools::the_confinement_statement_is_appended_to_run_on_a_confining_turn_only`
 `verified-by: bravebot_agent::turn::a_failed_run_on_a_confining_turn_says_what_it_ran_under`
 `verified-by: bravebot_agent::turn::a_run_that_succeeded_on_a_confining_turn_carries_no_profile_line`
