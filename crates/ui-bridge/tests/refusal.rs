@@ -79,8 +79,7 @@ fn harness() -> Harness {
             cancel,
             answers: answers_tx,
             pending,
-            turn: 1,
-            run: false,
+            target: 1,
             finished: Arc::new(AtomicBool::new(false)),
         },
     }
@@ -232,8 +231,7 @@ fn refusing_nothing_queues_nothing() {
             cancel: bravebot_core::cancel::Cancel::new(),
             answers: mpsc::channel().0,
             pending: Arc::new(Mutex::new(None)),
-            turn: 1,
-            run: false,
+            target: 1,
             finished: Arc::new(AtomicBool::new(false)),
         },
     );
@@ -1264,8 +1262,7 @@ fn question_numbers_are_not_reused_by_a_later_turn_of_the_same_session() {
             cancel,
             answers: answers_tx,
             pending: Arc::clone(&pending),
-            turn: 1,
-            run: false,
+            target: 1,
             finished: Arc::new(AtomicBool::new(false)),
         };
         let answerer = std::thread::spawn(move || {
@@ -1313,7 +1310,9 @@ fn a_session_with_no_question_numbers_left_refuses_to_ask() {
     let emitter = Emitter::new(Box::new(move |event| {
         sink.lock().expect("not poisoned").push(event);
     }));
-    let (_answers_tx, answers_rx) = mpsc::channel();
+    // No sender is kept, so a question that wrongly went out is refused at once and the missing
+    // number shows in the events below, instead of the test waiting for an answer.
+    let (_, answers_rx) = mpsc::channel();
     let mut exhausted = BridgeConfirmer::new(
         emitter,
         "s1",

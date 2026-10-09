@@ -59,9 +59,10 @@ These tests do not establish TypeScript adapter behavior or native rendering.
 This block supplies no saved-history import, late subscription, reconnect, controller state,
 send deduplication, persistent listener, networking or embedded bindings. Session identity lasts
 for the connection. Closing detaches the view without claiming worker termination or save
-success. Question numbers last the session, a cancel can name its turn, and the trust answer is taken once
-(RPCVIEW-6); a runtime that does not advertise these keeps its older, weaker targets. A cancel issued
-while a send is unanswered names no turn, since the turn it starts is not yet known.
+success. Question numbers last the session, a cancel can name the target of a turn or run, and the trust answer is
+taken once (RPCVIEW-6); a runtime that does not advertise these keeps its older, weaker targets. A
+cancel issued while a send is unanswered, or after the view has ended, names no target and stops
+whatever is running (RPCVIEW-7).
 
 ## Implemented TypeScript client
 
@@ -188,7 +189,7 @@ Every session, draft, message, and pending action is qualified by target and run
 | Take control | Explicit authorized handoff using expected controller epoch. | New atomic host transition; old-epoch actions fail. |
 | Send | Text plus client message ID; acknowledge acceptance separately from completion. | `turn.send`; add narrow send deduplication below. Busy returns no queued turn; record that rejection. |
 | Answer | Typed reply to the exact session/turn/question under current control. | Existing reply kinds plus new bridge target checks; phone subset below. |
-| Cancel | Apply cancellation to an exact active turn. | Add expected-turn validation to existing session-only `turn.cancel`. |
+| Cancel | Apply cancellation to an exact active turn or run. | Expected-target validation on `turn.cancel`; the target is never reused, unlike a turn number. |
 | Close | Enter `closing`; reach `closed` only after writer shutdown. | Existing `session.close` acknowledges before the worker necessarily finishes; add completion evidence. |
 | Detach | End this client's subscription/control availability. | Does not close a persistent host session. Stdio EOF retains its current process-ending semantics. |
 

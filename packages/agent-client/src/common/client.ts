@@ -1,7 +1,7 @@
 import { describeThrown, isolate } from './isolate.js'
 import { CapabilityError, ProtocolError, RpcError, UnsupportedError } from './errors.js'
 import { RpcConnection, type Deadlines, type LineSink, type Outcome } from './connection.js'
-import type { AgentClient, AgentSession, AskAnswer, CloseOutcome, SendResult, TargetInfo, ViewListener } from './interface.js'
+import type { AgentClient, AgentSession, AskAnswer, CancelResult, CloseOutcome, SendResult, TargetInfo, ViewListener } from './interface.js'
 import { applyUpdate, endView, startView, type ViewState } from './view.js'
 import {
   SESSION_VIEW_START,
@@ -52,9 +52,7 @@ class Session implements AgentSession {
   private trust: JsonValue | null = null
   private readonly listeners = new Set<ViewListener>()
   private readonly replying = new Set<number>()
-  /** The latest turn this session sent, which the view may not show yet. */
-  private sent = 0
-  /** Sends whose answer has not arrived, so the turn they will be numbered is not yet known. */
+  /** Sends whose answer has not arrived, so the target of the turn they start is not yet known. */
   private sending = 0
   /** Why the view could not start, when a malformed event arrived before it existed. */
   refused: string | null = null
@@ -64,8 +62,8 @@ class Session implements AgentSession {
     private readonly connection: RpcConnection,
     private readonly forget: (id: string) => void,
     private readonly report: (message: string) => void,
-    /** Whether the runtime names the turn a cancel is for. */
-    private readonly namesTurns: boolean,
+    /** Whether the runtime names what a cancel is for. */
+    private readonly namesTargets: boolean,
   ) {}
 
   get view(): ViewState {
@@ -148,9 +146,10 @@ class Session implements AgentSession {
       this.sending--
     }
     if (!isRecord(result) || typeof result.turn !== 'number') throw new ProtocolError('turn.send did not report a turn')
-    // The latest send, not the largest: turn numbers go back after a rewind.
-    this.sent = result.turn
-    return { turn: result.turn }
+    // A runtime that does not advertise action targets reports none; 0 is the idle target.
+    const target = result.target === undefined ? 0 : result.target
+    if (typeof target !== 'number' || !Number.isSafeInteger(target) || target < 0) throw new ProtocolError('turn.send reported a target that is not a count')
+    return { turn: result.turn, target }
   }
 
   /** The question on screen, if it is the one being answered and this client can answer it. */
@@ -194,13 +193,21 @@ class Session implements AgentSession {
     }
   }
 
-  async cancel(): Promise<void> {
-    // Name the turn to stop when the runtime can use it, so a cancel that arrives late cannot reach a
-    // turn that began after the one meant. While a send is unanswered the number of the turn it
-    // starts is not known, so the cancel names none and stops whatever is running, as Stop always has.
-    const turn = Math.max(this.sent, this.current?.turn ?? 0)
-    const named = this.namesTurns && this.sending === 0
-    await this.connection.request('turn.cancel', this.params(named ? { turn } : {}), undefined, { control: true })
+  async cancel(target?: number): Promise<CancelResult> {
+    // An explicit target asks to stop that turn only. A runtime that cannot name one would stop
+    // whatever is running instead, so the request is refused.
+    if (target !== undefined && !this.namesTargets) throw new UnsupportedError('this runtime cannot cancel a named turn')
+    // Name what to stop when the runtime can use it, so a cancel that arrives late cannot reach a
+    // turn that began after the one meant. A caller names it. Otherwise it is the turn on screen,
+    // unless a send is unanswered (the target of the turn it starts is not known) or the view has
+    // ended (what it shows is stale). Then the cancel names nothing and stops whatever is running,
+    // as Stop always has.
+    const shown = this.current !== null && this.current.ended === null && this.sending === 0 ? this.current.target : undefined
+    const named = this.namesTargets ? (target ?? shown) : undefined
+    const result = await this.connection.request('turn.cancel', this.params(named === undefined ? {} : { target: named }), undefined, {
+      control: true,
+    })
+    return { cancelled: named !== undefined && isRecord(result) && typeof result.cancelled === 'boolean' ? result.cancelled : null }
   }
 
   async close(): Promise<CloseOutcome> {

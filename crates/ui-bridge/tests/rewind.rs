@@ -52,9 +52,19 @@ impl Window {
 
     /// Send `prompt`, approve every write, and return the turn's final event.
     fn turn(&mut self, session: &str, prompt: &str) -> Event {
+        self.send(session, prompt);
+        self.finish(session)
+    }
+
+    /// Send `prompt` and return the response, which names the turn and its target.
+    fn send(&mut self, session: &str, prompt: &str) -> Value {
         let params = json!({"session": session, "prompt": prompt, "model": "undo-test/test"});
         self.once_finished(|window| window.dispatch("turn.send", params.clone()))
-            .unwrap();
+            .unwrap()
+    }
+
+    /// Approve every write until the running turn's final event, and return it.
+    fn finish(&mut self, session: &str) -> Event {
         let until = std::time::Instant::now() + endpoint::LIMIT;
         loop {
             assert!(std::time::Instant::now() < until, "the turn never ended");
@@ -309,4 +319,30 @@ fn a_rewind_while_a_turn_runs_is_refused() {
     let done = window.turn(&session, "third");
     server.join().unwrap();
     assert_eq!(done.name, "turn.done", "{:?}", done.data);
+}
+
+/// A turn after a rewind is numbered again but is a different target, so a late cancel for the
+/// earlier turn with that number stops nothing (RPCVIEW-6).
+#[test]
+fn a_turn_after_a_rewind_has_a_new_target_though_its_number_repeats() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("rewind-new-target");
+    let (config, _requests, server) =
+        endpoint::endpoint(vec![endpoint::answer(), endpoint::answer()], None);
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+
+    let first = window.send(&session, "first");
+    window.finish(&session);
+    window.rewind(&session, 1).unwrap();
+    let second = window.send(&session, "second");
+    window.finish(&session);
+    server.join().unwrap();
+
+    assert_eq!(
+        first["turn"], second["turn"],
+        "the turn number was not reused"
+    );
+    assert_ne!(first["target"], second["target"], "a target was reused");
 }

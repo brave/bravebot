@@ -17,6 +17,8 @@ export interface ViewEnd {
 export interface ViewState {
   readonly sequence: number
   readonly turn: number
+  /** What a cancel names to stop the turn on screen. */
+  readonly target: number
   readonly status: Status
   readonly pending: Pending | null
   /** In the order each row first appeared. */
@@ -29,7 +31,7 @@ export function startView(initial: ViewUpdate): ViewState {
   if (initial.sequence !== 0) throw new ProtocolError(`the initial view has sequence ${initial.sequence}, not 0`)
   const ids = new Set(initial.rows.map((row) => row.id))
   if (ids.size !== initial.rows.length) throw new ProtocolError('the initial view repeats a row id')
-  const view: ViewState = { sequence: 0, turn: initial.turn, status: initial.status, pending: initial.pending, rows: [...initial.rows], ended: null }
+  const view: ViewState = { sequence: 0, turn: initial.turn, target: initial.target, status: initial.status, pending: initial.pending, rows: [...initial.rows], ended: null }
   return initial.status === 'detached' ? endView(view, 'detached', 'the session was closed') : view
 }
 
@@ -57,6 +59,7 @@ export function applyUpdate(view: ViewState, update: ViewUpdate): ViewState {
   const next: ViewState = {
     sequence: update.sequence,
     turn: update.turn,
+    target: update.target,
     status: update.status,
     pending: update.pending,
     rows,

@@ -75,7 +75,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
     const made = await rig({ 'plan:busy': [{ say: 'all done', hold: 'model' }] })
     const session = await trusted(made)
     const seen = recording(session)
-    assert.deepEqual(await session.send('plan:busy please'), { turn: 1 })
+    assert.equal((await session.send('plan:busy please')).turn, 1)
     await made.stub.reached('model')
     const running = await until(session, 'the prompt row', (view) => view.status === 'running' && view.rows.length === 1)
     assert.equal(running.rows[0]?.kind, 'prompt')
@@ -91,7 +91,7 @@ describe('a real bravebot-rpc process through the typed client', () => {
     assert.deepEqual(sequences, sequences.map((_, at) => sequences[0]! + at), 'every update was the next in sequence')
     assert.equal(done.ended, null)
     // The next turn is accepted straight after completion: nothing about the finished one blocks it.
-    assert.deepEqual(await session.send('plan:busy again'), { turn: 2 })
+    assert.equal((await session.send('plan:busy again')).turn, 2)
     await until(session, 'the second turn', (view) => view.turn === 2 && view.status === 'completed')
   })
 
@@ -277,27 +277,46 @@ describe('a real bravebot-rpc process through the typed client', () => {
   test('a cancel delayed past the end of its turn does not stop the next turn', async () => {
     const made = await rig({ 'plan:first': [{ say: 'first reply' }], 'plan:second': [{ say: 'second reply', hold: 'second' }] })
     const session = await trusted(made)
-    assert.deepEqual(await session.send('plan:first'), { turn: 1 })
+    const first = await session.send('plan:first')
     await until(session, 'the first turn to end', (view) => view.status === 'completed')
-    assert.deepEqual(await session.send('plan:second'), { turn: 2 })
+    const second = await session.send('plan:second')
+    assert.notEqual(second.target, first.target)
     await made.stub.reached('second')
-    // The cancel meant for turn 1, arriving while turn 2 runs.
-    assert.deepEqual(await rawOn(made.rpc, 'turn.cancel', { session: session.id, turn: 1 }), { cancelled: false })
+    // The cancel meant for the first turn, arriving while the second runs.
+    assert.deepEqual(await session.cancel(first.target), { cancelled: false })
     assert.equal(session.view.status, 'running', 'the delayed cancel stopped the later turn')
     made.stub.release('second')
     const done = await until(session, 'the second turn to end', (view) => view.status === 'completed' && view.turn === 2)
     assert.equal((done.rows.at(-1)?.data as { reply: string }).reply, 'second reply')
   })
 
-  test('cancel stops the turn that was just sent, before the view shows it', async () => {
+  test('cancel stops the turn that was just sent', async () => {
     const made = await rig({ 'plan:first': [{ say: 'first reply' }], 'plan:second': [{ say: 'late', hold: 'second' }] })
     const session = await trusted(made)
     await session.send('plan:first')
     await until(session, 'the first turn to end', (view) => view.status === 'completed')
     await session.send('plan:second')
-    await session.cancel()
+    assert.deepEqual(await session.cancel(), { cancelled: true })
     await until(session, 'the second turn to be cancelled', (view) => view.status === 'cancelled' && view.turn === 2)
     made.stub.release('second')
+  })
+
+  test('after a rewind a turn is numbered again, and a cancel meant for the earlier turn with that number stops nothing', async () => {
+    const made = await rig({ 'plan:one': [{ say: 'one' }], 'plan:two': [{ say: 'two' }], 'plan:three': [{ say: 'three', hold: 'third' }] })
+    const session = await trusted(made)
+    await session.send('plan:one')
+    await until(session, 'the first turn to end', (view) => view.status === 'completed')
+    const earlier = await session.send('plan:two')
+    await until(session, 'the second turn to end', (view) => view.status === 'completed' && view.turn === 2)
+    await rawOn(made.rpc, 'session.rewind', { session: session.id, steps: 1 })
+    const later = await session.send('plan:three')
+    assert.equal(later.turn, earlier.turn, 'the rewound session numbers its next turn again')
+    assert.notEqual(later.target, earlier.target)
+    await made.stub.reached('third')
+    assert.deepEqual(await session.cancel(earlier.target), { cancelled: false })
+    assert.equal(session.view.status, 'running', 'the delayed cancel stopped the later turn')
+    made.stub.release('third')
+    await until(session, 'the third turn to end', (view) => view.status === 'completed' && view.turn === 2)
   })
 
   test('an answer meant for an earlier turn cannot match a later turn question, whose number is new', async () => {

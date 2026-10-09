@@ -93,11 +93,11 @@ impl Emitter {
         Ok(())
     }
 
-    pub fn view_started(&self, session: &str, turn: u64, prompt: serde_json::Value) {
+    pub fn view_started(&self, session: &str, turn: u64, target: u64, prompt: serde_json::Value) {
         if let Ok(mut output) = self.0.lock()
             && let Some(view) = output.views.get_mut(session)
         {
-            let update = view.started(turn, prompt);
+            let update = view.started(turn, target, prompt);
             output.update(session, update);
         }
     }
@@ -173,7 +173,7 @@ mod tests {
         let (terminal, eligible) = received.recv_timeout(Duration::from_secs(5)).unwrap();
         let next = emitter.clone();
         let starting =
-            std::thread::spawn(move || next.view_started("s1", 2, json!({"text": "next"})));
+            std::thread::spawn(move || next.view_started("s1", 2, 2, json!({"text": "next"})));
         release.send(()).unwrap();
         ending.join().unwrap();
         starting.join().unwrap();

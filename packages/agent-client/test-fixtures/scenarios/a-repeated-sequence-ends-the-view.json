@@ -8,9 +8,9 @@
     {"expectRequest": "new", "method": "session.new", "params": {"directory": "/work"}},
     {"send": [{"event": "trust.request", "session": "s1", "data": {"directory": "/work", "keeping": null}}, {"id": "$new", "ok": {"session": "s1"}}]},
     {"expectRequest": "view", "method": "session.view.start", "params": {"session": "s1", "version": 1}},
-    {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "status": "idle", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
+    {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "target": 0, "status": "idle", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
     {"await": "a", "bindSession": "a"},
-    {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 1, "turn": 1, "status": "running", "pending": null, "rows": [{"id": 1, "turn": 1, "kind": "prompt", "event": null, "data": {"text": "go"}, "resolved": false}]}}, {"event": "session.view.update", "session": "s1", "data": {"sequence": 1, "turn": 1, "status": "running", "pending": null, "rows": [{"id": 2, "turn": 1, "kind": "prompt", "event": null, "data": {"text": "go"}, "resolved": false}]}}]},
+    {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 1, "turn": 1, "target": 1, "status": "running", "pending": null, "rows": [{"id": 1, "turn": 1, "kind": "prompt", "event": null, "data": {"text": "go"}, "resolved": false}]}}, {"event": "session.view.update", "session": "s1", "data": {"sequence": 1, "turn": 1, "target": 1, "status": "running", "pending": null, "rows": [{"id": 2, "turn": 1, "kind": "prompt", "event": null, "data": {"text": "go"}, "resolved": false}]}}]},
     {"expectView": "a", "sequence": 1, "rows": [{"id": 1}], "ended": {"reason": "sequence_gap"}}
   ]
 }

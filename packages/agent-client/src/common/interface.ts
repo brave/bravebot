@@ -8,13 +8,24 @@ export interface TargetInfo {
   configured: boolean
   defaultModel: string | null
   sessionView: SessionViewCapability
-  /** Whether the runtime names the turn a cancel is for, so a late cancel cannot stop a later turn. */
+  /** Whether the runtime names what a cancel is for, so a late cancel cannot stop a later turn. */
   actionTargets: boolean
 }
 
 export interface SendResult {
   /** The turn number the bridge accepted the prompt as. Completion is reported by the view. */
   turn: number
+  /** What a cancel names to stop this turn. Unlike `turn`, it is never reused, so it stays exact after a rewind. 0 from a runtime that reports no targets. */
+  target: number
+}
+
+export interface CancelResult {
+  /**
+   * Whether the bridge stopped the named turn. `false` means the turn had already ended or another
+   * had begun, and nothing was stopped. `null` means the cancel named nothing and stopped whatever
+   * was running, because the runtime cannot name a target, the view had ended, or a send was unanswered.
+   */
+  cancelled: boolean | null
 }
 
 /**
@@ -52,8 +63,12 @@ export interface AgentSession {
   decide(request: number, decision: 'approve' | 'reject'): Promise<void>
   /** Answer the displayed `ask` question. */
   answer(request: number, answers: AskAnswer[]): Promise<void>
-  /** Ask the bridge to cancel the running turn, which also refuses a pending question. The view reports the outcome. */
-  cancel(): Promise<void>
+  /**
+   * Ask the bridge to cancel a turn, which also refuses a pending question. `target` is the one a
+   * `SendResult` or the view reported; without it the turn on screen is named. A runtime that cannot name
+   * a target refuses one with `UnsupportedError` rather than stop something else. The view reports the outcome.
+   */
+  cancel(target?: number): Promise<CancelResult>
   close(): Promise<CloseOutcome>
 }
 

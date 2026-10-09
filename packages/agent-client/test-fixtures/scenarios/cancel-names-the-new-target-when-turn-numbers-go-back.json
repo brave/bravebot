@@ -1,0 +1,26 @@
+{
+  "name": "cancel-names-the-new-target-when-turn-numbers-go-back",
+  "description": "After a rewind a send can be numbered lower than an earlier one; the target is new, so a cancel names the turn on screen.",
+  "steps": [
+    {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
+    {"expectRequest": "info", "method": "agent.info", "params": {}},
+    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}, "actionTargets": {"cancel": "expected_target", "questionIds": "session", "trust": "once", "version": 1}}}}]},
+    {"expectRequest": "new", "method": "session.new", "params": {"directory": "/work"}},
+    {"send": [{"event": "trust.request", "session": "s1", "data": {"directory": "/work", "keeping": null}}, {"id": "$new", "ok": {"session": "s1"}}]},
+    {"expectRequest": "view", "method": "session.view.start", "params": {"session": "s1", "version": 1}},
+    {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "target": 0, "status": "idle", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
+    {"await": "a", "bindSession": "a"},
+    {"start": "one", "call": "send", "session": "a", "args": {"text": "go"}},
+    {"expectRequest": "one", "method": "turn.send", "params": {"session": "s1", "prompt": "go"}},
+    {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 1, "turn": 5, "target": 10, "status": "running", "pending": null, "rows": []}}, {"id": "$one", "ok": {"turn": 5, "target": 10}}]},
+    {"await": "one", "result": {"turn": 5, "target": 10}},
+    {"start": "two", "call": "send", "session": "a", "args": {"text": "go"}},
+    {"expectRequest": "two", "method": "turn.send", "params": {"session": "s1", "prompt": "go"}},
+    {"send": [{"event": "session.view.update", "session": "s1", "data": {"sequence": 2, "turn": 3, "target": 11, "status": "running", "pending": null, "rows": []}}, {"id": "$two", "ok": {"turn": 3, "target": 11}}]},
+    {"await": "two", "result": {"turn": 3, "target": 11}},
+    {"start": "cancel", "call": "cancel", "session": "a"},
+    {"expectRequest": "c", "method": "turn.cancel", "params": {"session": "s1", "target": 11}},
+    {"send": [{"id": "$c", "ok": {"cancelled": true}}]},
+    {"await": "cancel", "result": {"cancelled": true}}
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "actionTargets": {
-    "cancel": "expected_turn",
+    "cancel": "expected_target",
     "questionIds": "session",
     "trust": "once",
     "version": 1
@@ -129,6 +129,7 @@
     ],
     "sequence": 3,
     "status": "waiting",
+    "target": 7,
     "turn": 1
   }
 }

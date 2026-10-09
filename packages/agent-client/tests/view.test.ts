@@ -6,7 +6,7 @@ import type { Row, ViewUpdate } from '../src/common/wire.js'
 
 const row = (id: number, text = ''): Row => ({ id, turn: 0, kind: 'narration', event: null, data: text, resolved: false })
 const update = (sequence: number, rows: Row[], status: ViewUpdate['status'] = 'idle'): ViewUpdate =>
-  ({ sequence, turn: 0, status, pending: null, rows })
+  ({ sequence, turn: 0, target: 0, status, pending: null, rows })
 
 test('an initial view that repeats a row id is refused', () => {
   assert.throws(() => startView(update(0, [row(1, 'a'), row(1, 'b')])), ProtocolError)

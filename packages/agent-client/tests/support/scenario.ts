@@ -102,7 +102,7 @@ export async function runScenario(scenario: Scenario, chunking: Chunking): Promi
     send: (args, target) => target().send(args.text),
     decide: (args, target) => target().decide(args.request, args.decision),
     answer: (args, target) => target().answer(args.request, args.answers),
-    cancel: (_args, target) => target().cancel(),
+    cancel: (args, target) => target().cancel(args.target),
     close: (_args, target) => target().close(),
   }
 

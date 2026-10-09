@@ -1,6 +1,6 @@
 {
-  "name": "cancel-without-action-targets-names-no-turn",
-  "description": "Against a runtime that does not advertise action targets, a cancel names only the session, as that runtime understands it.",
+  "name": "send-with-a-target-that-is-not-a-count-is-refused",
+  "description": "A turn.send response whose target is not a count is a protocol error, not a target the caller can cancel with.",
   "steps": [
     {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
     {"expectRequest": "info", "method": "agent.info", "params": {}},
@@ -12,11 +12,7 @@
     {"await": "a", "bindSession": "a"},
     {"start": "send", "call": "send", "session": "a", "args": {"text": "go"}},
     {"expectRequest": "send", "method": "turn.send", "params": {"session": "s1", "prompt": "go"}},
-    {"send": [{"id": "$send", "ok": {"turn": 1}}]},
-    {"await": "send", "result": {"turn": 1}},
-    {"start": "cancel", "call": "cancel", "session": "a"},
-    {"expectRequest": "c", "method": "turn.cancel", "params": {"session": "s1"}},
-    {"send": [{"id": "$c", "ok": {}}]},
-    {"await": "cancel"}
+    {"send": [{"id": "$send", "ok": {"turn": 1, "target": -1}}]},
+    {"await": "send", "error": {"name": "ProtocolError"}}
   ]
 }

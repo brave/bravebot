@@ -83,7 +83,7 @@ for (const ending of ['end', 'error'] as const) {
         if (method === 'agent.info') ok = { capabilities: { sessionView: capability } }
         if (method === 'session.new') ok = { session: 's1' }
         if (method === 'session.view.start') send({ event: 'session.view.initial', session: 's1',
-          data: { sequence: 0, turn: 0, status: 'idle', pending: null, rows: [] } })
+          data: { sequence: 0, turn: 0, target: 0, status: 'idle', pending: null, rows: [] } })
         send({ id, ok })
       })`
     const connection = connectStdio({ command: process.execPath, args: ['-e', script], env: {},

@@ -970,12 +970,12 @@ impl Bridge {
         let pending: crate::turn::Pending = Arc::new(Mutex::new(None));
 
         let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let target = crate::running::next_target();
         let running = Running {
             cancel: cancel.clone(),
             answers: answers_tx,
             pending: Arc::clone(&pending),
-            turn: turn_number,
-            run: false,
+            target,
             finished: Arc::clone(&finished),
         };
 
@@ -987,6 +987,7 @@ impl Bridge {
         self.emitter.view_started(
             &handle,
             turn_number as u64,
+            target,
             wire::submitted(&prompt, composed.as_ref()),
         );
         self.emitter.send(Event::new(
@@ -1036,7 +1037,7 @@ impl Bridge {
             });
         });
 
-        Ok(json!({ "turn": turn_number }))
+        Ok(json!({ "turn": turn_number, "target": target }))
     }
 
     /// Start a manifest run, and return before it finishes (MANIFEST-11).
@@ -1113,28 +1114,27 @@ impl Bridge {
 
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
-        let (run, turns) = state
+        let run = state
             .lock()
             .map(|mut s| {
                 // A run writes files as a turn does, so the same coverage gap applies.
                 s.rewind
                     .record_gap(bravebot_agent::rewind::CoverageGap::Desktop);
                 s.runs += 1;
-                (s.runs, s.turns)
+                s.runs
             })
-            .unwrap_or((1, 0));
+            .unwrap_or(1);
 
         let cancel = Cancel::new();
         let (answers_tx, answers_rx) = mpsc::channel();
         let pending: crate::turn::Pending = Arc::new(Mutex::new(None));
         let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let target = crate::running::next_target();
         let running = Running {
             cancel: cancel.clone(),
             answers: answers_tx,
             pending: Arc::clone(&pending),
-            // The session's last turn. A run is not a turn and takes no number of its own.
-            turn: turns,
-            run: true,
+            target,
             finished: Arc::clone(&finished),
         };
 
@@ -1173,7 +1173,7 @@ impl Bridge {
             });
         });
 
-        Ok(json!({ "run": run }))
+        Ok(json!({ "run": run, "target": target }))
     }
 
     /// Put the session back to where it stood `steps` turns ago, on disk and in the conversation
@@ -1314,36 +1314,42 @@ impl Bridge {
     /// Cancellation never sends an approval or authorises a write.
     fn cancel_turn(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
-        // The turn the caller meant to stop (RPCVIEW-6). Absent, the request means whatever is
-        // running, as it always has. Present, it stops that turn and no other.
-        let expected = match request.params.get("turn") {
+        // A cancel that ignored `turn` would stop whatever is running, so it is refused.
+        if request.params.get("turn").is_some() {
+            return Err(Failure::bad_request(
+                "`turn` no longer names what to cancel; use `target`",
+            ));
+        }
+        // What the caller meant to stop (RPCVIEW-6). Absent, the request means whatever is
+        // running, as it always has. Present, it stops that turn or run and no other.
+        let expected = match request.params.get("target") {
             None | Some(Value::Null) => None,
             Some(value) => Some(
                 value
                     .as_u64()
-                    .ok_or_else(|| Failure::bad_request("`turn` must be a number"))?,
+                    .ok_or_else(|| Failure::bad_request("`target` must be a number"))?,
             ),
         };
         let open = self
             .open
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
-        if let Some(expected) = expected {
-            let running = open.running.as_ref().filter(|running| {
-                !running.is_finished() && !running.run && running.turn as u64 == expected
-            });
-            let Some(running) = running else {
-                // An old cancel for a turn that is over reaches a later turn as nothing at all, and
-                // does not stop the watches either.
-                return Ok(json!({ "cancelled": false }));
-            };
-            running.cancel.cancel();
-            if let Ok(mut watches) = open.watches.lock() {
-                watches.stop_firing();
+        let stopping = match expected {
+            Some(expected) => {
+                let named = open
+                    .running
+                    .as_ref()
+                    .filter(|running| !running.is_finished() && running.target == expected);
+                // An old cancel for something that is over reaches a later turn as nothing at
+                // all, and does not stop the watches either.
+                let Some(named) = named else {
+                    return Ok(json!({ "cancelled": false }));
+                };
+                Some(named)
             }
-            return Ok(json!({ "cancelled": true }));
-        }
-        if let Some(running) = &open.running {
+            None => open.running.as_ref(),
+        };
+        if let Some(running) = stopping {
             running.cancel.cancel();
         }
         if let Ok(mut watches) = open.watches.lock() {
@@ -1351,7 +1357,11 @@ impl Bridge {
         }
         // Cancelling when nothing is running is not an error: the turn may have finished
         // between the user pressing the key and this arriving.
-        Ok(json!({}))
+        Ok(if expected.is_some() {
+            json!({ "cancelled": true })
+        } else {
+            json!({})
+        })
     }
 
     /// Carry an answer back to the write that is waiting for it.
@@ -3177,8 +3187,7 @@ mod watch_tests {
             cancel: cancel.clone(),
             answers,
             pending: Arc::new(Mutex::new(None)),
-            turn: 1,
-            run: false,
+            target: 1,
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let mut bridge = Bridge::new(Box::new(|_| {}));

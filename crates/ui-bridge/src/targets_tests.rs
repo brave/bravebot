@@ -1,8 +1,8 @@
-//! The turn a cancel names (RPCVIEW-6): an old cancel reaches a later turn as nothing at all.
+//! What a cancel names (RPCVIEW-6): an old cancel reaches a later turn or run as nothing at all.
 
 use super::*;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 struct Session {
     bridge: Bridge,
@@ -14,13 +14,9 @@ struct Session {
     _directory: tempfile::TempDir,
 }
 
-/// A session with turn `turn` in flight, started by one of its two watches. A cancel that applies
-/// stops the watch that started it and leaves the other.
-fn session_running(turn: usize) -> Session {
-    session_holding(turn, false)
-}
-
-fn session_holding(turn: usize, run: bool) -> Session {
+/// A session with the turn or run numbered `target` in flight, started by one of its two watches. A
+/// cancel that applies stops the watch that started it and leaves the other.
+fn session_running(target: u64) -> Session {
     // A directory of its own, private to this test, and removed with it.
     let mut builder = tempfile::Builder::new();
     builder.prefix("bravebot-cancel-target-");
@@ -66,8 +62,7 @@ fn session_holding(turn: usize, run: bool) -> Session {
             cancel: cancel.clone(),
             answers,
             pending: Arc::new(Mutex::new(None)),
-            turn,
-            run,
+            target,
             finished: Arc::clone(&finished),
         }),
         model: None,
@@ -87,10 +82,10 @@ fn session_holding(turn: usize, run: bool) -> Session {
 }
 
 impl Session {
-    fn cancel_turn(&mut self, turn: Option<serde_json::Value>) -> Result<Value, Failure> {
+    fn cancel_turn(&mut self, target: Option<serde_json::Value>) -> Result<Value, Failure> {
         let mut params = json!({"session": self.handle});
-        if let Some(turn) = turn {
-            params["turn"] = turn;
+        if let Some(target) = target {
+            params["target"] = target;
         }
         let line = json!({"id": 1, "method": "turn.cancel", "params": params}).to_string();
         let request = Request::parse(&line)
@@ -103,10 +98,10 @@ impl Session {
     }
 }
 
-/// An old cancel, delayed past the end of its turn, must not stop the turn that came after it, or
-/// the watches that turn's cancel would stop.
+/// An old cancel, delayed past the end of what it named, must not stop what came after it, or the
+/// watches that cancel would stop.
 #[test]
-fn a_cancel_naming_another_turn_stops_nothing() {
+fn a_cancel_naming_another_target_stops_nothing() {
     let mut session = session_running(2);
     assert_eq!(
         session.cancel_turn(Some(json!(1))).unwrap(),
@@ -114,13 +109,13 @@ fn a_cancel_naming_another_turn_stops_nothing() {
     );
     assert!(
         !session.cancel.is_cancelled(),
-        "turn 2 was stopped by a cancel for turn 1"
+        "target 2 was stopped by a cancel for target 1"
     );
     assert_eq!(session.watching(), 2, "an old cancel stopped a watch");
 }
 
 #[test]
-fn a_cancel_naming_the_running_turn_stops_it() {
+fn a_cancel_naming_the_running_target_stops_it() {
     let mut session = session_running(2);
     assert_eq!(
         session.cancel_turn(Some(json!(2))).unwrap(),
@@ -134,9 +129,9 @@ fn a_cancel_naming_the_running_turn_stops_it() {
     );
 }
 
-/// A turn that has ended is not stopped by a cancel that names its number.
+/// What has ended is not stopped by a cancel that names it.
 #[test]
-fn a_cancel_naming_a_finished_turn_stops_nothing() {
+fn a_cancel_naming_a_finished_target_stops_nothing() {
     let mut session = session_running(2);
     session
         .finished
@@ -148,9 +143,9 @@ fn a_cancel_naming_a_finished_turn_stops_nothing() {
     assert!(!session.cancel.is_cancelled());
 }
 
-/// A caller that names no turn is a caller from before turns were named, and keeps what it had.
+/// A caller that names nothing is a caller from before targets were named, and keeps what it had.
 #[test]
-fn a_cancel_naming_no_turn_stops_whatever_is_running() {
+fn a_cancel_naming_nothing_stops_whatever_is_running() {
     let mut session = session_running(3);
     assert_eq!(session.cancel_turn(None).unwrap(), json!({}));
     assert!(session.cancel.is_cancelled());
@@ -161,27 +156,38 @@ fn a_cancel_naming_no_turn_stops_whatever_is_running() {
     );
 }
 
-/// A manifest run takes the session's last turn number without being a turn, so a late cancel for
-/// that finished turn must not stop the run that came after it.
+/// A turn number repeats after `session.rewind`, so it cannot say which turn a cancel meant. The
+/// number a cancel names is never handed out twice.
 #[test]
-fn a_cancel_naming_a_turn_never_stops_a_manifest_run_that_carries_its_number() {
-    let mut session = session_holding(3, true);
-    assert_eq!(
-        session.cancel_turn(Some(json!(3))).unwrap(),
-        json!({"cancelled": false})
-    );
+fn a_target_is_never_handed_out_twice() {
+    let first = crate::running::next_target();
+    let seen: Vec<u64> = (0..100).map(|_| crate::running::next_target()).collect();
+    assert!(seen.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(first < seen[0]);
+}
+
+/// A cancel that still names a turn number would otherwise be read as naming nothing.
+#[test]
+fn a_cancel_naming_a_turn_number_is_refused_and_stops_nothing() {
+    let mut session = session_running(2);
+    let line = json!({"id": 1, "method": "turn.cancel",
+        "params": {"session": session.handle, "turn": 2}})
+    .to_string();
+    let failure = session
+        .bridge
+        .dispatch(&Request::parse(&line).unwrap())
+        .unwrap_err();
+    assert_eq!(failure.code, ErrorCode::BadRequest);
     assert!(!session.cancel.is_cancelled());
-    // A cancel that names nothing still stops the run, as it always has.
-    assert_eq!(session.cancel_turn(None).unwrap(), json!({}));
-    assert!(session.cancel.is_cancelled());
+    assert_eq!(session.watching(), 2);
 }
 
 #[test]
-fn a_turn_that_is_not_a_number_is_refused_and_stops_nothing() {
+fn a_target_that_is_not_a_number_is_refused_and_stops_nothing() {
     let mut session = session_running(1);
-    for turn in [json!("1"), json!(-1), json!(1.5), json!(true)] {
-        let refused = session.cancel_turn(Some(turn.clone())).unwrap_err();
-        assert_eq!(refused.code, ErrorCode::BadRequest, "{turn}");
+    for target in [json!("1"), json!(-1), json!(1.5), json!(true)] {
+        let refused = session.cancel_turn(Some(target.clone())).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest, "{target}");
     }
     assert!(!session.cancel.is_cancelled());
 }
@@ -195,4 +201,29 @@ fn the_bridge_advertises_what_it_promises_about_targets() {
         info["capabilities"]["actionTargets"],
         crate::view::action_targets()
     );
+}
+
+/// A repeated trust reply is refused before the session's state is touched. A running turn holds
+/// that state while it works, so a repeat that took the lock first would wait behind the turn and
+/// hold up the cancel behind it on the dispatch thread.
+#[test]
+fn a_repeated_trust_reply_does_not_wait_behind_a_running_turn() {
+    let mut session = session_running(2);
+    let state = Arc::clone(&session.bridge.open.get(&session.handle).unwrap().state);
+    let held = state.lock().unwrap();
+    let handle = session.handle.clone();
+    let mut bridge = std::mem::replace(&mut session.bridge, Bridge::new(Box::new(|_| {})));
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let line = json!({"id": 1, "method": "trust.reply",
+            "params": {"session": handle, "trusted": true}})
+        .to_string();
+        let _ = sender.send(bridge.dispatch(&Request::parse(&line).unwrap()));
+    });
+    let outcome = receiver.recv_timeout(Duration::from_secs(10));
+    drop(held);
+    let refused = outcome
+        .expect("the repeat waited behind the running turn's hold on the session")
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::NoSuchRequest);
 }

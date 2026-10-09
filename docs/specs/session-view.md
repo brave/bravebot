@@ -9,7 +9,9 @@ governs:
   - crates/ui-bridge/src/running.rs
   - crates/ui-bridge/src/turn.rs
   - crates/ui-bridge/src/wire.rs
+  - crates/ui-bridge/src/manifest.rs
   - packages/agent-client/src/common/wire.ts
+  - packages/agent-client/src/common/interface.ts
   - packages/agent-client/src/common/view.ts
   - packages/agent-client/src/common/client.ts
 documented-by: none (internal: the local RPC view is documented in ui/docs/phase-0-rpc-protocol.md for client authors)
@@ -126,29 +128,35 @@ so an answer meant for one question cannot match a later question in any turn or
 session. A session whose counter is spent asks no more questions, and a question not asked is
 refused.
 
-`turn.cancel` may name the turn it is for. A cancel that names a turn other than the one running,
-or one that has ended, stops nothing and answers `{ "cancelled": false }`; one that names the
-running turn answers `{ "cancelled": true }`. A manifest run carries the session's last turn number
-but is not a turn, so a cancel that names a turn never stops it. A cancel that names no turn stops
-whatever is running and answers `{}`. A `turn` that is not a number is refused. Turn
-numbers repeat after `session.rewind`, so a named cancel separates turns within one history, not
-the turns before a rewind from the turns after it.
+A turn or manifest run is stopped by the target it was started with, and a target is never handed
+out twice. `turn.send` and `manifest.run` return it, and the session view carries the target of the
+turn on screen. `turn.cancel` may name a target. A cancel that names a target other than the one
+running, or one that has ended, stops nothing and answers `{ "cancelled": false }`; one that names
+the running target answers `{ "cancelled": true }`. A cancel that names no target stops whatever is
+running and answers `{}`. A `target` that is not a number is refused. A `turn` parameter is refused, because a cancel that ignored it would stop whatever is running. A target is unique within one bridge process; a restarted bridge counts again. A turn number could not do
+this job: it repeats after `session.rewind`, so a delayed cancel for the old turn 3 would stop the
+new turn 3, and a manifest run has no turn number of its own. A session with a view cannot start a run, so the view never has to carry a run's target; a bridge that lets one do so must report the run's target in the view.
 
 `trust.reply` is taken once, while the session's startup question is waiting. A repeat, and any
 answer to a session that was never asked, is refused with `no_such_request` before the session's
 state is touched, so it neither replaces the trust already given nor waits behind a running turn.
 
 `agent.info` and `agent.ready` advertise this as `capabilities.actionTargets`, version 1, with
-`questionIds: session`, `cancel: expected_turn` and `trust: once`. A bridge that does not
+`questionIds: session`, `cancel: expected_target` and `trust: once`. A bridge that does not
 advertise it numbers questions per turn, takes a cancel for whatever is running, and accepts a
 repeated trust answer, and a client talking to one must not claim the stronger protection.
 
-`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_another_turn_stops_nothing`
-`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_the_running_turn_stops_it`
-`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_a_finished_turn_stops_nothing`
-`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_no_turn_stops_whatever_is_running`
-`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_a_turn_never_stops_a_manifest_run_that_carries_its_number`
-`verified-by: bravebot_ui_bridge::targets_tests::a_turn_that_is_not_a_number_is_refused_and_stops_nothing`
+`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_another_target_stops_nothing`
+`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_the_running_target_stops_it`
+`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_a_finished_target_stops_nothing`
+`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_nothing_stops_whatever_is_running`
+`verified-by: bravebot_ui_bridge::targets_tests::a_target_is_never_handed_out_twice`
+`verified-by: bravebot_ui_bridge::targets_tests::a_target_that_is_not_a_number_is_refused_and_stops_nothing`
+`verified-by: bravebot_ui_bridge::targets_tests::a_cancel_naming_a_turn_number_is_refused_and_stops_nothing`
+`verified-by: bravebot_ui_bridge::rewind::a_turn_after_a_rewind_has_a_new_target_though_its_number_repeats`
+`verified-by: bravebot_ui_bridge::targets_tests::a_repeated_trust_reply_does_not_wait_behind_a_running_turn`
+`verified-by: bravebot_ui_bridge::manifest::a_run_is_stopped_by_its_own_target_and_by_no_other`
+`verified-by: bravebot_ui_bridge::manifest::a_session_with_a_view_cannot_start_a_run`
 `verified-by: bravebot_ui_bridge::targets_tests::the_bridge_advertises_what_it_promises_about_targets`
 `verified-by: bravebot_ui_bridge::refusal::question_numbers_are_not_reused_by_a_later_turn_of_the_same_session`
 `verified-by: bravebot_ui_bridge::refusal::a_session_with_no_question_numbers_left_refuses_to_ask`
@@ -183,3 +191,19 @@ question the client cannot answer is refused without being sent, and a run is an
 
 `verified-by: bravebot_ui_bridge::view::the_client_wire_contract_matches_the_rust_types`
 `verified-by: by-construction (packages/agent-client/tests runs the shared scenarios under four chunkings, and drives a real bravebot-rpc against a model service of its own for accepted turns, trust deciding whether a write is asked about, approval and rejection of a write, a command and a fetch with different real effects, a typed and a declined answer to a question, cancellation, interleaved sessions, fetched bytes copied into a file, a write that lands when the session cannot be saved, close, EOF, malformed input and failing callbacks, with labelled rows carried whole in the scenarios, and runs the local program in scripts/local-client.ts against the same process; make check-agent-client runs it, and the Front end CI job runs that target)`
+
+<a id="RPCVIEW-7"></a>
+### RPCVIEW-7: the client names what Stop is for from values Rust reported
+
+`AgentSession.cancel(target?)` names a target only when the runtime advertises
+`cancel: expected_target`. The target is the one the caller gives, which is the `target` a send
+returned, or else the target of the turn on screen. The only choice the client makes is which
+reported value to send; it derives no target of its own. It names none, and so stops whatever is
+running as Stop always has, in three cases: the runtime does not advertise it, a send has not been
+answered so the target of the turn it starts is not yet known, or the view has ended and shows a
+stale turn. A target the caller gives is never dropped: against a runtime that does not advertise it,
+the cancel is refused with `UnsupportedError` and nothing is sent, since the runtime would stop
+whatever is running instead. The result is `cancelled: true` or `false` as the bridge answered when a target was
+named, and `null` when none was.
+
+`verified-by: by-construction (packages/agent-client/test-fixtures/scenarios/cancel-names-the-target-on-screen.json, cancel-names-the-target-it-is-given.json, cancel-names-the-new-target-when-turn-numbers-go-back.json, cancel-while-a-send-is-unanswered-names-no-target.json and cancel-without-action-targets-names-no-target.json and send-with-a-target-that-is-not-a-count-is-refused.json run under four chunkings, and tests/real-rpc.test.ts drives a real bravebot-rpc through a delayed cancel for an earlier turn, a cancel after a rewind that numbers a turn again, and a cancel of the turn just sent)`

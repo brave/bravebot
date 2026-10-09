@@ -58,6 +58,8 @@ pub struct Pending {
 pub struct Update {
     pub sequence: u64,
     pub turn: u64,
+    /// What a cancel names to stop the turn on screen (RPCVIEW-6); 0 before any turn has started.
+    pub target: u64,
     pub status: Status,
     pub pending: Option<Pending>,
     pub rows: Vec<Row>,
@@ -68,6 +70,7 @@ pub struct Update {
 pub(crate) struct View {
     sequence: u64,
     turn: u64,
+    target: u64,
     status: Status,
     next_row: u64,
     pending: Option<Pending>,
@@ -78,6 +81,7 @@ impl View {
         Self {
             sequence: 0,
             turn: 0,
+            target: 0,
             status: if trusted {
                 Status::Idle
             } else {
@@ -96,6 +100,7 @@ impl View {
         Update {
             sequence: self.sequence,
             turn: self.turn,
+            target: self.target,
             status: self.status,
             pending: self.pending.clone(),
             rows,
@@ -119,8 +124,9 @@ impl View {
         }
     }
 
-    pub fn started(&mut self, turn: u64, prompt: Value) -> Update {
+    pub fn started(&mut self, turn: u64, target: u64, prompt: Value) -> Update {
         self.turn = turn;
+        self.target = target;
         self.status = Status::Running;
         let row = self.row(RowKind::Prompt, None, prompt);
         self.changed(vec![row])
@@ -210,7 +216,7 @@ impl View {
 /// that does not advertise it numbers questions per turn, takes a cancel for whatever is running,
 /// and accepts a repeated trust answer.
 pub fn action_targets() -> Value {
-    json!({"version": 1, "questionIds": "session", "cancel": "expected_turn", "trust": "once"})
+    json!({"version": 1, "questionIds": "session", "cancel": "expected_target", "trust": "once"})
 }
 
 pub fn capability() -> Value {
@@ -227,7 +233,7 @@ mod tests {
     fn approval_replacements_preserve_the_payload_and_kind() {
         for kind in ["confirm", "run", "fetch", "ask", "output"] {
             let mut view = View::new(true);
-            view.started(4, json!({"text": "prompt"}));
+            view.started(4, 4, json!({"text": "prompt"}));
             let data = json!({"request": 7, "remark": {"label": "(U,priv)",
                 "preview": ["\u{1b}[2J forged chrome"]}, "future": [1, 2]});
             let name = match kind {
@@ -324,6 +330,7 @@ mod tests {
         let update = Update {
             sequence: 3,
             turn: 1,
+            target: 7,
             status: Status::Waiting,
             pending: Some(Pending {
                 row: 4,
@@ -366,7 +373,7 @@ mod tests {
     #[test]
     fn failures_have_authoritative_terminal_status() {
         let mut view = View::new(true);
-        view.started(1, json!({"text": "prompt"}));
+        view.started(1, 1, json!({"text": "prompt"}));
         let failed = view
             .event(&Event::new("turn.error", "s1", json!({"kind": "backend"})))
             .unwrap();

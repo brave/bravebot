@@ -55,6 +55,8 @@ export interface Pending {
 export interface ViewUpdate {
   sequence: number
   turn: number
+  /** What a cancel names to stop the turn on screen. It is never reused, unlike a turn number. */
+  target: number
   status: Status
   pending: Pending | null
   rows: Row[]
@@ -143,11 +145,16 @@ function decodePending(value: unknown): Pending | null {
 /** Read `session.view.initial` or `session.view.update` data. */
 export function decodeUpdate(value: unknown): ViewUpdate {
   if (!isObject(value)) throw new ProtocolError('a view update must be an object')
-  if (!isCount(value.sequence) || !isCount(value.turn)) throw new ProtocolError('a view update needs numeric sequence and turn')
+  // A runtime that does not advertise action targets sends none; 0 is the idle target.
+  const target = value.target === undefined ? 0 : value.target
+  if (!isCount(value.sequence) || !isCount(value.turn) || !isCount(target)) {
+    throw new ProtocolError('a view update needs numeric sequence and turn, and a numeric target if it has one')
+  }
   if (!Array.isArray(value.rows)) throw new ProtocolError('a view update needs rows')
   return {
     sequence: value.sequence,
     turn: value.turn,
+    target,
     status: oneOf(STATUSES, value.status, 'a status'),
     pending: decodePending(value.pending),
     rows: value.rows.map(decodeRow),
@@ -156,7 +163,7 @@ export function decodeUpdate(value: unknown): ViewUpdate {
 
 /**
  * Whether the runtime promises exact action targets: question numbers that last the session, a
- * cancel that names its turn, and a trust answer taken once (RPCVIEW-6). Absent, an older runtime
+ * cancel that names its target, and a trust answer taken once (RPCVIEW-6). Absent, an older runtime
  * numbers questions per turn and cancels whatever is running, and the client claims no more.
  */
 export function readActionTargets(info: unknown): boolean {
@@ -166,7 +173,7 @@ export function readActionTargets(info: unknown): boolean {
     isObject(targets) &&
     targets.version === 1 &&
     targets.questionIds === 'session' &&
-    targets.cancel === 'expected_turn' &&
+    targets.cancel === 'expected_target' &&
     targets.trust === 'once'
   )
 }

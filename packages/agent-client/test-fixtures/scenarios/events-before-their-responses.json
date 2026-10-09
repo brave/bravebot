@@ -8,9 +8,9 @@
     {"expectRequest": "new", "method": "session.new", "params": {"directory": "/work"}},
     {"send": [{"event": "trust.request", "session": "s1", "data": {"directory": "/work", "keeping": null}}, {"id": "$new", "ok": {"session": "s1"}}]},
     {"expectRequest": "view", "method": "session.view.start", "params": {"session": "s1", "version": 1}},
-    {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "status": "awaiting_trust", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
+    {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "target": 0, "status": "awaiting_trust", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
     {"await": "a", "bindSession": "a"},
     {"expectStartupTrust": "a", "value": {"directory": "/work", "keeping": null}},
-    {"expectView": "a", "sequence": 0, "turn": 0, "status": "awaiting_trust", "pending": null, "rows": [], "ended": null}
+    {"expectView": "a", "sequence": 0, "turn": 0, "target": 0, "status": "awaiting_trust", "pending": null, "rows": [], "ended": null}
   ]
 }
