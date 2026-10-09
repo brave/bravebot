@@ -1460,6 +1460,62 @@ fn a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do() {
     );
 }
 
+/// A planner that follows `pr-fix` reads a worktree beside the working directory as `../<name>/..`.
+/// The refusal it reads says to use the absolute path once the person has opened the directory, so
+/// the planner has something to tell them rather than a reason to try `run`, and the trail records
+/// the remedy that was offered.
+#[test]
+fn a_read_climbing_to_a_sibling_directory_tells_the_planner_to_ask_for_the_directory() {
+    let sibling = Scratch::new("climb-remedy-sibling");
+    std::fs::write(sibling.path.join("policy.rs"), "fn policy() {}").unwrap();
+    let name = sibling.path.file_name().unwrap().to_str().unwrap();
+    let climbing = format!("../{name}/policy.rs");
+
+    let scratch = Scratch::new("climb-remedy");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", &format!(r#"{{"path":"{climbing}"}}"#)),
+        reply_with("could not read it"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("resolve the conflict in the worktree"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    for told in [
+        "with /add-dir in the terminal",
+        "its absolute path reaches it",
+    ] {
+        assert!(
+            second.contains(told),
+            "the refusal did not say {told}: {second}"
+        );
+    }
+    assert!(
+        !second.contains("fn policy"),
+        "content from outside the workspace reached the model"
+    );
+    let refused = confinement_refusals(&sink);
+    assert_eq!(refused.len(), 1, "{:?}", sink.events());
+    assert!(
+        refused[0].contains("remedy offered: open its directory"),
+        "the trail does not record the remedy offered: {}",
+        refused[0]
+    );
+}
+
 /// The confinement refusals a turn's trail holds, by their reasons.
 fn confinement_refusals(sink: &RecordingSink) -> Vec<String> {
     sink.blocked()
@@ -47017,6 +47073,48 @@ fn a_yes_to_a_path_marks_nothing_trusted_and_is_recorded() {
     let at = gate_in(&turn.events, "path_reach");
     assert!(at.contains("write"), "{at}");
     assert!(at.contains(&places.beside.display().to_string()), "{at}");
+}
+
+/// PATHREQ-7: a yes to `request_path` reaches programs and not the file tools, which are reached
+/// with `/add-dir`. `read_file` keeps refusing the granted directory and the refusal says what does
+/// reach it, so a planner that was granted a worktree does not read the yes as having opened it.
+#[test]
+fn a_yes_to_a_path_does_not_let_the_file_tools_touch_it() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("file-tools");
+    let target = places.beside.join("notes.txt");
+    std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let turn = path_turn(
+        "path-file-tools",
+        &places,
+        &[
+            asking_for(&places.beside, true),
+            (
+                "read_file",
+                serde_json::json!({ "path": target.display().to_string() }),
+            ),
+        ],
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut asked,
+    );
+    assert_eq!(
+        turn.workspace.path_reach().len(),
+        1,
+        "the control: a grant was made"
+    );
+    let read = message_from(&turn.results[1], "Result of read_file");
+    assert!(
+        read.contains("outside the workspace") && read.contains("/add-dir"),
+        "the read was not refused with the remedy: {read}"
+    );
+    assert!(!read.contains("NOTES-CONTENT"), "{read}");
 }
 
 fn gate_in(events: &[Event], gate: &str) -> String {

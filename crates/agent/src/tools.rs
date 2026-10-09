@@ -14900,7 +14900,10 @@ mod tests {
             );
             assert_eq!(
                 refused,
-                ["run.directory: '..' resolves outside the workspace; remedy offered: none"],
+                [
+                    "run.directory: '..' resolves outside the workspace; remedy offered: open its \
+                     directory, which holds the working directory and so ends checkouts"
+                ],
                 "the refused directory was not recorded as the planner named it"
             );
             assert!(!clean, "a turn whose run was refused would end as clean");

@@ -81,3 +81,15 @@ The tool is in the set no delegate is offered, and a call naming it anyway is an
 unknown name ([DELEGATE-12](../delegation.md#DELEGATE-12)).
 
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
+
+<a id="PATHREQ-7"></a>
+### PATHREQ-7: a yes does not reach the file tools
+
+A yes lets a program reach the path. `read_file`, `write_file`, `edit_file`, `list_files` and
+`search` stay confined to the working directory and the directories opened with `/add-dir`
+([TRUST-10](../trust-map.md#TRUST-10)), and keep refusing a path that only a yes reaches. The refusal
+says to open the directory with `/add-dir`, which also marks it trusted ([TRUST-9](../trust-map.md#TRUST-9)).
+`request_path` does not do that, since the path is a string the planner chose and a trust decision
+over it would be one made on its say-so ([TRUST-8](../trust-map.md#TRUST-8)).
+
+`verified-by: bravebot_agent::turn::a_yes_to_a_path_does_not_let_the_file_tools_touch_it`

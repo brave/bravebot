@@ -19,6 +19,12 @@ pushes over only the head it fetched. Spend tokens on conflicts, failures and co
 
 Edit only inside the worktree it prints, never the checkout this was started from.
 
+The worktree is beside the working directory, outside the workspace, so the file tools refuse it
+until the person opens it with `/add-dir <worktree>`. Once it is open, name each file by its
+absolute path: a path with `..` never reaches it, and `request_path` does not either, since it
+reaches programs and not the file tools. If a file tool refuses the worktree, ask the person to
+run `/add-dir` on it and say which directory.
+
 `<pr>` is a number or a pull request URL. Several can be given, separated by commas or spaces
 (`12,13 https://github.com/brave/bravebot/pull/14`), and `all` stands for every open
 brave/bravebot pull request whose author is `git config user.name`. With several, the script runs
