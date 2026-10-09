@@ -46,7 +46,7 @@ fn take_turn(
             deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
             auto_vetting: false,
             sandbox: bravebot_sandbox::SandboxMode::default(),
-            permission_mode: bravebot_agent::PermissionMode::Ask,
+            permission_mode: bravebot_agent::PermissionMode::Ask.into(),
             mcp_requested: Vec::new(),
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,

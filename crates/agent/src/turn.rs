@@ -903,7 +903,7 @@ pub struct Task {
     ///
     /// The confirmer enforces it. This is the half the model is told, and the two are set from the
     /// same value by the caller.
-    pub permission_mode: crate::PermissionMode,
+    pub permission_mode: crate::LiveMode,
     /// Which tick of a loop this turn is, where a caller is running one.
     ///
     /// `None` for an ordinary turn, and for a prompt the person typed in the middle of a loop.
@@ -1107,7 +1107,7 @@ impl Task {
             sandbox: bravebot_sandbox::SandboxMode::default(),
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
-            permission_mode: crate::PermissionMode::default(),
+            permission_mode: crate::LiveMode::default(),
             // Asking too: nobody has said a check's word may stand in for an answer.
             auto_vetting: false,
             // Nothing said about either destination, which is a caller that read no settings
@@ -1404,8 +1404,11 @@ impl Task {
     ///
     /// The caller must give the same mode to [`crate::Confining`], which is what enforces it. This
     /// only decides what the planner is told.
-    pub fn with_permission_mode(mut self, mode: crate::PermissionMode) -> Self {
-        self.permission_mode = mode;
+    ///
+    /// A [`crate::LiveMode`] is read again whenever the turn decides something, so a mode the
+    /// person changes while the turn runs is the one the rest of the turn follows (MODE-8).
+    pub fn with_permission_mode(mut self, mode: impl Into<crate::LiveMode>) -> Self {
+        self.permission_mode = mode.into();
         self
     }
 
@@ -2056,7 +2059,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             servers: None,
             mcp: None,
             jobs: &mut jobs,
-            permission_mode: task.permission_mode,
+            permission_mode: task.permission_mode.clone(),
             auto_vetting: task.auto_vetting,
             run_directory: &mut run_directory,
             confine_runs: false,
@@ -3263,7 +3266,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         policy = policy.within(spec);
     }
 
-    policy.record_permission_mode(task.permission_mode.name());
+    policy.record_permission_mode(task.permission_mode.get().name());
 
     // Before every turn rather than as a session opens, since a session's map is made at a start,
     // a clear and a resume and moved by `/cd` (MEMORY-5).
@@ -3490,12 +3493,17 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // Whether what a run printed can be read with nobody asked: bypassing with no screening, in a
         // turn offered read_output at all. A definition or a delegate left without it has no release
         // for `read` to make a round early, and making one would widen what it was confined to.
-        let reads_unasked = !task
-            .permission_mode
-            .checks_before_promoting(task.auto_vetting)
-            && offered
-                .iter()
-                .any(|tool| tool.function.name == "read_output");
+        // Asked again wherever it is used, since the person can leave bypassing while the turn runs.
+        let offers_read_output = offered
+            .iter()
+            .any(|tool| tool.function.name == "read_output");
+        let reads_unasked = || {
+            !task
+                .permission_mode
+                .get()
+                .checks_before_promoting(task.auto_vetting)
+                && offers_read_output
+        };
 
         // The definition's model where an addressed one named a model, and no turn at all where that
         // model needs a sign-in this machine has not made. Running it on the session's model instead
@@ -3586,7 +3594,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // prompts, since a delegate writing files in plan mode would be the mode failing exactly where
         // nobody is watching the writes. Only plan mode says anything: see
         // `PermissionMode::instruction`.
-        let mode = task.permission_mode.instruction().unwrap_or_default();
+        let started_in = task.permission_mode.get();
+        let mut told_mode = started_in;
+        let mode = started_in.instruction().unwrap_or_default();
         let memory = |keeps: bool, name: &str| match keeps && workspace.checkout().is_none() {
             true => crate::memory::told(&policy, workspace, name),
             false => String::new(),
@@ -3870,7 +3880,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     },
                     &mut confirmer,
                     &mut reporter,
-                    task.permission_mode,
+                    task.permission_mode.get(),
                     &holding,
                 );
                 notices.extend(
@@ -3995,6 +4005,15 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         return Err(TurnError::Cancelled { attempts: Some(0) });
                     }
 
+                    // The mode the person last chose applies to this turn as it runs (MODE-8). The
+                    // prompt was written in the one the turn started in, so a change that matters to
+                    // the planner is said to it before the next request.
+                    let chosen = task.permission_mode.get();
+                    if let Some(notice) = told_mode.change_notice(chosen) {
+                        conversation.push_from(Message::user(notice), Provenance::Driver);
+                    }
+                    told_mode = chosen;
+
                     // Whatever finished while the last round was running, before the planner is asked what to
                     // do next. Waiting for none of them: one that is still working is left working, which is
                     // the whole of what starting them separately buys.
@@ -4026,7 +4045,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     collect_jobs(
                         &mut jobs,
                         task.output_cap.unwrap_or(tools::OUTPUT_CAP),
-                        reads_unasked,
+                        reads_unasked(),
                         &mut policy,
                         conversation,
                         &mut reporter,
@@ -4645,7 +4664,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 servers: servers.as_deref_mut(),
                                 mcp: mcp.as_ref().map(|(offer, _)| offer),
                                 jobs: &mut jobs,
-                                permission_mode: task.permission_mode,
+                                permission_mode: task.permission_mode.clone(),
                                 auto_vetting: task.auto_vetting,
                                 run_directory: &mut run_directory,
                                 confine_runs: task.confine_runs,
@@ -4727,7 +4746,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     task.profile.as_deref(),
                                     spawning_model.as_deref(),
                                     spawning_effort,
-                                    task.permission_mode,
+                                    task.permission_mode.clone(),
                                     task.auto_vetting,
                                     &task.attribution,
                                     task.system_prompts.appending.as_deref(),
@@ -5008,7 +5027,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             let read_from = match &presented {
                                 Presentation::Quarantined(reference)
                                     if output.read_asked
-                                        && reads_unasked
+                                        && reads_unasked()
                                         && reference
                                             .bytes
                                             .is_some_and(|bytes| bytes <= output_cap) =>
@@ -5016,7 +5035,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     tools::read_in_the_result(
                                         &mut policy,
                                         conversation.quarantine(),
-                                        task.permission_mode,
+                                        task.permission_mode.get(),
                                         task.auto_vetting,
                                         &mut confirmer,
                                         &reference.slot,
@@ -5339,7 +5358,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     let advice = match (
                                         output.printed_by.is_some(),
                                         output.covered_by_record,
-                                        reads_unasked,
+                                        reads_unasked(),
                                     ) {
                                         (false, _, _) => String::new(),
                                         (true, _, true) => {

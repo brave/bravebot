@@ -25,25 +25,24 @@ const MODES: Record<PermissionMode, { label: string; icon: IconName; says: strin
 }
 
 /**
- * How much the session's next turn asks before it acts.
+ * How much the session asks before it acts.
  *
  * Asking is the quiet resting state, drawn like the model beside it. The other two are drawn
- * marked for as long as they hold, since each changes what the next turn does without a card to
+ * marked for as long as they hold, since each changes what the session does without a card to
  * say so.
  *
- * Not disabled while a turn runs. The running turn keeps the mode it began with (MODE-8), and the
- * tooltip says a change applies from the next one.
+ * Not disabled while a turn runs. The running turn follows the mode chosen last (MODE-8), so a
+ * change applies to it from its next question.
  */
-export function PermissionModePicker({ mode, running, onChoose }: {
+export function PermissionModePicker({ mode, onChoose }: {
   mode: PermissionMode
-  running: boolean
   onChoose: (mode: PermissionMode) => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const trigger = useRef<HTMLElement>(null)
   const reason = useRef('explicit')
   const current = MODES[mode]
-  const tooltip = `${current.label}: ${current.says}${running ? '. A change applies from the next turn' : ''}`
+  const tooltip = `${current.label}: ${current.says}`
 
   // Leo's React wrapper sets these once, when the host is made, so a change of mode would leave
   // the accessible name and the tooltip describing the mode it opened in.

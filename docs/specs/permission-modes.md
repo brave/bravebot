@@ -317,25 +317,37 @@ session. That a mode stops prompts is not a reason to think they wanted this one
 `verified-by: bravebot_agent::permission_mode::no_mode_answers_for_a_line_the_person_typed`
 
 <a id="MODE-8"></a>
-### MODE-8: a turn keeps the mode it began with, and both halves read one value
+### MODE-8: a mode chosen while a turn runs applies to the rest of that turn
 
-The mode is read once, when the prompt is sent. The planner is told that mode and the prompts are
-answered against that mode, so the two cannot disagree about a turn in flight. A press while a turn
-runs describes the next turn.
+The mode is the session's, and a turn reads it again at each decision rather than once when the
+prompt is sent. A mode chosen while a turn runs governs every question and every refusal the turn
+reaches after that, and the planner is told when the change matters to it: a change into plan mode
+repeats the plan-mode instruction, and a change out of it says the refusal has ended. A change
+between the other modes says nothing, as MODE-1 says nothing of them. An answer is credited in the
+trail to the mode the question was put in, so a mode chosen over a prompt already on screen does not
+take credit for the answer given to it.
 
-**Why.** A write already on screen being reviewed must not have the question withdrawn from under
-the person answering it. Reading the mode in two places at two moments is how the planner comes to
-be told one thing while the prompts do another, and the half that would be wrong is the half nobody
-can see.
+**Why.** A person who presses the key while a turn runs is telling the session what they want from
+then on. A turn that kept the mode it began with left a person who had just stopped the writes
+watching them go on, and nothing on screen said the key had not yet applied. A question already on
+screen is left as it is: the answer to it is the person's, and the mode they chose over it does not
+withdraw it.
 
+`verified-by: bravebot_agent::turn::a_mode_chosen_during_a_turn_applies_to_the_rest_of_it`
+`verified-by: bravebot_agent::turn::leaving_plan_mode_during_a_turn_lets_the_rest_of_it_write`
+`verified-by: bravebot_agent::turn::an_answer_given_over_a_mode_change_is_not_credited_to_the_new_mode`
+`verified-by: bravebot_agent::permission_mode::a_confirmer_follows_the_mode_chosen_after_it_was_made`
+`verified-by: bravebot_agent::permission_mode::the_planner_is_told_only_of_a_change_into_or_out_of_plan_mode`
 `verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`
-`verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_is_the_next_turns`
+`verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_applies_to_that_turn`
+`verified-by: bravebot_ui_bridge::permission_mode::planning_chosen_while_a_turn_runs_refuses_the_rest_of_that_turn`
 
 <a id="MODE-9"></a>
 ### MODE-9: a delegate inherits the mode of the turn that spawned it
 
 Both halves: the prompts a delegate's work raises are answered against that mode, and the delegate's
-own planner is told it.
+own planner is told it. A delegate holds the same handle on the mode as the turn that spawned it, so
+a mode chosen while it runs applies to it too (MODE-8).
 
 **Why.** A delegate is the spawning turn's work done somewhere else, so a session that is planning
 must not write through one. The enforcing half holds because a delegate's prompts travel back to the
@@ -379,8 +391,8 @@ to be given on, so a request naming bypass is refused rather than read as anothe
 The mode belongs to one open session, and every session opens asking, a resumed session and a fork
 included (MODE-10). The bridge holds it, rather than each turn's request carrying it, because a
 watch starts a turn that no request asked for, and that turn runs in the mode the window shows. A
-turn or a manifest run reads the mode once, when it is accepted, and keeps it to its end (MODE-8).
-A change while one runs is accepted and describes the next.
+turn or a manifest run holds the session's own handle on the mode, so a change while one runs is
+accepted and applies to the rest of it (MODE-8).
 
 **Why.** Refusing bypass rather than reading it as asking keeps a window from drawing a mode its
 session is not in. A fork opens asking rather than taking its parent's mode for MODE-10's reason: a
@@ -391,13 +403,13 @@ again.
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_cannot_choose_to_bypass_every_check`
 `verified-by: bravebot_ui_bridge::permission_mode::accepting_edits_writes_unasked_and_still_asks_about_a_command`
 `verified-by: bravebot_ui_bridge::permission_mode::planning_writes_nothing_and_asks_nothing_about_a_write`
-`verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_is_the_next_turns`
+`verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_applies_to_that_turn`
 
 <a id="MODE-12"></a>
 ### MODE-12: `/plan` sets plan mode, with the same standing as the key, and sends only its task
 
 `/plan` sets the session to plan mode from whichever mode it is in, and `/plan <task>` also starts a
-turn on the task. The turn reads plan mode when it begins (MODE-8), and what it is sent is the task
+turn on the task. The turn begins in plan mode, and what it is sent is the task
 after the word, never the typed line. Typed while a turn runs it waits for that turn to end. No command sets bypassing, which stays reachable only as MODE-5 says.
 
 **Why.** Plan mode only narrows what is permitted, so a typed word carries the same endorsement as

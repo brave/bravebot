@@ -195,8 +195,8 @@ session opens and cannot change while it runs. It is stated once at startup, and
 
 **Shift-Tab** cycles the session through asking about everything, accepting edits, plan mode, and
 bypassing every check. It types nothing, is read before Tab so it never completes a half-typed line,
-and works while a turn runs. A turn in flight keeps the mode it began with, so what you press
-describes the next one. Both spellings of the chord are answered, since which one arrives is the
+and works while a turn runs. A turn in flight follows the mode you pressed last, from its next
+question or tool call; a question already on your screen is left as it is. Both spellings of the chord are answered, since which one arrives is the
 terminal's choice rather than yours.
 
 The mode leads the row beneath the box and is the only part of it drawn in a colour. Asking about

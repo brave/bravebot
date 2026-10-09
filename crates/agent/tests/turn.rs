@@ -2774,14 +2774,30 @@ struct RecordingConfirmer {
     /// The answer to every write after the first, where a test needs the two to differ.
     /// `None` answers them all the same way.
     later: Option<bravebot_agent::WriteDecision>,
+    /// A mode the person "chooses" while the first question is on screen, for the tests about a
+    /// mode that changes in the middle of a turn.
+    switching: Option<(bravebot_agent::LiveMode, bravebot_agent::PermissionMode)>,
 }
 
 impl RecordingConfirmer {
+    /// Approves, and changes the live mode to `to` while it is being asked, as a key pressed over a
+    /// prompt would.
+    fn approving_while_the_mode_changes(
+        live: &bravebot_agent::LiveMode,
+        to: bravebot_agent::PermissionMode,
+    ) -> Self {
+        Self {
+            switching: Some((live.clone(), to)),
+            ..Self::approving()
+        }
+    }
+
     fn approving() -> Self {
         Self {
             seen: Vec::new(),
             decision: bravebot_agent::WriteDecision::approve(),
             later: None,
+            switching: None,
         }
     }
 
@@ -2790,6 +2806,7 @@ impl RecordingConfirmer {
             seen: Vec::new(),
             decision: bravebot_agent::WriteDecision::reject(),
             later: None,
+            switching: None,
         }
     }
 
@@ -2800,6 +2817,7 @@ impl RecordingConfirmer {
             seen: Vec::new(),
             decision: bravebot_agent::WriteDecision::approve(),
             later: Some(bravebot_agent::WriteDecision::reject()),
+            switching: None,
         }
     }
 }
@@ -2823,6 +2841,9 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
             _ => self.decision,
         };
         self.seen.push(request.clone());
+        if let Some((live, to)) = &self.switching {
+            live.set(*to);
+        }
         answer
     }
 
@@ -2831,6 +2852,9 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         &mut self,
         _request: &bravebot_agent::RunRequest,
     ) -> bravebot_agent::RunDecision {
+        if let Some((live, to)) = &self.switching {
+            live.set(*to);
+        }
         bravebot_agent::RunDecision::reject()
     }
 
@@ -3594,6 +3618,153 @@ fn an_approval_names_what_answered_it() {
             "{tool} under plan"
         );
     }
+}
+
+/// MODE-8: a mode chosen while a turn runs applies to the rest of that turn. The person approves
+/// the first write and then moves to plan mode over the prompt, so the planner's second write is
+/// refused and the planner is told why before its next request.
+#[test]
+fn a_mode_chosen_during_a_turn_applies_to_the_rest_of_it() {
+    use bravebot_agent::PermissionMode;
+    let scratch = Scratch::new("mode-changed-during-a-turn");
+    std::fs::write(scratch.path.join("notes.md"), "original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"first"}"#),
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"second"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let live = bravebot_agent::LiveMode::new(PermissionMode::Ask);
+    let task = Task::new("rewrite the notes").with_permission_mode(live.clone());
+    let mut recording =
+        RecordingConfirmer::approving_while_the_mode_changes(&live, PermissionMode::Plan);
+    let mut confirmer = bravebot_agent::Confining::new(&mut recording, live.clone(), false);
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "first",
+        "the write after the change to plan mode went through"
+    );
+    assert_eq!(recording.seen.len(), 1, "the second write raised a prompt");
+    let asked = every_request(&received);
+    assert_eq!(asked.len(), 3, "the turn did not take three rounds");
+    assert!(
+        !asked[0].contains("Plan mode"),
+        "the planner was told plan mode before it was chosen"
+    );
+    assert!(
+        asked[2].contains("Plan mode. The user is deciding"),
+        "the planner was not told the mode changed"
+    );
+}
+
+/// MODE-8, the other direction: leaving plan mode during a turn lifts its refusal for the rest of
+/// it, and the planner is told it has ended.
+#[test]
+fn leaving_plan_mode_during_a_turn_lets_the_rest_of_it_write() {
+    use bravebot_agent::PermissionMode;
+    let scratch = Scratch::new("plan-left-during-a-turn");
+    std::fs::write(scratch.path.join("notes.md"), "original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("run", r#"{"command":"ls"}"#),
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"replaced"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let live = bravebot_agent::LiveMode::new(PermissionMode::Plan);
+    let task = Task::new("look and then write").with_permission_mode(live.clone());
+    let mut recording =
+        RecordingConfirmer::approving_while_the_mode_changes(&live, PermissionMode::Ask);
+    let mut confirmer = bravebot_agent::Confining::new(&mut recording, live.clone(), false);
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "replaced",
+        "plan mode went on refusing after the person left it"
+    );
+    let asked = every_request(&received);
+    assert!(
+        asked[0].contains("Plan mode. The user is deciding"),
+        "the planner was not told the mode it started in"
+    );
+    assert!(
+        asked[2].contains("Plan mode has ended"),
+        "the planner was not told plan mode ended"
+    );
+}
+
+/// MODE-8: the trail credits an answer to the mode the question was put in. The person moves to
+/// bypassing while the prompt is on screen and then answers it, so the answer was theirs and no
+/// mode gave it.
+#[test]
+fn an_answer_given_over_a_mode_change_is_not_credited_to_the_new_mode() {
+    use bravebot_agent::PermissionMode;
+    let scratch = Scratch::new("answer-over-a-mode-change");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"first"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let live = bravebot_agent::LiveMode::new(PermissionMode::Ask);
+    let task = Task::new("write it").with_permission_mode(live.clone());
+    let mut recording =
+        RecordingConfirmer::approving_while_the_mode_changes(&live, PermissionMode::Bypass);
+    let mut confirmer = bravebot_agent::Confining::new(&mut recording, live.clone(), false);
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let credited: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "approval",
+                detail,
+            } if detail.starts_with("answered by") || detail.starts_with("no mode answered") => {
+                Some(detail.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(credited, ["no mode answered, left to the confirmer"]);
 }
 
 /// Plan mode refuses a write however the person would have answered, so the file is not touched even

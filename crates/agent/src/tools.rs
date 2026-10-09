@@ -1863,7 +1863,7 @@ pub struct Tools<'a> {
     /// consulted only where something wanted to prompt. A path the trust map already covers, and a
     /// path a rule in the settings file allows, raise no prompt at all, so a refusal that waited
     /// for one would let exactly those writes through.
-    pub permission_mode: crate::PermissionMode,
+    pub permission_mode: crate::LiveMode,
     /// Whether a check that finds nothing may promote a slot without anybody being asked.
     ///
     /// `false` for every turn nobody turned it on for, which is the default and what a turn has
@@ -3118,9 +3118,9 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // A mode that refuses writes refuses them whether or not anybody would have been asked,
         // which is what makes it a statement about the turn rather than an answer given on the
         // person's behalf. Checked before the tool runs, so nothing is read and no path resolved.
-        writing if tools.permission_mode.refuses_writes() && writes_a_file(writing) => {
+        writing if tools.permission_mode.get().refuses_writes() && writes_a_file(writing) => {
             Produced::problem(
-                "refused: this turn is in plan mode, so writing is refused however the user would \
+                "refused: the session is in plan mode, so writing is refused however the user would \
                  have answered. Do not retry; say what you would change and why.",
             )
         }
@@ -3135,7 +3135,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             tools.workspace,
             tools.slots,
             tools.recording(),
-            tools.permission_mode,
+            tools.permission_mode.get(),
             confirmer,
             &arguments,
         ),
@@ -3723,7 +3723,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         // The plain mode test and not the one the two promotion gates ask, because screening does not
         // answer a vouch: it is a standing rule about a path rather than one slot's bytes, so under
         // bypass nobody reads this word however the run was started.
-        let checked = (tools.permission_mode != crate::PermissionMode::Bypass).then(|| {
+        let checked = (tools.permission_mode.get() != crate::PermissionMode::Bypass).then(|| {
             let spec = policy.before_vetting_a_path(&proposed_path, body);
             let asked_at = std::time::Instant::now();
             (
@@ -4962,12 +4962,13 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             record: standing.record.clone(),
         };
 
+        // Read before the question is put, because a person can change the mode while they decide
+        // it, and the trail must not credit a mode with an answer they gave.
+        let mode = tools.permission_mode.get();
         let answer = confirmer.confirm_write(&request);
         policy.record_answer(
-            tools
-                .permission_mode
-                .answers_a_write_unasked(!request.credentials.is_empty())
-                .then(|| tools.permission_mode.name()),
+            mode.answers_a_write_unasked(!request.credentials.is_empty())
+                .then(|| mode.name()),
         );
         if !answer.approved() {
             return credential_aware_rejection(&shown_path, &scanned);
@@ -6044,6 +6045,7 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     let mut waited = None;
     let spec = match tools
         .permission_mode
+        .get()
         .checks_before_promoting(tools.auto_vetting)
     {
         false => None,
@@ -6074,7 +6076,7 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     match release_output(
         policy,
         tools.slots,
-        tools.permission_mode,
+        tools.permission_mode.get(),
         tools.auto_vetting,
         confirmer,
         &slot,
@@ -6374,6 +6376,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     // so under bypass nothing reads that word whatever was asked for.
     let spec = match tools
         .permission_mode
+        .get()
         .checks_before_promoting(tools.auto_vetting)
     {
         false => None,
@@ -6410,6 +6413,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     // `docs/specs/labels.md`.
     let endorsed = tools
         .permission_mode
+        .get()
         .released_by(tools.auto_vetting, verdict);
 
     // A `match` rather than an `if`, so a fourth way of endorsing cannot be added and default to
@@ -6454,7 +6458,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                 let (shown, lines) = measured.declassify(&proof);
                 (shown, lines, None)
             }
-            Some(_) if tools.permission_mode == crate::PermissionMode::Bypass => {
+            Some(_) if tools.permission_mode.get() == crate::PermissionMode::Bypass => {
                 (String::new(), 0, None)
             }
             Some(media) => match copy_a_picture(policy, tools.slots, tools.cache, &slot, media) {
@@ -7437,13 +7441,10 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 .filter(|_| !requested.is_empty() && crate::reach::may_be_added_to())
                 .map(|(home, _)| crate::reach::Store::new(home).path().to_path_buf()),
         };
+        // Read before the question is put, for the reason a write's is.
+        let mode = tools.permission_mode.get();
         let answer = confirmer.confirm_run(&request);
-        policy.record_answer(
-            tools
-                .permission_mode
-                .answers_a_run_unasked()
-                .then(|| tools.permission_mode.name()),
-        );
+        policy.record_answer(mode.answers_a_run_unasked().then(|| mode.name()));
         if !answer.approved() {
             return Produced::problem(
                 "refused: the user did not approve running this. Do not retry the same \
@@ -15196,7 +15197,7 @@ mod tests {
                 servers: None,
                 mcp: None,
                 jobs: &mut jobs,
-                permission_mode: crate::PermissionMode::default(),
+                permission_mode: crate::LiveMode::default(),
                 auto_vetting: false,
                 run_directory: &mut run_directory,
                 confine_runs: false,

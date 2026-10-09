@@ -1418,12 +1418,11 @@ Still open:
 - A manifest run is passed the session's rules, and the agent's runner does not read them.
 - `session.mode` takes `session` and `mode`, one of `ask`, `acceptEdits` or `plan`, and answers
   `{ permissionMode }`. Any other word, `bypass` included, is `bad_request`: bypassing is reached
-  only through the command-line flag (MODE-5). It is accepted while a turn runs and changes the
-  next turn, not the running one (MODE-8).
+  only through the command-line flag (MODE-5). It is accepted while a turn runs and applies to the rest
+  of that turn (MODE-8).
 - `session.new`, `session.open` and `session.fork` carry `permissionMode`, which is always `ask`.
   A mode is not written to the record and a fork does not take its parent's (MODE-10).
-- `turn.started` and `manifest.started` carry `mode`, the mode the turn or run reads once and
-  keeps to its end.
+- `turn.started` and `manifest.started` carry `mode`, the mode the turn or run started in.
 
 ## Shared session view, version 1
 

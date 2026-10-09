@@ -2537,9 +2537,8 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // for a completion. Both spellings, because which one arrives is the terminal's choice.
         //
         // In the shared ladder so it works mid-turn, which is when it is most wanted: a person
-        // watching a turn edit files it should not be is deciding about the next turn, and this is
-        // how they say so. The turn in flight keeps the mode it began with, its confirmer having
-        // been built with it.
+        // watching a turn edit files it should not be stops it with this key. The turn in flight
+        // reads the session's handle on the mode, so it follows the last press (MODE-8).
         _ if cycles_the_mode(key) => {
             session.cycle_permission_mode();
             Action::Redraw
@@ -4500,14 +4499,14 @@ fn event_loop(
                 // The person's own typing is the request, so no turn is run: each file goes
                 // through the write gate and is put to them, whatever the map would have said
                 // (CHECKOUT-14).
-                let permission_mode = session.permission_mode();
+                let permission_mode = session.live_permission_mode();
                 let task = Task::new(format!("/checkouts apply {id}"))
                     .with_home(bravebot_agent::home::directory())
                     .with_profile(bravebot_agent::home::profile())
                     .with_cache(bravebot_agent::home::cache())
                     .remembering(Some(stored.id().to_string()))
                     .with_permissions(answers.rules.permissions.clone())
-                    .with_permission_mode(permission_mode)
+                    .with_permission_mode(permission_mode.clone())
                     .with_auto_vetting(session.auto_vetting())
                     .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
                         settings.run_deadlines(),
@@ -7410,10 +7409,9 @@ fn manifest_animated(
     let worker_config = config.clone();
     let worker_workspace = workspace.clone();
     let worker_trust = trust.clone();
-    // The mode as it stands now. A run keeps the one it began with, for the reason a turn does: a
-    // key pressed while it walks describes what comes after it, and a plan already on the screen
-    // must not have the question withdrawn from under the person answering it.
-    let permission_mode = session.permission_mode();
+    // The session's own handle, so a key pressed while the run walks applies to the rest of it
+    // (MODE-8).
+    let permission_mode = session.live_permission_mode();
     // No files: a file named with `@` is context, and this mode fixes its plan before it observes
     // anything, which is the same reason a pipe is refused (MANIFEST-9).
     //
@@ -7433,7 +7431,7 @@ fn manifest_animated(
         .with_model(session.model().map(str::to_string))
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())
-        .with_permission_mode(permission_mode)
+        .with_permission_mode(permission_mode.clone())
         .with_attribution(attribution.clone())
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
@@ -8071,10 +8069,10 @@ fn run_turn_animated(
     // session knows what it is already doing, and a tool answering out of a stale reading would
     // tell the planner a watch exists that the session then declines to keep.
     let looking_again = will_look_again(session, wrote);
-    // Read once, here, so the mode the planner is told about and the mode the confirmer enforces are
-    // the same one: the person may press the key while this turn runs, and the two halves reading it
-    // at different moments is how they would come to disagree.
-    let permission_mode = session.permission_mode();
+    // The session's own handle rather than a copy of its value: the person may press the key while
+    // this turn runs, and the planner, the tools and the confirmer all read what they pressed last
+    // (MODE-8).
+    let permission_mode = session.live_permission_mode();
     // The worker starts the language servers, and the info panel on this thread names them.
     let language_servers = session.language_servers().clone();
     let mut task = Task::new(prompt)
@@ -8089,7 +8087,7 @@ fn run_turn_animated(
         .addressing(addressed.as_ref().map(|addressed| addressed.name.clone()))
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())
-        .with_permission_mode(permission_mode)
+        .with_permission_mode(permission_mode.clone())
         .with_attribution(attribution.clone())
         // The words `--system-prompt` and `--append-system-prompt` named, on every turn the session
         // sends, ticks and goal rounds included (CLI-19).
@@ -16904,8 +16902,8 @@ mod tests {
         assert_eq!(command_typed("/planning the release"), None);
     }
 
-    /// A turn keeps the mode it began with (MODE-8), so the word waits for the turn in flight
-    /// rather than changing the mode its confirmer was built with.
+    /// The word carries a prompt, which is a turn of its own, so it waits for the turn in flight
+    /// and sets the mode when that prompt is run (MODE-12).
     #[test]
     fn the_plan_command_waits_for_the_turn_in_flight() {
         use bravebot_agent::PermissionMode;
@@ -23825,8 +23823,9 @@ mod tests {
         }
     }
 
-    /// Most wanted mid-turn, which is when somebody watching a turn edit the wrong files decides the
-    /// next one should stop and ask. The turn in flight keeps the mode its confirmer was built with.
+    /// Most wanted mid-turn, which is when somebody watching a turn edit the wrong files decides it
+    /// should stop and ask. The handle the running turn holds is the session's own, so the turn
+    /// reads the mode the key left (MODE-8).
     #[test]
     fn the_mode_can_be_changed_while_a_turn_runs() {
         use bravebot_agent::PermissionMode;
@@ -23834,9 +23833,11 @@ mod tests {
         handle_key(&mut session, key(KeyCode::Char('a')));
         handle_key(&mut session, key(KeyCode::Enter));
         assert_eq!(session.status, Status::Working);
+        let held_by_the_turn = session.live_permission_mode();
 
         handle_key(&mut session, shift(KeyCode::Tab));
         assert_eq!(session.permission_mode(), PermissionMode::AcceptEdits);
+        assert_eq!(held_by_the_turn.get(), PermissionMode::AcceptEdits);
     }
 
     /// Keys that mean nothing here must be ignored rather than mishandled.

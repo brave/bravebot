@@ -938,8 +938,7 @@ export function App(): React.JSX.Element {
     } catch (error) { setProblem(String(error)) }
   }, [readBots])
 
-  // Allowed while a turn runs: the bridge keeps the running turn in the mode it began with, and
-  // the next one runs in this (MODE-8). What the bridge answered is what is drawn.
+  // Allowed while a turn runs: the running turn follows the mode chosen last (MODE-8). What the bridge answered is what is drawn.
   const chooseMode = useCallback(async (mode: PermissionMode) => {
     const handle = handleRef.current
     if (!handle) return

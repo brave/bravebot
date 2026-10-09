@@ -83,7 +83,7 @@ pub use conversation::Conversation;
 pub use delegate::Delegated;
 pub use mode::Mode;
 pub use outcome::{Category, Diagnosis, Ending, Spent};
-pub use permission_mode::{Confining, PermissionMode};
+pub use permission_mode::{Confining, LiveMode, PermissionMode};
 pub use processor::ProcessorError;
 pub use report::{Activity, IgnoreReports, Reporter};
 pub use scratch::SessionScratch;
