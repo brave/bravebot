@@ -1590,6 +1590,9 @@ pub struct Output {
     /// Recorded by the turn loop only once the planner was shown the result (READ-8): a read that
     /// was quarantined, refused or answered with a notice shows no window.
     pub window: Option<crate::conversation::ReadWindow>,
+    /// Whether this is the planner's task list, accepted, so that a compaction can carry it
+    /// across the cut (COMPACT-16). False for a `todo_write` that was refused.
+    pub task_list: bool,
     /// Whether the text is workspace content rather than the driver's own words about the call.
     pub content: bool,
     /// Whether this call left a file on disk different from how it found it.
@@ -2261,6 +2264,9 @@ struct Produced {
     glimpsed: Option<Labelled<String>>,
     /// The window of a file `text` shows, for the record of what the planner has been shown.
     window: Option<crate::conversation::ReadWindow>,
+    /// Whether `text` is the planner's task list, accepted. A fact about the call rather than
+    /// anything inside `text`, so the turn can record where the list sits without reading it.
+    task_list: bool,
     /// Whether `text` is workspace content rather than the driver's own words about the call.
     ///
     /// What the kernel does with a result is worth reporting only where the result is content:
@@ -2337,6 +2343,7 @@ impl Produced {
             said: None,
             glimpsed: None,
             window: None,
+            task_list: false,
             content: false,
             usage: Usage::default(),
             inference_interval: None,
@@ -2379,6 +2386,7 @@ impl Produced {
             said: None,
             glimpsed: None,
             window: None,
+            task_list: false,
             wakeup: None,
             watch: None,
             content: false,
@@ -2982,6 +2990,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 said: produced.said,
                 glimpsed: produced.glimpsed,
                 window: produced.window,
+                task_list: produced.task_list,
                 content: produced.content,
                 changed_a_file: produced.changed_a_file,
                 ran_a_program: produced.ran_a_program,
@@ -3163,6 +3172,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         said: produced.said,
         glimpsed: produced.glimpsed,
         window: produced.window,
+        task_list: produced.task_list,
         content: produced.content,
         changed_a_file: produced.changed_a_file,
         ran_a_program: produced.ran_a_program,
@@ -5605,7 +5615,9 @@ fn todo_write<S: Sink, R: Reporter>(
         format!("{} of {} done", list.done(), list.len())
     });
 
-    Produced::new(summary, "", note)
+    let mut produced = Produced::new(summary, "", note);
+    produced.task_list = true;
+    produced
 }
 
 /// Say when this turn should be asked again.

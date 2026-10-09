@@ -5375,6 +5375,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 if shown_window && let Some(window) = output.window.take() {
                                     conversation.shown_read(window);
                                 }
+                                if shown_window && output.task_list {
+                                    conversation.task_list_shown();
+                                }
                             }
                             None => conversation.push_composed_from(
                                 Message::user(body),
