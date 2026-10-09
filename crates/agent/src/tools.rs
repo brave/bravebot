@@ -5236,8 +5236,8 @@ fn diagnostics_after_a_write<S: Sink>(
         .join(proposed_path)
         .components()
         .collect::<std::path::PathBuf>()
-        .to_string_lossy()
-        .into_owned();
+        .to_str()?
+        .to_owned();
     // Asked before anything is recorded, so a write with no server to ask leaves no trace of one.
     if !servers.covers(&absolute) {
         return None;
