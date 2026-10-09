@@ -110,6 +110,8 @@ pub struct RequestView {
     pub spans: Vec<Span>,
     /// The names of the tools the request offered.
     pub tools: Vec<String>,
+    /// The size in bytes of the tool definitions as sent, which no span holds.
+    pub tools_bytes: u64,
 }
 
 impl RequestView {
@@ -157,6 +159,13 @@ impl RequestView {
                 .flatten()
                 .map(|tool| tool.function.name.clone())
                 .collect(),
+            // A length of what is sent and nothing read out of it: the bytes are counted, never
+            // looked at.
+            tools_bytes: request
+                .tools
+                .as_ref()
+                .and_then(|tools| serde_json::to_string(tools).ok())
+                .map_or(0, |sent| sent.len() as u64),
         }
     }
 }
@@ -251,6 +260,27 @@ mod tests {
 
         assert_eq!(view.spans[0].provenance, Provenance::Typed);
         assert_eq!(view.spans[1].provenance, Provenance::Unrecorded);
+    }
+
+    /// The definitions are counted as they are sent, since no span holds them, and a request that
+    /// offers none counts none.
+    #[test]
+    fn the_size_of_the_tool_definitions_is_what_was_sent() {
+        let prompt = Prompt::default();
+        let bare = request(vec![Message::system("")]);
+        assert_eq!(RequestView::of(&bare, &prompt, &[]).tools_bytes, 0);
+
+        let tool = bravebot_aichat::protocol::Tool::function(
+            "read_file",
+            "Read a file.",
+            serde_json::json!({"type": "object"}),
+        );
+        let sent = serde_json::to_string(std::slice::from_ref(&tool))
+            .unwrap()
+            .len() as u64;
+        let offered = request(vec![Message::system("")]).with_tools(vec![tool]);
+        assert_eq!(RequestView::of(&offered, &prompt, &[]).tools_bytes, sent);
+        assert!(sent > 0);
     }
 
     #[test]

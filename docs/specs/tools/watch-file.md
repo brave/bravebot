@@ -48,6 +48,7 @@ first. And a path nobody vouched for is one this program has no business reporti
 the gate is not looser either.
 
 `verified-by: bravebot_agent::tools::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
+`verified-by: bravebot_agent::tools::a_watch_is_refused_once_the_context_has_met_something_untrusted`
 
 <a id="ARM-3"></a>
 ### ARM-3: the path must name a file, or have nothing at it yet

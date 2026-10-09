@@ -230,6 +230,17 @@ pub struct Conversation {
     /// Trusted metadata: a path the planner named, the window it asked for and a change token taken
     /// from the file's size and modification time, never anything a file said.
     reads: ShownReads,
+    /// Where the planner's latest task list result sits in `messages`, if one has been written.
+    ///
+    /// A position, as `reads` holds, so nothing here reads the list: the driver records that a
+    /// `todo_write` was accepted at this message and never looks inside it to decide anything.
+    /// Not part of a [`Snapshot`], for the reason `reads` is not.
+    task_list: Option<usize>,
+    /// The latest task list, once a compaction took the message holding it out of the request.
+    ///
+    /// Carried word for word and put back after the summary (COMPACT-16). Model output the
+    /// planner already held, so it comes back at the label of the context it came from.
+    carried_task_list: Option<String>,
 }
 
 /// A window of a file as `read_file` showed it, for telling a repeat of the same read from a new one.
@@ -306,6 +317,8 @@ impl Conversation {
             measured: 0,
             asked_to_write: false,
             reads: ShownReads::default(),
+            task_list: None,
+            carried_task_list: None,
         }
     }
 
@@ -465,6 +478,17 @@ impl Conversation {
         }
     }
 
+    /// Record that the message just pushed is the planner's task list, accepted.
+    ///
+    /// The list it replaces is out of date wherever it is, so a copy carried across an earlier
+    /// compaction is dropped.
+    pub fn task_list_shown(&mut self) {
+        if let Some(last) = self.messages.len().checked_sub(1) {
+            self.task_list = Some(last);
+            self.carried_task_list = None;
+        }
+    }
+
     /// Record what the last request built from this conversation came to.
     ///
     /// The server's own figure. There is no tokeniser here, so this is the only measurement of a
@@ -603,6 +627,20 @@ impl Conversation {
     ///
     /// The replaced messages go to the archive rather than into a bin. See the field.
     pub fn compacted(&mut self, boundary: usize, summary: &str) {
+        // Before the drain, while the message is still there to copy. Only a list the cut takes
+        // is carried: one in the kept part is sent word for word already, and would be sent twice.
+        match self.task_list {
+            Some(at) if at < boundary => {
+                self.carried_task_list = self.messages[at]
+                    .message
+                    .content
+                    .as_text()
+                    .map(str::to_string);
+                self.task_list = None;
+            }
+            Some(at) => self.task_list = Some(at - boundary + 1),
+            None => {}
+        }
         let replaced: Vec<Stored> = self.messages.drain(..boundary).collect();
         self.archive.extend(replaced);
         self.reads.compacted(boundary);
@@ -611,6 +649,10 @@ impl Conversation {
         if let Some(live) = self.live_references() {
             note.push_str("\n\n");
             note.push_str(&live);
+        }
+        if let Some(list) = &self.carried_task_list {
+            note.push_str("\n\nYour task list, as you last wrote it:\n");
+            note.push_str(list);
         }
         self.messages.insert(
             0,
@@ -857,6 +899,8 @@ impl Conversation {
             measured: snapshot.measured,
             asked_to_write: snapshot.asked_to_write,
             reads: ShownReads::default(),
+            task_list: None,
+            carried_task_list: None,
         }
     }
 
@@ -2105,6 +2149,107 @@ mod tests {
 
         let note = conversation.messages()[0].message.content.text();
         assert!(note.contains("ref:0"), "{note}");
+    }
+
+    /// COMPACT-16: the planner's list is the one thing in the head it cannot rebuild from prose.
+    #[test]
+    fn a_task_list_written_before_the_cut_is_in_the_request_after_it() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first"));
+        conversation.push(Message::tool_result(
+            "t1",
+            "1 of 2 done\n[completed] a\n[pending] b",
+        ));
+        conversation.task_list_shown();
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        assert!(boundary > 1, "the list has to be inside what is given up");
+        conversation.compacted(boundary, "they started");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(
+            note.ends_with("1 of 2 done\n[completed] a\n[pending] b"),
+            "{note}"
+        );
+    }
+
+    /// COMPACT-16: nothing written means nothing added, so a session that never used the tool
+    /// is not told about a list it does not have.
+    #[test]
+    fn a_conversation_with_no_task_list_gains_none_from_a_compaction() {
+        let mut conversation = four_exchanges();
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary, "they started");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(!note.contains("as you last wrote it"), "{note}");
+    }
+
+    /// COMPACT-16: a list inside the kept part is already sent word for word, and sending it a
+    /// second time in the summary would put two lists in front of the planner.
+    #[test]
+    fn a_task_list_the_cut_leaves_in_place_is_not_sent_twice() {
+        let mut conversation = four_exchanges();
+        conversation.push(Message::tool_result("t1", "0 of 1 done\n[pending] a"));
+        conversation.task_list_shown();
+
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary, "they started");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(!note.contains("[pending] a"), "{note}");
+        assert!(
+            conversation.messages().iter().any(|m| m
+                .message
+                .content
+                .text()
+                .contains("[pending] a"))
+        );
+    }
+
+    /// COMPACT-16: the copy has to survive the next compaction, which summarises the summary that
+    /// holds it, and it is replaced when the planner writes a newer list.
+    #[test]
+    fn the_carried_list_survives_a_second_compaction_until_a_newer_one_replaces_it() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::tool_result("t1", "old list"));
+        conversation.task_list_shown();
+        for round in 0..2 {
+            for (prompt, answer) in [("p1", "a1"), ("p2", "a2"), ("p3", "a3"), ("p4", "a4")] {
+                conversation.push(Message::user(prompt));
+                conversation.push(Message::assistant(answer));
+            }
+            let boundary = conversation
+                .compaction_boundary()
+                .expect("something to compact");
+            conversation.compacted(boundary, &format!("summary {round}"));
+            let note = conversation.messages()[0].message.content.text();
+            assert!(note.ends_with("old list"), "round {round}: {note}");
+        }
+
+        conversation.push(Message::tool_result("t2", "new list"));
+        conversation.task_list_shown();
+        for (prompt, answer) in [("p5", "a5"), ("p6", "a6"), ("p7", "a7"), ("p8", "a8")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("something to compact");
+        conversation.compacted(boundary, "summary 2");
+        let note = conversation.messages()[0].message.content.text();
+        assert!(note.ends_with("new list"), "{note}");
+        assert!(!note.contains("old list"), "{note}");
     }
 
     /// A name minted for content the planner turned out to be allowed to read never became a

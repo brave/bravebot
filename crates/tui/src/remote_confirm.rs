@@ -978,6 +978,7 @@ mod tests {
             model: "m".to_string(),
             spans: Vec::new(),
             tools: vec!["read_file".to_string()],
+            tools_bytes: 0,
         };
         reporter.request_built(view.clone());
         match inbound.recv().expect("a message arrived") {

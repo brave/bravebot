@@ -8657,6 +8657,102 @@ fn a_run_without_the_safe_flag_says_nothing_of_safe_mode() {
     assert!(said(&refused).1.contains("--safe"), "{:?}", said(&refused));
 }
 
+/// `--locked` reads no settings layer from a checkout, and the same checkout is read without it.
+///
+/// Both runs are in one test so the control makes the locked half mean something: a fixture whose
+/// file was never going to be read would pass against a flag that did nothing. `doctor` is where a
+/// checkout's refusal is visible with its source.
+#[test]
+fn a_locked_run_reads_no_settings_layer_from_the_checkout() {
+    let scratch = Scratch::new("cli-running-locked-layers")
+        .with_settings(r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-settings"]}}}"#);
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"sandbox": {"filesystem": {"denyWrite": ["from-the-checkout"]}}}"#,
+    )
+    .expect("the checkout's settings");
+    let report = |arguments: &[&str]| {
+        let output = bravebot_started_in(
+            &scratch.path,
+            &checkout,
+            BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+            arguments,
+        );
+        said(&output).0
+    };
+
+    let plain = report(&["doctor"]);
+    assert!(
+        plain.contains("denyWrite from-the-checkout"),
+        "the control never read the checkout's file, so the locked run proves nothing: {plain}"
+    );
+
+    let locked = report(&["--locked", "doctor"]);
+    assert!(
+        !locked.contains("from-the-checkout"),
+        "a locked run read the checkout's settings: {locked}"
+    );
+    assert!(
+        locked.contains("denyRead ~/from-settings"),
+        "a locked run dropped the person's own file: {locked}"
+    );
+}
+
+/// `--locked` refuses the bypass flag before any request is sent, and a background session, which
+/// would not carry the flag, is refused too.
+#[test]
+fn a_locked_run_refuses_the_bypass_flag_and_a_background_start() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = Scratch::new("cli-running-locked-bypass").with_settings(&settings_for(&gateway));
+    for arguments in [
+        vec!["--locked", "--dangerously-skip-permissions", "-p", "hi"],
+        vec!["-p", "hi", "--dangerously-skip-permissions", "--locked"],
+        vec!["--bg", "--locked", "a task"],
+    ] {
+        let output = bravebot(&scratch.path, AT_A_GATEWAY, &arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+        assert!(stderr.contains("--locked"), "{arguments:?}: {stderr}");
+    }
+    assert!(
+        gateway
+            .asked
+            .recv_timeout(Duration::from_millis(300))
+            .is_err(),
+        "a refused run still reached the model"
+    );
+}
+
+/// `--locked` includes `--safe`: a home full of customizations is read by none of the five
+/// loaders, and the run says so.
+#[cfg(unix)]
+#[test]
+fn a_locked_run_loads_none_of_the_customizations_a_safe_one_leaves_out() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = a_home_full_of_customizations("cli-running-locked", &gateway);
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--locked", "-p", "say something"],
+    );
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("a locked run still reaches the model the settings named");
+    for word in [
+        "zebra-skill-words",
+        "zebra-definition-words",
+        "zebra-instruction-words",
+    ] {
+        assert!(!asked.contains(word), "a locked run sent {word}: {asked}");
+    }
+    assert!(!scratch.path.join("hook-fired").exists());
+    assert!(said(&output).1.contains("Safe mode"));
+}
+
 /// A session in lines started in `cwd` with `flag` among its arguments, which answers the trust
 /// question yes and sends one prompt.
 ///

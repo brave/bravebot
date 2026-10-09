@@ -80,6 +80,7 @@ fn main() -> ExitCode {
                 arg.as_str(),
                 "--incognito"
                     | "--safe"
+                    | "--locked"
                     | "--tools"
                     | "--no-shell"
                     | "--vet"
@@ -107,6 +108,15 @@ fn main() -> ExitCode {
         bravebot_core::safe::engage();
     }
 
+    // Beside the mode above, which it includes, and before the first setting is read: a settings
+    // layer read once from a checkout cannot be unread. The bypass flag is refused here and not
+    // after the arguments are parsed, so that nothing else the line says is acted on first.
+    let locked = take_flag(&mut args, "--locked");
+    if locked {
+        bravebot_core::safe::engage();
+        bravebot_config::lock();
+    }
+
     // Beside the mode above and for the same reason: the switch has to be settled before a session
     // is assembled, and this is the last moment certain to be before every way of assembling one.
     // What it turns on is read once per session, where the three routes into it are resolved.
@@ -119,6 +129,13 @@ fn main() -> ExitCode {
     // questions to the same trait. Reading it per subcommand would be four chances to read it in
     // three of them, and the flag would then be silently ignored wherever it was forgotten.
     let skip_permissions = take_skip_permissions(&mut args);
+    if locked && skip_permissions {
+        return stopped_before_the_turn(
+            wants_json(&args),
+            Ending::Argument,
+            t!(cli_locked_refuses_bypass).to_string(),
+        );
+    }
 
     // Read off the arguments as typed, before the flag below takes anything out of them: a result
     // object was asked for by the command line that failed, whichever token the failure consumed.
@@ -1015,6 +1032,7 @@ fn print_help() {
         ("--json-stream", t!(cli_option_json_stream)),
         ("--incognito", t!(cli_option_incognito)),
         ("--safe", t!(cli_option_safe)),
+        ("--locked", t!(cli_option_locked)),
         ("--vet", t!(cli_option_vet)),
         (
             "--dangerously-skip-permissions",
@@ -1117,6 +1135,15 @@ fn take_incognito(args: &mut Vec<String>) -> bool {
 fn take_safe(args: &mut Vec<String>) -> bool {
     let asked = args.len();
     args.retain(|arg| arg != "--safe");
+    args.len() != asked
+}
+
+/// Take the flag `name` out of the arguments, reporting whether it was there.
+///
+/// Repeats are one flag rather than an error, as with `--safe`.
+fn take_flag(args: &mut Vec<String>, name: &str) -> bool {
+    let asked = args.len();
+    args.retain(|arg| arg != name);
     args.len() != asked
 }
 
@@ -3253,12 +3280,11 @@ fn skill_keys_unread(
 /// nothing has vouched for, which is what an unanswered question leaves. Nothing is written and
 /// nobody is asked: `doctor` changes nothing and puts no question.
 fn trust_already_answered(root: &Path) -> bravebot_core::TrustStore {
-    let kept = bravebot_agent::trusted::record_for(
+    let kept = bravebot_agent::trusted::honoured(
         bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
         root,
-    )
-    .and_then(|(store, identity)| store.kept(&identity));
+    );
     match kept {
         Some(_) => bravebot_tui::trust_prompt::trusting_the_workspace(root),
         None => bravebot_agent::workspace::trust_store(root),

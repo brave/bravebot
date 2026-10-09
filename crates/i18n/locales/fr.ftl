@@ -95,6 +95,10 @@ cli-plain-trusting-kept =
     { $directory } approuvé (vous avez demandé de le retenir { $when } ; pour que la question
     soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
     lignes qui le nomment)
+cli-plain-trusting-kept-root =
+    { $directory } approuvé, dans { $root } (vous avez demandé de retenir { $root } { $when } ; pour que la
+    question soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
+    lignes qui nomment { $root })
 # Dit quand une session en arrière-plan est relancée et que sa conversation précédente a été relue
 # depuis son enregistrement (BG-1).
 cli-plain-resumed = Reprise de la conversation précédente de cette session ({ $count }).
@@ -138,6 +142,10 @@ cli-option-json-stream = Afficher un événement par ligne sur stdout pendant l'
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
 cli-option-safe =
     Ne charger ni hooks, ni skills, ni définitions, ni serveurs MCP, ni AGENTS.md. La connexion, le modèle et les permissions s'appliquent toujours
+cli-option-locked =
+    Comme --safe, et ne lire aucun fichier de réglages du projet ou local, et refuser --dangerously-skip-permissions
+cli-locked-refuses-bypass =
+    --dangerously-skip-permissions est refusé avec --locked : une exécution verrouillée n'ouvre jamais le mode bypass
 cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
@@ -1095,9 +1103,9 @@ trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
 trust-directory-remember = faire confiance et retenir
 trust-directory-remember-explained =
-    r : lui faire confiance, et ne plus poser cette question aux sessions démarrées plus tard exactement dans ce répertoire
+    r : lui faire confiance, et ne plus poser cette question aux sessions démarrées plus tard dans ce répertoire, ou en dessous s'il est une racine git
 trust-directory-remember-exact =
-    La question reste posée à une session démarrée dans un répertoire qu'il contient ou qui le contient, ou dans un répertoire supprimé puis recréé ici.
+    La question reste posée à une session démarrée au-dessus, dans un dépôt imbriqué, ou dans un répertoire supprimé puis recréé ici.
 trust-directory-remember-where = /forget-trust revient dessus, et c'est noté ici :
 trust-directory-remember-unseen = ↑↓ r ne retient rien : ce qu'il écrit n'est pas encore affiché
 trust-directory-remember-too-small = r ne retient rien : ce qu'il écrit dépasse la hauteur du cadre
@@ -1609,6 +1617,7 @@ status-directory-untrusted = non fiable, chaque écriture vous est donc montrée
 status-directory-kept = retenu { $when }
 status-directory-kept-note = les sessions démarrées ici plus tard l'approuvent sans demander
 status-directory-kept-where = /forget-trust pour que la question soit reposée ; la réponse est retenue dans { $path }
+status-directory-kept-root-note = les sessions démarrées ici plus tard l'approuvent sans demander, car { $root } a été retenu
 status-also-open = Aussi ouvert
 status-added-directory = ajouté avec /add-dir
 status-scratch = Temporaire
@@ -1745,6 +1754,20 @@ session-limit-set-below-spent = la limite de la session est de { $limit } jetons
 session-limit-cleared = la session n'a plus de limite de dépense
 session-limit-unknown = { $figure } n'est pas une limite. Utilisez un nombre entier de jetons, suivi de k ou de m pour des milliers ou des millions, ou off pour retirer la limite
 request-none-yet = Aucune requête n'a encore été envoyée au modèle dans cette session.
+# Ce que /context rapporte. Les noms de section sont des mots fixes, jamais lus dans un fichier ou un résultat.
+context-not-measured = Le contexte n'a pas encore été mesuré, il n'y a donc pas de répartition.
+context-compacted = La conversation a été compactée après la mesure de la dernière requête, cette répartition ne la décrit donc plus. La prochaine requête la mesurera de nouveau.
+context-no-request = Le contexte a été mesuré, mais cette session n'a encore envoyé aucune requête propre à répartir.
+context-total = Dernière requête
+context-approximate = parts des octets envoyés, ramenées au total mesuré
+context-section-system = Invite système
+context-section-instructions = Fichiers d'instructions
+context-section-skills = Compétences
+context-section-tools = Définitions d'outils
+context-section-typed = Ce que vous avez saisi
+context-section-planner = Ce que le planificateur a écrit
+context-section-results = Résultats d'outils
+context-section-other = Autres messages
 request-title = La dernière requête envoyée à { $model }, lue dans la requête elle-même
 request-tools = Outils proposés : { $names }
 request-no-tools = Outils proposés : aucun
@@ -1907,6 +1930,7 @@ scroller-footer-search = / rechercher
 
 command-status = Décrire cette session, ce qu'elle peut toucher, et ce qu'elle a dépensé
 command-cost = Montrer ce que chaque tour de cette session a dépensé
+command-context = Montrer ce qui remplit la fenêtre de contexte, par catégorie
 command-limit = Montrer la limite de dépense de la session, la fixer en jetons ou la retirer
 command-request = Montrer la dernière requête envoyée au modèle, et l'origine de chacune de ses parties
 command-model = Choisir avec quel modèle réfléchir
@@ -2100,12 +2124,16 @@ session-trusting-unasked =
     { $directory } approuvé (--dangerously-skip-permissions, la question ne vous a pas été posée)
 session-trusting-kept =
     { $directory } approuvé (vous avez demandé de le retenir { $when } ; /forget-trust pour que la question soit reposée)
+session-trusting-kept-root =
+    { $directory } approuvé, dans { $root } (vous avez demandé de retenir { $root } { $when } ; /forget-trust pour que la question soit reposée)
 session-trust-kept =
     { $directory } approuvé, et les sessions démarrées ici plus tard ne demanderont plus ; /forget-trust revient dessus
 session-trust-not-kept =
     { $directory } approuvé pour cette session seulement : la réponse n'a pas pu être écrite dans { $path }, la prochaine session ici demandera donc
 session-trust-forgotten =
     la prochaine session démarrée dans { $directory } demandera s'il faut l'approuver ; celle-ci garde sa réponse, et /clear en démarre une qui demande
+session-trust-forgotten-root =
+    la prochaine session démarrée dans { $directory } ou ailleurs dans { $root } demandera s'il faut l'approuver ; celle-ci garde sa réponse, et /clear en démarre une qui demande
 session-trust-nothing-to-forget = aucune réponse n'est retenue pour { $directory }, il n'y a donc rien à oublier
 session-trust-not-forgotten = la réponse retenue dans { $path } n'a pas pu être supprimée : { $error }
 session-trust-forget-incognito =
@@ -2558,6 +2586,11 @@ delegate-isolation-not-read =
     { $definition } est chargé sans copie de travail à part : sa ligne isolation indique { $value }, et seuls checkout et worktree en demandent une
 delegate-effort-not-a-level =
     { $definition } demande l'effort { $effort }, qui n'est aucun de { $levels }, donc son délégué garde l'effort du tour qui le lance
+delegate-writes-not-read =
+    { $count ->
+        [one] { $definition } a un motif writes illisible ici, qui ne couvre donc aucun fichier : { $patterns }. Son délégué ne peut écrire que ce que couvrent les autres motifs, et aucun fichier s'il n'y en a pas
+       *[other] { $definition } a des motifs writes illisibles ici, qui ne couvrent donc aucun fichier : { $patterns }. Son délégué ne peut écrire que ce que couvrent les autres motifs, et aucun fichier s'il n'y en a pas
+    }
 delegate-checkout-reader =
     { $definition } est chargé sans copie de travail à part : c'est un reader, et un reader n'en reçoit jamais
 delegate-memory-in-checkout =

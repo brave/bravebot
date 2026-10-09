@@ -48,6 +48,7 @@ located and the body is shown to a person in full.
 ### EDIT-3: an edit is approved as a diff, and cannot leave the workspace
 
 `verified-by: bravebot_agent::turn::an_edit_is_reviewed_as_a_diff`
+`verified-by: bravebot_agent::turn::a_reviewed_edit_carries_both_sides_of_the_diff`
 `verified-by: bravebot_agent::turn::an_approved_edit_is_recorded_as_endorsed`
 `verified-by: bravebot_agent::turn::a_refused_edit_does_not_happen`
 `verified-by: bravebot_agent::turn::an_edit_cannot_escape_the_workspace`
