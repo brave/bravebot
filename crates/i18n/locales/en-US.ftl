@@ -1570,7 +1570,7 @@ run-write-not-remembered =
 run-stdin-not-remembered =
     a line fed a reference is asked about every time, so this one cannot be remembered
 run-scopes-not-remembered =
-    a line the planner asked to carry a credential scope or a toolchain list is asked about every time, so this one cannot be remembered
+    a line the planner asked to carry a credential scope or a toolchain list is asked about every time, so the line itself cannot be remembered
 # Said only where the plan asked for a credential scope and a record of reach can be written. The
 # lines under it are the programs, each with its operation word, as `/reach` lists them.
 run-keep-reach-explained = m: also remember the requested reach for these commands, so the next plan for them carries it
