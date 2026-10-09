@@ -5232,6 +5232,7 @@ mod tests {
                 .into_iter()
                 .map(|request| ("gh".to_string(), request))
                 .collect(),
+            requested_reaches: Vec::new(),
             carried: Vec::new(),
         });
         request.reach_record = Some("/home/someone/.bravebot/reach.jsonl".into());
