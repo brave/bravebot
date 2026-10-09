@@ -3995,6 +3995,11 @@ fn event_loop(
     session.adopt_wheel_rows(settings.wheel_rows());
     session.adopt_panel();
     session.adopt_caffeinate();
+    // A background job belongs to the session here and ends with it, except where nothing may
+    // outlive the process that wrote it (RUN-15).
+    if !bravebot_core::incognito::engaged() {
+        session.keep_jobs_between_turns();
+    }
     session.adopt_prompt_files(crate::prompt_files::directory());
     crate::title::adopt(
         settings.terminal_title(),
@@ -8075,6 +8080,7 @@ fn run_turn_animated(
     let permission_mode = session.live_permission_mode();
     // The worker starts the language servers, and the info panel on this thread names them.
     let language_servers = session.language_servers().clone();
+    let kept_jobs = session.kept_jobs().cloned();
     let mut task = Task::new(prompt)
         .with_rounds(None)
         .with_home(bravebot_agent::home::directory())
@@ -8119,6 +8125,11 @@ fn run_turn_animated(
     }
     if session.take_driver_prompt() || wrote == Wrote::TheDriver {
         task = task.written_by_the_driver();
+    }
+    // The jobs the session keeps, so one started here is still running when the next turn begins
+    // (RUN-15).
+    if let Some(kept) = kept_jobs {
+        task = task.keeping_jobs(kept);
     }
     task = with_submitted_attachments(task, session);
     task = with_session_advisor(task, session);

@@ -684,7 +684,9 @@ A call may say it should not be waited for. It is endorsed the same way, starts 
 answers immediately with a handle. The turn carries on.
 
 When it exits, the turn is told: the handle, the status, and the output under the label the plan
-earned. A background run that is still going when the session ends is killed.
+earned. A background run that is still going when the turn ends is killed, except in an interactive
+session, where it is left running and is killed when the session ends ([RUN-15](run.md#RUN-15)). A
+job that ended between two turns is told at the next turn's first round.
 
 The output of a background run obeys every other clause here. Backgrounding changes when the planner
 is told, never what it is allowed to read.
