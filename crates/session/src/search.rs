@@ -7,8 +7,8 @@
 
 use crate::sessions::{self, Front};
 use bravebot_agent::conversation::{Composed, Conversation, Said, Snapshot};
-use serde::Deserialize;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// The longest line kept, in characters. A reply can run to pages on one line.
@@ -110,29 +110,49 @@ pub struct Corpus {
 }
 
 impl Corpus {
-    /// Read every record in a project's session directory.
-    pub fn read(project: &Path) -> Self {
+    /// What the sessions of a project say, for the ones `wanted` names.
+    ///
+    /// A session whose index entry is current is answered from it, and its record is not opened.
+    /// An entry is current when the record's size and modification time are the ones it was built
+    /// from; any other is rebuilt from the record, and a session saved before the index existed has
+    /// none, so it is built the first time it is wanted.
+    pub fn read(project: &Path, wanted: impl Fn(&str) -> bool) -> Self {
         let mut lines = HashMap::new();
         let Some(directory) = sessions::project_directory(project) else {
             return Self { lines };
         };
-        let Ok(entries) = std::fs::read_dir(directory) else {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
             return Self { lines };
         };
+        let mut recorded = HashSet::new();
+        let mut indexed = Vec::new();
         for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
-            if path.extension().is_none_or(|extension| extension != "json") {
-                continue;
-            }
             let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
                 continue;
             };
             if !sessions::is_a_session_name(id) {
                 continue;
             }
-            let Ok(contents) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            lines.insert(id.to_string(), lines_of(&contents));
+            match path.extension().and_then(|extension| extension.to_str()) {
+                Some("json") => {
+                    recorded.insert(id.to_string());
+                    if wanted(id) {
+                        lines.insert(id.to_string(), indexed_lines(project, &path, id));
+                    }
+                }
+                Some(INDEX_EXTENSION) => indexed.push(path),
+                _ => {}
+            }
+        }
+        // An entry whose record is gone is words nobody can resume, and the record's removal is
+        // what SESSION-30 promises to take them with it. Where nothing may be written, as in an
+        // incognito session, a search removes nothing either.
+        let may_write = sessions::writable_project_directory(project).is_some();
+        for path in indexed.into_iter().filter(|_| may_write) {
+            let named = path.file_stem().and_then(|stem| stem.to_str());
+            if named.is_some_and(|id| !recorded.contains(id)) {
+                let _ = std::fs::remove_file(path);
+            }
         }
         Self { lines }
     }
@@ -154,6 +174,92 @@ impl Corpus {
             .iter()
             .find_map(|line| snippet(line, query.phrase()))
     }
+}
+
+/// The extension of the file beside a record that holds what the record says.
+pub(crate) const INDEX_EXTENSION: &str = "search";
+
+/// The shape of an index entry. Raised whenever [`lines_of`] would answer differently for the same
+/// record, so an entry built by an older rule is rebuilt rather than trusted.
+const INDEX_VERSION: u32 = 1;
+
+/// What one record said, with what it was built from.
+#[derive(Serialize, Deserialize)]
+struct Indexed {
+    version: u32,
+    bytes: u64,
+    modified: u128,
+    lines: Vec<String>,
+}
+
+/// A record's size and modification time, which say whether an entry built from it is still its.
+///
+/// A record that is a link is followed, as it was before there was an index.
+fn stamp(path: &Path) -> Option<(u64, u128)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let modified = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((metadata.len(), modified))
+}
+
+/// The lines of one record, from its index entry when that is current and from the record, which
+/// then gets a new entry, when it is not.
+///
+/// The stamp is taken before the record is read, so a record written in between leaves an entry
+/// that is already out of date and is rebuilt on the next search.
+fn indexed_lines(project: &Path, record: &Path, id: &str) -> Vec<String> {
+    let Some((bytes, modified)) = stamp(record) else {
+        return Vec::new();
+    };
+    let entry = record.with_extension(INDEX_EXTENSION);
+    // An entry that is a link is not read through, since it could name any file.
+    if std::fs::symlink_metadata(&entry).is_ok_and(|found| found.is_file()) {
+        let current = std::fs::read_to_string(&entry)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Indexed>(&text).ok())
+            .filter(|held| {
+                held.version == INDEX_VERSION && held.bytes == bytes && held.modified == modified
+            });
+        if let Some(held) = current {
+            return held.lines;
+        }
+    }
+    let Ok(contents) = std::fs::read_to_string(record) else {
+        return Vec::new();
+    };
+    let lines = lines_of(&contents);
+    store(project, id, bytes, modified, &lines);
+    lines
+}
+
+/// Keep what a record said beside it. Nothing is kept where nothing may be written, as in an
+/// incognito session, and a failed write only costs the next search a read.
+fn store(project: &Path, id: &str, bytes: u64, modified: u128, lines: &[String]) {
+    let Some(directory) = sessions::writable_project_directory(project) else {
+        return;
+    };
+    let entry = Indexed {
+        version: INDEX_VERSION,
+        bytes,
+        modified,
+        lines: lines.to_vec(),
+    };
+    let Ok(body) = serde_json::to_vec(&entry) else {
+        return;
+    };
+    let path = directory.join(format!("{id}.{INDEX_EXTENSION}"));
+    // A link standing where the entry goes is replaced, never written through.
+    if std::fs::symlink_metadata(&path).is_ok_and(|found| !found.is_file()) {
+        let _ = std::fs::remove_file(&path);
+    }
+    let _ = bravebot_agent::home::write_file(&path, &body);
 }
 
 /// The record fields a search reads.
@@ -449,11 +555,183 @@ mod tests {
         )
         .expect("write");
 
-        let corpus = Corpus::read(&project);
+        let corpus = Corpus::read(&project, |_| true);
         let query = Query::parse("signing keys").expect("a query");
         assert!(corpus.found("a1b2", &query).is_some());
         assert!(corpus.found("not a name", &query).is_none());
         assert!(corpus.found("a1b2.audit", &query).is_none());
+    }
+
+    fn directory_of(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let project = crate::test_profile::project(name);
+        let directory = sessions::project_directory(&project).expect("a directory");
+        std::fs::create_dir_all(&directory).expect("create");
+        (project, directory)
+    }
+
+    fn entry_of(directory: &Path, id: &str) -> std::path::PathBuf {
+        directory.join(format!("{id}.{INDEX_EXTENSION}"))
+    }
+
+    fn found_in(corpus: &Corpus, id: &str, phrase: &str) -> bool {
+        corpus
+            .found(id, &Query::parse(phrase).expect("a query"))
+            .is_some()
+    }
+
+    /// Replace a record's bytes and put its modification time back, so the file looks untouched.
+    fn rewrite_unseen(path: &Path, body: &str) {
+        let before = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .expect("a time");
+        std::fs::write(path, body).expect("write");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .and_then(|file| file.set_modified(before))
+            .expect("set the time");
+    }
+
+    #[test]
+    fn a_session_saved_before_the_index_is_found_and_indexed() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (project, directory) = directory_of("bravebot-search-first-build");
+        let body = record(Some("terminal"), vec![said("rotate the signing keys")]);
+        std::fs::write(directory.join("a1b2.json"), &body).expect("write");
+        assert!(!entry_of(&directory, "a1b2").exists());
+
+        let corpus = Corpus::read(&project, |_| true);
+
+        assert!(found_in(&corpus, "a1b2", "signing keys"));
+        assert!(entry_of(&directory, "a1b2").exists());
+    }
+
+    #[test]
+    fn a_current_entry_answers_without_the_record_being_read() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (project, directory) = directory_of("bravebot-search-current");
+        let first = record(Some("terminal"), vec![said("rotate the signing keys")]);
+        let record_path = directory.join("a1b2.json");
+        std::fs::write(&record_path, &first).expect("write");
+        Corpus::read(&project, |_| true);
+
+        // Same length, same time, other words: only an index that is believed can still say the
+        // first ones.
+        let second = first.replace("signing keys", "casting keys");
+        assert_eq!(first.len(), second.len());
+        rewrite_unseen(&record_path, &second);
+        let corpus = Corpus::read(&project, |_| true);
+
+        assert!(found_in(&corpus, "a1b2", "signing keys"));
+        assert!(!found_in(&corpus, "a1b2", "casting"));
+    }
+
+    #[test]
+    fn a_record_written_since_is_read_again() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (project, directory) = directory_of("bravebot-search-rewritten");
+        let first = record(Some("terminal"), vec![said("rotate the signing keys")]);
+        let record_path = directory.join("a1b2.json");
+        std::fs::write(&record_path, &first).expect("write");
+        Corpus::read(&project, |_| true);
+
+        // Longer, with the time put back: the size alone says it changed.
+        let longer = record(
+            Some("terminal"),
+            vec![said("rotate the signing keys"), said("then tag a release")],
+        );
+        rewrite_unseen(&record_path, &longer);
+        let corpus = Corpus::read(&project, |_| true);
+        assert!(found_in(&corpus, "a1b2", "tag a release"));
+
+        // Same length, later time: the time alone says it changed.
+        let swapped = longer.replace("release", "rollout");
+        assert_eq!(longer.len(), swapped.len());
+        std::fs::write(&record_path, &swapped).expect("write");
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&record_path)
+            .and_then(|file| file.set_modified(later))
+            .expect("set the time");
+        let corpus = Corpus::read(&project, |_| true);
+        assert!(found_in(&corpus, "a1b2", "tag a rollout"));
+        assert!(!found_in(&corpus, "a1b2", "tag a release"));
+    }
+
+    #[test]
+    fn an_entry_built_by_another_rule_is_not_trusted() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (project, directory) = directory_of("bravebot-search-version");
+        let body = record(Some("terminal"), vec![said("rotate the signing keys")]);
+        let record_path = directory.join("a1b2.json");
+        std::fs::write(&record_path, &body).expect("write");
+        Corpus::read(&project, |_| true);
+        let entry = entry_of(&directory, "a1b2");
+        let held = std::fs::read_to_string(&entry).expect("an entry");
+        let stale = held.replace(
+            &format!("\"version\":{INDEX_VERSION}"),
+            &format!("\"version\":{}", INDEX_VERSION + 1),
+        );
+        assert_ne!(held, stale);
+        std::fs::write(&entry, stale.replace("signing keys", "forged words")).expect("write");
+
+        let corpus = Corpus::read(&project, |_| true);
+
+        assert!(found_in(&corpus, "a1b2", "signing keys"));
+        assert!(!found_in(&corpus, "a1b2", "forged words"));
+    }
+
+    #[test]
+    fn a_session_nobody_asked_for_is_neither_read_nor_indexed() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (project, directory) = directory_of("bravebot-search-unwanted");
+        let body = record(Some("terminal"), vec![said("rotate the signing keys")]);
+        std::fs::write(directory.join("a1b2.json"), &body).expect("write");
+        std::fs::write(directory.join("c3d4.json"), &body).expect("write");
+
+        let corpus = Corpus::read(&project, |id| id == "a1b2");
+
+        assert!(found_in(&corpus, "a1b2", "signing keys"));
+        assert!(!found_in(&corpus, "c3d4", "signing keys"));
+        assert!(entry_of(&directory, "a1b2").exists());
+        assert!(!entry_of(&directory, "c3d4").exists());
+    }
+
+    #[test]
+    fn the_index_holds_only_what_a_search_covers_and_goes_with_its_record() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (project, directory) = directory_of("bravebot-search-index-contents");
+        let result = Message::tool_result("call-1", "SECRET-FILE-BODY with a password");
+        let body = record(
+            Some("terminal"),
+            vec![
+                said("read it"),
+                calling("read_file", r#"{"path":"a.txt"}"#),
+                Stored::plain(result),
+            ],
+        );
+        std::fs::write(directory.join("a1b2.json"), &body).expect("write");
+        Corpus::read(&project, |_| true);
+        let held = std::fs::read_to_string(entry_of(&directory, "a1b2")).expect("an entry");
+        assert!(held.contains("read it"));
+        assert!(!held.contains("SECRET-FILE-BODY"), "{held}");
+
+        std::fs::remove_file(directory.join("a1b2.json")).expect("remove");
+        Corpus::read(&project, |_| true);
+        assert!(!entry_of(&directory, "a1b2").exists());
     }
 
     #[test]
