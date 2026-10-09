@@ -44,7 +44,7 @@ use crate::theme;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
     Trust,
-    /// Trust, and keep the answer for later sessions started in exactly this directory (TRUST-23).
+    /// Trust, and keep the answer for later sessions started in this directory or below its git root (TRUST-23).
     ///
     /// Grants this session what [`Answer::Trust`] grants and nothing more; what differs is that the
     /// caller writes it down. Only ever the answer at the working directory's own question, and only
@@ -1957,8 +1957,8 @@ mod tests {
             "the key was not named: {output}"
         );
         assert!(
-            output.contains("exactly this directory"),
-            "nothing said the answer is about this directory alone: {output}"
+            output.contains("it is a git root"),
+            "nothing said how far the answer reaches: {output}"
         );
         assert!(
             output.contains("work-1a2b.jsonl"),

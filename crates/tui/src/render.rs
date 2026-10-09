@@ -5294,6 +5294,7 @@ mod tests {
                     },
                 ],
                 tools: vec!["read_file".to_string()],
+                tools_bytes: 0,
             });
             session.show_request();
             let (drawn, _) = screen(&session);
@@ -9140,14 +9141,14 @@ mod tests {
             for c in line.chars() {
                 session.type_char(c);
             }
-            let mut terminal = Terminal::new(TestBackend::new(96, 14)).expect("terminal");
+            let mut terminal = Terminal::new(TestBackend::new(96, 15)).expect("terminal");
             terminal
                 .draw(|frame| {
                     draw(frame, &session);
                 })
                 .expect("draw succeeds");
             let buffer = terminal.backend().buffer();
-            for row in 0..14u16 {
+            for row in 0..15u16 {
                 let text: String = (0..96u16)
                     .map(|column| buffer.cell((column, row)).expect("cell").symbol())
                     .collect();

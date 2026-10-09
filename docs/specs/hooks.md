@@ -96,6 +96,9 @@ and a turn that died is exactly when they want telling.
 `verified-by: bravebot_config::hooks::two_entries_for_one_moment_both_fire_in_order`
 `verified-by: bravebot_agent::turn::a_hook_fires_when_the_turn_begins_and_when_it_is_over`
 `verified-by: bravebot_agent::turn::a_hook_fires_when_the_tool_it_names_finishes`
+`verified-by: bravebot_agent::turn::a_hook_fires_for_a_call_that_was_refused`
+`verified-by: bravebot_agent::turn::a_delegate_fires_neither_turn_moment`
+`verified-by: bravebot_agent::turn::a_hook_fires_when_the_turn_is_over_though_it_was_cancelled`
 `verified-by: bravebot_agent::turn::a_delegate_does_not_fire_the_turn_s_own_moments`
 
 <a id="HOOK-3"></a>

@@ -39,6 +39,7 @@ use bravebot_aichat::protocol::Effort;
 use bravebot_core::capability::Capability;
 use bravebot_core::delegate::{Admitted, Definition, Definitions, Kind, Narrowing};
 use bravebot_core::event::Sink;
+use bravebot_core::permissions::Permissions;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_i18n::t;
@@ -63,6 +64,8 @@ enum Read {
         no_checkout: Option<String>,
         /// An `effort:` value naming no level, as the file wrote it.
         no_effort: Option<String>,
+        /// The `writes:` patterns that cannot be read, as the file wrote them.
+        unread_writes: Vec<String>,
     },
     /// Not a definition at all: no `name`, so nothing claimed to be one.
     ///
@@ -158,6 +161,18 @@ fn read_definition(text: &str, origin: &str) -> Read {
         }
     }
 
+    // A line limiting the files its delegate may write (DELEGATE-28). A pattern nobody can read
+    // is named and covers nothing, so a line left with none limits the delegate to writing no
+    // file at all, as an empty `tools:` line leaves it no tool: the author believes a limit is in
+    // force, and falling back to every file would be the one outcome that is never what they wrote.
+    let mut unread_writes = Vec::new();
+    if let Some(writes) = declared.get("writes") {
+        let patterns = names_in(writes);
+        let (_, unread) = Permissions::new().edit_limit(&patterns);
+        unread_writes = unread.into_iter().map(|rejected| rejected.text).collect();
+        definition = definition.with_writes(patterns);
+    }
+
     // The key other agents' definitions spell it with, so a file ported from one selects the
     // same servers here. No alias holds a colon, so one in the line is a server declared inline,
     // whose entry may hold an argv and a variable's value: the line then selects no server, and
@@ -222,6 +237,7 @@ fn read_definition(text: &str, origin: &str) -> Read {
         no_memory,
         no_checkout,
         no_effort,
+        unread_writes,
     }
 }
 
@@ -677,6 +693,7 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
             no_memory,
             no_checkout,
             no_effort,
+            unread_writes,
         } => {
             if declares_servers {
                 notices.push(Notice::from_message(t!(
@@ -709,6 +726,14 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
                     definition = origin,
                     effort = word,
                     levels = Effort::ALL.map(Effort::as_str).join(", ")
+                )));
+            }
+            if !unread_writes.is_empty() {
+                notices.push(Notice::from_message(t!(
+                    delegate_writes_not_read,
+                    definition = origin,
+                    count = unread_writes.len(),
+                    patterns = unread_writes.join(", ")
                 )));
             }
             match definitions.insert(*definition) {
@@ -823,6 +848,15 @@ fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
     }
     if narrowing.given_a_checkout {
         said.push("its delegate is given a checkout of its own".to_string());
+    }
+    for limit in &narrowing.writes_confined_to {
+        said.push(match limit.as_slice() {
+            [] => "its delegate may write no file".to_string(),
+            patterns => format!(
+                "its delegate may write only files covered by {}",
+                patterns.join(", ")
+            ),
+        });
     }
     format!(
         "{origin} does not widen {}: {}",
@@ -1487,6 +1521,27 @@ mod tests {
         }
     }
 
+    /// DELEGATE-28. `writes:` is read the way `tools:` is, so both spellings of a list arrive as
+    /// the same patterns. An empty line is a limit covering no file and an absent one is no limit,
+    /// and the two have to stay apart: a definition written to write nothing must not write
+    /// everything.
+    #[test]
+    fn a_definition_reads_the_writes_it_names() {
+        let writes_of = |line: &str| {
+            definition_of(&format!(
+                "---\nname: scribe\ndescription: writes\nkind: worker\n{line}---\n\nbody\n"
+            ))
+            .write_limits()
+            .to_vec()
+        };
+        let both = vec![vec!["docs/**".to_string(), "README.md".to_string()]];
+
+        assert_eq!(writes_of("writes: docs/**, README.md\n"), both);
+        assert_eq!(writes_of("writes:\n  - docs/**\n  - README.md\n"), both);
+        assert_eq!(writes_of("writes:\n"), vec![Vec::<String>::new()]);
+        assert!(writes_of("").is_empty());
+    }
+
     /// `skills:` is read the way `tools:` is, so both spellings of a list arrive as the same
     /// names. An empty line names none, which is a delegate offered no skills, and an absent one
     /// is every skill the turn found: the two have to stay apart, or a definition written to be
@@ -1593,6 +1648,7 @@ mod tests {
                     confined_to: None,
                     servers_confined_to: Some(servers.iter().map(|s| s.to_string()).collect()),
                     given_a_checkout: false,
+                    writes_confined_to: Vec::new(),
                     replaced: "home.md".to_string(),
                 },
             )
@@ -1957,6 +2013,7 @@ mod tests {
                     confined_to: None,
                     servers_confined_to: None,
                     given_a_checkout: true,
+                    writes_confined_to: Vec::new(),
                     replaced: "home.md".to_string(),
                 },
             )

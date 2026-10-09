@@ -5570,11 +5570,55 @@ fn an_edit_is_reviewed_as_a_diff() {
     );
 }
 
-/// When a review does happen, the request carries the diff material: the file as it is and
-/// the file as it would become.
+/// When a review does happen, the request carries the diff material: the file as it is, the
+/// file as it would become, and the comparison of the two. A reviewer shown the replacement
+/// passage alone, or a diff of the wrong pair, would approve something other than the write.
 #[test]
 fn a_reviewed_edit_carries_both_sides_of_the_diff() {
     let scratch = Scratch::new("edit-review-shape");
+    std::fs::write(scratch.path.join("a.txt"), "keep\nold\ntail\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"old","new_text":"new\nmore"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust("a.txt");
+
+    let task = Task::new("edit a.txt").with_permissions(rules(&[], &["Edit(a.txt)"], &[]));
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    assert_eq!(confirmer.seen.len(), 1, "the edit was reviewed once");
+    let seen = &confirmer.seen[0];
+    assert_eq!(seen.path, "a.txt");
+    assert_eq!(seen.contents, "keep\nnew\nmore\ntail\n");
+    assert_eq!(seen.existing.as_deref(), Some("keep\nold\ntail\n"));
+    assert_eq!((seen.diff.added(), seen.diff.removed()), (2, 1));
+    assert!(!seen.untrusted);
+}
+
+/// With the file trusted and no rule asking, an edit is applied without a question.
+#[test]
+fn a_trusted_edit_no_rule_asks_about_is_applied_without_a_review() {
+    let scratch = Scratch::new("edit-review-silent");
     std::fs::write(scratch.path.join("a.txt"), "keep\nold\ntail\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
@@ -5590,8 +5634,6 @@ fn a_reviewed_edit_carries_both_sides_of_the_diff() {
     let mut sink = RecordingSink::new();
     let mut confirmer = RecordingConfirmer::approving();
 
-    // The file is readable as trusted, but a fetch taints the context, so the resulting data
-    // is untrusted and the write must be reviewed.
     let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
 
@@ -5607,7 +5649,6 @@ fn a_reviewed_edit_carries_both_sides_of_the_diff() {
     )
     .expect("turn runs");
 
-    // Trusted throughout, so no review. Asserted so the silent path stays covered.
     assert!(confirmer.seen.is_empty());
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
@@ -6000,7 +6041,12 @@ fn an_approved_edit_is_recorded_as_endorsed() {
 #[test]
 fn an_edit_cannot_escape_the_workspace() {
     let scratch = Scratch::new("edit-escape");
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let inside = scratch.path.join("workspace");
+    std::fs::create_dir_all(&inside).unwrap();
+    // The target exists and contains the passage, so only the workspace boundary can refuse it.
+    let outside = scratch.path.join("escaped.txt");
+    std::fs::write(&outside, "a\n").unwrap();
+    let workspace = Workspace::new(&inside).expect("workspace");
 
     let (endpoint, _received) = serve_sequence(vec![
         tool_request_2(
@@ -6014,14 +6060,19 @@ fn an_edit_cannot_escape_the_workspace() {
     let mut sink = RecordingSink::new();
     let mut confirmer = RecordingConfirmer::approving();
 
+    // The workspace is trusted, so the untrusted-file refusal cannot be what stops the edit.
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+
     let task = Task::new("edit outside");
-    turn::run(
+    turn::run_with_trust(
         &config,
         &egress,
         &workspace,
         &task,
         &mut confirmer,
         &mut sink,
+        trust,
     )
     .expect("turn runs");
 
@@ -6029,7 +6080,7 @@ fn an_edit_cannot_escape_the_workspace() {
         confirmer.seen.is_empty(),
         "an escaping path reached the approval prompt"
     );
-    assert!(!scratch.path.parent().unwrap().join("escaped.txt").exists());
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "a\n");
 }
 
 /// The notice has to reach the model, not just exist in the workspace layer: a capped
@@ -22344,6 +22395,99 @@ fn a_conversation_past_the_budget_is_summarised_before_the_next_request() {
     );
 }
 
+/// COMPACT-16: the planner's list is written in one turn and the compaction that cuts it out of the
+/// request comes in a later one. The refused call between the two proves a list that was not
+/// accepted does not stand in for the one that was.
+#[test]
+fn a_task_list_the_summary_replaced_is_sent_again_after_the_cut() {
+    let scratch = Scratch::new("compact-keeps-the-task-list");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "todo_write",
+            r#"{"todos":[{"content":"write the lexer","status":"completed"},{"content":"write the parser","status":"pending"}]}"#,
+        ),
+        tool_request("todo_write", r#"{}"#),
+        reply_with("planned"),
+        reply_with("they planned a lexer and a parser"),
+        reply_with("done"),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("plan it"),
+    )
+    .expect("the planning turn runs");
+    for (prompt, answer) in [
+        ("what about the error type", "widened it"),
+        ("now the tests", "updated them"),
+        ("and the docs", "written"),
+        ("carry on", "carrying on"),
+    ] {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+    }
+    conversation.measured(50_000);
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it"),
+    )
+    .expect("the compacting turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 5, "{bodies:#?}");
+    let planning = &bodies[4];
+    assert!(
+        planning.contains("they planned a lexer and a parser"),
+        "the summary did not reach the next request: {planning}"
+    );
+    assert!(
+        planning.contains("[pending] write the parser"),
+        "the list the summary replaced was not sent again: {planning}"
+    );
+    assert!(
+        !planning.contains("error:"),
+        "the refused call stood in for the list: {planning}"
+    );
+}
+
+/// COMPACT-16: no list, nothing added.
+#[test]
+fn a_compaction_adds_no_task_list_where_the_planner_never_wrote_one() {
+    let scratch = Scratch::new("compact-without-a-task-list");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("they are porting the parser"),
+        reply_with("done"),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it"),
+    )
+    .expect("turn runs");
+
+    let _summariser = received.recv().expect("the summariser's request");
+    let planning = received.recv().expect("the planner's request");
+    assert!(!planning.contains("as you last wrote it"), "{planning}");
+}
+
 /// The first round after a large read, or a switch to a smaller window, is refused by the service
 /// before any figure has said the conversation was large. The turn shortens the conversation once
 /// and sends the same request again, so the person is not left to run `/compact` and type the
@@ -27836,6 +27980,317 @@ fn a_delegates_write_is_approved_on_its_own() {
         std::fs::read_to_string(scratch.path.join("out.txt")).unwrap(),
         "from the delegate"
     );
+}
+
+/// DELEGATE-28. A delegate under a definition with a `writes:` line is refused every file outside
+/// it before a person is asked, under the name given and under one that climbs out of the pattern,
+/// is told so rather than that a rule refused it, and still has its write inside the pattern
+/// approved on its own. The file outside is left as it was.
+#[test]
+fn a_delegate_cannot_write_outside_the_files_its_definition_names() {
+    let scratch = Scratch::new("delegate-writes-limit");
+    let home = Scratch::new("delegate-writes-limit-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("scribe.md"),
+        "---\nname: scribe\ndescription: Writes the docs.\nkind: worker\nwrites: docs/**\n---\n\nWRITE-DOCS\n",
+    )
+    .expect("write the definition");
+    std::fs::create_dir_all(scratch.path.join("src")).expect("create src");
+    std::fs::create_dir_all(scratch.path.join("docs")).expect("create docs");
+    std::fs::write(scratch.path.join("src/main.rs"), "fn main() {}\n").expect("seed main.rs");
+    std::fs::write(scratch.path.join("src/lib.rs"), "// lib\n").expect("seed lib.rs");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-THE-SCRIBE-DO-IT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"scribe","task":"EDIT-THE-FILES"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the scribe finished"),
+            ],
+        ),
+        (
+            "EDIT-THE-FILES",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"src/main.rs","contents":"clobbered"}"#,
+                ),
+                tool_request(
+                    "write_file",
+                    r#"{"path":"docs/../src/lib.rs","contents":"clobbered"}"#,
+                ),
+                tool_request(
+                    "write_file",
+                    r#"{"path":"docs/a.md","contents":"documented"}"#,
+                ),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAVE-THE-SCRIBE-DO-IT").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("src/main.rs")).unwrap(),
+        "fn main() {}\n",
+        "a delegate wrote outside the files its definition names"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("src/lib.rs")).unwrap(),
+        "// lib\n",
+        "a delegate climbed out of the pattern and wrote outside it"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("docs/a.md")).unwrap(),
+        "documented"
+    );
+    assert_eq!(
+        confirmer.seen.len(),
+        1,
+        "the person was asked about a write the definition had already refused: {:?}",
+        confirmer.seen.iter().map(|s| &s.path).collect::<Vec<_>>()
+    );
+    assert!(confirmer.seen[0].path.ends_with("docs/a.md"));
+
+    let told = every_request(&received)
+        .iter()
+        .filter(|body| !body.contains("HAVE-THE-SCRIBE-DO-IT"))
+        .filter(|body| body.contains("limits the files you may write"))
+        .count();
+    assert!(
+        told > 0,
+        "the delegate was not told why its write was refused"
+    );
+}
+
+/// DELEGATE-28. A redirection is a write and is held to the limit as a named file is: one into the
+/// pattern runs, and one out of it is refused before the person is asked, with the limit given as
+/// the reason.
+#[test]
+fn a_limited_delegates_redirection_is_held_to_its_definitions_files() {
+    let scratch = Scratch::new("delegate-writes-redirect");
+    let home = Scratch::new("delegate-writes-redirect-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("scribe.md"),
+        "---\nname: scribe\ndescription: Writes the docs.\nkind: worker\nwrites: docs/**\n---\n\nWRITE-DOCS\n",
+    )
+    .expect("write the definition");
+    std::fs::create_dir_all(scratch.path.join("src")).expect("create src");
+    std::fs::create_dir_all(scratch.path.join("docs")).expect("create docs");
+    std::fs::write(scratch.path.join("src/main.rs"), "fn main() {}\n").expect("seed main.rs");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-THE-SCRIBE-REDIRECT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"scribe","task":"REDIRECT-OUTPUT"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the scribe finished"),
+            ],
+        ),
+        (
+            "REDIRECT-OUTPUT",
+            vec![
+                tool_request("run", r#"{"command":"echo clobbered > src/main.rs"}"#),
+                tool_request("run", r#"{"command":"echo documented > docs/c.md"}"#),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAVE-THE-SCRIBE-REDIRECT").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("src/main.rs")).unwrap(),
+        "fn main() {}\n",
+        "a redirection wrote outside the files the definition names"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("docs/c.md")).unwrap(),
+        "documented\n",
+        "a redirection into the files the definition names was refused"
+    );
+    assert_eq!(
+        confirmer.seen.lock().unwrap().len(),
+        1,
+        "the person was asked about a redirection the definition had already refused"
+    );
+    assert!(
+        every_request(&received)
+            .iter()
+            .any(|body| body.contains("limits the files you may write")),
+        "the delegate was not told why its redirection was refused"
+    );
+}
+
+/// DELEGATE-28. A link inside the pattern that reaches a file outside it is judged by the file it
+/// reaches: the name given is covered by `docs/**` and the file is not.
+#[cfg(unix)]
+#[test]
+fn a_delegate_cannot_write_through_a_link_out_of_the_files_its_definition_names() {
+    let scratch = Scratch::new("delegate-writes-link");
+    let home = Scratch::new("delegate-writes-link-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("scribe.md"),
+        "---\nname: scribe\ndescription: Writes the docs.\nkind: worker\nwrites: docs/**\n---\n\nWRITE-DOCS\n",
+    )
+    .expect("write the definition");
+    std::fs::create_dir_all(scratch.path.join("src")).expect("create src");
+    std::fs::create_dir_all(scratch.path.join("docs")).expect("create docs");
+    std::fs::write(scratch.path.join("src/main.rs"), "fn main() {}\n").expect("seed main.rs");
+    std::os::unix::fs::symlink("../src/main.rs", scratch.path.join("docs/main.md")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HAVE-THE-SCRIBE-USE-A-LINK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"scribe","task":"EDIT-VIA-LINK"}"#),
+                reply_with("waiting"),
+                reply_with("the scribe finished"),
+            ],
+        ),
+        (
+            "EDIT-VIA-LINK",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"docs/main.md","contents":"clobbered"}"#,
+                ),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAVE-THE-SCRIBE-USE-A-LINK").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("src/main.rs")).unwrap(),
+        "fn main() {}\n",
+        "a delegate wrote outside its definition's files through a link"
+    );
+    assert!(confirmer.seen.is_empty(), "{:?}", confirmer.seen.len());
+}
+
+/// DELEGATE-28. A link outside the pattern that reaches a file inside it is judged by the name
+/// given as well: the file is covered by `docs/**` and the name is not.
+#[cfg(unix)]
+#[test]
+fn a_delegate_cannot_write_through_a_link_outside_its_files_to_one_inside() {
+    let scratch = Scratch::new("delegate-writes-link-in");
+    let home = Scratch::new("delegate-writes-link-in-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("scribe.md"),
+        "---\nname: scribe\ndescription: Writes the docs.\nkind: worker\nwrites: docs/**\n---\n\nWRITE-DOCS\n",
+    )
+    .expect("write the definition");
+    std::fs::create_dir_all(scratch.path.join("src")).expect("create src");
+    std::fs::create_dir_all(scratch.path.join("docs")).expect("create docs");
+    std::fs::write(scratch.path.join("docs/a.md"), "original\n").expect("seed a.md");
+    std::os::unix::fs::symlink("../docs/a.md", scratch.path.join("src/link.md")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HAVE-THE-SCRIBE-WRITE-BY-LINK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"scribe","task":"WRITE-BY-LINK"}"#),
+                reply_with("waiting"),
+                reply_with("the scribe finished"),
+            ],
+        ),
+        (
+            "WRITE-BY-LINK",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"src/link.md","contents":"clobbered"}"#,
+                ),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAVE-THE-SCRIBE-WRITE-BY-LINK").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("docs/a.md")).unwrap(),
+        "original\n",
+        "a delegate wrote through a name outside its definition's files"
+    );
+    assert!(confirmer.seen.is_empty(), "{:?}", confirmer.seen.len());
 }
 
 /// The directories a session made checkouts in, under its state directory.
@@ -36140,6 +36595,168 @@ fn a_hook_fires_when_the_tool_it_names_finishes() {
         fired, "read\n",
         "the hook for the tool that ran should be the only one that fired"
     );
+}
+
+/// HOOK-2: `tool-finished` is "whatever came of it", so a call the workspace refused still fires
+/// the hook written for it. A hook fired only on success would leave a formatter silent exactly
+/// when a person most wants to know the call did not do what it was asked.
+#[cfg(unix)]
+#[test]
+fn a_hook_fires_for_a_call_that_was_refused() {
+    let scratch = Scratch::new("hooks-refused-call");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho \"$1\" >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            "{{\"on\": \"tool-finished\", \"tool\": \"read_file\", \"run\": [{note}, \"read\"]}}"
+        ),
+    );
+
+    // Outside the workspace and outside everything opened, which is refused rather than read.
+    let outside = scratch
+        .path
+        .with_file_name("bravebot-turn-hooks-refused-outside.txt");
+    std::fs::write(&outside, "OUTSIDE-BODY").expect("a file outside");
+    let arguments = format!(r#"{{"path":"{}"}}"#, outside.display());
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", &arguments),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let ran = turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read it").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    std::fs::remove_file(&outside).ok();
+    ran.expect("a refused call does not fail the turn");
+
+    assert!(
+        !sent.iter().any(|request| request.contains("OUTSIDE-BODY")),
+        "the call was not refused, so this says nothing about a refused one"
+    );
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt"))
+        .expect("the hook did not fire for a call that was refused");
+    assert_eq!(fired, "read\n");
+}
+
+/// HOOK-2: the turn moments belong to the turn a person asked for, so one that spawns a delegate
+/// still fires each once. A delegate that fired them as well would run a person's "turn is over"
+/// command when only part of the turn was.
+#[cfg(unix)]
+#[test]
+fn a_delegate_fires_neither_turn_moment() {
+    let scratch = Scratch::new("hooks-delegate-turn-moments");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho \"$1\" >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            "{{\"on\": \"turn-started\", \"run\": [{note}, \"began\"]}},
+             {{\"on\": \"turn-finished\", \"run\": [{note}, \"ended\"]}}"
+        ),
+    );
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request("read_file", r#"{"path":"a.txt"}"#),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        !reporter.delegated.is_empty(),
+        "no delegate ran, so this says nothing about one"
+    );
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt")).expect("the hooks ran");
+    assert_eq!(fired, "began\nended\n");
+}
+
+/// HOOK-2: `turn-finished` fires however the turn ended, and a cancelled turn is one that ended.
+/// The commonest thing attached to it is telling somebody who walked away.
+#[cfg(unix)]
+#[test]
+fn a_hook_fires_when_the_turn_is_over_though_it_was_cancelled() {
+    let scratch = Scratch::new("hooks-cancelled-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho \"$1\" >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"turn-finished\", \"run\": [{note}, \"ended\"]}}"),
+    );
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("never reached")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    cancel.cancel();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("anything").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        &cancel,
+    )
+    .expect_err("a cancelled turn does not produce an answer");
+
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt"))
+        .expect("the hook did not fire for a turn that was cancelled");
+    assert_eq!(fired, "ended\n");
 }
 
 /// HOOK-6: a hook that ended badly is said out loud and changes nothing about the turn.
@@ -45424,4 +46041,138 @@ mod spend_limit {
         assert!(ran.ended.is_ok());
         assert!(ran.asked.is_empty());
     }
+}
+
+/// What the planner is shown for each shape: paths alone, or a count per file and a total, with no
+/// matching line in either.
+#[test]
+fn a_search_asks_for_files_or_a_count_through_the_tool() {
+    let scratch = Scratch::new("search-output-through-the-tool");
+    std::fs::write(scratch.path.join("a.txt"), "needle\nneedle\n").unwrap();
+    std::fs::write(scratch.path.join("b.txt"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for (output, wanted) in [
+        ("files", "a.txt\\nb.txt"),
+        ("count", "a.txt: 2\\nb.txt: 1\\ntotal: 3 matching lines"),
+    ] {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2(
+                "search",
+                &format!(r#"{{"pattern":"needle","directory":".","output":"{output}"}}"#),
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let task = Task::new("survey needle");
+        turn::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::Unattended,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+
+        let _first = received.recv().expect("first request");
+        let second = received.recv().expect("second request");
+        assert!(
+            second.contains(wanted),
+            "{output}: not the shape asked for: {second}"
+        );
+        assert!(
+            !second.contains("a.txt:1:"),
+            "{output}: a matching line came back: {second}"
+        );
+    }
+}
+
+/// An output name off the list is refused rather than read as the default, which would answer a
+/// question the planner did not ask.
+#[test]
+fn a_search_output_off_the_list_is_refused() {
+    let scratch = Scratch::new("search-output-refused");
+    std::fs::write(scratch.path.join("a.txt"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "search",
+            r#"{"pattern":"needle","directory":".","output":"everything"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("survey needle");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("must be one of lines, files or count"),
+        "{second}"
+    );
+}
+
+/// Quarantine is the default footing, and a list of paths that came from a walk which stopped short
+/// looks complete. The claim has to reach the planner beside the reference.
+#[test]
+fn a_quarantined_capped_files_result_still_says_it_is_incomplete() {
+    let scratch = Scratch::new("search-files-capped-quarantined");
+    for n in 0..12 {
+        std::fs::write(scratch.path.join(format!("f{n:05}.txt")), "needle\n").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(10), None);
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "search",
+            r#"{"pattern":"needle","directory":".","output":"files"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("survey needle");
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("f00000.txt"),
+        "the paths reached the model, so this is not the quarantined case: {second}"
+    );
+    assert!(
+        second.contains("incomplete"),
+        "a capped files result made no claim to a planner that may not read it: {second}"
+    );
 }
