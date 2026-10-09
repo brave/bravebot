@@ -464,6 +464,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
+| `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
@@ -740,6 +741,20 @@ none of these, and zero, sets no limit. The nearest settings file that names it 
 [`/limit`](../reference/commands.md#limit-tokens--credits--off) changes it for one session. Tokens are
 the usage the model service reports, so a limit in tokens is a bound on tokens and not on money. The
 one-shot `-p` run and the desktop app do not apply it.
+
+### `deferMcpToolsAbove`
+
+```json
+{ "deferMcpToolsAbove": "20k" }
+```
+
+Every tool of a server you approved is otherwise sent to the model in full on every turn. With this
+set, a turn whose server tools would weigh more than that many tokens, estimated from their length,
+sends only their names, `alias:tool`, and a `load_tool` the model calls with one name to have that
+tool's definition sent from its next request on. The name has to match one on the list exactly.
+Loading changes what is sent and not who is asked: a loaded tool still asks you before each call.
+A number or a size like `"20k"`; anything else, and zero, leaves every tool in full, which is the
+default. It lasts a turn, so a later turn loads again.
 
 ### `terminalTitle`
 

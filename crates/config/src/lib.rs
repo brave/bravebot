@@ -1027,6 +1027,10 @@ pub struct Config {
     ///
     /// `None` offers no advisor. [`Config::advisor`] resolves a tier word in it.
     pub advisor_model: Option<String>,
+    /// The size in tokens above which a server's tools are offered by name only, from the
+    /// `deferMcpToolsAbove` setting. `None` offers every tool in full (`mcp-servers.md`
+    /// SERVERS-16).
+    pub defer_mcp_tools_above: Option<u64>,
     /// The model the settings in force name for a turn to move to when its own keeps failing, as
     /// the file spelled it.
     ///
@@ -1278,6 +1282,7 @@ impl Config {
         // (BACKEND-48).
         config.models = managed.models().clone();
         config.advisor_model = settings.advisor_model().map(str::to_string);
+        config.defer_mcp_tools_above = settings.defer_mcp_tools_above();
         config.fallback_model = settings.fallback_model().map(str::to_string);
         config.summary_model = settings.summary_model().map(str::to_string);
         let ttl = settings.prompt_cache_ttl();
@@ -1406,6 +1411,7 @@ impl Config {
             premium_endpoint,
             default_model,
             advisor_model: None,
+            defer_mcp_tools_above: None,
             fallback_model: None,
             summary_model: None,
             prompt_cache_ttl: None,

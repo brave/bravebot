@@ -2814,3 +2814,241 @@ fn a_moved_server_is_held_to_the_call_bound_it_had() {
         "the call was held to the startup bound: {second}"
     );
 }
+
+/// Run one turn whose server tools are offered by name once their definitions weigh more than
+/// `threshold` tokens (SERVERS-16).
+fn run_deferring<C: Confirmer + Send>(
+    endpoint: &str,
+    project: &Path,
+    threshold: u64,
+    task: Task,
+    confirmer: &mut C,
+) -> bravebot_agent::Outcome {
+    let workspace = Workspace::new(project).expect("workspace");
+    let mut config = config_for(endpoint);
+    config.defer_mcp_tools_above = Some(threshold);
+    turn::run(
+        &config,
+        &Egress::new(),
+        &workspace,
+        &task,
+        confirmer,
+        &mut RecordingSink::new(),
+    )
+    .expect("the turn runs")
+}
+
+/// The names of the functions a request offered.
+fn offered_names(request: &str) -> Vec<String> {
+    let request: Value = serde_json::from_str(request).expect("a request");
+    request["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|tool| {
+            tool["function"]["name"]
+                .as_str()
+                .expect("a name")
+                .to_string()
+        })
+        .collect()
+}
+
+/// What the planner was sent as the answer to its one tool call, which is the last tool message.
+fn answer_to_the_call(request: &str) -> String {
+    let request: Value = serde_json::from_str(request).expect("a request");
+    request["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "tool")
+        .and_then(|message| message["content"].as_str())
+        .expect("a tool message")
+        .to_string()
+}
+
+/// SERVERS-16: past the threshold the planner is offered the names a person vouched for under one
+/// `load_tool`, with none of the server's own words, and a definition joins the offer on the
+/// request after the one that loaded it.
+#[test]
+fn a_deferred_tool_is_offered_by_name_and_its_definition_arrives_once_loaded() {
+    let scratch = Scratch::new("deferred-load");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request("load_tool", r#"{"name":"weather:get_forecast"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        1,
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let sent = rounds(&chat);
+    let [first, second, ..] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    let before = offered_names(first);
+    assert!(before.contains(&"load_tool".to_string()), "{before:?}");
+    assert!(
+        !before.contains(&FORECAST.to_string()),
+        "an unloaded tool was offered in full: {before:?}"
+    );
+    assert!(
+        first.contains("weather:get_forecast"),
+        "the name was not listed: {first}"
+    );
+    assert!(
+        !first.contains(DESCRIPTION),
+        "the server's description was sent before anything was loaded: {first}"
+    );
+    let after = offered_names(second);
+    assert!(
+        after.contains(&FORECAST.to_string()),
+        "the loaded tool was not offered on the next request: {after:?}"
+    );
+    assert!(
+        second.contains(DESCRIPTION),
+        "the loaded definition lacks the description"
+    );
+    assert!(
+        confirmer.calls.is_empty(),
+        "loading a tool was put to the person as a call: {:?}",
+        confirmer.calls
+    );
+}
+
+/// SERVERS-16: the name is matched exactly, so one character out, another case and a prefix each
+/// load nothing, and the planner is told so.
+#[test]
+fn a_name_close_to_a_deferred_tool_loads_nothing() {
+    for near in [
+        "weather:get_forecas",
+        "Weather:get_forecast",
+        "weather:get_forecast ",
+        "weather:get_",
+        "get_forecast",
+    ] {
+        let scratch = Scratch::new("deferred-near");
+        let (url, _server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let arguments = serde_json::json!({ "name": near }).to_string();
+        let (endpoint, chat) = serve_chat(vec![
+            tool_request("load_tool", &arguments),
+            reply_with("done"),
+        ]);
+        let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+        run_deferring(
+            &endpoint,
+            &scratch.project(),
+            1,
+            Task::new("what is the forecast").with_mcp(Some(session)),
+            &mut confirmer,
+        );
+        let sent = rounds(&chat);
+        let [_, second, ..] = sent.as_slice() else {
+            panic!("the turn made {} rounds", sent.len());
+        };
+        assert!(
+            !offered_names(second).contains(&FORECAST.to_string()),
+            "{near:?} loaded a tool"
+        );
+        assert!(
+            answer_to_the_call(second).contains("no tool named"),
+            "{near:?} was not refused: {}",
+            answer_to_the_call(second)
+        );
+    }
+}
+
+/// SERVERS-16: naming a tool that is on the list and not loaded is refused with the way to load it,
+/// and neither the person nor the server hears of it.
+#[test]
+fn a_call_to_a_deferred_tool_that_is_not_loaded_is_refused_and_reaches_no_one() {
+    let scratch = Scratch::new("deferred-call");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        1,
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let sent = rounds(&chat);
+    let [_, second, ..] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    let told = answer_to_the_call(second);
+    assert!(
+        told.contains("not loaded") && told.contains("load_tool"),
+        "{told}"
+    );
+    assert!(confirmer.calls.is_empty(), "{:?}", confirmer.calls);
+    assert!(
+        methods(&server).iter().all(|method| method != "tools/call"),
+        "the server was called"
+    );
+}
+
+/// SERVERS-16: loading changes what is offered and nothing about who is asked, so a loaded tool is
+/// still put to the person before each call.
+#[test]
+fn a_loaded_tool_is_still_put_to_the_person_before_each_call() {
+    let scratch = Scratch::new("deferred-ask");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request("load_tool", r#"{"name":"weather:get_forecast"}"#),
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        1,
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let [call] = confirmer.calls.as_slice() else {
+        panic!(
+            "the call was not put to the person once: {:?}",
+            confirmer.calls
+        );
+    };
+    assert_eq!(call.name(), "weather:get_forecast");
+}
+
+/// SERVERS-16: below the threshold nothing is deferred, so the tool is offered in full and there is
+/// no `load_tool` to name.
+#[test]
+fn tools_under_the_threshold_are_offered_in_full_with_no_loader() {
+    let scratch = Scratch::new("deferred-under");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        1_000_000,
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let sent = rounds(&chat);
+    let names = offered_names(&sent[0]);
+    assert!(names.contains(&FORECAST.to_string()), "{names:?}");
+    assert!(!names.contains(&"load_tool".to_string()), "{names:?}");
+}

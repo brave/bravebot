@@ -3908,7 +3908,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         let holds_a_server = holding
             .iter()
             .any(|capability| matches!(capability, Capability::McpCall(_)));
-        let mcp = match (&task.delegate, &task.mcp) {
+        let mut mcp = match (&task.delegate, &task.mcp) {
             (_, Some(_)) if !holds_a_server => None,
             // `--tools` names this program's own tools, so a server's are not among them, and no
             // list is put to the person for a server whose tools would not be offered.
@@ -3944,8 +3944,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             }
             (_, None) => None,
         };
+        // Past the size the settings name, the tools are offered by name under one `load_tool`
+        // and a definition joins `offered` when the planner loads it (SERVERS-16).
+        if let (Some((offer, _)), Some(threshold)) = (&mut mcp, config.defer_mcp_tools_above) {
+            *offer = offer.clone().deferring_above(threshold);
+        }
         if let Some((offer, _)) = &mcp {
             offered.extend(offer.functions());
+            if offer.is_deferred() {
+                tools::offer_tool_loader(&mut offered, &offer.unloaded());
+            }
         }
 
         let mut steps = 0;
@@ -4884,6 +4892,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // the planner about one that does not exist.
                         if let Some(path) = output.watch.clone() {
                             watches.push(path);
+                        }
+                        // A tool the planner loaded is offered from the next request on (SERVERS-16).
+                        if let Some(wire) = output.tool_loaded.take()
+                            && let Some((offer, _)) = &mut mcp
+                        {
+                            offered.extend(offer.load(&wire));
                         }
                         // What a loaded skill's file asks the rounds after it to run as (SKILL-15).
                         // Shown before the next round and kept in the turn's notices (SKILL-11),

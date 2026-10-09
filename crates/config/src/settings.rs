@@ -138,6 +138,7 @@ const READ_KEYS: &[&str] = &[
     "advisorModel",
     "agent",
     "attribution",
+    "deferMcpToolsAbove",
     "editorMode",
     "effort",
     "env",
@@ -278,6 +279,9 @@ pub struct Settings {
     editor_mode: Option<String>,
     /// The session spend limit the top-level `limit` key named, if it named a usable one.
     limit: Option<crate::limit::Limit>,
+    /// The size in tokens above which the top-level `deferMcpToolsAbove` key asks for a server's
+    /// tools to be offered by name, if it named a usable one.
+    defer_mcp_tools_above: Option<u64>,
     /// What the top-level `terminalTitle` key said, if it said a boolean.
     terminal_title: Option<bool>,
     /// What the top-level `updateCheck` key said, if it said a boolean.
@@ -1005,6 +1009,13 @@ impl Settings {
                 }
                 _ => None,
             },
+            defer_mcp_tools_above: match root.get("deferMcpToolsAbove") {
+                Some(serde_json::Value::Number(count)) => {
+                    count.as_u64().filter(|tokens| *tokens > 0)
+                }
+                Some(serde_json::Value::String(text)) => crate::limit::parse_count(text),
+                _ => None,
+            },
             terminal_title: match root.get("terminalTitle") {
                 Some(serde_json::Value::Bool(on)) => Some(*on),
                 _ => None,
@@ -1186,6 +1197,15 @@ impl Settings {
     /// zero, is absence: a misspelt limit leaves the session unbounded, as it was without the key.
     pub fn limit(&self) -> Option<crate::limit::Limit> {
         self.limit
+    }
+
+    /// The size in tokens above which the settings in force have a server's tools offered by name
+    /// only, if they name one.
+    ///
+    /// A number, or a size written as `"limit"` is (`"20k"`). Anything else is absence, which
+    /// leaves every tool offered in full. It only ever offers less, so any layer may state it.
+    pub fn defer_mcp_tools_above(&self) -> Option<u64> {
+        self.defer_mcp_tools_above
     }
 
     /// Whether the settings in force let the interface set the terminal's title, if they said.
@@ -1476,6 +1496,7 @@ impl Settings {
             && self.prompt_cache_ttl.is_none()
             && self.editor_mode.is_none()
             && self.limit.is_none()
+            && self.defer_mcp_tools_above.is_none()
             && self.terminal_title.is_none()
             && self.update_check.is_none()
             && self.vetting.is_none()
@@ -1636,6 +1657,11 @@ impl Settings {
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.limit.is_some().then_some("limit"))
+            .chain(
+                self.defer_mcp_tools_above
+                    .is_some()
+                    .then_some("deferMcpToolsAbove"),
+            )
             .chain(self.terminal_title.is_some().then_some("terminalTitle"))
             .chain(self.update_check.is_some().then_some("updateCheck"))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
@@ -5480,6 +5506,26 @@ mod tests {
     /// A file that sets only this is not a file that set nothing, and it is a key this build reads:
     /// reported among the names, and never as one nothing reads, which would tell somebody who wrote
     /// it that the title they turned off is still being set.
+    /// SERVERS-16: a count or a size is a threshold, and anything else, including zero, leaves every
+    /// tool offered in full.
+    #[test]
+    fn only_a_positive_size_sets_the_mcp_deferral_threshold() {
+        for (written, expected) in [
+            (r#"{"deferMcpToolsAbove": 20000}"#, Some(20_000)),
+            (r#"{"deferMcpToolsAbove": "20k"}"#, Some(20_000)),
+            (r#"{"deferMcpToolsAbove": 0}"#, None),
+            (r#"{"deferMcpToolsAbove": true}"#, None),
+            (r#"{"deferMcpToolsAbove": -5}"#, None),
+            (r#"{"model": "m"}"#, None),
+        ] {
+            assert_eq!(
+                Settings::parse(written).defer_mcp_tools_above(),
+                expected,
+                "{written}"
+            );
+        }
+    }
+
     #[test]
     fn the_terminal_title_switch_is_among_the_names_reported() {
         let settings = Settings::parse(r#"{"terminalTitle": false}"#);

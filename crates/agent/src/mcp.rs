@@ -524,6 +524,8 @@ impl Session {
         Offer {
             session: self.clone(),
             tools,
+            deferred: false,
+            loaded: Vec::new(),
         }
     }
 
@@ -870,6 +872,11 @@ struct Offered {
 pub struct Offer {
     session: Session,
     tools: Vec<Offered>,
+    /// Whether the tools are offered by name only until one is loaded (SERVERS-16).
+    deferred: bool,
+    /// The wire names loaded so far this turn, in the order they were loaded. Always names this
+    /// offer holds, since [`Offer::load`] takes a name only by finding it in `tools`.
+    loaded: Vec<String>,
 }
 
 impl Offer {
@@ -878,9 +885,12 @@ impl Offer {
     /// The description is the server's words, which a person read and let through, so it is sent
     /// behind a margin and after a sentence of this process's own saying whose they are. It is a
     /// function's description and never a line of the system prompt (SERVERS-8).
+    ///
+    /// Where the offer is deferred, only the tools loaded so far (SERVERS-16).
     pub fn functions(&self) -> Vec<Tool> {
         self.tools
             .iter()
+            .filter(|tool| !self.deferred || self.loaded.contains(&tool.wire))
             .map(|tool| {
                 let name = format!("{}:{}", tool.alias, tool.drawn.name);
                 let mut description = format!(
@@ -915,6 +925,74 @@ impl Offer {
                 )
             })
             .collect()
+    }
+
+    /// What offering every tool in full would cost the context, in tokens.
+    ///
+    /// An estimate from the length of the definitions a backend would be sent, at four characters
+    /// a token. It reads text a person vouched for and decides only how much is offered at once.
+    pub fn weight(&self) -> u64 {
+        let all = Offer {
+            deferred: false,
+            ..self.clone()
+        };
+        all.functions()
+            .iter()
+            .map(|tool| serde_json::to_string(tool).map_or(0, |text| text.len() as u64))
+            .sum::<u64>()
+            .div_ceil(4)
+    }
+
+    /// Offer the tools by name only when offering them in full would cost more than `threshold`
+    /// tokens (SERVERS-16).
+    pub fn deferring_above(mut self, threshold: u64) -> Self {
+        self.deferred = self.weight() > threshold;
+        self
+    }
+
+    /// Whether the tools are offered by name only until one is loaded.
+    pub fn is_deferred(&self) -> bool {
+        self.deferred
+    }
+
+    /// The names a deferred offer has not yet loaded, each as `alias:tool`.
+    pub fn unloaded(&self) -> Vec<String> {
+        self.tools
+            .iter()
+            .filter(|tool| !self.loaded.contains(&tool.wire))
+            .map(|tool| format!("{}:{}", tool.alias, tool.drawn.name))
+            .collect()
+    }
+
+    /// The wire name of the tool called `name` as `alias:tool`, compared exactly, and whether it
+    /// is loaded already. Nothing falls back to a prefix, a case-insensitive match or a nearest
+    /// one (SERVERS-16).
+    pub fn named(&self, name: &str) -> Option<(&str, bool)> {
+        self.tools
+            .iter()
+            .find(|tool| format!("{}:{}", tool.alias, tool.drawn.name) == name)
+            .map(|tool| (tool.wire.as_str(), self.loaded.contains(&tool.wire)))
+    }
+
+    /// Whether a deferred offer holds the tool under this wire name without having loaded it.
+    pub fn is_unloaded(&self, wire: &str) -> bool {
+        self.deferred
+            && !self.loaded.iter().any(|loaded| loaded == wire)
+            && self.tools.iter().any(|tool| tool.wire == wire)
+    }
+
+    /// Load the tool under this wire name, so [`Offer::functions`] holds its definition from now on.
+    /// Nothing where this offer holds no such tool.
+    pub fn load(&mut self, wire: &str) -> Option<Tool> {
+        if !self.tools.iter().any(|tool| tool.wire == wire) {
+            return None;
+        }
+        if !self.loaded.iter().any(|loaded| loaded == wire) {
+            self.loaded.push(wire.to_string());
+        }
+        let mut only = self.clone();
+        only.loaded = vec![wire.to_string()];
+        only.functions().into_iter().next()
     }
 
     /// This offer less the tools of every server `held` names no grant for (SERVERS-9).

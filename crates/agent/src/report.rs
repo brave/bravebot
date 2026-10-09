@@ -993,6 +993,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         // have to remember which of the verbs meant that.
         "spawn_processor" => t!(verb_spawn_processor),
         "load_skill" => t!(verb_load_skill),
+        "load_tool" => t!(verb_load_tool),
         "ask_user" => t!(verb_ask_user),
         "request_path" => t!(verb_request_path),
         "run" => t!(verb_run),

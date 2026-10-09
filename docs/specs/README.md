@@ -46,7 +46,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 28 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 9 | tools that come from outside this repository, and what they are allowed to do |
-| [mcp-servers.md](mcp-servers.md) | `SERVERS` | 15 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
+| [mcp-servers.md](mcp-servers.md) | `SERVERS` | 16 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [browser.md](browser.md) | `BROWSER` | 16 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 9 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 10 | every request that leaves this process, and what comes back |
