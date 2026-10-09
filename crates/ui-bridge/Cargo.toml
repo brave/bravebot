@@ -11,6 +11,8 @@ repository.workspace = true
 # A pasted picture crosses the pipe as base64 and the agent takes its bytes.
 base64 = { workspace = true }
 bravebot-agent = { path = "../agent" }
+# One reading of a proposed write as plain lines, the one the command-line session shows.
+bravebot-approval = { path = "../approval" }
 # For `Message` and `Role`: cutting a conversation has to look at what a message *is*, and
 # `Snapshot::messages` is a `Vec<Message>` from this crate. Reading the type the agent already
 # hands us is not a widening of what this depends on.

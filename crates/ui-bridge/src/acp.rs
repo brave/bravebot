@@ -14,6 +14,7 @@
 
 use crate::bridge::Bridge;
 use crate::protocol::{Event, Request};
+use bravebot_agent::diff::Change;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -452,17 +453,13 @@ fn options(remember: bool, allow: &str, reject: &str) -> Value {
     Value::Array(all)
 }
 
-/// Control characters replaced, so text the editor draws cannot carry its own escapes.
+/// Control characters pictured, as the terminal pictures them, so text the editor draws cannot
+/// carry its own escapes. A newline stays one.
 fn plain(text: &str) -> String {
-    text.chars()
-        .map(|c| {
-            if c.is_control() && c != '\n' {
-                '\u{fffd}'
-            } else {
-                c
-            }
-        })
-        .collect()
+    text.split('\n')
+        .map(bravebot_approval::printable)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ---------------------------------------------------------------- the prompt
@@ -760,6 +757,49 @@ fn question(shared: &mut Shared, session: &str, name: &str, data: &Value) {
     );
 }
 
+/// The text of a write's question: the lines the terminal shows for the same write, read back out
+/// of the bridge's own description of it.
+fn write_text(data: &Value) -> String {
+    let strings = |list: &Value| -> Vec<String> {
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|line| line.as_str().map(str::to_string))
+            .collect()
+    };
+    let changes: Vec<Change> = data["changes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|held| {
+            let text = || held["text"].as_str().unwrap_or_default().to_string();
+            match held["kind"].as_str() {
+                Some("added") => Change::Added(text()),
+                Some("removed") => Change::Removed(text()),
+                Some("kept") => Change::Kept(text()),
+                _ => Change::Elided(held["lines"].as_u64().map_or(0, |n| n as usize)),
+            }
+        })
+        .collect();
+    let remark = data["remark"]["preview"]
+        .is_array()
+        .then(|| strings(&data["remark"]["preview"]));
+    let credentials = strings(&data["credentials"]);
+    let count = |key: &str| data[key].as_u64().map_or(0, |n| n as usize);
+    bravebot_approval::write_lines(&bravebot_approval::Write {
+        untrusted: data["untrusted"].as_bool() == Some(true),
+        remark: remark.as_deref(),
+        credentials: &credentials,
+        written_since_checkout: data["writtenSinceCheckout"].as_bool() == Some(true),
+        line_endings: data["lineEndings"].as_str(),
+        exact: data["exact"].as_bool() != Some(false),
+        added: count("added"),
+        removed: count("removed"),
+        changes: &changes,
+    })
+    .join("\n")
+}
+
 /// What a question is about, for a person reading it: a title, the kind of call, and the text the
 /// drawn prompt shows.
 fn describe(stem: &str, data: &Value) -> (String, &'static str, String) {
@@ -767,25 +807,7 @@ fn describe(stem: &str, data: &Value) -> (String, &'static str, String) {
         "confirm" => {
             let path = data["path"].as_str().unwrap_or_default();
             let intent = data["intent"].as_str().unwrap_or("write");
-            let mut title = format!("{intent} {path}");
-            if data["untrusted"].as_bool() == Some(true) {
-                title.push_str(" (decided by untrusted content)");
-            }
-            let diff: Vec<String> = data["changes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|change| {
-                    let text = change["text"].as_str().unwrap_or_default();
-                    match change["kind"].as_str() {
-                        Some("added") => format!("+ {text}"),
-                        Some("removed") => format!("- {text}"),
-                        Some("kept") => format!("  {text}"),
-                        _ => "  ...".to_string(),
-                    }
-                })
-                .collect();
-            (plain(&title), "edit", plain(&diff.join("\n")))
+            (plain(&format!("{intent} {path}")), "edit", write_text(data))
         }
         "run" => {
             let plan = data["plan"].as_str().unwrap_or_default();
@@ -857,5 +879,55 @@ mod tests {
             None
         );
         assert_eq!(chosen(&json!({})), None);
+    }
+
+    /// The terminal's lines for a write come from `bravebot_approval`, and the editor's text is
+    /// those lines read back out of the bridge's JSON, so every field of the request has to cross.
+    #[test]
+    fn a_write_question_reads_to_the_editor_as_it_reads_in_the_terminal() {
+        use bravebot_agent::confirm::{Intent, Remark, WriteRequest};
+        use bravebot_agent::diff::Diff;
+
+        let old: String = (0..30).map(|n| format!("keep {n}\n")).collect();
+        let new = format!("{old}added\u{1b}[2J\n").replacen("keep 0\n", "changed\n", 1);
+        let request = WriteRequest {
+            written_since_checkout: true,
+            path: "notes.md".to_string(),
+            contents: new.clone(),
+            existing: Some(old.clone()),
+            diff: Diff::compute(&old, &new),
+            intent: Intent::Edit,
+            untrusted: true,
+            remark: Some(Remark {
+                preview: vec!["fixed a typo".to_string()],
+                lines: 1,
+                label: "untrusted".to_string(),
+            }),
+            credentials: vec!["API_KEY on line 31".to_string()],
+            may_always: false,
+            record: None,
+        };
+        let changes = request.diff.condensed(2);
+        assert!(
+            changes.iter().any(|held| matches!(held, Change::Elided(_))),
+            "the fixture has no elided run, so it cannot show one crossing"
+        );
+        let line_endings = request.line_endings_note();
+        let expected = bravebot_approval::write_lines(&bravebot_approval::Write {
+            untrusted: true,
+            remark: Some(&["fixed a typo".to_string()]),
+            credentials: &["API_KEY on line 31".to_string()],
+            written_since_checkout: true,
+            line_endings: line_endings.as_deref(),
+            exact: true,
+            added: request.diff.added(),
+            removed: request.diff.removed(),
+            changes: &changes,
+        })
+        .join("\n");
+
+        let data = crate::wire::write_request(7, &request);
+        assert_eq!(write_text(&data), expected);
+        assert!(expected.contains("\u{241b}[2J") && !expected.contains('\u{1b}'));
     }
 }

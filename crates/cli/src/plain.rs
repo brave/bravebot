@@ -26,9 +26,9 @@ use bravebot_agent::confirm::{
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
     ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
-use bravebot_agent::diff::Change;
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{PermissionMode, Workspace};
+use bravebot_approval::quarantined;
 use bravebot_config::Config;
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::cancel::Cancel;
@@ -47,14 +47,6 @@ use std::process::ExitCode;
 /// Two characters, no colour and no glyph. A marker is the only thing a session in lines draws at
 /// all, and it is drawn for a reader that may be speaking it rather than looking at it.
 const MARKER: &str = "> ";
-
-/// How many lines of what a question is about are shown before the rest is counted instead.
-///
-/// A write is approved from the change it would make and a read from the bytes it would release,
-/// so the content is what the question is; and the whole of a generated file is not readable as
-/// one. A person scrolled past a thousand lines is answering whatever was in front of them at the
-/// end of it, which is not the question that was asked.
-const MOST_CONTENT_LINES: usize = 40;
 
 /// Lines of unchanged text kept either side of a change, so a hunk can be placed in its file.
 const CONTEXT: usize = 3;
@@ -1187,86 +1179,25 @@ fn checked(verdict: Verdict) -> String {
     .to_string()
 }
 
-/// Quarantined content as rows, each behind a margin, capped.
-///
-/// The margin is on every row, for the reason [`crate::progress`] puts it on every row: a caption
-/// above the block could be imitated by the block's own first line, and a margin cannot be. The cap
-/// is because a question has to be readable as one: a person scrolled past a thousand lines of
-/// output is answering whatever is in front of them at the end of it.
-fn quarantined(content: &str) -> Vec<String> {
-    let mut rows = Vec::new();
-    let mut counted = content.lines();
-    for line in counted.by_ref().take(MOST_CONTENT_LINES) {
-        rows.push(format!(
-            "{} {}",
-            crate::progress::QUARANTINE_BAR,
-            shown(line)
-        ));
-    }
-    let left_out = counted.count();
-    if left_out > 0 {
-        rows.push(t!(transcript_more_lines, count = left_out).to_string());
-    }
-    rows
-}
-
 /// The lines a proposed write is read before approving: what it would do, then the change itself.
 fn change(request: &WriteRequest) -> Vec<String> {
     let mut lines = vec![shown(&request.summary())];
-    if request.untrusted {
-        lines.push(t!(write_untrusted).to_string());
-    }
-    // What the isolated processor that produced the body said about it, beside the diff rather than
-    // somewhere up the scrollback: a remark saying a typo was fixed is only a claim worth anything
-    // while the lines it describes are in front of the person reading it. It decides nothing, and
-    // it is free text a processor authored, so it goes behind the margin with the content.
-    if let Some(remark) = &request.remark {
-        lines.push(t!(write_remark).to_string());
-        lines.extend(quarantined(&remark.preview.join("\n")));
-    }
-    // What the scan inferred, beside the lines it read it from. These are the driver's own words
-    // about its own findings, each already a kind, a location and a masked preview, so no part of
-    // the value is repeated here and none of it needs the margin content sits behind.
-    if !request.credentials.is_empty() {
-        lines.push(t!(write_credentials).to_string());
-        lines.extend(request.credentials.iter().map(|found| shown(found)));
-    }
-
-    if request.written_since_checkout {
-        lines.push(t!(write_since_checkout).to_string());
-    }
-    lines.extend(request.line_endings_note());
-
-    let diff = &request.diff;
-    // A change too large to diff says so rather than showing a guess at it, which is what the
-    // panel does with the same diff. The summary above still counts the lines.
-    if !diff.is_exact() {
-        lines.push(t!(
-            write_too_large_to_show,
-            added = diff.added(),
-            removed = diff.removed()
-        ));
-        return lines;
-    }
-
-    let mut changed = 0usize;
-    let mut left_out = 0usize;
-    for held in diff.condensed(CONTEXT) {
-        if changed == MOST_CONTENT_LINES {
-            left_out += 1;
-            continue;
-        }
-        changed += 1;
-        lines.push(match held {
-            Change::Added(line) => format!("+ {}", shown(&line)),
-            Change::Removed(line) => format!("- {}", shown(&line)),
-            Change::Kept(line) => format!("  {}", shown(&line)),
-            Change::Elided(count) => t!(write_unchanged, count = count).to_string(),
-        });
-    }
-    if left_out > 0 {
-        lines.push(t!(transcript_more_lines, count = left_out).to_string());
-    }
+    let changes = request.diff.condensed(CONTEXT);
+    let line_endings = request.line_endings_note();
+    lines.extend(bravebot_approval::write_lines(&bravebot_approval::Write {
+        untrusted: request.untrusted,
+        remark: request
+            .remark
+            .as_ref()
+            .map(|remark| remark.preview.as_slice()),
+        credentials: &request.credentials,
+        written_since_checkout: request.written_since_checkout,
+        line_endings: line_endings.as_deref(),
+        exact: request.diff.is_exact(),
+        added: request.diff.added(),
+        removed: request.diff.removed(),
+        changes: &changes,
+    }));
     lines
 }
 
