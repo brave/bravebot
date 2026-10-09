@@ -28,6 +28,7 @@
 
 use crate::capability::{Capability, CapabilitySet, ServerAlias};
 use crate::label::Confidentiality;
+use crate::permissions::Permissions;
 
 /// A kind of delegate: what it may hold, and how long it may go on.
 ///
@@ -326,6 +327,14 @@ pub struct Definition {
     /// take one away. Held to the kind where it is read rather than where it is set, so one met
     /// down to a `reader` has none.
     checkout: bool,
+    /// The path patterns its `writes:` lines limited a delegate's file writes to, one list per
+    /// line that limited it (DELEGATE-28).
+    ///
+    /// Empty is no limit. A path must be inside every list, so a replacement keeps the lists of
+    /// the definition it replaced beside its own and a later definition can add a limit and
+    /// cannot take one away. Kept as written: reading a pattern needs the host's separators and
+    /// case folding, which the kernel has from the rules in force when a delegate is started.
+    writes: Vec<Vec<String>>,
     /// The standing part of what a delegate of this name is told about itself.
     ///
     /// Empty where the file had no body. Carried rather than read: the kernel never branches on
@@ -351,6 +360,7 @@ impl Definition {
             rounds: None,
             memory: false,
             checkout: false,
+            writes: Vec::new(),
             prompt: String::new(),
             origin: "built-in".to_string(),
         }
@@ -377,6 +387,7 @@ impl Definition {
             rounds: None,
             memory: false,
             checkout: false,
+            writes: Vec::new(),
             prompt: prompt.into(),
             origin: origin.into(),
         }
@@ -493,6 +504,19 @@ impl Definition {
     /// Give a delegate of it a checkout of its own.
     pub fn with_checkout(mut self) -> Self {
         self.checkout = true;
+        self
+    }
+
+    /// The lists of path patterns a delegate of it may write inside, empty where it is limited
+    /// to none (DELEGATE-28).
+    pub fn write_limits(&self) -> &[Vec<String>] {
+        &self.writes
+    }
+
+    /// Limit a delegate of it to writing the files these patterns cover. The caller has split the
+    /// line into patterns; an empty list is a limit that covers nothing.
+    pub fn with_writes(mut self, patterns: Vec<String>) -> Self {
+        self.writes.push(patterns);
         self
     }
 
@@ -668,6 +692,9 @@ pub struct Narrowing {
     /// Whether its delegate is given a checkout it did not ask for, because the one it replaced
     /// asked. Never where it is loaded as a `reader`, which is given none.
     pub given_a_checkout: bool,
+    /// The write limits it is held to that its own file did not write, because the one it
+    /// replaced did (DELEGATE-28). Empty where its own stand alone.
+    pub writes_confined_to: Vec<Vec<String>>,
     /// Where the definition that cut it down came from.
     pub replaced: String,
 }
@@ -724,6 +751,9 @@ impl Definitions {
     /// A checkout is met as the kind is: either asking gives one, so a later definition can add
     /// one and cannot take one away (CHECKOUT-2).
     ///
+    /// The write limits are kept whole beside the replacement's own, so a path has to be inside
+    /// both: a later definition can add a limit and cannot take one away (DELEGATE-28).
+    ///
     /// The rounds are taken over because a bound is not authority: a gate refuses on the last
     /// round what it refuses on the first. They are still held to the ceiling of the kind the
     /// replacement is loaded as, so a narrower kind brings its lower ceiling with it.
@@ -770,8 +800,23 @@ impl Definitions {
         let confined_to = (tools != asked).then(|| tools.clone().unwrap_or_default());
         let given_a_checkout = existing.checkout && !definition.checkout && loaded != Kind::Reader;
         let replaced = existing.origin.clone();
+        // The limits of the one replaced come first and are kept whole, so a third definition
+        // meets both of the first two. Only those its own lines did not repeat are reported.
+        let writes_confined_to: Vec<Vec<String>> = existing
+            .writes
+            .iter()
+            .filter(|limit| !definition.writes.contains(limit))
+            .cloned()
+            .collect();
+        let mut writes = existing.writes.clone();
+        for limit in std::mem::take(&mut definition.writes) {
+            if !writes.contains(&limit) {
+                writes.push(limit);
+            }
+        }
 
         definition.kind = loaded;
+        definition.writes = writes;
         definition.tools = tools;
         definition.servers = servers;
         definition.checkout |= existing.checkout;
@@ -781,6 +826,7 @@ impl Definitions {
             && confined_to.is_none()
             && servers_confined_to.is_none()
             && !given_a_checkout
+            && writes_confined_to.is_empty()
         {
             return Admitted::AsWritten;
         }
@@ -790,6 +836,7 @@ impl Definitions {
             confined_to,
             servers_confined_to,
             given_a_checkout,
+            writes_confined_to,
             replaced,
         })
     }
@@ -1087,6 +1134,9 @@ pub struct DelegateSpec {
     /// Whether the definition that selected it gives it a checkout of its own, whatever the call
     /// asked.
     checkout: bool,
+    /// The limits on the files it may write, read by the run that started it: those of every
+    /// delegate above it and those of its own definition (DELEGATE-28).
+    writes: Vec<Permissions>,
     task: String,
     capabilities: CapabilitySet,
     rounds: usize,
@@ -1127,6 +1177,7 @@ impl DelegateSpec {
             prompt: definition.prompt().to_string(),
             memory: definition.keeps_memory(),
             checkout: definition.asks_for_checkout(),
+            writes: Vec::new(),
             task: task.into(),
             capabilities,
             rounds,
@@ -1138,6 +1189,15 @@ impl DelegateSpec {
     pub(crate) fn holding(mut self, held: Confidentiality) -> Self {
         self.holds = held;
         self
+    }
+
+    pub(crate) fn limited_to(mut self, limits: Vec<Permissions>) -> Self {
+        self.writes = limits;
+        self
+    }
+
+    pub(crate) fn write_limits(&self) -> &[Permissions] {
+        &self.writes
     }
 
     pub(crate) fn holds(&self) -> Confidentiality {
@@ -1728,6 +1788,7 @@ mod tests {
                 confined_to: None,
                 servers_confined_to: Some(vec!["notes".to_string()]),
                 given_a_checkout: false,
+                writes_confined_to: Vec::new(),
                 replaced: "~/a.md".to_string(),
             })
         );
@@ -1756,6 +1817,7 @@ mod tests {
                 confined_to: Some(vec!["read_file".to_string()]),
                 servers_confined_to: Some(Vec::new()),
                 given_a_checkout: false,
+                writes_confined_to: Vec::new(),
                 replaced: "~/a.md".to_string(),
             })
         );
@@ -2161,6 +2223,7 @@ mod tests {
                 confined_to: None,
                 servers_confined_to: None,
                 given_a_checkout: false,
+                writes_confined_to: Vec::new(),
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -2211,6 +2274,7 @@ mod tests {
                 confined_to: Some(vec!["read_file".to_string()]),
                 servers_confined_to: Some(Vec::new()),
                 given_a_checkout: false,
+                writes_confined_to: Vec::new(),
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -2258,6 +2322,7 @@ mod tests {
                 confined_to: Some(vec!["read_file".to_string()]),
                 servers_confined_to: None,
                 given_a_checkout: false,
+                writes_confined_to: Vec::new(),
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -2300,6 +2365,7 @@ mod tests {
                 confined_to: Some(Vec::new()),
                 servers_confined_to: None,
                 given_a_checkout: false,
+                writes_confined_to: Vec::new(),
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -2692,6 +2758,79 @@ mod tests {
         );
     }
 
+    /// DELEGATE-28: a write limit is met as the tools are. A replacement writing none keeps the
+    /// one the definition it replaced wrote and is reported as narrowed, one writing its own is
+    /// held to both, and one repeating the limit is admitted as written because it changed
+    /// nothing.
+    #[test]
+    fn a_later_definition_cannot_take_a_write_limit_away() {
+        let limit = |patterns: &[&str]| patterns.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("scribe", "home", Kind::Worker, None, "", "~/a.md")
+                .with_writes(limit(&["docs/**"])),
+        );
+
+        let dropped = definitions.insert(Definition::from_file(
+            "scribe",
+            "project",
+            Kind::Worker,
+            None,
+            "",
+            ".b.md",
+        ));
+        assert_eq!(
+            definitions
+                .get("scribe")
+                .expect("selectable")
+                .write_limits(),
+            &[limit(&["docs/**"])],
+            "a later definition writing no limit lifted the earlier one"
+        );
+        assert_eq!(
+            dropped,
+            Admitted::Narrowed(Narrowing {
+                named: Kind::Worker,
+                loaded: Kind::Worker,
+                confined_to: None,
+                servers_confined_to: None,
+                given_a_checkout: false,
+                writes_confined_to: vec![limit(&["docs/**"])],
+                replaced: "~/a.md".to_string(),
+            })
+        );
+
+        let wider = definitions.insert(
+            Definition::from_file("scribe", "project", Kind::Worker, None, "", ".c.md")
+                .with_writes(limit(&["**"])),
+        );
+        assert_eq!(
+            definitions
+                .get("scribe")
+                .expect("selectable")
+                .write_limits(),
+            &[limit(&["docs/**"]), limit(&["**"])],
+            "a later definition's wider limit replaced the earlier one instead of joining it"
+        );
+        assert!(matches!(wider, Admitted::Narrowed(_)), "{wider:?}");
+
+        let repeated = definitions.insert(
+            Definition::from_file("scribe", "project", Kind::Worker, None, "", ".d.md")
+                .with_writes(limit(&["docs/**"]))
+                .with_writes(limit(&["**"])),
+        );
+        assert_eq!(repeated, Admitted::AsWritten);
+        assert_eq!(
+            definitions
+                .get("scribe")
+                .expect("selectable")
+                .write_limits()
+                .len(),
+            2,
+            "a repeated limit was kept twice"
+        );
+    }
+
     /// CHECKOUT-2: a checkout is met as the kind is. A replacement asking for none keeps the one
     /// the definition it replaced asked for, and is reported as narrowed, and one asking for a
     /// checkout its replaced definition did not is admitted as written, because a checkout gives
@@ -2726,6 +2865,7 @@ mod tests {
                 confined_to: None,
                 servers_confined_to: None,
                 given_a_checkout: true,
+                writes_confined_to: Vec::new(),
                 replaced: "~/a.md".to_string(),
             })
         );

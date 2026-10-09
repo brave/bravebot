@@ -2554,6 +2554,11 @@ delegate-isolation-not-read =
     { $definition } est chargé sans copie de travail à part : sa ligne isolation indique { $value }, et seuls checkout et worktree en demandent une
 delegate-effort-not-a-level =
     { $definition } demande l'effort { $effort }, qui n'est aucun de { $levels }, donc son délégué garde l'effort du tour qui le lance
+delegate-writes-not-read =
+    { $count ->
+        [one] { $definition } a un motif writes illisible ici, qui ne couvre donc aucun fichier : { $patterns }. Son délégué ne peut écrire que ce que couvrent les autres motifs, et aucun fichier s'il n'y en a pas
+       *[other] { $definition } a des motifs writes illisibles ici, qui ne couvrent donc aucun fichier : { $patterns }. Son délégué ne peut écrire que ce que couvrent les autres motifs, et aucun fichier s'il n'y en a pas
+    }
 delegate-checkout-reader =
     { $definition } est chargé sans copie de travail à part : c'est un reader, et un reader n'en reçoit jamais
 delegate-memory-in-checkout =

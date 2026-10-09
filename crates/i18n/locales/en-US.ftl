@@ -3042,6 +3042,16 @@ delegate-isolation-not-read = { $definition } is loaded without a checkout: its 
 # names for them, joined with a comma, and are not translated: they are what a file has to write to
 # be understood.
 delegate-effort-not-a-level = { $definition } asks for effort { $effort }, which is none of { $levels }, so its delegate keeps the effort of the turn that spawns it
+# A definition's writes line holds patterns that cannot be read: one needing the home or the
+# settings directory, which a definition has neither of, or one that is not a path pattern. They
+# cover no file, so the delegate may write only what the others cover, and nothing at all where none
+# was readable. The definition is its file's path and the patterns are that file's own words, both
+# from a vouched-for file. "writes" is the key and stays as it is.
+delegate-writes-not-read =
+    { $count ->
+        [one] { $definition } has a writes pattern that cannot be read here, so it covers no file: { $patterns }. Its delegate may write only what the other patterns cover, and no file where there are none
+       *[other] { $definition } has writes patterns that cannot be read here, so they cover no file: { $patterns }. Its delegate may write only what the other patterns cover, and no file where there are none
+    }
 # A definition asks for a checkout and is loaded as a reader, either as its own kind line says or
 # because a definition of the same name narrowed it. A reader is never given a checkout. The
 # definition is its file's path.
