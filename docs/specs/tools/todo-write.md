@@ -52,4 +52,5 @@ achieved, and leaving it unstruck would leave it reading as work still to come.
 `verified-by: bravebot_core::todo::a_cancelled_task_is_not_counted_as_done`
 `verified-by: bravebot_agent::tools::a_cancelled_task_is_counted_apart_from_the_finished_ones`
 `verified-by: bravebot_tui::render::a_cancelled_task_is_struck_without_the_finished_colour`
+`verified-by: bravebot_tui::panel::a_cancelled_task_in_the_panel_is_struck_and_marked_apart_from_a_done_one`
 `verified-by: bravebot_ui_bridge::wire::a_cancelled_task_crosses_as_cancelled`
