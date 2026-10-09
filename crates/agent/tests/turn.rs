@@ -22421,8 +22421,18 @@ fn an_attachment_is_sent_beside_the_prompt_that_came_with_it() {
         .as_array()
         .expect("the prompt carries parts");
     assert_eq!(parts[0]["text"], "what is this");
-    assert_eq!(parts[1]["type"], "image_url");
-    let url = parts[1]["image_url"]["url"].as_str().expect("a url");
+    // The path, then the bytes, in that order (DROP-11): a planner given a picture and no path
+    // cannot name the file it was shown. The prompt the person typed stays first.
+    assert_eq!(parts[1]["type"], "text");
+    assert!(
+        parts[1]["text"]
+            .as_str()
+            .is_some_and(|said| said.contains("shot.png")),
+        "the part before the bytes does not name the file: {}",
+        parts[1]
+    );
+    assert_eq!(parts[2]["type"], "image_url");
+    let url = parts[2]["image_url"]["url"].as_str().expect("a url");
     assert!(url.starts_with("data:image/png;base64,"), "{url}");
     // iVBORw0KGgo is the base64 of a PNG's signature, so this is the file and not a placeholder.
     assert!(url.contains("iVBORw0KGgo"), "{url}");
@@ -22468,6 +22478,53 @@ fn attaching_a_file_vouches_for_it_the_way_naming_one_does() {
     assert!(
         body.contains("iVBORw0KGgo"),
         "attaching did not vouch for the file: {body}"
+    );
+}
+
+/// DROP-11: the path travels with the bytes. A turn's prompt holds the marker `[Image #1]`, and
+/// without the path the request says a picture arrived and never which file it was, so a planner
+/// asked to look at the dropped file cannot name it to a tool or say which one it saw.
+///
+/// Asserted on the order inside the message, because a path that lands after the bytes belongs to
+/// whatever part comes next: on a line that dropped two files it would name the wrong one.
+#[test]
+fn a_dropped_picture_reaches_the_model_with_its_path() {
+    let scratch = Scratch::new("dropped-path");
+    std::fs::write(
+        scratch.path.join("shot.png"),
+        [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("a picture"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let task = Task::new("what is in [Image #1]").with_attachment("shot.png", "image/png");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("a request was sent");
+    let named = body
+        .find("Dropped file: shot.png")
+        .unwrap_or_else(|| panic!("the dropped file's path did not go with it: {body}"));
+    let bytes = body
+        .find("iVBORw0KGgo")
+        .unwrap_or_else(|| panic!("the bytes did not go: {body}"));
+    assert!(
+        named < bytes,
+        "the path did not come before the bytes it names: {body}"
     );
 }
 
@@ -23926,6 +23983,12 @@ fn a_picture_dropped_onto_a_question_reaches_the_model_with_it() {
     assert!(
         body.contains("data:image/png;base64,iVA="),
         "the picture did not go with the question: {body}"
+    );
+    // DROP-11: a question carries the path as a turn does, so the marker is answered by a named
+    // file rather than by counting parts.
+    assert!(
+        body.contains("Dropped file: shot.png"),
+        "the dropped file's path did not go with the question: {body}"
     );
 }
 

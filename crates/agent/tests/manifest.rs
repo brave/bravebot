@@ -545,6 +545,12 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
             body.contains("data:image/png;base64,iVA="),
             "the dropped picture did not reach the planner: {body}"
         );
+        // DROP-11: both calls name the file beside its bytes, so the planner can write a step
+        // about the path it was shown rather than about a marker standing for nothing.
+        assert!(
+            body.contains("Dropped file: shot.png"),
+            "the dropped file's path did not reach the planner: {body}"
+        );
     }
 }
 
