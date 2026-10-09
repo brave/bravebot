@@ -1696,7 +1696,7 @@ pub struct Session {
     /// conversation to read it, about a file that moved while nobody was here.
     watches: watch::Watches,
     /// Set when `/init` hands back its prompt, so the turn that sends it says the driver wrote it.
-    init_prompt_pending: bool,
+    driver_prompt_pending: bool,
     /// The same prompts, resolved, for the turn in flight to take between rounds.
     ///
     /// Shared with the worker rather than sent down a channel, because a queued prompt can be
@@ -1966,7 +1966,7 @@ impl Session {
             ctrl_enter_arrives: false,
             looping: None,
             watches: watch::Watches::new(),
-            init_prompt_pending: false,
+            driver_prompt_pending: false,
             goal: None,
             addressing: None,
             system_prompts: bravebot_agent::turn::SystemPrompts::default(),
@@ -7690,7 +7690,7 @@ impl Session {
             self.note(t!(init_already_there, file = crate::init_command::FILE));
             return None;
         }
-        self.init_prompt_pending = true;
+        self.driver_prompt_pending = true;
         Some(self.begin_turn(
             crate::init_command::PROMPT.to_string(),
             (Vec::new(), Vec::new()),
@@ -7698,9 +7698,20 @@ impl Session {
         ))
     }
 
-    /// Whether the turn starting now sends `/init`'s prompt, which the driver wrote. Taken once.
-    pub fn take_init_prompt(&mut self) -> bool {
-        std::mem::take(&mut self.init_prompt_pending)
+    /// Begin the turn `/review` is (CMD-18).
+    pub fn start_review(&mut self, asked: &crate::review_command::Asked) -> String {
+        self.driver_prompt_pending = true;
+        self.begin_turn(
+            crate::review_command::prompt(asked),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+        )
+    }
+
+    /// Whether the turn starting now sends a prompt the driver wrote, as `/init` and `/review` do.
+    /// Taken once.
+    pub fn take_driver_prompt(&mut self) -> bool {
+        std::mem::take(&mut self.driver_prompt_pending)
     }
 
     /// The definition the turn starting now was addressed to, taken so no later turn inherits it.
@@ -13923,10 +13934,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let mut s = Session::new("none").in_workspace(&root);
-        assert!(!s.take_init_prompt());
+        assert!(!s.take_driver_prompt());
         assert!(s.start_init().is_some());
-        assert!(s.take_init_prompt());
-        assert!(!s.take_init_prompt());
+        assert!(s.take_driver_prompt());
+        assert!(!s.take_driver_prompt());
         let _ = std::fs::remove_dir_all(&root);
     }
 

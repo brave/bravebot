@@ -45,6 +45,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
+| `/review` | `[target] [focus]` | Have the planner review local changes or a pull request |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
 | `/copy` | `[n]` | Put the last reply on the clipboard, or the one that many replies back |
 | `/undo` | | Rewind one turn and put back the files it wrote |
@@ -718,6 +719,30 @@ did not, it cannot see them, so it asks you questions and writes from your answe
 If the directory already holds a file called `AGENTS.md`, `/init` says so and does nothing, whatever
 the file contains. A `CLAUDE.md` does not count, only the name `AGENTS.md` is checked, and an `AGENTS.md` written beside a
 `CLAUDE.md` is the one read, since the first file found is the only one.
+
+## `/review [target] [focus]`
+
+Has the planner review changes and report what it finds. The target is one of:
+
+| Target | Reviews |
+|---|---|
+| none | the uncommitted changes, staged and unstaged |
+| `staged` | only what is staged |
+| `since <ref>` | everything since a branch, tag or commit, uncommitted changes included |
+| `commit <ref>` | one commit |
+| `pr <number or URL>` | a pull request, by number or by its `https://github.com/<owner>/<repo>/pull/<n>` address |
+
+Words after the target are what to look at: `/review since main the locking in the cache`. Those
+four words only count as the first word, so `/review the staged changes` reviews the uncommitted
+changes with that focus. A ref that `git` could read as an option or a range, or an address that is
+not a GitHub pull request, is refused with a usage note and no turn starts.
+
+The planner fetches the diff with `run` (`git diff`, `git show` or `gh pr diff`), so you are asked
+about the program like any other. Where the diff comes back as lines you have vouched for, the planner
+reviews it. Where it comes back as a reference, the planner may not see it, and hands it to a
+processor whose findings are shown to you as untrusted content and to no model. The command writes
+nothing and the prompt forbids changes, commits, pushes and comments. A prompt file or skill named
+`review` is shadowed by the command.
 
 ## `/agent <name> <task>`
 

@@ -143,12 +143,12 @@ mod tests {
     /// one sharing it.
     #[test]
     fn what_matches_is_every_name_starting_with_the_word_in_name_order() {
-        let held = [skill("review-pr"), skill("release-notes"), skill("review")];
+        let held = [skill("retro-pr"), skill("release-notes"), skill("retro")];
         assert_eq!(
             names(&matching(&held, "re")),
-            ["release-notes", "review", "review-pr"]
+            ["release-notes", "retro", "retro-pr"]
         );
-        assert_eq!(names(&matching(&held, "review")), ["review", "review-pr"]);
+        assert_eq!(names(&matching(&held, "retro")), ["retro", "retro-pr"]);
         assert!(matching(&held, "zzz").is_empty());
         assert!(matching(&held, "Review").is_empty(), "the other case");
     }
