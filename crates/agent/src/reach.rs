@@ -483,6 +483,18 @@ fn listing(held: &[Grant]) -> String {
     if held.is_empty() {
         return t!(reach_none).to_string();
     }
+    rows(held).join("\n")
+}
+
+/// The rows `/reach` lists for the grants in force for `session` in the workspace at `root`, each
+/// numbered as `/reach remove <number>` counts them. Empty where none is in force.
+///
+/// What `/status` shows, so the two cannot word a grant differently.
+pub fn listed(home: &Path, session: &str, root: &Path) -> Vec<String> {
+    rows(&Store::new(home).read(Some(session), root))
+}
+
+fn rows(held: &[Grant]) -> Vec<String> {
     held.iter()
         .enumerate()
         .map(|(at, grant)| {
@@ -497,8 +509,7 @@ fn listing(held: &[Grant]) -> String {
             )
             .to_string()
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect()
 }
 
 fn remove(store: &Store, session: &str, root: &Path, number: usize) -> String {
@@ -1123,6 +1134,37 @@ mod tests {
             "{listed}"
         );
         assert_eq!(place.say_in("s", &place.second, ""), t!(reach_none));
+    }
+
+    /// `/status` lists the rows in force where the person is, worded and numbered as `/reach` lists
+    /// them. The regressions it rejects: a row typed in another checkout listed here, a row made in
+    /// another session listed here, and a number that is not the one `/reach remove` takes.
+    #[test]
+    fn the_status_rows_are_the_grants_in_force_here_and_no_others() {
+        let place = Place::new("status-rows");
+        let named = place.project.display().to_string();
+        place.say_in("s", &place.first, &format!("{named} write -- ls"));
+        place.say_in("s", &place.second, &format!("{named} -- cat"));
+        place.say_in("other", &place.first, &format!("{named} -- tail"));
+
+        let here = listed(&place.home, "s", &place.first);
+
+        assert_eq!(here.len(), 1, "{here:?}");
+        assert_eq!(here[0], place.say_in("s", &place.first, ""), "{here:?}");
+        assert!(
+            here[0].starts_with("1. ls also reads and writes "),
+            "{here:?}"
+        );
+        assert!(here[0].contains(&named), "{here:?}");
+        assert!(here[0].contains("allowed 2026-10-07"), "{here:?}");
+        assert!(!here[0].contains("cat") && !here[0].contains("tail"));
+        let there = listed(&place.home, "s", &place.second);
+        assert_eq!(there.len(), 1, "{there:?}");
+        assert!(there[0].starts_with("1. cat also reads "), "{there:?}");
+        assert_eq!(
+            listed(&place.home, "s", &place.profile),
+            Vec::<String>::new()
+        );
     }
 
     /// A credential scope for a program the scope table gives it to is for every checkout. The

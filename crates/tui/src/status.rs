@@ -199,6 +199,10 @@ pub struct Facts<'a> {
     /// adds nothing to one. Nothing is said in that case, for the reason the loop says nothing when
     /// there is none.
     pub remembered: Option<Remembered<'a>>,
+    /// The reach remembered for commands that is in force here, one row each as `/reach` lists it.
+    ///
+    /// Empty says nothing, for the reason no remembered line says nothing.
+    pub reach: &'a [String],
     /// The answer about this directory a session was told to remember, where one is kept and
     /// would settle the next session started here (TRUST-23).
     pub kept_trust: Option<KeptTrust<'a>>,
@@ -814,6 +818,22 @@ pub fn report(facts: &Facts<'_>) -> Report {
         ));
     }
 
+    // The third standing answer, and the one that changes a plan a person is shown: a command's
+    // plan carries a row they did not see requested. The rows are `/reach`'s own, so the number on
+    // each is the one `/reach remove` takes.
+    if !facts.reach.is_empty() {
+        lines.push(
+            Line::new(
+                t!(status_reach),
+                t!(count_reach_grants, count = facts.reach.len()),
+            )
+            .with_note(t!(status_reach_note)),
+        );
+        for row in facts.reach {
+            lines.push(Line::new("", row.as_str()));
+        }
+    }
+
     Report { lines }
 }
 
@@ -1001,6 +1021,8 @@ mod tests {
             // Nothing remembered past a session, which is what a fresh directory looks like. Tests
             // about that line build their own record and set it.
             remembered: None,
+            // No reach remembered for any command, on the same footing.
+            reach: &[],
             // No answer about the directory kept past a session, on the same footing.
             kept_trust: None,
         }
@@ -1675,6 +1697,37 @@ mod tests {
             shown.contains("/home/someone/.bravebot/remembered"),
             "{shown}"
         );
+    }
+
+    /// SANDBOX-23: a reach remembered for a command changes the plan a person is shown, so the
+    /// report lists each row as `/reach` does, with the note saying how to forget one. The
+    /// regressions it rejects: a report that lists none, rows without their numbers, and a heading
+    /// drawn for a session that has none.
+    #[test]
+    fn the_report_lists_the_reach_remembered_for_commands() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let quiet = rendered(&report(&facts(&config, &trust)));
+        assert!(!quiet.contains(t!(status_reach)), "{quiet}");
+
+        let rows = vec![
+            "1. ls also reads and writes /tmp/project, allowed 2026-10-07, for this session in /tmp/project"
+                .to_string(),
+            "2. git push also reads the remote scope, allowed 2026-10-06, always".to_string(),
+        ];
+        let mut facts = facts(&config, &trust);
+        facts.reach = &rows;
+        let shown = rendered(&report(&facts));
+
+        assert!(shown.contains(t!(status_reach)), "{shown}");
+        assert!(
+            shown.contains(&t!(count_reach_grants, count = 2)),
+            "{shown}"
+        );
+        assert!(shown.contains(t!(status_reach_note)), "{shown}");
+        for row in &rows {
+            assert!(shown.contains(row.as_str()), "{shown}");
+        }
     }
 
     /// RUN-19: where the list is shortened it says how many of each it left out. A bare count would

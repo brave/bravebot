@@ -1571,6 +1571,10 @@ count-commands = { $count ->
     [one] { $count } commande
    *[other] { $count } commandes
     }
+count-reach-grants = { $count ->
+    [one] { $count } autorisation
+   *[other] { $count } autorisations
+    }
 count-tokens = { $count ->
     [one] { $count } jeton
    *[other] { $count } jetons
@@ -1698,6 +1702,9 @@ status-remembered-note =
 status-remembered-this-session = mémorisée dans cette session
 status-remembered-earlier = mémorisée dans une session antérieure
 status-remembered-where = supprimez une ligne de { $path } pour qu'elle soit redemandée
+status-reach = Accès retenus
+status-reach-note =
+    ajoutés au plan de la commande que chacun nomme ; /reach remove <numéro> en oublie un
 status-remembered-and-more = { $count ->
     [one] … et 1 de plus, dont { $earlier } d'une session antérieure
    *[other] … et { $count } de plus, dont { $earlier } d'une session antérieure

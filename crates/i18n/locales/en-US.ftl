@@ -1787,6 +1787,10 @@ count-commands = { $count ->
     [one] { $count } command
    *[other] { $count } commands
     }
+count-reach-grants = { $count ->
+    [one] { $count } grant
+   *[other] { $count } grants
+    }
 count-tokens = { $count ->
     [one] { $count } token
    *[other] { $count } tokens
@@ -1942,6 +1946,8 @@ status-remembered-note = run unasked in this directory, and their output stays q
 status-remembered-this-session = remembered in this session
 status-remembered-earlier = remembered in an earlier session
 status-remembered-where = delete a line from { $path } to be asked again
+status-reach = Remembered reach
+status-reach-note = added to the plan of the command each names; /reach remove <number> forgets one
 status-remembered-and-more = { $count ->
     [one] … and 1 more, { $earlier } of them from an earlier session
    *[other] … and { $count } more, { $earlier } of them from an earlier session
