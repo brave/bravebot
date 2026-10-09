@@ -2441,9 +2441,9 @@ the one a terminal of that size would have drawn from the start, so the hint row
 sit on the new bottom row, fitted to the new width. A burst of size changes from dragging a window
 edge is coalesced into frames like any other burst of input, not drawn once per event.
 
-**Why.** The idle loop drew only after an event it mapped to an action, and a size change mapped to
-none. The screen kept the layout of the old size, worst on the bottom row, until a key was pressed.
-Every other loop draws on each pass, so only the idle one needed the event.
+**Why.** Without a frame on a size change, the idle loop draws nothing until a key arrives, so the
+screen keeps the old size's layout, and the bottom row suffers most. Every other loop draws on each
+pass, so only the idle loop needs this event.
 
 `verified-by: bravebot_tui::app::a_resize_while_the_box_is_idle_asks_for_a_frame`
 `verified-by: bravebot_tui::render::a_frame_drawn_after_a_resize_is_the_frame_of_a_terminal_that_size_from_the_start`
