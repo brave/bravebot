@@ -668,7 +668,8 @@ as a file. A tool's directory is read and never written.
 A line `IdentityFile <name>` in the user's own `~/.ssh/config` adds the file `<name>.pub`, and one
 whose name already ends in `.pub` adds that file. The keyword is matched without regard to case
 and its value may follow `=`. A name is absolute or begins `~/` or `%d/`. A name holding another `%`
-token or a `$`, or a relative one, adds nothing. A file is added only where it exists as a regular
+token or a `$`, or a relative one, adds nothing, and neither does a line that is not valid UTF-8,
+which is skipped whole and never rewritten into a name it did not spell. A file is added only where it exists as a regular
 file, where the file a link leads to is named `*.pub`, and where that file is not in a credential
 location other than `~/.ssh` ([SANDBOX-12](#SANDBOX-12)), and the row is the file a link leads to.
 The `.pub` name is the only thing added, so a line that names a private key adds the public file
@@ -769,6 +770,8 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_sandbox::scope::an_identity_file_in_the_ssh_configuration_adds_its_public_key`
 `verified-by: bravebot_sandbox::scope::an_identity_file_that_is_not_a_public_key_adds_nothing`
 `verified-by: bravebot_sandbox::scope::a_named_public_key_behind_a_link_is_read_where_it_leads`
+`verified-by: bravebot_sandbox::scope::an_identity_file_line_that_is_not_text_adds_nothing_and_its_lossy_lookalike_is_not_read`
+`verified-by: bravebot_sandbox::scope::an_identity_file_whose_name_is_not_text_adds_neither_it_nor_its_lookalike`
 `verified-by: bravebot_sandbox::scope::the_ssh_configuration_adds_a_bounded_number_of_keys_to_the_remote_scope_alone`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_a_public_key_its_configuration_names_and_never_the_private_one`
 `verified-by: bravebot_agent::confine::the_prompt_the_line_and_the_policy_agree_on_which_credential_a_stage_lifts`

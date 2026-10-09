@@ -368,7 +368,8 @@ const NAMED_PUBLIC_KEYS_LIMIT: usize = 32;
 /// named in the configuration needs the same read as one at a default name. A line naming `<name>`
 /// adds `<name>.pub`, and one already ending in `.pub` adds that file. A name is absolute or
 /// begins `~/` or `%d/`; one with any other `%` or a `$` adds nothing, since ssh would read it
-/// from somewhere this cannot know. A file is added only where it is a regular file, the file a
+/// from somewhere this cannot know, and neither does a line that is not valid UTF-8. A file is
+/// added only where it is a regular file, the file a
 /// link leads to is named `*.pub`, and that file is not in a credential location other than
 /// `~/.ssh`. No private key name is added, whatever the line says. Only the user's own file is
 /// read, and a repository's `core.sshCommand`, an `Include` and a `Match` are not followed. A file
@@ -387,9 +388,13 @@ fn named_public_keys(home: &Path) -> Vec<PathBuf> {
     {
         return Vec::new();
     }
-    let configuration = String::from_utf8_lossy(&configuration);
     let mut keys: Vec<PathBuf> = Vec::new();
-    for line in configuration.lines() {
+    for line in configuration.split(|byte| *byte == b'\n') {
+        // A lossy decode would name a different file than ssh opens.
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let line = line.strip_suffix('\r').unwrap_or(line);
         let Some(named) = identity_file(line) else {
             continue;
         };
@@ -1269,6 +1274,55 @@ mod tests {
             read_for_the_configuration(&home),
             [home.join("keys/real.pub")]
         );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A line holding bytes that are not UTF-8 is skipped whole. A lossy decode would spell its
+    /// name with U+FFFD and grant the file of that spelling, which ssh never opens. The lines
+    /// either side of it are still read.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_file_line_that_is_not_text_adds_nothing_and_its_lossy_lookalike_is_not_read() {
+        let home = a_home_with(
+            "identity-files-not-text",
+            "",
+            &[
+                ".ssh/before.pub",
+                ".ssh/tool-\u{FFFD}.pub",
+                ".ssh/after.pub",
+            ],
+        );
+        std::fs::write(
+            home.join(".ssh/config"),
+            b"IdentityFile ~/.ssh/before\nIdentityFile ~/.ssh/tool-\xff\nIdentityFile ~/.ssh/after\n",
+        )
+        .unwrap();
+        let mut read = read_for_the_configuration(&home);
+        read.sort();
+        assert_eq!(
+            read,
+            [home.join(".ssh/after.pub"), home.join(".ssh/before.pub")]
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// On a file system that holds a name that is not UTF-8, the file the line spells exists
+    /// beside its lossy lookalike, and neither is granted.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_identity_file_whose_name_is_not_text_adds_neither_it_nor_its_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = a_home_with(
+            "identity-files-not-text-on-disk",
+            "",
+            &[".ssh/tool-\u{FFFD}.pub"],
+        );
+        let spelled = home
+            .join(".ssh")
+            .join(std::ffi::OsStr::from_bytes(b"tool-\xff.pub"));
+        std::fs::write(&spelled, "a key").unwrap();
+        std::fs::write(home.join(".ssh/config"), b"IdentityFile ~/.ssh/tool-\xff\n").unwrap();
+        assert_eq!(read_for_the_configuration(&home), Vec::<PathBuf>::new());
         std::fs::remove_dir_all(&home).unwrap();
     }
 
