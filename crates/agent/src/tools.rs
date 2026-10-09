@@ -14881,6 +14881,144 @@ mod tests {
             );
             assert!(!clean, "a turn whose run was refused would end as clean");
         }
+
+        /// SANDBOX-28: a delegate that names `request_path` anyway is answered as an unknown name,
+        /// the person is not asked, and nothing is held. The first case is the control: the same
+        /// call from a turn that is not a delegate is asked and held, so an implementation that
+        /// refused every call would not pass.
+        #[cfg(unix)]
+        #[test]
+        fn a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked() {
+            use crate::confirm::{
+                CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
+                McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
+                ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
+                WriteRequest,
+            };
+            use bravebot_core::ask::{Answer, Asking};
+
+            #[derive(Default)]
+            struct CountsPathQuestions {
+                asked: usize,
+            }
+
+            impl Confirmer for CountsPathQuestions {
+                fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+                    self.asked += 1;
+                    Decision::Approve
+                }
+                fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+                    WriteDecision::reject()
+                }
+                fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+                    RunDecision::reject()
+                }
+                fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+                    CallDecision::reject()
+                }
+                fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
+                    Vec::new()
+                }
+                fn interjection(&mut self) -> Option<String> {
+                    None
+                }
+            }
+
+            let scratch = Scratch::new("request-path-delegate");
+            let home = scratch.path.join("home");
+            let beside = scratch.path.join("beside");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&beside).unwrap();
+            let home: &'static std::path::Path =
+                Box::leak(home.canonicalize().unwrap().into_boxed_path());
+            let beside = beside.canonicalize().unwrap();
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&project).unwrap();
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": "1",
+                "function": {
+                    "name": "request_path",
+                    "arguments": json!({
+                        "path": beside.display().to_string(),
+                        "write": true,
+                        "why": "the build writes its output there",
+                    })
+                    .to_string(),
+                }
+            }))
+            .expect("a call");
+
+            for (delegated, asked, held) in [(false, 1, 1), (true, 0, 0)] {
+                let workspace = Workspace::new(&project).expect("workspace");
+                let mut trust = bravebot_core::trust::TrustStore::new("/work");
+                trust.trust(".");
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "build it");
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::ShellExec]),
+                    &mut sink,
+                )
+                .expect("policy")
+                .with_trust(trust);
+                let mut confirmer = CountsPathQuestions::default();
+
+                let output = with_tools(&workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.profile = Some(home);
+                    tools.delegated = delegated;
+                    dispatch(
+                        &mut policy,
+                        tools,
+                        &mut confirmer,
+                        &mut crate::report::IgnoreReports,
+                        &call,
+                    )
+                });
+                let said = told(&mut policy, &output.text);
+
+                if delegated {
+                    assert_eq!(said, "error: no such tool 'request_path'");
+                } else {
+                    assert!(said.starts_with("approved:"), "{said}");
+                }
+                assert_eq!(confirmer.asked, asked, "delegated {delegated}: {said}");
+                assert_eq!(
+                    workspace.path_reach().len(),
+                    held,
+                    "delegated {delegated}: {said}"
+                );
+            }
+        }
     }
 
     /// LABEL-5 over a tool's arguments, at the three tools that take a decision from one and had

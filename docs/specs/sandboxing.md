@@ -1669,12 +1669,11 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
 - The desktop shows no card for it and refuses, which grants nothing.
 
 **Why.** A stage that cannot write a path the work needs fails with `Operation not permitted`, and
-the planner has no other way to say which path it needed: `/add-dir` is the person's, marks the
-directory trusted, and was the only road, so the person was sent to trust a directory to let one
-build write one file. A narrower road, with the same refusals as the rows a person can write, lets
-them say yes to a single path for a single session. What the planner supplies decides nothing:
-the path is routing and is judged by the rules, and the reason is drawn for the person and
-recorded.
+the planner has no way to say which path it needed. Without a per-path request, the only way to let
+a build write one file is `/add-dir`, which marks the whole directory trusted. A request for one
+path, with the same refusals as the rows a person can write, lets them say yes to that path for a
+single session. What the planner supplies decides nothing: the path is routing and is judged by the
+rules, and the reason is drawn for the person and recorded.
 
 `verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
 `verified-by: bravebot_sandbox::rules::a_request_at_inside_or_above_a_credential_location_is_refused`
@@ -1687,6 +1686,7 @@ recorded.
 `verified-by: bravebot_agent::workspace::a_new_workspace_holds_no_path_reach`
 `verified-by: bravebot_agent::reach::reach_paths_lists_ends_and_leaves_other_words_alone`
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
+`verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_marks_nothing_trusted_and_is_recorded`
 `verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
@@ -1696,6 +1696,8 @@ recorded.
 `verified-by: bravebot_tui::confirm::a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do`
 `verified-by: bravebot_tui::confirm::a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
 `verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
+`verified-by: bravebot_cli::plain::a_path_is_asked_in_lines_and_only_a_yes_lets_programs_reach_it`
+`verified-by: bravebot_ui_bridge::refusal::a_request_for_a_path_is_refused_with_no_card_whatever_the_window_would_say`
 
 ## Programs a person asked for
 

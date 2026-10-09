@@ -1954,6 +1954,64 @@ mod tests {
         }
     }
 
+    /// SANDBOX-28 in lines: the path, whether it is read or written, the planner's reason and what
+    /// a yes does not do are put to the person, and only the affirmative lets programs reach it.
+    /// A read is not drawn as a write, or a person who is asked to allow a read is shown a grant of
+    /// more.
+    #[test]
+    fn a_path_is_asked_in_lines_and_only_a_yes_lets_programs_reach_it() {
+        for (write, shown_access, not_shown_access) in [
+            (
+                true,
+                t!(path_writes, path = "/data/out").to_string(),
+                "may read /data/out",
+            ),
+            (
+                false,
+                t!(path_reads, path = "/data/out").to_string(),
+                "read and write",
+            ),
+        ] {
+            let request = bravebot_agent::confirm::PathRequest {
+                path: std::path::PathBuf::from("/data/out"),
+                write,
+                why: "the build writes its output there".to_string(),
+            };
+            for (answer, expected) in [
+                ("y\n", Decision::Approve),
+                ("n\n", Decision::Reject),
+                ("", Decision::Reject),
+            ] {
+                let mut asking = Prompting::new(
+                    std::io::BufReader::new(std::io::Cursor::new(answer.as_bytes().to_vec())),
+                    Vec::new(),
+                );
+                assert_eq!(
+                    asking.confirm_path(&request),
+                    expected,
+                    "write {write}, {answer:?}"
+                );
+                let drawn = String::from_utf8(asking.output).expect("text");
+                for line in [
+                    shown_access.clone(),
+                    t!(path_why, why = "the build writes its output there").to_string(),
+                    t!(path_explained).to_string(),
+                    t!(path_not_trusted).to_string(),
+                    t!(path_title).to_string(),
+                ] {
+                    assert!(
+                        drawn.contains(&line),
+                        "write {write}: {line} is not drawn in {drawn}"
+                    );
+                }
+                assert!(
+                    !drawn.contains(not_shown_access),
+                    "write {write}: {not_shown_access} is drawn in {drawn}"
+                );
+            }
+        }
+    }
+
     /// The startup question (TRUST-7) reaches a session in lines too, and the three answers the
     /// panel has are the three a line has. What a yes grants is not decided here: the map comes
     /// back from the interface's own function, so the two surfaces cannot come to disagree about

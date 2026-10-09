@@ -21560,6 +21560,8 @@ mod tests {
                 "~/work write always -- make",
             ),
             ("/reach remove 2", "remove 2"),
+            ("/reach paths", "paths"),
+            ("/reach paths remove 1", "paths remove 1"),
         ] {
             type_line(&mut session, line);
             assert_eq!(

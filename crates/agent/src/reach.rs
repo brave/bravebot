@@ -828,8 +828,16 @@ mod tests {
         let command = |argument: &str| requested_paths_command(&workspace, argument);
 
         assert_eq!(command("paths"), Some(t!(path_none).to_string()));
-        workspace.grant_path_reach(PathBuf::from("/data/in"), false, "reads".to_string());
-        workspace.grant_path_reach(PathBuf::from("/data/out"), true, "writes".to_string());
+        workspace.grant_path_reach(
+            PathBuf::from("/data/in"),
+            false,
+            "UNIQUE-REASON-IN".to_string(),
+        );
+        workspace.grant_path_reach(
+            PathBuf::from("/data/out"),
+            true,
+            "UNIQUE-REASON-OUT".to_string(),
+        );
 
         let listed = command("paths").expect("the listing");
         let rows: Vec<&str> = listed.lines().collect();
@@ -837,8 +845,8 @@ mod tests {
         assert!(rows[0].starts_with("1.") && rows[0].contains("reads /data/in"));
         assert!(rows[1].starts_with("2.") && rows[1].contains("reads and writes /data/out"));
         assert!(
-            !listed.contains("writes\n"),
-            "the planner's reason was listed"
+            !listed.contains("UNIQUE-REASON"),
+            "the planner's reason was listed: {listed}"
         );
 
         assert_eq!(
@@ -846,21 +854,21 @@ mod tests {
             Some(t!(path_refused_number, number = "9").to_string())
         );
         assert_eq!(workspace.path_reach().len(), 2);
-        for malformed in [
-            "paths remove",
-            "paths remove x",
-            "paths forget 1",
-            "paths remove 0",
+        for (malformed, expected) in [
+            ("paths remove", t!(path_usage).to_string()),
+            ("paths remove x", t!(path_usage).to_string()),
+            ("paths forget 1", t!(path_usage).to_string()),
+            (
+                "paths remove 0",
+                t!(path_refused_number, number = "0").to_string(),
+            ),
         ] {
-            let said = command(malformed).expect("a reply");
-            assert!(
-                said == t!(path_usage) || said == t!(path_refused_number, number = "0"),
-                "{malformed}: {said}"
-            );
+            assert_eq!(command(malformed), Some(expected), "{malformed}");
             assert_eq!(workspace.path_reach().len(), 2, "{malformed}");
         }
         let removed = command("paths remove 1").expect("a reply");
         assert!(removed.contains("/data/in"), "{removed}");
+        assert!(!removed.contains("UNIQUE-REASON"), "{removed}");
         assert_eq!(workspace.path_reach().len(), 1);
         assert_eq!(workspace.path_reach()[0].path, Path::new("/data/out"));
 
