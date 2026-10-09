@@ -70,3 +70,10 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# Dependencies are built optimised in a debug build too. Decoding and scaling a picture and drawing
+# every prompt at every scroll position took tens of seconds a test unoptimised and a few seconds
+# optimised, and the dependencies are rebuilt only when the lockfile moves. The workspace's own
+# crates stay unoptimised, so an edit to them rebuilds as fast as before.
+[profile.dev.package."*"]
+opt-level = 2
