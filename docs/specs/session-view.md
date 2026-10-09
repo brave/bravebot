@@ -133,7 +133,7 @@ out twice. `turn.send` and `manifest.run` return it, and the session view carrie
 turn on screen. `turn.cancel` may name a target. A cancel that names a target other than the one
 running, or one that has ended, stops nothing and answers `{ "cancelled": false }`; one that names
 the running target answers `{ "cancelled": true }`. A cancel that names no target stops whatever is
-running and answers `{}`. A `target` that is not a number is refused, and so is the `turn` parameter that named a cancel's turn before targets existed. A target is unique within one bridge process; a restarted bridge counts again. A turn number could not do
+running and answers `{}`. A `target` that is not a number is refused. A `turn` parameter is refused, because a cancel that ignored it would stop whatever is running. A target is unique within one bridge process; a restarted bridge counts again. A turn number could not do
 this job: it repeats after `session.rewind`, so a delayed cancel for the old turn 3 would stop the
 new turn 3, and a manifest run has no turn number of its own. A session with a view cannot start a run, so the view never has to carry a run's target; a bridge that lets one do so must report the run's target in the view.
 
@@ -206,4 +206,4 @@ the cancel is refused with `UnsupportedError` and nothing is sent, since the run
 whatever is running instead. The result is `cancelled: true` or `false` as the bridge answered when a target was
 named, and `null` when none was.
 
-`verified-by: by-construction (packages/agent-client/test-fixtures/scenarios/cancel-names-the-target-on-screen.json, cancel-names-the-target-it-is-given.json, cancel-names-the-new-target-when-turn-numbers-go-back.json, cancel-while-a-send-is-unanswered-names-no-target.json and cancel-without-action-targets-names-no-target.json run under four chunkings, and tests/real-rpc.test.ts drives a real bravebot-rpc through a delayed cancel for an earlier turn, a cancel after a rewind that numbers a turn again, and a cancel of the turn just sent)`
+`verified-by: by-construction (packages/agent-client/test-fixtures/scenarios/cancel-names-the-target-on-screen.json, cancel-names-the-target-it-is-given.json, cancel-names-the-new-target-when-turn-numbers-go-back.json, cancel-while-a-send-is-unanswered-names-no-target.json and cancel-without-action-targets-names-no-target.json and send-with-a-target-that-is-not-a-count-is-refused.json run under four chunkings, and tests/real-rpc.test.ts drives a real bravebot-rpc through a delayed cancel for an earlier turn, a cancel after a rewind that numbers a turn again, and a cancel of the turn just sent)`

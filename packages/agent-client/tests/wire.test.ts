@@ -55,6 +55,15 @@ test('a view update missing a required field is refused rather than defaulted', 
   }
 })
 
+test('a view update whose target is not a count is refused, and an absent one reads as 0', () => {
+  for (const target of ['3', -1, 1.5, null]) {
+    assert.throws(() => decodeUpdate({ ...(contract.update as object), target }), ProtocolError, String(target))
+  }
+  const update = structuredClone(contract.update) as Record<string, unknown>
+  delete update.target
+  assert.equal(decodeUpdate(update).target, 0)
+})
+
 test('an absent capability, or one that is not version 1, is not read as supported', () => {
   assert.equal(readSessionViewCapability({}), null)
   assert.equal(readSessionViewCapability({ capabilities: {} }), null)

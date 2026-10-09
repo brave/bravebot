@@ -1,0 +1,18 @@
+{
+  "name": "send-with-a-target-that-is-not-a-count-is-refused",
+  "description": "A turn.send response whose target is not a count is a protocol error, not a target the caller can cancel with.",
+  "steps": [
+    {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
+    {"expectRequest": "info", "method": "agent.info", "params": {}},
+    {"send": [{"id": "$info", "ok": {"build": "build-1", "version": "0.14.0", "configured": true, "defaultModel": "stub-model", "home": "/home/person/.bravebot", "capabilities": {"sessionView": {"version": 1, "start": "session.view.start", "scope": "fresh_session", "approvals": ["confirm", "run", "fetch", "ask"], "reconnect": false}}}}]},
+    {"expectRequest": "new", "method": "session.new", "params": {"directory": "/work"}},
+    {"send": [{"event": "trust.request", "session": "s1", "data": {"directory": "/work", "keeping": null}}, {"id": "$new", "ok": {"session": "s1"}}]},
+    {"expectRequest": "view", "method": "session.view.start", "params": {"session": "s1", "version": 1}},
+    {"send": [{"event": "session.view.initial", "session": "s1", "data": {"sequence": 0, "turn": 0, "status": "idle", "pending": null, "rows": []}}, {"id": "$view", "ok": {"version": 1}}]},
+    {"await": "a", "bindSession": "a"},
+    {"start": "send", "call": "send", "session": "a", "args": {"text": "go"}},
+    {"expectRequest": "send", "method": "turn.send", "params": {"session": "s1", "prompt": "go"}},
+    {"send": [{"id": "$send", "ok": {"turn": 1, "target": -1}}]},
+    {"await": "send", "error": {"name": "ProtocolError"}}
+  ]
+}

@@ -148,7 +148,7 @@ class Session implements AgentSession {
     if (!isRecord(result) || typeof result.turn !== 'number') throw new ProtocolError('turn.send did not report a turn')
     // A runtime that does not advertise action targets reports none; 0 is the idle target.
     const target = result.target === undefined ? 0 : result.target
-    if (typeof target !== 'number') throw new ProtocolError('turn.send reported a target that is not a number')
+    if (typeof target !== 'number' || !Number.isSafeInteger(target) || target < 0) throw new ProtocolError('turn.send reported a target that is not a count')
     return { turn: result.turn, target }
   }
 

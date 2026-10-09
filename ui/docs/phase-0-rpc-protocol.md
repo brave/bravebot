@@ -695,7 +695,7 @@ flight errors `turn_in_flight`. Different sessions run concurrently.
 running and returns `{}`, as it always has. Present, it stops that turn or run and no other. It
 returns `{ "cancelled": true }` for the running one, and `{ "cancelled": false }` when the named
 one is not running or has ended, in which case nothing is stopped, the watches included. A
-`target` that is not a number is refused with `bad_request`, as is the old `turn` parameter. A target is never handed out twice,
+`target` that is not a number is refused with `bad_request`, as is a `turn` parameter, which a cancel would otherwise ignore and so stop whatever is running. A target is never handed out twice,
 unlike a turn number, which repeats after `session.rewind`, so a cancel that arrives late cannot
 stop what came after. A target is unique within one bridge process, so a restarted bridge counts again. A client that holds a target should send it.
 

@@ -1314,8 +1314,7 @@ impl Bridge {
     /// Cancellation never sends an approval or authorises a write.
     fn cancel_turn(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
-        // `turn` named a cancel's target before targets existed. Read as nothing, it would stop
-        // whatever is running, so it is refused.
+        // A cancel that ignored `turn` would stop whatever is running, so it is refused.
         if request.params.get("turn").is_some() {
             return Err(Failure::bad_request(
                 "`turn` no longer names what to cancel; use `target`",
