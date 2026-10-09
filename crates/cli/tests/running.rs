@@ -2729,6 +2729,60 @@ fn a_gateway_asking_to_run(command: &'static str) -> Gateway {
     })
 }
 
+/// SANDBOX-24: a person's `sandbox.network.allowedHosts` reaches the programs `run` starts as a
+/// proxy variable, and a run with no list reaches none.
+///
+/// A property of the process: the entry points settle the list once and `Tools` reads it back
+/// through `sandbox_network::settled()`, which is `None` in every test that does not start from an
+/// entry point. The tests in `crates/agent` hand the list to `with_hosts` themselves, so a link
+/// that dropped it would leave them passing while no stage was pointed at a proxy. The program is
+/// `printenv` writing a file, so the effect is on disk and not words the model was handed; the run
+/// with no list is the control that the variable is not there to be found anyway.
+#[cfg(unix)]
+#[test]
+fn an_allowed_hosts_list_points_the_programs_a_run_starts_at_the_proxy() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return;
+    }
+    let run_in = |name: &str, hosts: Option<&str>| {
+        let gateway = a_gateway_asking_to_run("printenv HTTPS_PROXY > proxy.txt");
+        let mut settings: serde_json::Value =
+            serde_json::from_str(&settings_for(&gateway)).expect("settings for a gateway");
+        if let Some(hosts) = hosts {
+            settings["sandbox"] = serde_json::json!({"network": {"allowedHosts": [hosts]}});
+        }
+        let scratch = Scratch::new(name).with_settings(&settings.to_string());
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &environment,
+            &["--dangerously-skip-permissions", "-p", "print the proxy"],
+        );
+        let _ = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        std::fs::read_to_string(project.join("proxy.txt")).unwrap_or_default()
+    };
+
+    let control = run_in("cli-running-hosts-control", None);
+    assert_eq!(
+        control.trim(),
+        "",
+        "the control already had a proxy, so the list below says nothing: {control}"
+    );
+    let listed = run_in("cli-running-hosts-listed", Some("example.com"));
+    assert!(
+        listed.trim().starts_with("http://127.0.0.1:"),
+        "the list did not reach the stage as a loopback proxy: {listed:?}"
+    );
+}
+
 /// SANDBOX: `--sandbox-deny-write` and a settings file's `sandbox.filesystem.denyWrite` reach the
 /// programs `run` starts, and a run with neither reaches none.
 ///
