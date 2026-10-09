@@ -9353,6 +9353,42 @@ fn a_repo_map_never_opens_a_file_nobody_vouched_for() {
     );
 }
 
+/// A name that is not UTF-8 is listed with a replacement character, the spelling of the file that
+/// really holds one. Both are opened by that spelling, so the map reads the lookalike once and
+/// never the other file (PATH-003).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_repo_map_reads_a_name_and_its_lossy_lookalike_once() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let scratch = Scratch::new("map-lossy-names");
+    std::fs::write(
+        scratch
+            .path
+            .join(std::ffi::OsStr::from_bytes(b"tool-\xff.rs")),
+        "pub fn raw_function() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        scratch.path.join("tool-\u{FFFD}.rs"),
+        "pub fn lookalike_function() {}\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert_eq!(
+        map.body.matches("lookalike_function").count(),
+        1,
+        "{}",
+        map.body
+    );
+    assert!(!map.body.contains("raw_function"), "{}", map.body);
+    assert_eq!((map.files, map.skipped), (1, 0));
+}
+
 /// Ranking is a decision made from file text. A mention in a file nobody vouched for must not
 /// move a symbol up: here two such files mention `alpha` and one vouched file mentions `zeta`, so
 /// counting the unvouched mentions puts `alpha` first and the correct map puts `zeta` first.
