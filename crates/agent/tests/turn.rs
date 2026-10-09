@@ -16149,6 +16149,70 @@ fn a_failed_run_on_a_confining_turn_says_what_it_ran_under() {
     assert!(!line.contains("/elsewhere"), "{line}");
 }
 
+const CREDENTIAL_LOCATIONS: &str = "cannot be added with `/add-dir` or `--add-dir`";
+
+/// SANDBOX-19: the line that follows a failed step says a credential location cannot be added, in
+/// `strict` and in `standard`, in the same words for exit 1 and exit 2, since it is built from the
+/// session and the steps and not from what the program did.
+#[test]
+fn a_failed_run_says_a_credential_location_cannot_be_added_whatever_the_mode_and_exit() {
+    if cannot_confine_here() {
+        return;
+    }
+    for (label, mode) in [
+        ("strict", bravebot_sandbox::SandboxMode::Strict),
+        ("standard", bravebot_sandbox::SandboxMode::Standard),
+    ] {
+        let line = |code: u8| {
+            let (_, second) = requests_for_one_run_in(
+                &format!("run-credential-locations-{label}-{code}"),
+                &format!("sh -c 'exit {code}'"),
+                mode,
+            );
+            let said = message_from(&second, "Result of run").to_string();
+            assert!(said.contains(&format!("exited {code}")), "{label}: {said}");
+            said[said
+                .find("Any other path")
+                .expect("the end of the profile line")..]
+                .to_string()
+        };
+        let (one, two) = (line(1), line(2));
+        assert_eq!(one, two, "{label}");
+        assert_eq!(
+            one.matches(CREDENTIAL_LOCATIONS).count(),
+            1,
+            "{label}: {one}"
+        );
+        assert!(one.contains("`~/.ssh`"), "{label}: {one}");
+    }
+}
+
+/// SANDBOX-19: the sentence belongs to the line, so a run that worked and a turn that does not
+/// confine carry none.
+#[test]
+fn a_run_that_worked_or_was_not_confined_does_not_say_a_credential_location_cannot_be_added() {
+    let (_, second, _) = requests_for_one_run(
+        "run-credential-locations-unconfined",
+        "sh -c 'exit 1'",
+        false,
+    );
+    let result = message_from(&second, "Result of run");
+    assert!(result.contains("exited 1"), "{result}");
+    assert!(!result.contains(CREDENTIAL_LOCATIONS), "{result}");
+
+    if cannot_confine_here() {
+        return;
+    }
+    let (_, second) = requests_for_one_run_in(
+        "run-credential-locations-ok",
+        "mkdir made",
+        bravebot_sandbox::SandboxMode::Standard,
+    );
+    let result = message_from(&second, "Result of run");
+    assert!(result.contains("It exited 0."), "{result}");
+    assert!(!result.contains(CREDENTIAL_LOCATIONS), "{result}");
+}
+
 /// One confined run of `command` in a session that keeps its state in `state` and answers to `session`,
 /// with `profile` standing for the person's home. Returns what the person was asked and what the
 /// planner was sent after the run.
