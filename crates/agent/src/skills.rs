@@ -760,9 +760,17 @@ fn discover_workspace<S: Sink>(
     // skill. Reporting in place would tell a person a skill was not loaded while they can see that
     // it was: the layout `make init` creates in this repository symlinks the same skills into all
     // three, so that notice would be wrong on every turn.
-    let mut skipped: Vec<(&str, Vec<String>)> = Vec::new();
+    let mut skipped: Vec<(String, Vec<String>)> = Vec::new();
     for root in WORKSPACE_SKILL_ROOTS {
         discover_workspace_root(policy, workspace, root, catalogue, notices, &mut skipped);
+    }
+    // After the root's, so a skill under a directory the session has worked in shadows the
+    // project's of the same name, the deeper directory last (INSTR-14).
+    if !bravebot_core::safe::engaged() {
+        for directory in workspace.touched_directories() {
+            let root = format!("{directory}/{WORKSPACE_SKILLS}");
+            discover_workspace_root(policy, workspace, &root, catalogue, notices, &mut skipped);
+        }
     }
     for (root, names) in skipped {
         let missing = names.len()
@@ -784,10 +792,10 @@ fn discover_workspace<S: Sink>(
 fn discover_workspace_root<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
-    skills_root: &'static str,
+    skills_root: &str,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
-    skipped: &mut Vec<(&'static str, Vec<String>)>,
+    skipped: &mut Vec<(String, Vec<String>)>,
 ) {
     let root = workspace.root().join(skills_root);
     let names = skill_directories(&root);
@@ -803,7 +811,7 @@ fn discover_workspace_root<S: Sink>(
         // The names, so the caller can drop the ones a more specific root went on to offer. Held
         // here and never put in a notice: a directory name in a project nobody vouched for is
         // content, and only the count of it reaches a screen (SKILL-6).
-        skipped.push((skills_root, names));
+        skipped.push((skills_root.to_string(), names));
         return;
     }
 

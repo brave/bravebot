@@ -4055,6 +4055,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         earlier.as_deref(),
     ) {
         Ok(crate::workspace::Reading::Page { page, token }) => {
+            workspace.record_touch(&shown_path);
             shown_token = token;
             page
         }

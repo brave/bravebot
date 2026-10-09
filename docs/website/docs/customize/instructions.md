@@ -21,7 +21,7 @@ happens, rather than to ask the planner for it, see [Hooks](hooks.md). For a who
 planner loads only when the task calls for it, see [Skills](skills.md). For a kind of delegate the
 planner can hand a sub-task to, see [Delegate definitions](agents.md).
 
-## The eight sources
+## The ten sources
 
 | File | Applies to |
 |---|---|
@@ -33,8 +33,10 @@ planner can hand a sub-task to, see [Delegate definitions](agents.md).
 | `<workspace>/.claude/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.agents/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.bravebot/agents/<name>.md` | this project |
+| `<workspace>/<directory>/AGENTS.md` | this project, once a turn has worked in that directory |
+| `<workspace>/<directory>/.bravebot/skills/<name>/SKILL.md` | this project, once a turn has worked in that directory |
 
-And no others. There is **no search of parent directories** and no nested instructions file. A rule
+And no others. There is **no search of parent directories**. A rule
 that walked upwards would pick up instructions from whatever happened to be above a project on this
 machine, which is a different set of instructions on the next machine. A file at any other path is an
 ordinary file, read only when something asks for it by name, or when the source points at it.
@@ -44,6 +46,17 @@ ordinary file, read only when something asks for it by name, or when the source 
 wins a name clash with either of the others. Skills you wrote for another agent work here without
 being copied or symlinked. Your own `~/.claude/skills` and `~/.agents/skills` are not read, because
 `~/.bravebot` is the one user directory tried.
+
+**A directory the session has worked in adds its own.** Once the planner has read a file in
+`packages/api/`, or written one, the `AGENTS.md` in `packages/api/` and in each directory above it
+down from the project root follows the project's, the deeper last so it wins, and so do the skills
+under `.bravebot/skills` there; a skill of the same name replaces the project's. The next turn
+picks it up, not the one that read the file. Each goes through the same trust check as the project's
+own file, and one that fails it is left out with a notice naming the file. A pointer or an `@path`
+import inside a nested file is not followed. Only `.bravebot/skills` is read below the root, not
+`.claude/skills` or `.agents/skills`. A directory is counted when a file is read or written in it,
+not when it is only listed or searched, and a session remembers up to 64 of them until `/cd` moves
+the project.
 
 **The project's file is looked for under three names, and the first that exists is the one.** Not all
 three: a repository holding two of them holds one set of instructions under two names, and reading

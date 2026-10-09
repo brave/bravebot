@@ -13232,6 +13232,56 @@ fn a_trusted_workspace_agents_file_reaches_the_system_prompt() {
     );
 }
 
+/// INSTR-14 through the tool that does the reading: a nested `AGENTS.md` joins the system prompt
+/// of the turn after the planner read a file beside it. The turn that read it was composed before,
+/// as every standing instruction is (INSTR-7).
+#[test]
+fn a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_read() {
+    let scratch = Scratch::new("agents-nested-after-read");
+    std::fs::create_dir_all(scratch.path.join("pkg")).unwrap();
+    std::fs::write(scratch.path.join("pkg/AGENTS.md"), "PKG-CONVENTION").unwrap();
+    std::fs::write(scratch.path.join("pkg/a.txt"), "the file body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"pkg/a.txt"}"#),
+        reply_with("done"),
+        reply_with("again"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    for task in ["read pkg/a.txt", "carry on"] {
+        let mut sink = RecordingSink::new();
+        turn::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new(task),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+    }
+
+    let first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+    assert!(
+        !first.contains("PKG-CONVENTION"),
+        "read before the path was touched"
+    );
+    assert!(
+        !second.contains("PKG-CONVENTION"),
+        "recomposed in the middle of a turn"
+    );
+    assert!(
+        third.contains("PKG-CONVENTION"),
+        "not read by the turn after the file beside it was"
+    );
+}
+
 /// An instructions file is read by the driver before anything is asked, so it is a read nobody
 /// named, and a link from it to a denied file would put that file in the system prompt of a
 /// workspace the person trusted. The rule is asked about the file the name lands on.
