@@ -117,7 +117,7 @@ fn start_host(
     roster: &Roster,
     id: &str,
     first: &str,
-    directory: Option<&str>,
+    directory: Option<&std::path::Path>,
     mode: Mode,
 ) -> Result<(), ExitCode> {
     use std::process::Stdio;
@@ -166,7 +166,7 @@ fn start_host(
 fn host_command(
     program: &std::path::Path,
     id: &str,
-    directory: Option<&str>,
+    directory: Option<&std::path::Path>,
     mode: Mode,
 ) -> std::process::Command {
     let mut command = std::process::Command::new(program);
@@ -182,7 +182,7 @@ fn start_host(
     _roster: &Roster,
     _id: &str,
     _first: &str,
-    _directory: Option<&str>,
+    _directory: Option<&std::path::Path>,
     _mode: Mode,
 ) -> Result<(), ExitCode> {
     Err(fail(Ending::Failed, t!(bg_unsupported)))
@@ -212,13 +212,7 @@ pub(crate) fn hand_over(
     let Some(roster) = Roster::writable() else {
         return Err(fail(Ending::Failed, t!(sessions_no_home)));
     };
-    start_host(
-        &roster,
-        &left.id,
-        "",
-        Some(&left.directory.display().to_string()),
-        mode,
-    )?;
+    start_host(&roster, &left.id, "", Some(&left.directory), mode)?;
     let shown: String = left.id.chars().take(ID_SHOWN).collect();
     println!("{}", t!(bg_handed_over, id = shown));
     Ok(())
@@ -291,7 +285,7 @@ fn running(typed: &str, wake: Wake<'_>) -> Result<(Roster, Seen, bool), ExitCode
                 &roster,
                 &seen.job.id,
                 &first,
-                Some(&seen.job.directory),
+                Some(std::path::Path::new(&seen.job.directory)),
                 Mode::Ask,
             )?;
             match roster.get(&seen.job.id) {
@@ -571,7 +565,7 @@ mod tests {
         let command = host_command(
             std::path::Path::new("/bin/bravebot"),
             "3f2a9c1e",
-            Some("/work"),
+            Some(std::path::Path::new("/work")),
             Mode::AcceptEdits,
         );
         let arguments: Vec<_> = command.get_args().collect();
