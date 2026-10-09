@@ -147,6 +147,12 @@ the footer until the key it is for arrives, where the row has room for it beside
 (SCROLL-7). Any other key drops it and does what it does alone, the wheel included, and Escape
 abandons it and does nothing else.
 
+The prompts that scroll a body (write, output, run, vetting, vouch, exposure, server, tool list,
+call and plan, and the questions a session opens with) take Up / Down, `k` / `j`, PageUp / PageDown
+and Home / End. A prompt takes that set whole, so a new prompt does not choose its own. `j` and `k`
+are never answers, so a person scrolling cannot write a grant: the run prompt remembers a requested
+reach for every session with `e` ([SANDBOX-27](sandboxing.md#SANDBOX-27)).
+
 **Why.** Two dialects, because the people who reach for a pager have `less` or `vi` in their hands
 already and neither group should have to learn the other's. A key that does nothing on arrival
 reads as a broken feature, and the cost of answering both is a row in this table.
@@ -165,6 +171,9 @@ that the Known costs below do not already admit.
 `verified-by: bravebot_tui::app::the_line_keys_move_the_view_by_a_line`
 `verified-by: bravebot_tui::app::the_half_page_keys_move_the_view_by_half_a_screen`
 `verified-by: bravebot_tui::app::the_page_keys_move_the_view_by_a_whole_screen`
+`verified-by: bravebot_tui::confirm::j_and_k_scroll_each_prompt_a_line_as_the_arrows_do`
+`verified-by: bravebot_tui::confirm::j_and_k_scroll_the_run_prompt_where_keep_reach_is_offered_too`
+`verified-by: bravebot_tui::trust_prompt::j_and_k_scroll_the_question_a_line_and_answer_nothing`
 `verified-by: bravebot_tui::app::the_end_keys_reach_the_first_row_and_the_last`
 `verified-by: bravebot_tui::app::the_prompt_keys_land_on_the_turn_before_and_the_turn_after`
 `verified-by: bravebot_tui::app::the_view_stops_at_the_first_row_rather_than_scrolling_past_it`
