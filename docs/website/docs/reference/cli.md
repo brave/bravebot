@@ -543,7 +543,9 @@ Each runs on a throwaway account that holds a credential of each kind. It also r
 refused, a read of an SSH key or AWS credentials and a write beside or outside the session. A workflow that works
 without the sandbox and fails with it is reported with its stage, its exit code, a fix and a log path. A
 program that is not installed is reported as skipped, by name, and does not fail the report. It exits
-non-zero when a workflow fails or a refused row gets through. It takes no further argument.
+non-zero when a workflow fails or a refused row gets through. When `gh` holds a login in your own
+home, it also checks that `gh` can still read that login under the sandbox, and the fix for a failure
+names `sandbox.filesystem.allowRead`. It takes no further argument.
 
 **No value from a settings file is ever printed.** Where a credential decides whether a backend
 works, what is reported is that one was found, because a settings file holds credentials on some

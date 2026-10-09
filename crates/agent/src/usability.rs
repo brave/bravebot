@@ -13,10 +13,11 @@
 
 use crate::confine::Confinement;
 use bravebot_core::command::Step;
+use bravebot_sandbox::rules::Lists;
 use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// How long one stage may run before it is stopped and counted as failed. A cold `cargo build` is
@@ -164,6 +165,8 @@ pub enum Kind {
     Setup,
     /// The platform would not confine the stage.
     NotConfined(String),
+    /// `gh` holds a login outside the sandbox that it cannot read under it.
+    Login,
 }
 
 /// The stage a workflow failed at.
@@ -550,21 +553,133 @@ fn start(
     let output = std::fs::File::create(log).map_err(|_| Started::Other)?;
     let errors = output.try_clone().map_err(|_| Started::Other)?;
     command.stdin(Stdio::null()).stdout(output).stderr(errors);
-    let mut child = command.spawn().map_err(|_| Started::Other)?;
+    let child = command.spawn().map_err(|_| Started::Other)?;
+    Ok(wait_for(child))
+}
+
+/// The exit code of `child`, or `None` when a signal ended it or it ran past [`LIMIT`].
+fn wait_for(mut child: Child) -> Option<i32> {
     let deadline = Instant::now() + LIMIT;
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return Ok(status.code()),
+            Ok(Some(status)) => return status.code(),
             Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(20));
             }
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Ok(None);
+                return None;
             }
         }
     }
+}
+
+/// Variables that make `gh` answer from the environment, which would hide a login the sandbox
+/// takes away.
+const LOGIN_VARIABLES: &[&str] = &[
+    "GH_ENTERPRISE_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GITHUB_TOKEN",
+];
+
+/// The login `gh` keeps for the account, asked for outside the sandbox and then under it.
+///
+/// The workflows above run `gh` with a scratch home, so a login kept where the base refuses, such as
+/// a keychain, is never asked for. This runs `gh auth token` with the account's own home. It
+/// judges the two runs by exit status alone and sends the token to the null device. A machine with
+/// no `gh`, or whose `gh` holds no login outside the sandbox, gets no row: there is nothing for the
+/// sandbox to have taken away.
+pub fn login_row(root: &Path) -> Result<Option<Row>, Unavailable> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let (Some(gh), Some(home)) = (find("gh", &path), std::env::var_os("HOME")) else {
+        return Ok(None);
+    };
+    login_row_for(
+        root,
+        &gh,
+        Path::new(&home),
+        &bravebot_config::sandbox_filesystem(),
+    )
+}
+
+/// [`login_row`] for the `gh` at `gh` and the account whose home is `home`, held to the person's
+/// filesystem `lists` as a session is.
+pub fn login_row_for(
+    root: &Path,
+    gh: &Path,
+    home: &Path,
+    lists: &Lists,
+) -> Result<Option<Row>, Unavailable> {
+    let session = root.join("login");
+    std::fs::create_dir_all(&session)?;
+    let session = session.canonicalize()?;
+    let Ok(home) = home.canonicalize() else {
+        return Ok(None);
+    };
+    if !matches!(ask_for_the_login(gh, &home, &session, None), Ok(Some(0))) {
+        return Ok(None);
+    }
+    let confinement = Confinement::here(vec![session.clone()], None, Some(&home))
+        .ok_or(Unavailable::NoBase)?
+        .with_filesystem(lists);
+    let failed = |kind, code| {
+        Outcome::Failed(Failure {
+            kind,
+            stage: 1,
+            program: "gh".to_string(),
+            code,
+            log: None,
+        })
+    };
+    let outcome = match ask_for_the_login(gh, &home, &session, Some(&confinement)) {
+        Ok(Some(0)) => Outcome::Passed,
+        Ok(code) => failed(Kind::Login, code),
+        Err(Started::Other) => failed(Kind::Login, None),
+        Err(Started::NotConfined(detail)) => failed(Kind::NotConfined(detail), None),
+    };
+    Ok(Some(Row {
+        group: "gh",
+        name: "the stored login",
+        expect: Expect::Works,
+        outcome,
+    }))
+}
+
+fn ask_for_the_login(
+    gh: &Path,
+    home: &Path,
+    session: &Path,
+    confinement: Option<&Confinement>,
+) -> Result<Option<i32>, Started> {
+    let args = ["auth".to_string(), "token".to_string()];
+    let step = Step {
+        program: "gh".to_string(),
+        resolved: gh.canonicalize().map_err(|_| Started::Other)?,
+        started_as: gh.to_path_buf(),
+        args: args.to_vec(),
+        environment: Vec::new(),
+        routes: Vec::new(),
+    };
+    let mut command = Command::new(gh);
+    command.args(&args).current_dir(session).env("HOME", home);
+    for name in LOGIN_VARIABLES {
+        command.env_remove(name);
+    }
+    crate::scrub::apply(&mut command);
+    let mut command = match confinement {
+        Some(confinement) => confinement
+            .wrap(command, &step, session)
+            .map_err(|error| Started::NotConfined(error.to_string()))?,
+        None => command,
+    };
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = command.spawn().map_err(|_| Started::Other)?;
+    Ok(wait_for(child))
 }
 
 fn find_from(program: &str, session: &Path, path: &OsStr) -> Option<PathBuf> {
