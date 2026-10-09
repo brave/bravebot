@@ -10814,7 +10814,7 @@ fn permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force() {
     );
 }
 
-/// CLI-27: the same rule once the person granted it at the question is in force, so it decides as
+/// CLI-28: the same rule once the person granted it at the question is in force, so it decides as
 /// the allow it is, names the grant as the place it came from, and is not also reported as waiting.
 ///
 /// The record is seeded rather than written by a session, because the answer is the person's and
@@ -10865,7 +10865,7 @@ fn permissions_check_counts_a_checkouts_allow_rule_the_person_granted() {
     );
 }
 
-/// CLI-27: a command line that names no call is refused with the status for an argument, and
+/// CLI-28: a command line that names no call is refused with the status for an argument, and
 /// nothing is printed on stdout for a script to take as an answer.
 #[test]
 fn permissions_check_refuses_a_command_line_that_names_no_call() {
