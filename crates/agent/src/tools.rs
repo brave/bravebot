@@ -4962,8 +4962,8 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             record: standing.record.clone(),
         };
 
-        // Read before the question is put, because a person can change the mode while they decide
-        // it, and the trail must not credit a mode with an answer they gave.
+        // Read as the question is put, because a person can change the mode while they decide it,
+        // and the trail must not credit the new mode with an answer they gave.
         let mode = tools.permission_mode.get();
         let answer = confirmer.confirm_write(&request);
         policy.record_answer(
@@ -6334,6 +6334,9 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         );
     };
 
+    // Read once for the whole call: the check, the release and the picture's copy are one decision,
+    // and a mode changed part way through must not give them different answers.
+    let mode = tools.permission_mode.get();
     let slot = match policy.accept_reference("vet_content", "ref", &named) {
         Ok(slot) => slot,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
@@ -6374,11 +6377,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     // `read_output` carries, and the exemption `docs/specs/permission-modes.md` MODE-4 states from
     // the other side. The vouch offer in `read_file` keeps the plain one: no screening answers it,
     // so under bypass nothing reads that word whatever was asked for.
-    let spec = match tools
-        .permission_mode
-        .get()
-        .checks_before_promoting(tools.auto_vetting)
-    {
+    let spec = match mode.checks_before_promoting(tools.auto_vetting) {
         false => None,
         true => match policy.before_vetting(&slot, Some(&expects), tools.slots) {
             Ok(spec) => Some(spec),
@@ -6411,10 +6410,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     // there, and unsafe, and every way a check can fail to complete, fall through to the prompt
     // with the banner they would have carried anyway. Written down as the third known cost in
     // `docs/specs/labels.md`.
-    let endorsed = tools
-        .permission_mode
-        .get()
-        .released_by(tools.auto_vetting, verdict);
+    let endorsed = mode.released_by(tools.auto_vetting, verdict);
 
     // A `match` rather than an `if`, so a fourth way of endorsing cannot be added and default to
     // skipping the prompt: a new variant stops compiling here until somebody says which it is.
@@ -6458,9 +6454,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                 let (shown, lines) = measured.declassify(&proof);
                 (shown, lines, None)
             }
-            Some(_) if tools.permission_mode.get() == crate::PermissionMode::Bypass => {
-                (String::new(), 0, None)
-            }
+            Some(_) if mode == crate::PermissionMode::Bypass => (String::new(), 0, None),
             Some(media) => match copy_a_picture(policy, tools.slots, tools.cache, &slot, media) {
                 Ok((copy, bytes)) => {
                     let shown = crate::confirm::PictureShown {

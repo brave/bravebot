@@ -171,14 +171,19 @@ impl PermissionMode {
     ///
     /// The prompt it started with still says the old mode, so a change into plan mode repeats the
     /// instruction and a change out of it says the refusal is over. Between the other modes nothing
-    /// is said, for the reason [`PermissionMode::instruction`] says nothing about them.
-    pub fn change_notice(self, to: PermissionMode) -> Option<&'static str> {
+    /// is said, for the reason [`PermissionMode::instruction`] says nothing about them. Both are
+    /// worded for the rest of the turn, because they stay in the conversation after it ends and the
+    /// next turn is told its own mode afresh.
+    pub fn change_notice(self, to: PermissionMode) -> Option<String> {
         match (self, to) {
             (from, to) if from == to => None,
-            (_, Self::Plan) => to.instruction(),
+            (_, Self::Plan) => to.instruction().map(|instruction| {
+                format!("The user changed the mode while this turn was running.{instruction}")
+            }),
             (Self::Plan, _) => Some(
-                "Plan mode has ended. The user changed the mode, so writing is no longer refused \
-                 by it and you may carry out the plan if that is what they asked for.",
+                "Plan mode has ended for the rest of this turn. The user changed the mode, so \
+                 writing is no longer refused by it."
+                    .to_string(),
             ),
             _ => None,
         }
@@ -1337,8 +1342,10 @@ mod tests {
     #[test]
     fn the_planner_is_told_only_of_a_change_into_or_out_of_plan_mode() {
         use PermissionMode::*;
-        assert_eq!(Ask.change_notice(Plan), Plan.instruction());
-        assert_eq!(Bypass.change_notice(Plan), Plan.instruction());
+        for from in [Ask, AcceptEdits, Bypass] {
+            let said = from.change_notice(Plan).expect("told of plan mode");
+            assert!(said.contains(Plan.instruction().expect("plan says something").trim()));
+        }
         assert!(
             Plan.change_notice(Ask)
                 .is_some_and(|said| said.contains("ended"))

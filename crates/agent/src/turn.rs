@@ -3266,7 +3266,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         policy = policy.within(spec);
     }
 
-    policy.record_permission_mode(task.permission_mode.get().name());
+    let started_in = task.permission_mode.get();
+    policy.record_permission_mode(started_in.name());
 
     // Before every turn rather than as a session opens, since a session's map is made at a start,
     // a clear and a resume and moved by `/cd` (MEMORY-5).
@@ -3594,7 +3595,6 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // prompts, since a delegate writing files in plan mode would be the mode failing exactly where
         // nobody is watching the writes. Only plan mode says anything: see
         // `PermissionMode::instruction`.
-        let started_in = task.permission_mode.get();
         let mut told_mode = started_in;
         let mode = started_in.instruction().unwrap_or_default();
         let memory = |keeps: bool, name: &str| match keeps && workspace.checkout().is_none() {
@@ -4010,7 +4010,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // the planner is said to it before the next request.
                     let chosen = task.permission_mode.get();
                     if let Some(notice) = told_mode.change_notice(chosen) {
-                        conversation.push_from(Message::user(notice), Provenance::Driver);
+                        conversation.push_from(Message::user(&notice), Provenance::Driver);
                     }
                     told_mode = chosen;
 
