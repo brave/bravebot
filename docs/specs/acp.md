@@ -102,3 +102,16 @@ messages an editor writes are read as requests, notifications and answers.
 `verified-by: bravebot_ui_bridge::acp::a_reply_that_looks_like_a_protocol_message_is_only_text`
 `verified-by: bravebot_ui_bridge::acp::the_binary_writes_only_protocol_messages_to_stdout`
 `verified-by: bravebot_ui_bridge::acp::the_agent_advertises_what_it_carries_and_nothing_more`
+
+<a id="ACP-7"></a>
+### ACP-7: an editor may select asking, accepting edits or planning, and never bypassing
+
+`session/new` offers three modes and `session/set_mode` accepts those three: `ask`, `acceptEdits`
+and `plan`. A request naming `bypass`, or any other word, is refused with invalid parameters.
+Bypassing is reachable only where the command line asked for it
+([MODE-5](permission-modes.md#MODE-5)), and an editor has no command line, which is the reason
+[MODE-11](permission-modes.md#MODE-11) gives for the desktop window. What each mode answers before a
+question reaches the editor is [MODE-2](permission-modes.md#MODE-2) for accepting edits and
+[MODE-3](permission-modes.md#MODE-3) for planning.
+
+`verified-by: bravebot_ui_bridge::acp::an_editor_selects_three_modes_and_bypass_is_refused`

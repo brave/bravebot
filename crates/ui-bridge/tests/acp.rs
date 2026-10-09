@@ -320,6 +320,46 @@ fn the_end_of_the_input_refuses_a_question_still_waiting() {
     );
 }
 
+/// An editor selects among the three modes the session offers. Bypassing is not one of them and a
+/// request naming it is an error rather than another mode.
+#[test]
+fn an_editor_selects_three_modes_and_bypass_is_refused() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("modes");
+    let mut editor = Editor::on("http://127.0.0.1:9", &project);
+    let id = editor.request("session/new", json!({"cwd": project, "mcpServers": []}));
+    let made = editor.response(id)["result"].clone();
+    let offered: Vec<&str> = made["modes"]["availableModes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|mode| mode["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(offered, ["ask", "acceptEdits", "plan"]);
+    let session = made["sessionId"].as_str().unwrap().to_string();
+    for mode in ["acceptEdits", "plan", "ask"] {
+        let id = editor.request(
+            "session/set_mode",
+            json!({"sessionId": session, "modeId": mode}),
+        );
+        let answer = editor.response(id);
+        assert!(
+            answer.get("error").is_none(),
+            "{mode} was refused: {answer}"
+        );
+    }
+    for mode in ["bypass", "bypassPermissions", ""] {
+        let id = editor.request(
+            "session/set_mode",
+            json!({"sessionId": session, "modeId": mode}),
+        );
+        let answer = editor.response(id);
+        assert_eq!(answer["error"]["code"], -32602, "{mode:?}: {answer}");
+    }
+}
+
 /// No turn starts, and so no model is asked, until the trust question is answered.
 #[test]
 fn no_turn_starts_before_the_trust_question_is_answered() {
