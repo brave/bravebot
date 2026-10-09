@@ -3253,12 +3253,11 @@ fn skill_keys_unread(
 /// nothing has vouched for, which is what an unanswered question leaves. Nothing is written and
 /// nobody is asked: `doctor` changes nothing and puts no question.
 fn trust_already_answered(root: &Path) -> bravebot_core::TrustStore {
-    let kept = bravebot_agent::trusted::record_for(
+    let kept = bravebot_agent::trusted::honoured(
         bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
         root,
-    )
-    .and_then(|(store, identity)| store.kept(&identity));
+    );
     match kept {
         Some(_) => bravebot_tui::trust_prompt::trusting_the_workspace(root),
         None => bravebot_agent::workspace::trust_store(root),

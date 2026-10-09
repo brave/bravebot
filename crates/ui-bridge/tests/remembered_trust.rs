@@ -390,6 +390,63 @@ fn a_remembered_answer_answers_for_that_directory_alone() {
     assert_eq!(opened["remembered"], Value::Null, "{opened}");
 }
 
+/// A yes kept about the root of a git worktree settles a session started below it, names the root
+/// that answered, and is taken back from the session below, which makes the root ask too. A
+/// repository nested inside is asked, since the root above it is not the one it was vouched in.
+#[test]
+fn a_remembered_worktree_root_answers_for_a_directory_below_it() {
+    let scratch = Scratch::new("bridge-trust-remembered-root");
+    if !scratch.tells_directories_apart() {
+        return;
+    }
+    std::fs::create_dir(scratch.project().join(".git")).expect("a repository");
+    let nested = scratch.project().join("inner/vendored");
+    std::fs::create_dir_all(nested.join(".git")).expect("a nested repository");
+    let mut front = FrontEnd::start(&scratch.home());
+    let keeping = remember(&mut front, &scratch.project());
+
+    let (opened, question) = front.begin(&scratch.project().join("inner"));
+    assert_eq!(question, None, "a directory below the root was asked");
+    assert_eq!(opened["remembered"]["path"], keeping.to_str().unwrap());
+    assert_eq!(
+        opened["remembered"]["root"],
+        scratch.project().to_str().unwrap(),
+        "{opened}"
+    );
+    let session = handle(&opened);
+    let listed = front.call("permissions.list", json!({"session": session}));
+    assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+    assert_eq!(
+        listed["remembered"]["root"],
+        scratch.project().to_str().unwrap()
+    );
+
+    let (opened, question) = front.begin(&nested);
+    assert!(
+        question.is_some(),
+        "a nested repository was not asked about"
+    );
+    assert_eq!(opened["remembered"], Value::Null, "{opened}");
+
+    let listed = front.call(
+        "permissions.revoke",
+        json!({"session": session, "kind": "remembered"}),
+    );
+    assert_eq!(listed["remembered"], Value::Null, "{listed}");
+    assert!(
+        !keeping.exists(),
+        "the root's answer outlived being forgotten"
+    );
+    for directory in [scratch.project(), scratch.project().join("inner")] {
+        let (_, question) = front.begin(&directory);
+        assert!(
+            question.is_some(),
+            "{} was not asked after the root's answer was forgotten",
+            directory.display()
+        );
+    }
+}
+
 /// A kept answer is written only where the question offered it, and only for a yes: a no, a value
 /// that is not a boolean, a question already answered and a directory the answer may not be kept
 /// about all write nothing.

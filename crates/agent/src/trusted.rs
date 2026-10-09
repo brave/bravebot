@@ -3,14 +3,16 @@
 //! One file per working directory under `~/.bravebot/trusted`, keyed the way the session store, the
 //! remembered command lines and the granted rules are keyed ([`crate::home::key_for`]). An entry is
 //! the tree rule a yes writes, for one exact directory, and a later session begun in that directory
-//! starts with it rather than being asked ([TRUST-23]).
+//! starts with it rather than being asked ([TRUST-23]). So does one begun below the root of a git
+//! worktree when that root was the directory answered about.
 //!
 //! # The one record here that decides what is trusted
 //!
 //! Every other record under `~/.bravebot` decides whether somebody is asked. This one decides what
 //! a session reads as trusted, which is why it covers less than the answer it keeps: the directory
-//! itself and nothing above it, only while that directory is the one that was answered about, and
-//! nothing a session recorded after the answer.
+//! itself and what is below it where it is a git worktree's root, never what is above it, only while
+//! that directory is the one that was answered about, and nothing a session recorded after the
+//! answer.
 //!
 //! # Which directory, and not only which path
 //!
@@ -106,6 +108,71 @@ pub fn record_for(
     Some((Store::new(home, directory), identity))
 }
 
+/// A kept answer that settles a session, and the record it is in.
+///
+/// [`Kept::root`] is the session's own directory where the answer was kept there, and the root of
+/// the git worktree around it where the answer was kept about that ([TRUST-23]).
+///
+/// [TRUST-23]: ../../../docs/specs/trust-map.md
+#[derive(Debug, Clone)]
+pub struct Honoured {
+    /// The record the answer is in.
+    pub store: Store,
+    /// The answer.
+    pub kept: Kept,
+}
+
+/// The kept answer that settles a session started in `directory`, or `None` where it is asked.
+///
+/// An answer about `directory` itself, or failing that one about the root of the git worktree
+/// `directory` is inside ([`worktree_root_above`]). Both go through [`record_for`], so the refusals
+/// of a root and of the home directory apply to the root as they apply to the directory.
+pub fn honoured(home: Option<&Path>, profile: Option<&Path>, directory: &Path) -> Option<Honoured> {
+    let exact = || {
+        let (store, identity) = record_for(home, profile, directory)?;
+        let kept = store.kept(&identity)?;
+        Some(Honoured { store, kept })
+    };
+    exact().or_else(|| honoured_by_root(home, profile, directory))
+}
+
+/// The answer kept about the root of the worktree `directory` is inside, where `directory` is not
+/// that root. Never an answer about a directory above the root.
+pub fn honoured_by_root(
+    home: Option<&Path>,
+    profile: Option<&Path>,
+    directory: &Path,
+) -> Option<Honoured> {
+    let root = worktree_root_above(directory)?;
+    let (store, identity) = record_for(home, profile, &root)?;
+    let kept = store.kept(&identity)?;
+    Some(Honoured { store, kept })
+}
+
+/// The root of the git worktree `directory` is inside, where that root is a directory above it.
+///
+/// The nearest directory from `directory` upward holding a `.git` entry, which is how a nested
+/// repository or a submodule ends the walk at itself: a session started inside one is below its own
+/// root, and an answer about the repository around it is not an answer about it. `None` where
+/// `directory` is itself the root, where no directory above it holds `.git`, and wherever the
+/// answer cannot be told: a directory that cannot be resolved, or an entry whose presence cannot be
+/// read. Only whether the entry exists is read, never what is in it.
+pub fn worktree_root_above(directory: &Path) -> Option<PathBuf> {
+    // Resolved, so the parents walked are the filesystem's and not those a link spells, and the
+    // root found is under the name a turn there resolves directories to.
+    let resolved = std::fs::canonicalize(directory).ok()?;
+    for candidate in resolved.ancestors() {
+        match std::fs::symlink_metadata(candidate.join(".git")) {
+            Ok(_) => {
+                return (candidate != resolved).then(|| candidate.to_path_buf());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
 /// What the filesystem says about a directory that another directory at the same path would not.
 ///
 /// When it was made, to the nanosecond where the filesystem keeps that, and its number on the volume
@@ -156,6 +223,8 @@ pub struct Kept {
     pub session: String,
     /// When, in seconds since the epoch.
     pub at: u64,
+    /// The directory the answer is about.
+    pub root: PathBuf,
 }
 
 /// The record for one working directory.
@@ -213,6 +282,7 @@ impl Store {
                 kept = Some(Kept {
                     session: written.session,
                     at: written.at,
+                    root: self.directory.clone(),
                 });
             }
         }
@@ -374,7 +444,8 @@ mod tests {
             scratch.store("/work").kept(&identity(1)),
             Some(Kept {
                 session: "the-first".to_string(),
-                at: 1_000
+                at: 1_000,
+                root: PathBuf::from("/work"),
             })
         );
     }
@@ -698,5 +769,165 @@ mod tests {
         store.keep(&identity(1), "a-session", 1);
         assert!(store.forget().expect("forgotten"));
         assert!(!store.path().exists(), "an empty record was left behind");
+    }
+
+    /// A repository whose root was answered about, with a package below it and a state directory.
+    struct Checkout {
+        scratch: Scratch,
+        root: PathBuf,
+        package: PathBuf,
+    }
+
+    impl Checkout {
+        fn new(name: &str) -> Self {
+            let scratch = Scratch::new(name);
+            let root = scratch.path.join("repo");
+            let package = root.join("packages").join("api");
+            std::fs::create_dir_all(root.join(".git")).expect("a repository");
+            std::fs::create_dir_all(&package).expect("a package");
+            Self {
+                scratch,
+                root,
+                package,
+            }
+        }
+
+        /// Answered about `directory` as it is now, which a filesystem with no creation time cannot
+        /// do, and then there is nothing to read back.
+        fn remember(&self, directory: &Path) -> Option<()> {
+            let identity = Identity::of(directory)?;
+            Store::new(&self.scratch.path.join("home"), directory)
+                .keep(&identity, "a-session", 5)
+                .then_some(())
+        }
+
+        fn honoured(&self, directory: &Path) -> Option<Honoured> {
+            honoured(Some(&self.scratch.path.join("home")), None, directory)
+        }
+    }
+
+    /// TRUST-23: a session started below the root of a worktree whose root was answered about is not
+    /// asked, and the answer says which directory it is about. A kept answer read only for the exact
+    /// directory asks again for every package.
+    #[test]
+    fn a_directory_below_a_remembered_worktree_root_is_not_asked() {
+        let checkout = Checkout::new("trusted-below-root");
+        if checkout.remember(&checkout.root).is_none() {
+            return;
+        }
+
+        let found = checkout
+            .honoured(&checkout.package)
+            .expect("a package of a remembered repository was asked");
+        let root = std::fs::canonicalize(&checkout.root).expect("resolved");
+        assert_eq!(found.kept.root, root, "the answer named another directory");
+        assert_eq!(found.kept.session, "a-session");
+        assert_eq!(
+            checkout
+                .honoured(&checkout.root)
+                .map(|found| found.kept.root),
+            Some(root),
+            "the root itself stopped being answered"
+        );
+    }
+
+    /// TRUST-23: a git repository inside the remembered one ends the walk at itself, so a session in
+    /// it is asked, whether the repository nested is a directory or a submodule's `.git` file.
+    #[test]
+    fn a_nested_repository_is_asked_about() {
+        let checkout = Checkout::new("trusted-nested-repository");
+        if checkout.remember(&checkout.root).is_none() {
+            return;
+        }
+        let by_directory = checkout.package.join("vendored");
+        std::fs::create_dir_all(by_directory.join(".git")).expect("a nested repository");
+        let by_file = checkout.package.join("submodule");
+        std::fs::create_dir_all(&by_file).expect("a submodule");
+        std::fs::write(by_file.join(".git"), "gitdir: ../../../.git/modules/s\n").expect("a file");
+
+        for nested in [&by_directory, &by_file] {
+            assert!(
+                checkout.honoured(nested).is_none(),
+                "{} was answered for by the repository around it",
+                nested.display()
+            );
+            let below = nested.join("src");
+            std::fs::create_dir_all(&below).expect("below");
+            assert!(
+                checkout.honoured(&below).is_none(),
+                "{} was answered for by the repository around the nested one",
+                below.display()
+            );
+        }
+    }
+
+    /// TRUST-23: a repository deleted and made again at the same path is not the one the answer was
+    /// about, and the packages of the new one are asked.
+    #[test]
+    fn a_repository_made_again_asks_for_its_packages() {
+        let checkout = Checkout::new("trusted-remade-root");
+        let home = checkout.scratch.path.join("home");
+        let Some(identity) = Identity::of(&checkout.root) else {
+            return;
+        };
+        // An answer about the directory that was there, which another one made since is not.
+        let before = Identity {
+            made: identity.made.saturating_sub(10),
+            ..identity
+        };
+        assert!(Store::new(&home, &checkout.root).keep(&before, "an-earlier-clone", 1));
+
+        assert!(
+            checkout.honoured(&checkout.package).is_none(),
+            "an answer about an earlier repository at this path answered for the new one"
+        );
+    }
+
+    /// TRUST-23: the directory above the remembered root is asked, since an answer about one
+    /// repository would otherwise answer for every clone made beside it later. So is a directory
+    /// below a remembered one that is not the root of a worktree.
+    #[test]
+    fn only_a_worktree_root_answers_for_what_is_below_it() {
+        let checkout = Checkout::new("trusted-only-the-root");
+        if checkout.remember(&checkout.root).is_none() {
+            return;
+        }
+        let beside = checkout.scratch.path.join("another-clone");
+        std::fs::create_dir_all(&beside).expect("a directory beside the repository");
+        for above in [checkout.scratch.path.as_path(), beside.as_path()] {
+            assert!(
+                checkout.honoured(above).is_none(),
+                "{} was answered for by a repository below or beside it",
+                above.display()
+            );
+        }
+
+        let plain = checkout.scratch.path.join("plain");
+        let inside = plain.join("inside");
+        std::fs::create_dir_all(&inside).expect("a directory with no repository");
+        if checkout.remember(&plain).is_some() {
+            assert!(
+                checkout.honoured(&inside).is_none(),
+                "an answer about a directory that is no worktree root answered for what is below it"
+            );
+        }
+    }
+
+    /// TRUST-23: where the root found is the home directory or a filesystem root, the answer is
+    /// refused as it is for the directory, so a dotfiles repository in the home answers for nothing
+    /// below it.
+    #[test]
+    fn a_home_that_is_a_worktree_answers_for_nothing_below_it() {
+        let checkout = Checkout::new("trusted-home-is-a-repository");
+        let home = checkout.scratch.path.join("home");
+        let Some(identity) = Identity::of(&checkout.root) else {
+            return;
+        };
+        assert!(Store::new(&home, &checkout.root).keep(&identity, "a-session", 1));
+
+        assert!(
+            super::honoured(Some(&home), Some(&checkout.root), &checkout.package).is_none(),
+            "a repository that is the user's home answered for the directories below it"
+        );
     }
 }

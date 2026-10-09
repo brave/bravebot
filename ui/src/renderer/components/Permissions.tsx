@@ -49,7 +49,7 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
     </section>
     <section className="grant-section">
       <h3>Remembered for this directory</h3>
-      <p className="grant-note">Kept outside this conversation: sessions started in exactly this directory are trusted without asking. Forgetting it makes the next one ask; this conversation keeps its own grants.</p>
+      <p className="grant-note">Kept outside this conversation: sessions started in this directory, or below it where it is the root of a git repository, are trusted without asking. Forgetting it makes the next one ask; this conversation keeps its own grants.</p>
       {grants?.remembered && <RememberedHere kept={grants.remembered} busy={busy} onForget={() => void request('permissions.revoke', { kind: 'remembered' })} />}
       {grants && !grants.remembered && <p className="grant-empty"><Icon name="pin" />No answer is remembered for this directory.</p>}
     </section>
@@ -65,6 +65,7 @@ export function RememberedHere({ kept, busy, onForget }: { kept: KeptTrust; busy
   return <ul className="grant-list"><li className="grant-row">
     <Icon name="pin" /><code>{kept.path}</code>
     <span className="grant-state" data-test="remembered-when">{`Remembered ${ago(kept.at)}`}</span>
+    {kept.root && <span className="grant-state" data-test="remembered-root">{`for ${kept.root}`}</span>}
     <Button size="small" kind="plain-faint" isDisabled={busy} onClick={onForget}>Forget</Button>
   </li></ul>
 }
