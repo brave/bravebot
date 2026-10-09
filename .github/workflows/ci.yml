@@ -39,6 +39,7 @@ jobs:
       rust: ${{ steps.affected.outputs.rust }}
       ui: ${{ steps.affected.outputs.ui }}
       build: ${{ steps.affected.outputs.build }}
+      installers: ${{ steps.affected.outputs.installers }}
       docs: ${{ steps.affected.outputs.docs }}
       npm: ${{ steps.affected.outputs.npm }}
     steps:
@@ -592,10 +593,16 @@ jobs:
   #
   # One job per architecture. The four installers took over sixteen minutes one after another,
   # most of it compressing, and nothing one architecture builds is read by the other.
+  #
+  # On a pull request, only where the scripts that build, fuse or check an installer changed. A
+  # change to the lockfile or a manifest still runs the cross-builds, which link every target, but
+  # is no longer packaged and installed on Windows before it lands: main and every tag build and
+  # install both, so a dependency that breaks the installed app is found on main instead.
   windows-installers:
     name: Windows installer (${{ matrix.arch }})
     runs-on: windows-latest
-    needs: cross-build
+    needs: [changes, cross-build]
+    if: ${{ !cancelled() && needs.cross-build.result == 'success' && needs.changes.outputs.installers != 'false' }}
     strategy:
       fail-fast: false
       matrix:
