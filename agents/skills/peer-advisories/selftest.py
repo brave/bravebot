@@ -233,10 +233,10 @@ class Work(unittest.TestCase):
         self.assertEqual(pa.outcomes(self.work)[1][A]["fields"]["severity"], "low")
         self.vet(A, verdict="affected", issue=dict(self.issue, security=False))
         self.check(A, verdict="confirmed", security=True, severity="high")
-        self.assertEqual(pa.labels_for(pa.outcomes(self.work)[1][A]["fields"]), ["area/tools", "bug"])
+        self.assertEqual(pa.labels_for(pa.outcomes(self.work)[1][A]["fields"]), ["area/tools", "bug", "release-blocking"])
         self.vet(A, verdict="affected", issue=self.issue)
         self.check(A, verdict="confirmed", security=False)
-        self.assertEqual(pa.labels_for(pa.outcomes(self.work)[1][A]["fields"]), ["area/tools", "bug"])
+        self.assertEqual(pa.labels_for(pa.outcomes(self.work)[1][A]["fields"]), ["area/tools", "bug", "release-blocking"])
 
     def test_a_draft_has_no_em_dash_pings_nobody_and_does_not_name_the_machine(self):
         self.vet(A, verdict="affected", issue=self.issue)
@@ -244,7 +244,7 @@ class Work(unittest.TestCase):
         quiet(pa.draft, self.args())
         drafts = json.loads((self.work / "drafts.json").read_text())
         self.assertEqual(len(drafts), 1)
-        self.assertEqual(drafts[0]["labels"], ["area/tools", "bug", "needs-security-review", "security", "severity/high"])
+        self.assertEqual(drafts[0]["labels"], ["area/tools", "bug", "needs-security-review", "release-blocking", "security", "severity/high"])
         self.assertNotIn("\u2014", drafts[0]["title"])
         self.assertEqual(drafts[0]["key"], "shell")
         body = Path(drafts[0]["body_file"]).read_text()
@@ -318,7 +318,7 @@ class Work(unittest.TestCase):
             gh=gh,
             helper=pa.load_poster().helper,
             post=post,
-            existing_labels=lambda repo: set(labels or ["bug", "security", "needs-security-review", "severity/high", "area/tools"]),
+            existing_labels=lambda repo: set(labels or ["bug", "security", "needs-security-review", "severity/high", "area/tools", "release-blocking"]),
             assignable=lambda repo, login: True,
             already_filed=lambda repo, draft: duplicate,
             JITTER=(0.0, 0.0),

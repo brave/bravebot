@@ -125,6 +125,26 @@ An area is a fact about the issue rather than a judgement, so it can be applied 
 it. Apply none where the answer is not clear from the issue: an area guessed wrong is worse than
 one missing, because it routes the issue away from the person who would have found it.
 
+## Release-blocking and blocked
+
+`release-blocking` says the issue has to be resolved before the next release. `make bump-version`
+lists every open issue with it, with links, and asks before going on. The peer-advisories skill
+applies it to everything it files, since each is a defect another agent had and this tree may share.
+Remove it when the release no longer waits on the issue. The label is red, and a person creates it:
+
+```bash
+gh label create release-blocking --repo brave/bravebot --color d73a4a \
+  --description "Must be resolved before the next release"
+```
+
+`blocked/needs-planning` says the issue cannot be started until something else is decided or
+done. It is a statement about the issue's own progress and does not affect a release. It was
+previously named `blocked`:
+
+```bash
+gh label edit blocked --repo brave/bravebot --name blocked/needs-planning
+```
+
 ## Security
 
 `security` says the issue is about the guarantee this repository exists for, and it goes on with a
@@ -152,6 +172,10 @@ axis: an unread finding does not belong in anybody's queue.
 The [peer-advisories skill](../../agents/skills/peer-advisories/SKILL.md), which files what
 another coding agent's published advisory finds here, applies the same set, except that
 `security`, `needs-security-review` and `severity` go only on a finding about the guarantee.
+
+Every issue the peer-advisories skill files also carries `release-blocking`, described in
+[the next section](#release-blocking-and-blocked). The skill refuses to post while that label does
+not exist.
 
 The [peer-features skill](../../agents/skills/peer-features/SKILL.md), which files what other
 coding agents document that bravebot lacks or could do measurably better, applies a kind, an `area`
