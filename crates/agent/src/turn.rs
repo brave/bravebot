@@ -4850,6 +4850,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // Three shapes, and which one a result takes was decided by the tool that
                         // produced it and the kernel that labelled it, never here.
                         let mut shown_window = false;
+                        // Set where a skill's text was shown, so the result is tagged with it.
+                        let mut skill_shown: Option<String> = None;
                         // Set in each arm below, where the presentation that decides it is in scope.
                         let result_from: Provenance;
                         let body = if let Some(entries) = &output.entries {
@@ -5147,6 +5149,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     // Only a result the planner was shown counts as a window it holds
                                     // (READ-8). A quarantined one put nothing in front of it.
                                     shown_window = true;
+                                    skill_shown = output.skill.clone();
                                     // After the sample rather than in the middle of it, where the
                                     // notice naming what went is: what wrote that notice dropped the
                                     // bytes and does not know the slot they were kept in.
@@ -5419,7 +5422,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // The prose one is tagged, so nothing has to recognise it by the words it opens with.
                         match call.id.as_deref().filter(|_| replayed.is_some()) {
                             Some(id) => {
-                                conversation.push_from(Message::tool_result(id, body), result_from);
+                                let result = Message::tool_result(id, body);
+                                match skill_shown {
+                                    Some(name) => {
+                                        conversation.push_skill_result(result, name, result_from)
+                                    }
+                                    None => conversation.push_from(result, result_from),
+                                }
                                 if shown_window && let Some(window) = output.window.take() {
                                     conversation.shown_read(window);
                                 }

@@ -12669,6 +12669,197 @@ fn a_promoted_skill_name_is_recorded_as_the_models_choice() {
     );
 }
 
+/// COMPACT-17. The result is tagged with the name the catalogue gave the skill, so a compaction
+/// can send it again. A call that loaded nothing is tagged with nothing, whatever name it asked for.
+#[test]
+fn a_skill_the_planner_was_shown_is_tagged_and_a_refused_load_is_not() {
+    use bravebot_agent::conversation::Composed;
+
+    let scratch = Scratch::new("skill-tagged");
+    write_project_skill(&scratch.path, "commit-style", "commit-style", "sign them");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"commit-style"}"#),
+        tool_request("load_skill", r#"{"name":"commit-styles"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("commit this"),
+    )
+    .expect("turn runs");
+
+    let tagged: Vec<&Composed> = conversation
+        .messages()
+        .iter()
+        .filter(|stored| stored.message.tool_call_id.is_some())
+        .filter_map(|stored| stored.composed.as_ref())
+        .collect();
+    assert_eq!(
+        tagged,
+        [&Composed::Skill {
+            name: "commit-style".to_string()
+        }],
+        "one load was shown and one was refused"
+    );
+}
+
+/// COMPACT-17, end to end. A skill loaded in a turn is in the request after the conversation is
+/// compacted, in its own words, and the summariser is not what carries it.
+#[test]
+fn a_skill_loaded_in_a_turn_is_sent_again_when_that_conversation_is_compacted() {
+    use bravebot_agent::conversation::Composed;
+
+    let scratch = Scratch::new("skill-kept");
+    write_project_skill(
+        &scratch.path,
+        "commit-style",
+        "commit-style",
+        "always sign your commits",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"commit-style"}"#),
+        reply_with("understood"),
+        reply_with("they were committing"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("commit this"),
+    )
+    .expect("turn runs");
+    for prompt in ["one", "two", "three", "four"] {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        conversation.push(bravebot_aichat::protocol::Message::assistant("ok"));
+    }
+    let _ = received.recv().expect("first request");
+    let _ = received.recv().expect("second request");
+
+    turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+    )
+    .expect("compacting runs")
+    .expect("there is something to summarise");
+
+    let after_the_summary = &conversation.messages()[1];
+    assert_eq!(
+        after_the_summary.composed,
+        Some(Composed::SkillKept {
+            name: "commit-style".to_string()
+        })
+    );
+    assert!(
+        after_the_summary
+            .message
+            .content
+            .text()
+            .contains("always sign your commits"),
+        "{:?}",
+        after_the_summary.message
+    );
+}
+
+/// COMPACT-17. A skill in a project nobody vouched for is never shown to the planner, so nothing
+/// about it is sent again after a compaction. Text the planner was not shown is not put in front of
+/// it by a summary either.
+#[test]
+fn a_skill_from_an_untrusted_project_is_not_sent_again_when_the_conversation_is_compacted() {
+    use bravebot_agent::conversation::Composed;
+
+    let scratch = Scratch::new("skill-untrusted-kept");
+    write_project_skill(
+        &scratch.path,
+        "commit-style",
+        "commit-style",
+        "always sign your commits",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"commit-style"}"#),
+        reply_with("understood"),
+        reply_with("they were committing"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        Task::new("commit this"),
+    )
+    .expect("turn runs");
+    for prompt in ["one", "two", "three", "four"] {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        conversation.push(bravebot_aichat::protocol::Message::assistant("ok"));
+    }
+    let _ = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("always sign your commits"),
+        "the planner was shown the untrusted skill: {second}"
+    );
+
+    turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        None,
+    )
+    .expect("compacting runs")
+    .expect("there is something to summarise");
+
+    let carried: Vec<&Composed> = conversation
+        .messages()
+        .iter()
+        .filter_map(|stored| stored.composed.as_ref())
+        .filter(|composed| {
+            matches!(
+                composed,
+                Composed::Skill { .. } | Composed::SkillKept { .. }
+            )
+        })
+        .collect();
+    assert!(carried.is_empty(), "{carried:?}");
+    assert!(
+        conversation.messages().iter().all(|stored| !stored
+            .message
+            .content
+            .text()
+            .contains("always sign your commits")),
+        "the untrusted skill's text is in the compacted conversation"
+    );
+}
+
 /// LSP-1: `workspaceSymbol` names no file, so its query is the whole of what the server is asked
 /// to look for, and a field that decides that is routing. Recording it is what separates the
 /// model's choice from the user's, the same way the operation and the path beside it are recorded.

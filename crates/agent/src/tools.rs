@@ -1730,6 +1730,11 @@ pub struct Output {
     ///
     /// Absent where nothing was loaded and where what was loaded named neither.
     pub loaded: Option<(String, crate::skills::RunsAs)>,
+    /// The name of the skill this call loaded, as the catalogue spells it.
+    ///
+    /// Unlike `loaded` it is set for every skill, so the turn can tag the result and a compaction
+    /// can send the skill again (COMPACT-17). The catalogue's own string, never the call's.
+    pub skill: Option<String>,
 }
 
 /// Everything a tool works with that is not the policy.
@@ -2367,6 +2372,8 @@ struct Produced {
     ///
     /// Absent where nothing was loaded and where what was loaded asked for neither.
     loaded: Option<(String, crate::skills::RunsAs)>,
+    /// The name of the skill this call loaded, as the catalogue spells it.
+    skill: Option<String>,
 }
 
 impl Produced {
@@ -2406,6 +2413,7 @@ impl Produced {
             watch: None,
             delegate: Vec::new(),
             loaded: None,
+            skill: None,
         }
     }
 
@@ -2449,6 +2457,7 @@ impl Produced {
             attached: None,
             delegate: Vec::new(),
             loaded: None,
+            skill: None,
         }
     }
 
@@ -3058,6 +3067,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 watch: produced.watch,
                 delegate: produced.delegate,
                 loaded: produced.loaded,
+                skill: produced.skill,
             };
         }
     };
@@ -3241,6 +3251,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         watch: produced.watch,
         delegate: produced.delegate,
         loaded: produced.loaded,
+        skill: produced.skill,
     }
 }
 
@@ -9008,6 +9019,7 @@ fn load_skill<S: Sink>(
         tally(text.lines().count(), "line", "lines")
     });
     let mut produced = Produced::new(skill.body().clone(), skill.origin.clone(), note);
+    produced.skill = Some(skill.name.clone());
     // Carried out rather than acted on here. The rounds after this one are the turn's to ask, and a
     // skill that named neither carries nothing, so a turn holding no answer is a turn with nothing
     // to change.

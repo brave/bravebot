@@ -52,7 +52,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [network-egress.md](network-egress.md) | `NET` | 10 | every request that leaves this process, and what comes back |
 | [backends.md](backends.md) | `BACKEND` | 53 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 11 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama serves, and what of it may be copied here |
-| [compaction.md](compaction.md) | `COMPACT` | 16 | shortening a long conversation into a summary of itself, in the request only |
+| [compaction.md](compaction.md) | `COMPACT` | 17 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 15 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 19 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
