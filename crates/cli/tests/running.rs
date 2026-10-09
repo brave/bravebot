@@ -10444,6 +10444,50 @@ fn a_run_given_no_output_schema_has_a_null_structured_field() {
     assert_eq!(result["structured"], serde_json::Value::Null);
 }
 
+/// CLI-28: a model served through an AWS account is refused before a request is sent, whatever the
+/// roster says, because the Bedrock request has no field to carry the schema.
+#[test]
+fn an_output_schema_is_refused_for_a_model_served_through_bedrock() {
+    let gateway = a_gateway(r#"["tools", "structured_outputs"]"#, |_| {
+        streamed("all done")
+    });
+    let scratch = Scratch::new("cli-running-output-schema-bedrock").with_settings(&format!(
+        r#"{{
+            "provider": {{
+                "amazon-bedrock": {{"options": {{"region": "us-west-2"}}}},
+                "openrouter": {{
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{}/api/v1"}}
+                }}
+            }},
+            "model": "opus"
+        }}"#,
+        gateway.port
+    ));
+    std::fs::write(scratch.path.join("verdict.json"), A_VERDICT_SCHEMA).expect("write the schema");
+
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.extend([
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        &environment,
+        &["--output-schema", "verdict.json", "-p", "judge it"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("--output-schema"), "{stderr}");
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a request was sent by a run that was refused"
+    );
+}
+
 /// CLI-28: a model whose roster row names its parameters and not structured output is refused
 /// before a chat request is sent, and so is a schema outside what is checked.
 #[test]
