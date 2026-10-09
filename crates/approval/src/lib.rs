@@ -382,24 +382,34 @@ pub struct Server<'a> {
     pub summary: &'a str,
     /// The absolute path the server's name resolved to.
     pub program: &'a str,
+    /// The arguments it is started with as one line, empty where there are none.
+    pub arguments: &'a str,
     /// The tree it would index.
     pub workspace: &'a str,
     /// Starting it runs code from the dependency tree with the person's own access.
     pub runs_build_tooling: bool,
+    /// A person declared it, so what starting it runs is not known (LSP-11).
+    pub declared: bool,
 }
 
 /// The lines a language server is read before it is started.
 pub fn server_lines(server: &Server<'_>) -> Vec<String> {
-    vec![
-        printable(server.summary),
-        printable(server.program),
-        t!(server_workspace, workspace = printable(server.workspace)),
-        match server.runs_build_tooling {
-            true => t!(server_build_tooling).to_string(),
-            false => t!(server_reads_only).to_string(),
-        },
-        t!(server_explained).to_string(),
-    ]
+    let mut lines = vec![printable(server.summary), printable(server.program)];
+    if !server.arguments.is_empty() {
+        lines.push(t!(server_arguments, arguments = printable(server.arguments)));
+    }
+    lines.push(t!(server_workspace, workspace = printable(server.workspace)));
+    // What a program a person named runs is not known here, so the prompt says that rather than
+    // that it runs nothing.
+    lines.push(if server.declared {
+        t!(server_declared_unknown).to_string()
+    } else if server.runs_build_tooling {
+        t!(server_build_tooling).to_string()
+    } else {
+        t!(server_reads_only).to_string()
+    });
+    lines.push(t!(server_explained).to_string());
+    lines
 }
 
 /// One tool an MCP server lists.

@@ -1308,8 +1308,10 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         let lines = bravebot_approval::server_lines(&bravebot_approval::Server {
             summary: &request.summary(),
             program: &request.program,
+            arguments: &request.arguments_line(),
             workspace: &request.workspace,
             runs_build_tooling: request.runs_build_tooling,
+            declared: request.declared,
         });
         self.about(Held::Server);
         self.ask(&lines, t!(server_title))
@@ -2580,10 +2582,12 @@ mod tests {
         assert_eq!(
             asked(&mut |asking| {
                 asking.confirm_server(&ServerRequest {
-                    language: "rust",
+                    language: "rust".to_string(),
                     program: "rust-analyzer".to_string(),
+                    args: Vec::new(),
                     workspace: "/work".to_string(),
                     runs_build_tooling: false,
+                    declared: false,
                 });
             }),
             held(Held::Server)

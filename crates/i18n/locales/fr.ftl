@@ -1550,6 +1550,11 @@ server-workspace = pour indexer { $workspace }
 server-build-tooling =
     ceci exécute du code de votre projet et de ses dépendances avec vos propres accès, comme le
     font sa compilation et ses tests. il reste actif pendant cette session.
+server-arguments = avec { $arguments }
+server-declared-unknown =
+    vous avez déclaré ce serveur vous-même, donc ce que son démarrage exécute n'est pas connu :
+    il peut exécuter du code de votre projet et de ses dépendances. il s'exécute avec vos propres
+    accès et reste actif pendant cette session.
 server-reads-only =
     il lit le projet et reste actif pendant cette session. rien n'est écrit dans votre projet.
 server-explained =

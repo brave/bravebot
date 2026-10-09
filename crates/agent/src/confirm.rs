@@ -875,10 +875,13 @@ impl FetchRequest {
 /// [LSP-5]: ../../../docs/specs/tools/lsp.md
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerRequest {
-    /// The language this server answers about, in the words a person reads.
-    pub language: &'static str,
+    /// The language this server answers about, in the words a person reads: a name from the table, or
+    /// the name a person gave the declaration.
+    pub language: String,
     /// The binary, resolved to an absolute path, so what is approved is what runs.
     pub program: String,
+    /// The arguments it is started with, so the whole command is what is shown.
+    pub args: Vec<String>,
     /// The workspace it will index.
     pub workspace: String,
     /// Whether starting it runs code the project or its dependencies carry.
@@ -887,10 +890,36 @@ pub struct ServerRequest {
     /// macros execute, for TypeScript the `tsserver.js` the workspace carries, and for Python the
     /// `.pth` files of the environment on `PATH`. That is the part of LSP-5 that has to be said out
     /// loud rather than left inside the phrase "with your own access".
+    ///
+    /// Meaningless where `declared` is set: what a program a person named runs is not known, and the
+    /// prompt says so rather than saying it runs none.
     pub runs_build_tooling: bool,
+    /// Whether a person's own declaration chose this server rather than the table (LSP-11).
+    pub declared: bool,
 }
 
 impl ServerRequest {
+    /// The arguments as one line a person can read back into the list that was started.
+    ///
+    /// An argument holding a space, a quote or a control character is written quoted and escaped,
+    /// so `--cmd "a b"` and `--cmd a b`, which start different commands, do not read alike.
+    pub fn arguments_line(&self) -> String {
+        let plain = |argument: &str| {
+            !argument.is_empty()
+                && argument
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.,:/=@%+".contains(c))
+        };
+        self.args
+            .iter()
+            .map(|argument| match plain(argument) {
+                true => argument.clone(),
+                false => format!("{argument:?}"),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     /// A short description for a prompt line.
     pub fn summary(&self) -> String {
         format!("start the {} language server", self.language)

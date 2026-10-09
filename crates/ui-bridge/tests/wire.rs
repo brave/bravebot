@@ -1108,10 +1108,12 @@ fn a_fetch_from_a_metadata_service_says_so_across_the_bridge() {
 fn a_server_prompt_carries_what_would_run_and_whether_it_builds() {
     use bravebot_agent::confirm::ServerRequest;
     let request = ServerRequest {
-        language: "Rust",
+        language: "Rust".into(),
         program: "/home/someone/.cargo/bin/rust-analyzer".into(),
+        args: Vec::new(),
         workspace: "/home/someone/project".into(),
         runs_build_tooling: true,
+        declared: false,
     };
 
     assert_eq!(
@@ -1120,8 +1122,11 @@ fn a_server_prompt_carries_what_would_run_and_whether_it_builds() {
             "request": 5,
             "language": "Rust",
             "program": "/home/someone/.cargo/bin/rust-analyzer",
+            "args": [],
+            "argumentsLine": "",
             "workspace": "/home/someone/project",
             "runsBuildTooling": true,
+            "declared": false,
             "summary": "start the Rust language server",
         })
     );
@@ -1130,12 +1135,28 @@ fn a_server_prompt_carries_what_would_run_and_whether_it_builds() {
             6,
             &ServerRequest {
                 runs_build_tooling: false,
-                ..request
+                ..request.clone()
             }
         )["runsBuildTooling"],
         false,
         "a server that builds nothing was said to build"
     );
+
+    // LSP-11: a server a person declared carries its arguments and says it was declared, so the card
+    // can say that what starting it runs is not known.
+    let declared = wire::server_request(
+        7,
+        &ServerRequest {
+            language: "clangd".into(),
+            program: "/usr/bin/clangd".into(),
+            args: vec!["--background-index".into()],
+            declared: true,
+            ..request
+        },
+    );
+    assert_eq!(declared["declared"], true);
+    assert_eq!(declared["args"], json!(["--background-index"]));
+    assert_eq!(declared["argumentsLine"], "--background-index");
 }
 
 /// Every step crosses, in order and unshortened, because the answer covers the whole plan

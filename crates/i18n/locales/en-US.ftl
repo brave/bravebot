@@ -1785,6 +1785,11 @@ server-workspace = to index { $workspace }
 server-build-tooling =
     this runs code from your project and its dependencies with your own access, the way
     building or testing the project does. it stays running for this session.
+server-arguments = with { $arguments }
+server-declared-unknown =
+    you declared this server yourself, so what starting it runs is not known: it may run code
+    from your project and its dependencies. it runs with your own access, and stays running for
+    this session.
 server-reads-only =
     it reads the project and stays running for this session. nothing is written to your
     project.

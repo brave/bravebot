@@ -1043,8 +1043,10 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             bravebot_approval::server_lines(&bravebot_approval::Server {
                 summary: text("summary"),
                 program: text("program"),
+                arguments: text("argumentsLine"),
                 workspace: text("workspace"),
                 runs_build_tooling: data["runsBuildTooling"].as_bool() == Some(true),
+                declared: data["declared"].as_bool() == Some(true),
             })
             .join("\n"),
         ),
@@ -1292,10 +1294,12 @@ mod tests {
         );
 
         let server = ServerRequest {
-            language: "rust",
+            language: "rust".into(),
             program: "/bin/rust-analyzer".into(),
+            args: vec!["--log=error".into()],
             workspace: "/w".into(),
             runs_build_tooling: true,
+            declared: true,
         };
         let (_, _, text) = shown("server", crate::wire::server_request(3, &server));
         assert_eq!(
@@ -1303,8 +1307,10 @@ mod tests {
             bravebot_approval::server_lines(&bravebot_approval::Server {
                 summary: &server.summary(),
                 program: &server.program,
+                arguments: &server.arguments_line(),
                 workspace: &server.workspace,
                 runs_build_tooling: true,
+                declared: true,
             })
             .join("\n")
         );

@@ -906,10 +906,12 @@ fn every_kind_of_question_is_refused_in_its_own_shape() {
 
 fn a_server() -> bravebot_agent::confirm::ServerRequest {
     bravebot_agent::confirm::ServerRequest {
-        language: "Rust",
+        language: "Rust".into(),
         program: "/home/someone/.cargo/bin/rust-analyzer".into(),
+        args: Vec::new(),
         workspace: "/home/someone/project".into(),
         runs_build_tooling: true,
+        declared: false,
     }
 }
 

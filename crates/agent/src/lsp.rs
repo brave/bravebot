@@ -27,7 +27,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
-use bravebot_lsp::{Answer, Location, LspResult, Operation, Servers};
+use bravebot_lsp::{Answer, BuildTooling, Declared, Location, LspResult, Operation, Servers};
 pub use bravebot_lsp::{Language, Roster};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -45,6 +45,8 @@ use std::sync::{Arc, Mutex};
 pub struct LanguageServers {
     servers: Arc<Mutex<Servers>>,
     root: PathBuf,
+    /// `~/.bravebot` itself, where a person declares servers of their own (LSP-11).
+    state: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for LanguageServers {
@@ -77,6 +79,40 @@ fn resolve_program(program: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// The servers a person declared in their own directory, in name order.
+///
+/// The state directory is the only place read. A workspace holding an `lsp.json`, a `.lsp.json` or a
+/// `.github/lsp.json` is not looked at, because a file a checkout carries is a file the agent can
+/// write, and a declaration is a command to run (LSP-11, SERVERS-1).
+///
+/// `None` for a file that cannot be read, which leaves what was declared as it was: a file caught
+/// half written is not a person taking every declaration out, and treating it as one would stop the
+/// servers they approved and ask again once it is whole.
+fn declared_in(state: Option<&Path>) -> Option<Vec<Declared>> {
+    let Some(state) = state else {
+        return Some(Vec::new());
+    };
+    let read = bravebot_config::lsp::Declarations::read(state).ok()?;
+    Some(
+        read.servers
+            .into_iter()
+            .map(|server| Declared {
+                digest: server.digest().to_string(),
+                name: server.name().to_string(),
+                command: server.command().to_string(),
+                args: server.args().to_vec(),
+                extensions: server.extensions().clone(),
+                env: server
+                    .env()
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect(),
+                initialization_options: server.initialization_options().cloned(),
+            })
+            .collect(),
+    )
+}
+
 impl LanguageServers {
     /// Build the set for a workspace.
     ///
@@ -98,12 +134,13 @@ impl LanguageServers {
             // provider blocks in force can change during a session.
             servers: Arc::new(Mutex::new(Servers::new(
                 root.clone(),
-                state,
+                state.clone(),
                 resolve_program,
                 incognito,
                 bravebot_config::scrub::withheld,
             ))),
             root,
+            state,
         }
     }
 
@@ -125,6 +162,7 @@ impl LanguageServers {
         Self {
             servers: Arc::clone(&self.servers),
             root: self.root.clone(),
+            state: self.state.clone(),
         }
     }
 
@@ -149,15 +187,22 @@ impl LanguageServers {
         // A run that panicked mid-question leaves the lock poisoned and the map whole: a server is
         // in it only once it has started.
         let mut servers = self.servers.lock().unwrap_or_else(|held| held.into_inner());
+        // Read at each question, so a declaration edited during a session is the one the next
+        // question meets, and is asked about as the new declaration it is (LSP-11).
+        if let Some(declared) = declared_in(self.state.as_deref()) {
+            servers.declare(declared);
+        }
         if servers.running() != 0 {
             workspace.mark_rewind_gap(crate::rewind::CoverageGap::LanguageServer);
         }
         servers.ask(policy, question, &mut |starting| {
             let request = ServerRequest {
-                language: starting.language.as_str(),
+                language: starting.language.to_string(),
                 program: starting.resolved.display().to_string(),
+                args: starting.args.to_vec(),
                 workspace: starting.workspace.display().to_string(),
-                runs_build_tooling: starting.runs_build_tooling,
+                runs_build_tooling: starting.build_tooling == BuildTooling::Runs,
+                declared: starting.declared,
             };
             if confirmer.confirm_server(&request) != Decision::Approve {
                 return false;
@@ -903,8 +948,8 @@ mod tests {
                 path: "notes.txt".into(),
             },
             LspError::NoBinary {
-                language: bravebot_lsp::Language::Rust,
-                program: "rust-analyzer",
+                language: bravebot_lsp::Language::Rust.into(),
+                program: "rust-analyzer".into(),
             },
         ] {
             let said = error.to_string();
