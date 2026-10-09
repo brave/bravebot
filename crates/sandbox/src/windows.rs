@@ -773,7 +773,14 @@ mod tests {
     /// policy is otherwise one this backend applies, so the refusal is the only reason.
     #[test]
     fn a_policy_refusing_a_read_is_refused_rather_than_applied() {
-        let policy = a_policy_this_backend_applies().deny_read("/workspace/credentials");
+        let workspace = std::path::PathBuf::from(if cfg!(windows) {
+            r"C:\workspace"
+        } else {
+            "/workspace"
+        });
+        let policy = a_policy_this_backend_applies()
+            .allow_read(&workspace)
+            .deny_read(workspace.join("credentials"));
 
         let refusal = refusal_for(&policy).expect("a read refusal is not enforceable here");
 

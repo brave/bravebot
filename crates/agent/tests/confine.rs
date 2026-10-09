@@ -3,17 +3,51 @@
 //! the places that hold a credential.
 //!
 //! Each test skips where this machine cannot apply a profile, which includes a suite run from
-//! inside another profile.
+//! inside another profile. On Windows a test does not skip: a machine that cannot create a
+//! container profile fails them, since a job that confined nothing must not report green.
 
 use bravebot_agent::confine::Confinement;
 use bravebot_agent::exec;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::command::Plan;
 use bravebot_sandbox::network::Network;
+#[cfg(unix)]
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// `path` with its links followed, spelled as a session directory is: on Windows without the
+/// `\\?\` prefix `canonicalize` adds, which a command line cannot carry.
+fn resolved(path: &Path) -> PathBuf {
+    let path = path.canonicalize().expect("a canonical path");
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(ordinary) if cfg!(windows) => PathBuf::from(ordinary),
+        _ => path,
+    }
+}
+
+/// A line that prints `file`. Windows runs `cmd.exe`, a native program: Git's `cat` is an MSYS
+/// program, which expects a POSIX layer a container does not hold.
+fn cat(file: impl std::fmt::Display) -> String {
+    if cfg!(windows) {
+        format!("cmd /c type '{file}'")
+    } else {
+        format!("cat '{file}'")
+    }
+}
+
+/// A line that makes `file`, or on Windows a directory of that name, where there is none.
+fn touch(file: impl std::fmt::Display) -> String {
+    if cfg!(windows) {
+        format!("cmd /c mkdir '{file}'")
+    } else {
+        format!("touch '{file}'")
+    }
+}
 
 /// A session directory, a second one beside it that the session was not opened on, and a home
 /// directory holding a credential of each kind, all under the build directory.
@@ -38,6 +72,7 @@ impl Places {
         let home = top.join("home");
         for (path, contents) in [
             (".aws/credentials", "aws secret\n"),
+            (".bravebot/gateway-keys.json", "gateway secret\n"),
             (".ssh/id_ed25519", "ssh secret\n"),
             (".ssh/id_ed25519.pub", "ssh public\n"),
             (".ssh/config", "ssh config\n"),
@@ -49,9 +84,9 @@ impl Places {
             std::fs::write(file, contents).expect("home file");
         }
         Self {
-            session: session.canonicalize().expect("canonical session"),
-            beside: beside.canonicalize().expect("canonical beside"),
-            home: home.canonicalize().expect("canonical home"),
+            session: resolved(&session),
+            beside: resolved(&beside),
+            home: resolved(&home),
         }
     }
 
@@ -79,9 +114,19 @@ impl Places {
     }
 }
 
+#[cfg(unix)]
 fn can_confine() -> bool {
     bravebot_sandbox::base::Prelude::current().is_some()
         && bravebot_sandbox::confinement_works_here()
+}
+
+/// `confinement_works_here` starts `/bin/true`, which is not a Windows program, so it cannot say
+/// whether a container can be created here and is not asked.
+#[cfg(windows)]
+fn can_confine() -> bool {
+    bravebot_sandbox::for_current_platform()
+        .expect("a container profile can be created on this machine");
+    true
 }
 
 /// The regression it rejects, on a platform that lists what a program reaches: confinement passed
@@ -94,7 +139,7 @@ fn a_confined_program_cannot_read_a_file_outside_the_session() {
         return;
     }
     let places = Places::new("read");
-    let line = format!("cat {}", places.beside.join("outside.txt").display());
+    let line = cat(places.beside.join("outside.txt").display());
 
     let control = places.run(&line, None);
     let confined = places.run(&line, Some(&places.confinement()));
@@ -255,10 +300,10 @@ fn a_confined_program_reads_and_writes_inside_the_session() {
     let places = Places::new("inside");
     let confinement = places.confinement();
 
-    let read = places.run("cat inside.txt", Some(&confinement));
-    let wrote = places.run("touch made.txt", Some(&confinement));
+    let read = places.run(&cat("inside.txt"), Some(&confinement));
+    let wrote = places.run(&touch("made.txt"), Some(&confinement));
 
-    assert_eq!(read.stdout, "inside\n");
+    assert_eq!(read.stdout, "inside\n", "{read:?}");
     assert!(wrote.ended_well, "{wrote:?}");
     assert!(places.session.join("made.txt").exists());
 }
@@ -272,12 +317,14 @@ fn a_confined_program_cannot_write_outside_the_session() {
     }
     let places = Places::new("write");
     let target = places.beside.join("planted.txt");
+    let control = places.run(&touch("control.txt"), Some(&places.confinement()));
 
-    let ran = places.run(
-        &format!("touch {}", target.display()),
-        Some(&places.confinement()),
+    let ran = places.run(&touch(target.display()), Some(&places.confinement()));
+
+    assert!(
+        control.ended_well && places.session.join("control.txt").exists(),
+        "the same command could not write inside the session, so a refusal outside it means nothing: {control:?}"
     );
-
     assert!(!ran.ended_well, "{ran:?}");
     assert!(!target.exists());
 }
@@ -291,18 +338,28 @@ fn a_program_left_running_is_confined_as_well() {
     }
     let places = Places::new("background");
     let target = places.beside.join("planted.txt");
-    let plan = places.plan(&format!("touch {}", target.display()));
-    let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
-
-    let mut job = exec::start_steps(steps, &places.session, None, Some(&places.confinement()))
-        .expect("the job starts");
-    for _ in 0..200 {
-        if job.ended() {
-            break;
+    let finished = |line: &str| {
+        let plan = places.plan(line);
+        let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
+        let mut job = exec::start_steps(steps, &places.session, None, Some(&places.confinement()))
+            .expect("the job starts");
+        for _ in 0..200 {
+            if job.ended() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+        job
+    };
 
+    let mut control = finished(&touch("control.txt"));
+    let control_ended = control.ended();
+    let mut job = finished(&touch(target.display()));
+
+    assert!(
+        control_ended && places.session.join("control.txt").exists(),
+        "a job could not write inside the session, so a refusal outside it means nothing"
+    );
     assert!(job.ended(), "the job did not finish");
     assert!(!target.exists(), "the job wrote outside the session");
     assert_ne!(job.codes(), [Some(0)], "the write succeeded");
@@ -319,6 +376,7 @@ fn can_close_the_network() -> bool {
 /// What is observed is the listener's accept, not the program's exit status: a program that is
 /// refused and one that finds nothing listening exit alike, so only a connection that arrived says
 /// the network was reached.
+#[cfg(unix)]
 fn reached_a_listener(
     places: &Places,
     line: impl FnOnce(u16) -> String,
@@ -349,6 +407,7 @@ fn reached_a_listener(
 /// The regression it rejects: a closed setting that is read and never applied, so a program with
 /// no reason to reach the network reaches it. The same line under the open setting is the control
 /// that this machine lets the connection through, without which the refusal means nothing.
+#[cfg(unix)]
 #[test]
 fn a_closed_network_stops_a_program_with_no_reason_to_reach_it() {
     if !can_close_the_network() {
@@ -368,6 +427,7 @@ fn a_closed_network_stops_a_program_with_no_reason_to_reach_it() {
 /// The regression it rejects: the closed setting taking egress from the stages it exists to leave
 /// it with. A `git ls-remote` carries the remote scope and `curl` exists to fetch, and both reach
 /// the listener with the network closed.
+#[cfg(unix)]
 #[test]
 fn a_closed_network_keeps_a_remote_stage_and_curl_reaching_it() {
     if !can_close_the_network() {
@@ -427,7 +487,6 @@ fn a_platform_that_cannot_close_the_network_refuses_the_stage() {
 
 /// The lists a person writes, as the command line and the settings file hand them over: each entry a
 /// spelling and nothing else.
-#[cfg(unix)]
 fn written(
     allow_read: &[&str],
     deny_read: &[&str],
@@ -802,4 +861,83 @@ fn a_stage_with_no_egress_is_given_no_proxy() {
         proxy_variable(&places, "printenv HTTPS_PROXY", Some(&closed)),
         control
     );
+}
+
+/// The regression it rejects: a `denyRead` or `denyWrite` entry under a session directory being
+/// dropped on a platform that cannot subtract from a grant, so the stage starts and the program
+/// reads and writes the file the person denied. SANDBOX-25 says such a stage is not started.
+#[cfg(windows)]
+#[test]
+#[ignore = "exposes #1898: a deny entry is resolved with the verbatim prefix and the grants are not, so no entry is judged to be under a grant"]
+fn a_denied_entry_under_the_session_stops_the_stage() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("filesystem-deny-windows");
+    std::fs::write(places.session.join("secret.env"), "VALUE=1\n").expect("a file");
+    let listed =
+        places
+            .confinement()
+            .with_filesystem(&written(&[], &["secret.env"], &[], &["secret.env"]));
+
+    let refused = exec::run_plan_observed(
+        &places.plan("cat secret.env"),
+        &Cancel::new(),
+        exec::LIMIT,
+        None,
+        None,
+        Some(&listed),
+        &mut |_| Ok(()),
+    );
+
+    assert!(
+        matches!(&refused, Err(exec::ExecError::NotConfined { .. })),
+        "the stage started: {refused:?}"
+    );
+}
+
+/// The regression it rejects: the credential table skipped on Windows, so a session opened on the
+/// home directory grants the directories that hold a key. The home directory's own files are the
+/// control that the session is granted at all.
+#[cfg(windows)]
+#[test]
+#[ignore = "exposes #1899: the Windows run base names no credential location, so a session grant over the home directory covers them"]
+fn a_session_opened_on_the_home_directory_is_refused_the_credential_locations() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("home-session");
+    let confinement = Confinement::here(vec![places.home.clone()], None, Some(&places.home))
+        .expect("a platform with a base");
+    let read = |row: &str| {
+        let line = cat(places.home.join(row).display());
+        let plan = bravebot_agent::cmdline::compile(&line, &places.home, None, &mut |_, _| Ok(()))
+            .unwrap_or_else(|error| panic!("`{line}` should compile: {error}"));
+        exec::run_plan_observed(
+            &plan,
+            &Cancel::new(),
+            exec::LIMIT,
+            None,
+            None,
+            Some(&confinement),
+            &mut |_| Ok(()),
+        )
+        .unwrap_or_else(|error| panic!("`{line}` should start: {error}"))
+    };
+
+    assert!(
+        read(".gitconfig").ended_well,
+        "the home directory is granted"
+    );
+    for row in [
+        ".bravebot\\gateway-keys.json",
+        ".ssh\\id_ed25519",
+        ".aws\\credentials",
+    ] {
+        let ran = read(row);
+        assert!(
+            !ran.ended_well && !ran.stdout.contains("secret"),
+            "{row} was read: {ran:?}"
+        );
+    }
 }
