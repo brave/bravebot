@@ -10154,6 +10154,70 @@ mod tests {
             assert!(session.watching().is_none());
         }
 
+        fn thirty_lines_returned() -> bravebot_agent::report::Returned {
+            let lines: Vec<String> = (0..30).map(|n| format!("out {n}")).collect();
+            bravebot_agent::report::Returned {
+                lines: lines[..5].to_vec(),
+                total: 30,
+                from_the_end: false,
+                whole: lines,
+            }
+        }
+
+        /// SCROLL-10: a delegate's calls do not expand, so a long result returned while the
+        /// driver reports for a delegate keeps only its glimpse and holds nothing for expansion.
+        #[test]
+        fn a_delegates_long_result_is_not_held_for_expansion() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.finish_activity(Activity::running("Read", "f").done("30 lines"));
+            session.returned(thirty_lines_returned());
+
+            let delegates = session.delegates();
+            let kept = delegates[0]
+                .lines
+                .iter()
+                .find_map(|entry| entry.returned.as_ref())
+                .expect("the delegate's call lost its glimpse");
+            assert_eq!(kept.whole, kept.lines, "a delegate's result was held whole");
+            assert_eq!(kept.total, 30);
+            assert_eq!(session.expandable_lines, 0);
+        }
+
+        /// SCROLL-10: the key expands nothing while a delegate is the row the view is on, even
+        /// when the last frame had a call in the rows on the screen that would otherwise expand.
+        #[test]
+        fn expanding_does_nothing_while_a_delegate_is_watched() {
+            let mut session = Session::new("none");
+            session.finish_activity(Activity::running("Read", "f").done("30 lines"));
+            session.returned(thirty_lines_returned());
+            let id = spawn(&mut session, "reader", "find the parser");
+            session.delegate_finished(id, "answered".to_string(), false, None);
+            session.reporting_for(None);
+            session.laid = Laid {
+                width: 80,
+                height: 10,
+                rows: 40,
+                expandable: vec![(32, 38, 0)],
+                ..Laid::default()
+            };
+
+            assert!(session.watch());
+            assert!(session.watched_delegate().is_some());
+            session.toggle_expanded(|session| session.laid.clone());
+            assert!(
+                !session.transcript[0].expanded,
+                "a call expanded under a watched delegate"
+            );
+
+            session.stop_watching();
+            session.toggle_expanded(|session| session.laid.clone());
+            assert!(
+                session.transcript[0].expanded,
+                "the fixture's call was not one the key expands"
+            );
+        }
+
         /// Which delegate is the question a person has when several are going, and a view that
         /// opened straight into one of them would answer a question they had not asked.
         #[test]
