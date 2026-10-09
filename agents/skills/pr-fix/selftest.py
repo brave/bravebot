@@ -89,7 +89,22 @@ def test_only_a_whole_marker_line_starts_or_ends_a_conflict():
     assert pr_fix.marker_ranges(text) == [(2, 6)], pr_fix.marker_ranges(text)
 
 
-def world(root):
+def sign_head(cwd):
+    """Replace HEAD with the same commit carrying a signature header; verifying one needs a key, telling one is there does not."""
+    raw = subprocess.run(
+        ["git", "cat-file", "commit", "HEAD"], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout
+    headers, message = raw.split("\n\n", 1)
+    signature = "gpgsig -----BEGIN SSH SIGNATURE-----\n selftest\n -----END SSH SIGNATURE-----"
+    forged = f"{headers}\n{signature}\n\n{message}"
+    sha = subprocess.run(
+        ["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+        cwd=cwd, check=True, capture_output=True, text=True, input=forged,
+    ).stdout.strip()
+    git("reset", "-q", "--hard", sha, cwd=cwd)
+
+
+def world(root, signed=False):
     """brave/bravebot and a fork as bare repositories, a clone of both, and a conflicting PR."""
     brave, fork, seed, clone = (root / name for name in ("brave.git", "fork.git", "seed", "bravebot"))
     git("init", "-q", "--bare", "-b", "main", str(brave), cwd=root)
@@ -106,6 +121,8 @@ def world(root):
     git("checkout", "-q", "-b", "feature", cwd=seed)
     (seed / "a.txt").write_text("from the pull request\n")
     git("commit", "-q", "-am", "the pull request", cwd=seed)
+    if signed:
+        sign_head(seed)
     git("push", "-q", str(fork), "feature", cwd=seed)
     git("checkout", "-q", "main", cwd=seed)
     (seed / "a.txt").write_text("from main\n")
@@ -331,6 +348,60 @@ def test_a_push_leaves_out_what_was_not_committed():
         code, out = quietly(pr_fix.push, pr())
         assert code == 1 and "commit them first" in out, out
         assert git("rev-parse", "feature", cwd=fork) == before
+
+
+def test_signed_commits_are_not_replaced_by_unsigned_ones():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, fork = world(Path(tmp).resolve(), signed=True)
+        quietly(pr_fix.start, pr())
+        tree = pr().tree
+        (tree / "a.txt").write_text("resolved\n")
+        quietly(pr_fix.resume, pr())
+        assert not pr_fix.signed("HEAD", tree), "the rebase could not sign the commit it wrote"
+        before = git("rev-parse", "feature", cwd=fork)
+
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 1 and "update-branch" in out and "unsigned" in out, out
+        assert git("rev-parse", "feature", cwd=fork) == before, "nothing was pushed"
+
+        (tree / "fix.txt").write_text("a fix\n")
+        git("add", "fix.txt", cwd=tree)
+        git("commit", "-q", "-m", "a signed fix", cwd=tree)
+        sign_head(tree)
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 1, "a signed head over an unsigned rebased commit still drops the author's signature"
+        assert git("rev-parse", "feature", cwd=fork) == before
+
+        git("reset", "-q", "--hard", "HEAD~1", cwd=tree)
+        sign_head(tree)
+        (tree / "fix.txt").write_text("a fix\n")
+        git("add", "fix.txt", cwd=tree)
+        git("commit", "-q", "-m", "a signed fix", cwd=tree)
+        sign_head(tree)
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 0, out
+        assert git("rev-parse", "feature", cwd=fork) == git("rev-parse", "HEAD", cwd=tree)
+
+        (tree / "other.txt").write_text("unsigned\n")
+        git("add", "other.txt", cwd=tree)
+        git("commit", "-q", "-m", "an unsigned fix", cwd=tree)
+        pushed = git("rev-parse", "feature", cwd=fork)
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 1, "an unsigned commit is not added to a signed pull request"
+        assert git("rev-parse", "feature", cwd=fork) == pushed
+
+
+def test_an_unsigned_pull_request_is_pushed_unsigned():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, fork = world(Path(tmp).resolve())
+        quietly(pr_fix.start, pr())
+        tree = pr().tree
+        (tree / "a.txt").write_text("resolved\n")
+        quietly(pr_fix.resume, pr())
+        assert not pr_fix.signed(pr().tip, tree)
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 0, out
+        assert git("rev-parse", "feature", cwd=fork) == git("rev-parse", "HEAD", cwd=tree)
 
 
 def test_a_fix_committed_on_top_is_pushed_without_rewriting_the_pull_request():
