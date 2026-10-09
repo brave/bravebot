@@ -579,6 +579,49 @@ mod tests {
         assert!(face_fits(width + (avatar::WIDTH + FACE_GAP.len()) as u16));
     }
 
+    fn opening_lines(width: u16) -> Vec<Line<'static>> {
+        lines_with_network(
+            "kernel-enforced",
+            "premium available",
+            bravebot_sandbox::network::Network::Open,
+            false,
+            width,
+            24,
+        )
+    }
+
+    /// The opening screen itself draws the face, painted, beside every row of the mark, and drops
+    /// it for a width that fits the mark alone.
+    #[test]
+    fn the_opening_screen_draws_the_face_beside_the_mark_and_drops_it_when_narrow() {
+        let mark_only = (INDENT.len() + mark_width()) as u16;
+        for (width, with_face) in [(WIDE, true), (mark_only, false)] {
+            let screen = opening_lines(width);
+            let mut painted = false;
+            for row in LOGO {
+                let line = screen
+                    .iter()
+                    .find(|line| line.to_string().ends_with(row))
+                    .unwrap_or_else(|| panic!("no line ends in the mark row {row:?}"));
+                let text = line.to_string();
+                let lead = text.chars().count() - row.chars().count();
+                if with_face {
+                    assert_eq!(
+                        lead,
+                        INDENT.len() + avatar::WIDTH + FACE_GAP.len(),
+                        "{text:?}"
+                    );
+                    painted |= line.spans[1..=avatar::WIDTH]
+                        .iter()
+                        .any(|span| matches!(span.style.fg, Some(Color::Rgb(..))));
+                } else {
+                    assert_eq!(lead, INDENT.len(), "{text:?}");
+                }
+            }
+            assert_eq!(painted, with_face);
+        }
+    }
+
     /// A request for no colour gets no painted face.
     #[test]
     fn the_face_takes_no_colour_where_none_was_asked_for() {
