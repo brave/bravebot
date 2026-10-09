@@ -55,6 +55,13 @@ do what the flag is named and warned about for. A record of command lines somebo
 remembered past a session ([tools/run.md](tools/run.md)) is not read here either, and for this same
 reason.
 
+A trust answer is not an allow rule, though both are kept in the home directory. It approves no
+effect: it says which files are the person's own, so the planner may read them, and it covers one
+directory the person answered about. A run therefore opens trusting its working directory when the
+person typed `--trust-workspace` or kept an answer that settles a session there
+([TRUST-23](trust-map.md#TRUST-23), [TRUST-26](trust-map.md#TRUST-26)), and says so for the kept
+answer. Writing stays refused without the flag above.
+
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
 `verified-by: bravebot_agent::turn::a_turn_with_nobody_to_ask_reads_no_record`
@@ -475,8 +482,9 @@ against one.
 `--add-dir <path>` opens a directory outside the working one for the length of the run, and may be
 given more than once. An absolute path that exists, is a directory, and is not already inside the
 working one is opened; anything else is refused by name and the run stops before the turn. The
-run's trust map stays empty, so a file read there is read on the same footing as the project's own
-files: nothing vouched for it. A write there is refused as any other write in an unattended run is,
+run's trust map holds nothing for it, so a file read there is read on the same footing as the
+project's own files without an answer about them: nothing vouched for it. `--trust-workspace` covers
+the working directory alone. A write there is refused as any other write in an unattended run is,
 and the flag in CLI-1 lifts that exactly as it does elsewhere.
 
 **Why.** A headless task pointed at one checkout often needs to read another, and an absolute path
@@ -486,9 +494,9 @@ cannot be done at all.
 Vouching is a separate grant, and it is the one an unattended run cannot make. The interactive
 command of the same name records that a person vouched for the directory, which it can do because a
 person typed it in a session whose map already holds their answer about the directory they are
-working in. A run nobody is watching holds no such answer, its own working directory included, so a
-rule trusting the tree named on the command line would leave it more trusted than the tree the run
-works in. Reaching a directory is what the work needs; trusting what is in it is not.
+working in. A run nobody is watching holds no such answer unless the person gave one for its working
+directory (`--trust-workspace`, or a kept answer), so a rule trusting the tree named on the command
+line would leave it more trusted than the tree the run works in. Reaching a directory is what the work needs; trusting what is in it is not.
 
 Stopping rather than carrying on, because the two audiences differ: a session says the path was not
 opened and leaves the person to retype it, and a script that carried on would fail somewhere further

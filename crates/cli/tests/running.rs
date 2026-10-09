@@ -5917,6 +5917,185 @@ fn a_run_refuses_a_definition_only_an_untrusted_checkout_holds_and_says_it_count
     );
 }
 
+/// A project holding `notes.md`, and a gateway whose model asks to read it and then says it is done.
+///
+/// The model reads the notes only for a prompt asking it to, so a run with another prompt is a
+/// plain exchange that a later run can carry on from. The words in the file reach the second
+/// request when the run trusts the file, and a reference to them takes their place when it does
+/// not.
+fn a_project_whose_notes_the_model_reads(name: &str) -> (Gateway, Scratch, PathBuf) {
+    let gateway = a_gateway(r#"["tools"]"#, |body| {
+        if !body.contains("read the notes") {
+            return answered("hello")(body);
+        }
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"read_file",
+                        "arguments":serde_json::json!({"path": "notes.md"}).to_string()}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    });
+    let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+    std::fs::write(cwd.join("notes.md"), "THE-WORDS-IN-THE-PROJECT-NOTES").expect("write notes");
+    (gateway, scratch, cwd)
+}
+
+/// Whether the planner was handed the words of the file: a request carrying a tool result that
+/// holds them. A quarantined file's words go to the classifier a processor runs and not to the
+/// planner, so a request without a tool result is not the planner's.
+///
+/// Fails where no request carried a tool result at all, since the planner then never saw what the
+/// read returned either way and the answer would be a no.
+fn the_planner_saw_the_notes(gateway: &Gateway) -> bool {
+    let mut sent = Vec::new();
+    while let Ok(request) = gateway.asked.recv_timeout(Duration::from_secs(2)) {
+        sent.push(request);
+    }
+    assert!(
+        sent.iter()
+            .any(|request| request.contains(r#""role":"tool""#)),
+        "the read's result never reached the planner: {sent:?}"
+    );
+    sent.iter().any(|request| {
+        request.contains(r#""role":"tool""#) && request.contains("THE-WORDS-IN-THE-PROJECT-NOTES")
+    })
+}
+
+/// TRUST-26. The flag trusts the working directory, so a file in it reaches the planner as its own
+/// words, and it keeps no answer for later runs.
+#[test]
+fn a_run_given_the_workspace_flag_reads_a_project_file_as_trusted_and_writes_no_record() {
+    let (gateway, scratch, cwd) = a_project_whose_notes_the_model_reads("cli-running-trust-flag");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--trust-workspace", "-p", "read the notes"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the trusted file did not reach the planner"
+    );
+    assert!(
+        !scratch.path.join(".bravebot").join("trusted").exists(),
+        "the flag kept an answer for later runs"
+    );
+}
+
+/// TRUST-26. A run carrying on an earlier session keeps the map that session recorded and adds the
+/// working directory to it, so the flag trusts a file the earlier session left untrusted. The
+/// continuation without the flag is the control: it reads the file quarantined. Each continues a
+/// session of its own, since a session that already holds the read would answer from it.
+#[test]
+fn a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted() {
+    let (gateway, scratch, cwd) =
+        a_project_whose_notes_the_model_reads("cli-running-trust-flag-continued");
+    let earlier = || {
+        let run = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--json", "-p", "hello"],
+        );
+        let (stdout, stderr) = said(&run);
+        assert!(run.status.success(), "{stderr}");
+        session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"))
+    };
+    let (for_the_control, for_the_flag) = (earlier(), earlier());
+    assert_ne!(for_the_control, for_the_flag);
+    let _ = requests(&gateway);
+
+    let without = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--resume", &for_the_control, "-p", "read the notes"],
+    );
+    let (_, stderr) = said(&without);
+    assert!(without.status.success(), "{stderr}");
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "the continued run trusted a file nothing vouched for"
+    );
+
+    let with = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--trust-workspace",
+            "--resume",
+            &for_the_flag,
+            "-p",
+            "read the notes",
+        ],
+    );
+    let (_, stderr) = said(&with);
+    assert!(with.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the flag did not trust the working directory of the continued run"
+    );
+}
+
+/// TRUST-26, the control: the same run without the flag is the quarantine the issue describes.
+#[test]
+fn a_run_without_the_workspace_flag_reads_a_project_file_quarantined() {
+    let (gateway, scratch, cwd) =
+        a_project_whose_notes_the_model_reads("cli-running-trust-flag-absent");
+
+    let output = bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "read the notes"]);
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "an untrusted file reached the planner as its own words"
+    );
+}
+
+/// TRUST-23. An answer a person kept about the directory trusts a run there as the flag would, and
+/// the run says so on stderr.
+#[test]
+fn a_one_shot_run_in_a_directory_with_a_kept_answer_reads_a_project_file_as_trusted() {
+    let (gateway, scratch, cwd) = a_project_whose_notes_the_model_reads("cli-running-trust-kept");
+    let Some(identity) = bravebot_agent::trusted::Identity::of(&cwd) else {
+        // A filesystem that cannot say when a directory was made keeps no answer to read.
+        return;
+    };
+    let store = bravebot_agent::trusted::Store::new(&scratch.path.join(".bravebot"), &cwd);
+    assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+    let output = bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "read the notes"]);
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the kept answer did not trust the file"
+    );
+    assert!(
+        stderr.contains("you said to remember it") && stderr.contains("/forget-trust"),
+        "the run did not say it was trusting a kept answer: {stderr}"
+    );
+}
+
 /// CLI-19 in the request sent. `--system-prompt` stands in for the opening and for nothing else,
 /// so what teaches the planner to treat a tool's output as data is still there, and
 /// `--append-system-prompt` is the last of the standing sources. The same run without either is

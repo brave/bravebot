@@ -72,6 +72,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 |---|---|
 | `--file <path>` | include a workspace file as **trusted** context; repeatable |
 | `--add-dir <path>` | make a directory outside the working one reachable for this run; repeatable ([below](#--add-dir-path)) |
+| `--trust-workspace` | trust the working directory for this run, writing no record ([below](#--trust-workspace)) |
 | `-p`, `--print` | non-interactive; reads piped stdin as quarantined context |
 | `--plain` | a session in lines, taking nothing from the terminal ([below](#--plain)) |
 | `--mode <turn\|manifest>` | how a one-shot is run; `turn` (the default) decides step by step, `manifest` plans the whole run first ([below](#--mode-turnmanifest)) |
@@ -227,6 +228,21 @@ key in `~/.bravebot/settings.json`. Nothing is recorded, so the next run is back
 `--effort` with no word after it, a blank one, or a word that is no level is refused and the run
 stops, naming the levels it takes. A level the model in force reads none of is not sent, as it is
 not from any other source.
+
+## `--trust-workspace`
+
+```sh
+bravebot --trust-workspace -p "summarise what src/ does"
+```
+
+Starts the run from what a yes to the startup question writes: the working directory and everything
+beneath it is trusted, so the planner can read project files. Nothing is written to
+`~/.bravebot/trusted`, and directories opened with `--add-dir` stay untrusted. A run carrying on an
+earlier session keeps that session's trust and adds the working directory to it.
+
+It is a flag and nothing else: no settings file, environment variable or file in the directory turns
+it on. A run in a directory about which a session kept an answer (`r`), or inside the git worktree whose
+root it was kept about, opens trusting the directory without the flag and says so on stderr.
 
 ## `--add-dir <path>`
 

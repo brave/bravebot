@@ -366,7 +366,7 @@ fn main() -> ExitCode {
         // would otherwise be caught below as unknown options.
         Some(
             "-p" | "--print" | "--mode" | "--model" | "--advisor" | "--effort" | "--file"
-            | "--add-dir" | "--trace" | "--json" | "--json-stream",
+            | "--add-dir" | "--trust-workspace" | "--trace" | "--json" | "--json-stream",
         ) => run_task(&args, skip_permissions, agent, prompts),
         Some("doctor") if args.get(1).map(String::as_str) == Some("--sandbox-check") => {
             match args.len() {
@@ -994,6 +994,7 @@ fn print_help() {
     for (flags, description) in [
         ("--file <path>", t!(cli_option_file)),
         ("--add-dir <path>", t!(cli_option_add_dir)),
+        ("--trust-workspace", t!(cli_option_trust_workspace)),
         ("--settings <path>", t!(cli_option_settings)),
         ("--run-network <open|closed>", t!(cli_option_run_network)),
         ("--sandbox <mode>", t!(cli_option_sandbox)),
@@ -1267,6 +1268,9 @@ struct Invocation {
     effort: Option<bravebot_session::store::Effort>,
     /// Directories outside the working one that this run may reach into.
     directories: Vec<String>,
+    /// Whether the person typed `--trust-workspace`, which gives this run the map a yes to the
+    /// startup question writes (TRUST-26).
+    trust_workspace: bool,
     trace: bool,
     print: bool,
     /// Whether stdout carries the result object rather than the prose reply.
@@ -1288,6 +1292,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut advisor = None;
     let mut effort = None;
     let mut directories = Vec::new();
+    let mut trust_workspace = false;
     let mut trace = false;
     let mut print = false;
     let mut json = false;
@@ -1362,6 +1367,12 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 }
                 _ => return Err(t!(cli_add_dir_needs_a_path).to_string()),
             },
+            // Repeats are one flag, as with `--incognito`: asking twice for what is already so is
+            // no mistake worth refusing a run over.
+            "--trust-workspace" => {
+                trust_workspace = true;
+                index += 1;
+            }
             "--trace" => {
                 trace = true;
                 index += 1;
@@ -1410,6 +1421,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         advisor,
         effort,
         directories,
+        trust_workspace,
         trace,
         print,
         json,
@@ -1439,6 +1451,7 @@ fn run_task(
         advisor,
         effort,
         directories,
+        trust_workspace,
         trace,
         print,
         json: as_json,
@@ -1870,10 +1883,18 @@ fn run_task(
             // What a continued session vouched for comes back with it, as it does in a session
             // (SESSION-1). The programs it vouched for do not (CLI-1): the run is handed none, and
             // the record keeps the ones it holds.
-            let trust = continued
+            let trust = match continued
                 .as_ref()
                 .and_then(|record| record.trust_map(workspace.root()))
-                .unwrap_or_else(|| bravebot_agent::workspace::trust_store(workspace.root()));
+            {
+                Some(mut carried) => {
+                    if trust_workspace {
+                        carried.trust(".");
+                    }
+                    carried
+                }
+                None => unattended_trust(workspace.root(), trust_workspace),
+            };
             let mut conversation = continued
                 .as_ref()
                 .map(|record| bravebot_agent::Conversation::restored(record.conversation.clone()))
@@ -1924,7 +1945,7 @@ fn run_task(
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            bravebot_agent::workspace::trust_store(workspace.root()),
+            unattended_trust(workspace.root(), trust_workspace),
             &Cancel::new(),
         ),
     };
@@ -3274,21 +3295,66 @@ fn skill_keys_unread(
         .collect()
 }
 
+/// The trust map a one-shot run opens with (TRUST-23, TRUST-26).
+///
+/// What a yes to the startup question writes where the person typed `--trust-workspace`, or where
+/// they kept an answer that settles a session here (TRUST-23): one about this directory or the
+/// root of the git worktree around it. Both are their own gesture, so neither is a guess made in
+/// their name (CLI-1). Anything else is the empty map. Nothing is written, and a kept answer is
+/// said on stderr, since a run nobody watches is where it would otherwise go unnoticed.
+fn unattended_trust(root: &Path, flagged: bool) -> bravebot_core::TrustStore {
+    let (trust, notice) = unattended_trust_with(
+        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
+        root,
+        flagged,
+    );
+    if let Some(notice) = notice {
+        eprintln!("{}", t!(cli_notice, notice = notice));
+    }
+    trust
+}
+
+/// [`unattended_trust`] with the state directory and the home given, and the notice returned.
+fn unattended_trust_with(
+    home: Option<&Path>,
+    profile: Option<&Path>,
+    root: &Path,
+    flagged: bool,
+) -> (bravebot_core::TrustStore, Option<String>) {
+    if flagged {
+        return (
+            bravebot_tui::trust_prompt::trusting_the_workspace(root),
+            None,
+        );
+    }
+    match bravebot_agent::trusted::honoured(home, profile, root) {
+        Some(bravebot_agent::trusted::Honoured { store, kept }) => (
+            bravebot_tui::trust_prompt::trusting_the_workspace(root),
+            Some(t!(
+                cli_trusting_kept,
+                directory = kept.root.display().to_string(),
+                when = bravebot_session::sessions::how_long_ago(kept.at),
+                path = store.path().display().to_string()
+            )),
+        ),
+        None => (bravebot_agent::workspace::trust_store(root), None),
+    }
+}
+
 /// The trust map a session starting in this directory would open with, without asking anybody.
 ///
 /// A remembered yes answers here as it answers there (TRUST-23); anything else is a directory
 /// nothing has vouched for, which is what an unanswered question leaves. Nothing is written and
 /// nobody is asked: `doctor` changes nothing and puts no question.
 fn trust_already_answered(root: &Path) -> bravebot_core::TrustStore {
-    let kept = bravebot_agent::trusted::honoured(
+    unattended_trust_with(
         bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
         root,
-    );
-    match kept {
-        Some(_) => bravebot_tui::trust_prompt::trusting_the_workspace(root),
-        None => bravebot_agent::workspace::trust_store(root),
-    }
+        false,
+    )
+    .0
 }
 
 /// Report whether configuration is usable, without revealing the signing key.
@@ -6231,6 +6297,147 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    /// TRUST-26. The flag gives the run the map a yes writes: the working directory and what is
+    /// under it. A directory `--add-dir` opened sits beside it and is not covered, and neither is
+    /// anything above it.
+    #[test]
+    fn a_flagged_run_trusts_its_directory_and_nothing_outside_it() {
+        let scratch = Scratch::new("trust-flag-covers");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+
+        let (trust, notice) = unattended_trust_with(None, None, &project, true);
+
+        assert!(trust.is_trusted("."), "the working directory");
+        assert!(trust.is_trusted("src/lib.rs"), "a file under it");
+        assert!(
+            !trust.is_trusted(&beside.join("notes.md").display().to_string()),
+            "a directory opened beside the working one"
+        );
+        assert!(!trust.is_trusted("/etc/passwd"), "a path outside it");
+        assert_eq!(
+            notice, None,
+            "the person typed the flag, so nothing is said"
+        );
+    }
+
+    /// TRUST-26. The flag answers for this run alone, and the run without it keeps the empty map.
+    #[test]
+    fn a_flagged_run_writes_no_record_and_says_nothing() {
+        let scratch = Scratch::new("trust-flag-writes-nothing");
+        let project = scratch.directory("project");
+        let state = scratch.directory("state");
+
+        let (_, notice) = unattended_trust_with(Some(&state), None, &project, true);
+        assert_eq!(notice, None);
+        assert!(
+            !state.join("trusted").exists(),
+            "the flag kept an answer for later sessions"
+        );
+
+        let (trust, notice) = unattended_trust_with(Some(&state), None, &project, false);
+        assert!(!trust.is_trusted("."), "nothing was said and nothing kept");
+        assert_eq!(notice, None);
+    }
+
+    /// TRUST-23. A kept answer trusts a one-shot run in that directory and the run says where it
+    /// came from, since nobody is watching it open.
+    #[test]
+    fn a_kept_answer_trusts_a_one_shot_run_there_and_says_so() {
+        let scratch = Scratch::new("trust-kept-one-shot");
+        let project = scratch.directory("project");
+        let state = scratch.directory("state");
+        let Some(identity) = bravebot_agent::trusted::Identity::of(&project) else {
+            // A filesystem that cannot say when a directory was made keeps no answer to read.
+            return;
+        };
+        let store = bravebot_agent::trusted::Store::new(&state, &project);
+        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+        let (trust, notice) = unattended_trust_with(Some(&state), None, &project, false);
+
+        assert!(trust.is_trusted("."), "the kept answer did not apply");
+        assert!(trust.is_trusted("src/lib.rs"), "it did not cover the tree");
+        assert!(!trust.is_trusted("/etc/passwd"), "it covered too much");
+        let notice = notice.expect("a kept answer was used without saying so");
+        assert!(
+            notice.contains(&project.display().to_string())
+                && notice.contains(&store.path().display().to_string()),
+            "the notice names neither the directory nor the file: {notice}"
+        );
+    }
+
+    /// TRUST-23. A one-shot run started in a package of a repository whose root has a kept answer is
+    /// settled by it, as a session there is, trusts its own directory and says which one answered.
+    #[test]
+    fn a_kept_answer_about_the_repository_root_trusts_a_one_shot_run_in_a_package() {
+        let scratch = Scratch::new("trust-kept-root-one-shot");
+        let repository = scratch.directory("repository");
+        let package = scratch.directory("repository/packages/app");
+        let state = scratch.directory("state");
+        std::fs::create_dir_all(repository.join(".git")).expect("make the repository");
+        let Some(identity) = bravebot_agent::trusted::Identity::of(&repository) else {
+            return;
+        };
+        let store = bravebot_agent::trusted::Store::new(&state, &repository);
+        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+        let (trust, notice) = unattended_trust_with(Some(&state), None, &package, false);
+
+        assert!(trust.is_trusted("."), "the root's answer did not apply");
+        assert!(trust.is_trusted("src/lib.rs"), "it did not cover the tree");
+        let notice = notice.expect("a kept answer was used without saying so");
+        assert!(
+            notice.contains(&repository.display().to_string())
+                && !notice.contains(&package.display().to_string()),
+            "the notice does not name the root that answered, and only it: {notice}"
+        );
+    }
+
+    /// TRUST-23. The answer is about one directory: another at a different path, and a new
+    /// directory made at the same path, are not covered, and a run there trusts nothing.
+    #[test]
+    fn a_kept_answer_about_another_directory_trusts_a_one_shot_run_nowhere() {
+        let scratch = Scratch::new("trust-kept-elsewhere");
+        let project = scratch.directory("project");
+        let other = scratch.directory("other");
+        let state = scratch.directory("state");
+        let Some(identity) = bravebot_agent::trusted::Identity::of(&project) else {
+            return;
+        };
+        let store = bravebot_agent::trusted::Store::new(&state, &project);
+        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+        let (trust, notice) = unattended_trust_with(Some(&state), None, &other, false);
+        assert!(!trust.is_trusted("."), "another directory was trusted");
+        assert_eq!(notice, None);
+
+        std::fs::remove_dir_all(&project).expect("remove the directory answered about");
+        std::fs::create_dir_all(&project).expect("make another at the same path");
+        let (trust, notice) = unattended_trust_with(Some(&state), None, &project, false);
+        assert!(!trust.is_trusted("."), "a remade directory was trusted");
+        assert_eq!(notice, None);
+    }
+
+    /// TRUST-26. The flag is a switch on the command line that may be repeated, and its absence
+    /// leaves the run without it.
+    #[test]
+    fn the_workspace_flag_is_read_from_the_command_line_and_may_repeat() {
+        let typed = |arguments: &[&str]| {
+            parse_invocation(&args(arguments))
+                .expect("parses")
+                .trust_workspace
+        };
+        assert!(typed(&["--trust-workspace", "-p", "do a thing"]));
+        assert!(typed(&["-p", "do a thing", "--trust-workspace"]));
+        assert!(typed(&[
+            "--trust-workspace",
+            "--trust-workspace",
+            "do a thing"
+        ]));
+        assert!(!typed(&["-p", "do a thing"]));
     }
 
     /// The mode composes rather than leads: what is left after taking it out is the invocation the
