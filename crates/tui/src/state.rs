@@ -8465,7 +8465,7 @@ impl Session {
         // Between turns nothing reads the token, so the stop is carried out here and the row says
         // so. The planner is told at the next turn's first round, as it is of any finish (RUN-27).
         if asked
-            && !self.turn_in_flight
+            && !self.a_turn_is_running()
             && let Some(kept) = &self.kept_jobs
         {
             let stopped = kept.stop_requested();

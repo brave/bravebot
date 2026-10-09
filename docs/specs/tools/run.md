@@ -1763,6 +1763,8 @@ the wrong target, could only stop the whole turn and lose the rest of its work.
 `verified-by: bravebot_tui::state::a_stop_of_a_job_that_is_not_running_says_so_and_sets_nothing`
 `verified-by: bravebot_tui::app::jobs_stop_typed_mid_turn_sets_the_token_of_the_job_it_names`
 `verified-by: bravebot_agent::turn::a_stop_asked_for_between_turns_ends_the_job_and_the_next_turn_says_who_stopped_it`
+`verified-by: bravebot_tui::kept_jobs_tests::a_stop_between_turns_ends_the_program_and_the_row`
+`verified-by: bravebot_tui::kept_jobs_tests::a_stop_during_a_turn_leaves_the_stop_to_the_turn`
 
 <a id="RUN-28"></a>
 ### RUN-28: an entry in a person's list may be a pattern over variable names

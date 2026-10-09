@@ -27384,3 +27384,7 @@ mod undo_tests;
 #[cfg(test)]
 #[path = "credential_mode_tests.rs"]
 mod credential_mode_tests;
+
+#[cfg(test)]
+#[path = "kept_jobs_tests.rs"]
+mod kept_jobs_tests;
