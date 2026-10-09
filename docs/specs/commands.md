@@ -657,8 +657,14 @@ vouches for nothing. Where the diff comes back as a reference, the prompt tells 
 the reference to `spawn_processor` and not to read it another way, so the findings are the
 processor's remark, drawn for the person as untrusted content ([PROC-7](processors.md#PROC-7),
 [PROC-11](processors.md#PROC-11)) and shown to no
-model. The prompt forbids writes, commits, pushes and comments; the tool surface is what enforces
-that, as for every turn, and the prompt asks only. Nothing the driver does branches on the diff,
+model. The prompt also tells the planner to read a `REVIEW.md` in the working directory with
+`read_file`, as the project's account of what to flag or leave alone. That read is an ordinary one
+([READ-1](tools/read-file.md#READ-1)): the planner sees the lines where the trust map vouches for
+the file, and a reference where it does not, in which case the prompt tells it to review without
+the file and not to reach it another way. The prompt reads no file to build itself, and the file
+guides the report without lifting any limit the prompt sets. The prompt forbids writes, commits,
+pushes and comments; the tool surface is what enforces that, as for every turn, and the prompt
+asks only. Nothing the driver does branches on the diff,
 the findings or a verdict: no part of the turn reads them.
 
 A `/review` is a command, so a prompt file or skill of that name is shadowed by it (CMD-17).
@@ -683,6 +689,7 @@ before it is built. This command is the part that needs none of that.
 `verified-by: bravebot_tui::review_command::the_prompt_names_the_target_and_carries_the_focus`
 `verified-by: bravebot_tui::review_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
 `verified-by: bravebot_tui::review_command::the_prompt_sends_a_diff_it_may_not_see_to_a_processor`
+`verified-by: bravebot_tui::review_command::the_prompt_reads_review_md_through_read_file_and_goes_on_without_it_when_hidden`
 
 ## Picking up another session
 
