@@ -2637,6 +2637,10 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
         self.refusing.confirm_mcp_call(request)
     }
 
+    fn confirm_path(&mut self, request: &bravebot_agent::confirm::PathRequest) -> Decision {
+        self.refusing.confirm_path(request)
+    }
+
     fn confirm_move(&mut self, request: &bravebot_agent::confirm::MoveRequest) -> Decision {
         self.refusing.confirm_move(request)
     }

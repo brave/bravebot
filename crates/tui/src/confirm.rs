@@ -9,8 +9,8 @@
 
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
+    ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::reach::Lasting;
@@ -93,6 +93,10 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         ask_mcp_call(self.terminal, request).decision()
+    }
+
+    fn confirm_path(&mut self, request: &PathRequest) -> Decision {
+        ask_path(self.terminal, request).decision()
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -2872,6 +2876,72 @@ fn draw_move(
     pinned::draw(frame, inside, question, scroll, seen)
 }
 
+/// Ask whether programs may reach one more path for the session, blocking until answered.
+pub fn ask_path<B: Backend>(terminal: &mut Terminal<B>, request: &PathRequest) -> Answer {
+    let mut scroll = 0u16;
+    let mut seen = Seen::default();
+    loop {
+        let mut drawn = Drawn::default();
+        if terminal
+            .draw(|frame| drawn = draw_path(frame, request, scroll, &mut seen))
+            .is_err()
+        {
+            return Answer::Reject;
+        }
+
+        match input::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
+                Some(Response::Answer(answer)) => return answer,
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
+                None => continue,
+            },
+            Ok(_) => continue,
+            Err(_) => return Answer::Reject,
+        }
+    }
+}
+
+/// Draw the question of whether programs may reach a path.
+///
+/// The path is what a yes grants, so every row it takes has to have been drawn before a yes is
+/// taken: a path long enough to scroll could otherwise hide the end of it. The reason is the
+/// planner's own text and sits above, pinned, where it cannot push the keys off the screen.
+fn draw_path(
+    frame: &mut ratatui::Frame,
+    request: &PathRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::note(), t!(path_title));
+    let width = inside.width as usize;
+    let muted = Style::default().fg(theme::muted());
+    let shown = request.path.display().to_string();
+
+    let access = match request.write {
+        true => t!(path_writes, path = shown.as_str()),
+        false => t!(path_reads, path = shown.as_str()),
+    };
+    let mut body = indented(access, Style::default().add_modifier(Modifier::BOLD), width);
+    let deciding = body.len();
+    body.extend(indented(
+        t!(path_why, why = request.why.as_str()),
+        muted,
+        width,
+    ));
+    body.push(Line::raw(""));
+    body.extend(indented(t!(path_explained), muted, width));
+    body.push(Line::raw(""));
+    body.extend(indented(t!(path_not_trusted), muted, width));
+
+    let keys = |answerable| vec![answer_keys(t!(path_yes), t!(path_no), answerable)];
+    let question = Question::scrolled(body, deciding, 0, &keys);
+    pinned::draw(frame, inside, question, scroll, seen)
+}
+
 /// Ask whether to remove a checkout something was done in, blocking until answered (CHECKOUT-15).
 ///
 /// Asked with no turn running, so ctrl-c keeps the checkout like a no, and nothing is stopped.
@@ -4074,6 +4144,61 @@ mod tests {
             authority: "elsewhere.example:443".to_string(),
             may_record,
         }
+    }
+
+    fn a_path_request(write: bool) -> PathRequest {
+        PathRequest {
+            path: std::path::PathBuf::from("/opt/toolchain/include"),
+            write,
+            why: "the build reads headers there".to_string(),
+        }
+    }
+
+    fn path_screen(request: &PathRequest, size: (u16, u16), scroll: u16) -> (Vec<String>, Drawn) {
+        pinned_screen(size, |frame| {
+            draw_path(frame, request, scroll, &mut Seen::default())
+        })
+    }
+
+    /// SANDBOX-28: the person is shown the path and whether it is read or written, the planner's
+    /// reason, how long a yes lasts and that it marks nothing trusted.
+    #[test]
+    fn a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do() {
+        let reading = path_screen(&a_path_request(false), (160, 24), 0).0.concat();
+        for shown in [
+            "programs this session starts may read /opt/toolchain/include",
+            "the planner says: the build reads headers there",
+            "Every command the planner runs from now until this session ends",
+            "The directory is not marked trusted",
+            "y Yes, for this session",
+        ] {
+            assert!(reading.contains(shown), "{shown} is not drawn in {reading}");
+        }
+        assert!(!reading.contains("read and write"), "{reading}");
+
+        let writing = path_screen(&a_path_request(true), (160, 24), 0).0.concat();
+        assert!(
+            writing.contains("may read and write /opt/toolchain/include"),
+            "{writing}"
+        );
+    }
+
+    /// SANDBOX-28: a path too long for the box is the thing a yes grants, so a yes is not taken
+    /// until every row of it has been drawn.
+    #[test]
+    fn a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn() {
+        let request = PathRequest {
+            path: std::path::PathBuf::from(format!("/opt/{}/tail", numbered('p', 200).join(" "))),
+            write: false,
+            why: "headers".to_string(),
+        };
+        let (rows, drawn) = path_screen(&request, (80, 24), 0);
+        assert!(!drawn.answerable(), "{}", rows.join("\n"));
+        assert!(
+            box_rows(&rows).iter().any(|row| row.contains("p0000")),
+            "{}",
+            rows.join("\n")
+        );
     }
 
     /// SERVERS-11: the person is shown where the server is declared, where its reply points, and
@@ -8203,7 +8328,7 @@ mod tests {
 
     kinds!(
         Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList, McpCall,
-        Move, Ask,
+        Move, Path, Ask,
     );
 
     /// What a question remembers between its draws: the rows of each kind that have been shown.
@@ -8551,6 +8676,25 @@ mod tests {
             // As for the fetch prompt: the destination's host is pinned, and the move prompt's own
             // tests hold it there.
             Kind::Move => None,
+            Kind::Path => {
+                let words = numbered('p', 260);
+                let request = PathRequest {
+                    path: std::path::PathBuf::from(format!("/opt/{}", words.join(" "))),
+                    write: true,
+                    why: "to build the generated headers".to_string(),
+                };
+                let drawn = request.clone();
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_path(frame, &drawn, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding: words,
+                })
+            }
             // Every answer goes to the planner as an answer, and none of them approves anything.
             Kind::Ask => None,
         }

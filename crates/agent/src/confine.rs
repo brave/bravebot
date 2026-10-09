@@ -48,6 +48,9 @@ pub struct Confinement {
     grants: Vec<Grant>,
     /// The person's own filesystem lists, resolved against this session's directories.
     filesystem: Rules,
+    /// The paths the person let programs reach for this session (SANDBOX-28). Applied before
+    /// `filesystem`, so a denial of the person's still removes them.
+    path_reach: Rules,
     /// What the planner asked this one line to add to every stage that has no assignment in front
     /// of it, from the fixed menu. Empty for every line that asked for nothing.
     requested: Vec<Requested>,
@@ -100,6 +103,7 @@ impl Confinement {
             mode: SandboxMode::Standard,
             grants: Vec::new(),
             filesystem: Rules::none(),
+            path_reach: Rules::none(),
             requested: Vec::new(),
             #[cfg(test)]
             unconfinable: None,
@@ -127,6 +131,23 @@ impl Confinement {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
         self.filesystem = bravebot_sandbox::rules::resolve(lists, self.home.as_deref(), &base);
+        self
+    }
+
+    /// This confinement with the paths the person let programs reach for the session, each judged
+    /// when it was approved (SANDBOX-28).
+    pub fn with_path_reach(mut self, reach: &[crate::workspace::PathReach]) -> Self {
+        let read: Vec<PathBuf> = reach
+            .iter()
+            .filter(|row| !row.write)
+            .map(|row| row.path.clone())
+            .collect();
+        let write: Vec<PathBuf> = reach
+            .iter()
+            .filter(|row| row.write)
+            .map(|row| row.path.clone())
+            .collect();
+        self.path_reach = Rules::granted(&read, &write);
         self
     }
 
@@ -550,6 +571,7 @@ impl Confinement {
         if let Some(scratch) = &self.scratch {
             policy = policy.allow_read(scratch).allow_write(scratch);
         }
+        let policy = self.path_reach.apply(policy);
         self.filesystem.apply(policy).starting_in(directory)
     }
 
@@ -613,6 +635,15 @@ impl Confinement {
                 " The person's own rules also applied: {} allowRead, {} denyRead, {} allowWrite, \
                  {} denyWrite.",
                 rules.allow_read, rules.deny_read, rules.allow_write, rules.deny_write,
+            ),
+        };
+        let requested_paths = self.path_reach.counts();
+        let rules = match requested_paths.allow_read + requested_paths.allow_write {
+            0 => rules,
+            asked => format!(
+                "{rules} The person also let programs reach {asked} path{} through request_path \
+                 this session.",
+                if asked == 1 { "" } else { "s" },
             ),
         };
         if self.reads_the_machine() {
@@ -868,14 +899,17 @@ pub fn stated_to_the_planner(confine_runs: bool, mode: SandboxMode) -> Option<St
 /// Fixed text that ends every profile line, so the line is the same for every failure.
 const CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location such as `~/.ssh`, `~/.aws` \
      or `~/.kube` cannot be added with `/add-dir` or `--add-dir`. Where the mode accepts a \
-     request, a credential scope is how a line reaches one.";
+     request, a credential scope is how a line reaches one. Any other path a command needs is \
+     asked for with the `request_path` tool: the person is asked, and a yes lasts for this \
+     session.";
 
 /// The sentence that names the menu, for the planner, and the person is asked about every time.
 fn requests_menu_sentence() -> String {
     format!(
         "A line that needs more can ask for it with `run`'s `scopes` argument, by name from this \
          list: {}. The person is asked about the line every time, and no answer to it is \
-         remembered.",
+         remembered. A path outside the workspace that a command needs is asked for with the \
+         `request_path` tool instead, and a yes lasts for the session.",
         bravebot_sandbox::scope::Requested::MENU.join(", ")
     )
 }
@@ -1921,6 +1955,46 @@ mod tests {
                 step.program
             );
         }
+    }
+
+    /// SANDBOX-28: a path the person let programs reach is read, or read and written, by every
+    /// stage; the control is the same confinement without it. The person's own deny for a path they
+    /// also allowed is still in the policy, so it is not lifted by the grant, and the profile says
+    /// how many paths were granted and not which.
+    #[test]
+    fn a_path_the_person_let_programs_reach_is_held_and_their_own_deny_still_applies() {
+        let granted = [
+            ("/data/in", false),
+            ("/data/out", true),
+            ("/data/kept", true),
+        ]
+        .map(|(path, write)| crate::workspace::PathReach {
+            path: PathBuf::from(path),
+            write,
+            why: "the build needs it".to_string(),
+        });
+        let plain = reading_confinement(Prelude::Linux, &["/work/project"]);
+        let held = plain
+            .clone()
+            .with_path_reach(&granted)
+            .with_filesystem(&listed(&[], &[], &["/data/kept"]));
+        let cat = step("/bin/cat", &["file"]);
+
+        let before = plain.policy(&cat, Path::new("/work/project"), &[]);
+        let after = held.policy(&cat, Path::new("/work/project"), &[]);
+
+        assert!(!writes(&before, "/data/out") && !reads(&before, "/data/in"));
+        assert!(reads(&after, "/data/in") && !writes(&after, "/data/in"));
+        assert!(writes(&after, "/data/out") && reads(&after, "/data/out"));
+        assert!(
+            !writes(&after, "/data/kept"),
+            "a grant lifted the person's own deny"
+        );
+        assert!(reads(&after, "/data/kept"));
+        let said = held.profile(&[&cat]);
+        assert!(said.contains("3 path"), "{said}");
+        assert!(!said.contains("/data/out"), "{said}");
+        assert!(!plain.profile(&[&cat]).contains("also let programs reach"));
     }
 
     /// The prompt's description and the failure sentence say how many entries are in force and never

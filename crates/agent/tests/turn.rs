@@ -2433,6 +2433,14 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
             bravebot_agent::confirm::CallDecision::reject()
         }
 
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(
+            &mut self,
+            _request: &bravebot_agent::confirm::PathRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
         fn confirm_move(
             &mut self,
             _request: &bravebot_agent::confirm::MoveRequest,
@@ -2825,6 +2833,14 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -4665,6 +4681,14 @@ impl bravebot_agent::Confirmer for SaysOnce {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -5778,6 +5802,14 @@ impl bravebot_agent::Confirmer for ChangesTheFileWhenAsked {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -8309,6 +8341,14 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
             _request: &bravebot_agent::confirm::McpCallRequest,
         ) -> bravebot_agent::confirm::CallDecision {
             bravebot_agent::confirm::CallDecision::reject()
+        }
+
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(
+            &mut self,
+            _request: &bravebot_agent::confirm::PathRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
         }
 
         fn confirm_move(
@@ -13539,6 +13579,14 @@ impl bravebot_agent::Confirmer for AnswersWith {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -13941,6 +13989,10 @@ struct AskedAboutRuns {
     answers: std::collections::VecDeque<bravebot_agent::RunDecision>,
     writes: bravebot_agent::WriteDecision,
     seen: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::RunRequest>>>,
+    /// What the person is asked about reach to a path, and what they say. A refusal unless a test
+    /// gave a yes.
+    path_answer: bravebot_agent::confirm::Decision,
+    paths: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::PathRequest>>>,
 }
 
 impl AskedAboutRuns {
@@ -13950,7 +14002,16 @@ impl AskedAboutRuns {
             answers: std::collections::VecDeque::new(),
             writes: bravebot_agent::WriteDecision::reject(),
             seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            path_answer: bravebot_agent::confirm::Decision::Reject,
+            paths: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    /// Also lets programs reach the path a request names, for a test whose subject is what a yes
+    /// does.
+    fn approving_paths(mut self) -> Self {
+        self.path_answer = bravebot_agent::confirm::Decision::Approve;
+        self
     }
 
     /// Answers the runs of one turn in order, for a test where the person says different things to
@@ -14048,6 +14109,14 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_path(
+        &mut self,
+        request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.paths.lock().unwrap().push(request.clone());
+        self.path_answer
     }
 
     fn confirm_move(
@@ -17561,6 +17630,14 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -21170,6 +21247,14 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -21643,6 +21728,14 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -32639,6 +32732,14 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -39251,6 +39352,14 @@ impl bravebot_agent::confirm::Confirmer for RemembersWrites {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -40320,6 +40429,14 @@ impl bravebot_agent::confirm::Confirmer for RemembersExposures {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -45837,6 +45954,11 @@ mod spend_limit {
         fn confirm_mcp_call(&mut self, _: &McpCallRequest) -> CallDecision {
             CallDecision::reject()
         }
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(&mut self, _request: &bravebot_agent::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+
         fn confirm_move(&mut self, _: &MoveRequest) -> Decision {
             Decision::Reject
         }
@@ -46293,5 +46415,487 @@ fn a_quarantined_capped_files_result_still_says_it_is_incomplete() {
     assert!(
         second.contains("incomplete"),
         "a capped files result made no claim to a planner that may not read it: {second}"
+    );
+}
+
+// SANDBOX-28: asking the person for reach to a path a program cannot otherwise touch.
+
+/// What a turn that made `calls` in order left behind.
+struct PathTurn {
+    /// The planner's requests after the first, each holding the result of the call before it.
+    results: Vec<String>,
+    /// The first request, which carries the tool list.
+    first: String,
+    workspace: Workspace,
+    trust: bravebot_core::trust::TrustStore,
+    events: Vec<Event>,
+}
+
+/// Places a request for a path is made against: a session, a home that holds the places a request
+/// is refused at, and a directory beside both that a program cannot write unless it was asked for.
+struct PathPlaces {
+    home: PathBuf,
+    beside: PathBuf,
+}
+
+impl PathPlaces {
+    fn new(name: &str) -> Self {
+        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("path-{name}"));
+        let _ = std::fs::remove_dir_all(&top);
+        let home = top.join("home");
+        let beside = top.join("beside");
+        for place in [".ssh", ".bravebot", ".aws", "project"] {
+            std::fs::create_dir_all(home.join(place)).expect("home directory");
+        }
+        std::fs::create_dir_all(&beside).expect("beside directory");
+        Self {
+            home: home.canonicalize().expect("canonical home"),
+            beside: beside.canonicalize().expect("canonical beside"),
+        }
+    }
+
+    fn lands(&self) -> PathBuf {
+        self.beside.join("ran.txt")
+    }
+
+    fn writing_line(&self) -> String {
+        format!("sh -c 'echo x > {}'", self.lands().display())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn path_turn<C: bravebot_agent::Confirmer + Send>(
+    name: &str,
+    places: &PathPlaces,
+    calls: &[(&str, serde_json::Value)],
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: Option<bravebot_core::permissions::Permissions>,
+    confirmer: &mut C,
+) -> PathTurn {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies: Vec<String> = calls
+        .iter()
+        .map(|(tool, arguments)| tool_request_with_usage(tool, &arguments.to_string(), 1, 1))
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut task = Task::new("reach it")
+        .with_profile(Some(places.home.clone()))
+        .with_permission_mode(permission)
+        .with_confined_runs(true)
+        .with_sandbox_mode(mode);
+    if let Some(permissions) = permissions {
+        task = task.with_permissions(permissions);
+    }
+    let mut sink = RecordingSink::new();
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    outcome.outcome.as_ref().expect("the turn runs");
+    let first = received.recv().expect("first request");
+    let results = (0..calls.len())
+        .map(|_| received.recv().expect("a later request"))
+        .collect();
+    PathTurn {
+        results,
+        first,
+        workspace,
+        trust: outcome.decisions.trust,
+        events: sink.events().to_vec(),
+    }
+}
+
+/// What the tool said, without the line that names it.
+fn path_result(body: &str) -> &str {
+    let said = message_from(body, "Result of request_path");
+    said.split_once("\\n\\n").map_or(said, |(_, result)| result)
+}
+
+fn asking_for(path: &std::path::Path, write: bool) -> (&'static str, serde_json::Value) {
+    (
+        "request_path",
+        serde_json::json!({
+            "path": path.display().to_string(),
+            "write": write,
+            "why": "the build writes its output there",
+        }),
+    )
+}
+
+fn running(line: &str) -> (&'static str, serde_json::Value) {
+    ("run", serde_json::json!({ "command": line }))
+}
+
+/// SANDBOX-28: a yes lets a program write the path for the rest of the session. The control is the
+/// same line with no request, which cannot write it; a request for reading alone is the second
+/// control, since reach that was widened past what was asked would let this line write.
+#[test]
+fn a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("write");
+    let turn_with = |name: &str, calls: &[(&str, serde_json::Value)]| {
+        let _ = std::fs::remove_file(places.lands());
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let paths = asked.paths.clone();
+        let turn = path_turn(
+            name,
+            &places,
+            calls,
+            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            None,
+            &mut asked,
+        );
+        let asked = paths.lock().unwrap().clone();
+        (turn, asked, places.lands().exists())
+    };
+
+    let (_, asked, landed) = turn_with("path-write-control", &[running(&places.writing_line())]);
+    assert!(asked.is_empty());
+    assert!(!landed, "the line wrote beside the session with no request");
+
+    let (turn, asked, landed) = turn_with(
+        "path-write-read-only",
+        &[
+            asking_for(&places.beside, false),
+            running(&places.writing_line()),
+        ],
+    );
+    assert_eq!(asked.len(), 1);
+    assert!(!asked[0].write);
+    assert!(
+        path_result(&turn.results[0]).starts_with("approved"),
+        "{}",
+        turn.results[0]
+    );
+    assert!(!landed, "a request to read let the line write");
+
+    let (turn, asked, landed) = turn_with(
+        "path-write-yes",
+        &[
+            asking_for(&places.beside, true),
+            running(&places.writing_line()),
+        ],
+    );
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].path, places.beside);
+    assert!(asked[0].write);
+    assert_eq!(asked[0].why, "the build writes its output there");
+    assert!(landed, "the line did not write after a yes");
+    let held = turn.workspace.path_reach();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].path, places.beside);
+    assert!(held[0].write);
+}
+
+/// SANDBOX-28, TRUST-9: a yes is reach and not trust. The trust map comes back as it went in, and
+/// the trail records the reach under the gate that names it.
+#[test]
+fn a_yes_to_a_path_marks_nothing_trusted_and_is_recorded() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("trail");
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let turn = path_turn(
+        "path-trail",
+        &places,
+        &[asking_for(&places.beside, true)],
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut asked,
+    );
+    assert_eq!(
+        turn.workspace.path_reach().len(),
+        1,
+        "the control: a grant was made"
+    );
+    let before = trusting_the_workspace();
+    assert_eq!(
+        turn.trust.rules().collect::<Vec<_>>(),
+        before.rules().collect::<Vec<_>>()
+    );
+    assert!(!turn.trust.is_trusted(&places.beside.display().to_string()));
+    let at = gate_in(&turn.events, "path_reach");
+    assert!(at.contains("write"), "{at}");
+    assert!(at.contains(&places.beside.display().to_string()), "{at}");
+}
+
+fn gate_in(events: &[Event], gate: &str) -> String {
+    events
+        .iter()
+        .find_map(|event| match event {
+            Event::GatePassed {
+                gate: passed,
+                detail,
+            } if *passed == gate => Some(detail.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no {gate} gate in the trail: {events:?}"))
+}
+
+/// SANDBOX-28: a path an `allowWrite` row is refused at is refused here, and the person is not
+/// asked. `/` and the home directory are too broad, `~/.ssh`, `~/.aws` and `~/.bravebot` hold what
+/// a program must not read, a pattern names more than one path, and a path that is not there
+/// cannot be reached. The control is a path beside the session, which is asked about.
+#[test]
+fn a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("refused");
+    let home = places.home.display().to_string();
+    let refused = [
+        "/".to_string(),
+        "~".to_string(),
+        home.clone(),
+        "~/.ssh".to_string(),
+        format!("{home}/.aws"),
+        "~/.bravebot".to_string(),
+        format!("{home}/.."),
+        format!("{}/*", places.beside.display()),
+        "relative/dir".to_string(),
+        format!("{}/nothing-here", places.beside.display()),
+        format!("{home}/.config"),
+    ];
+    #[cfg(unix)]
+    let refused = {
+        let mut refused = refused.to_vec();
+        let odd = places.beside.join("odd\u{7}name");
+        std::fs::create_dir_all(&odd).expect("a directory with a control character in its name");
+        refused.push(odd.display().to_string());
+        refused
+    };
+    for (at, named) in refused.iter().enumerate() {
+        for write in [false, true] {
+            let mut asked =
+                AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+            let paths = asked.paths.clone();
+            let turn = path_turn(
+                &format!("path-refused-{at}-{write}"),
+                &places,
+                &[asking_for(std::path::Path::new(named), write)],
+                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_agent::PermissionMode::default(),
+                trusting_the_workspace(),
+                None,
+                &mut asked,
+            );
+            let said = path_result(&turn.results[0]);
+            assert!(
+                said.starts_with("refused") || said.starts_with("error"),
+                "{named} (write {write}): {said}"
+            );
+            assert!(
+                paths.lock().unwrap().is_empty(),
+                "{named}: the person was asked"
+            );
+            assert!(
+                turn.workspace.path_reach().is_empty(),
+                "{named}: reach was held"
+            );
+        }
+    }
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let paths = asked.paths.clone();
+    let control = path_turn(
+        "path-refused-control",
+        &places,
+        &[asking_for(&places.beside, false)],
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut asked,
+    );
+    assert_eq!(paths.lock().unwrap().len(), 1, "the control was not asked");
+    assert_eq!(control.workspace.path_reach().len(), 1);
+}
+
+/// SANDBOX-28, TRUST-7: no request is accepted under `off`, which has no profile to add to, or in a
+/// workspace the person declined to trust. The person is not asked and the planner is told in the
+/// same words as for any other refusal to accept one.
+#[test]
+fn a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("modes");
+    for (label, mode, trust) in [
+        (
+            "off",
+            bravebot_sandbox::SandboxMode::Off,
+            trusting_the_workspace(),
+        ),
+        (
+            "untrusted",
+            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_core::trust::TrustStore::new("/work"),
+        ),
+    ] {
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let paths = asked.paths.clone();
+        let turn = path_turn(
+            &format!("path-{label}"),
+            &places,
+            &[asking_for(&places.beside, true)],
+            mode,
+            bravebot_agent::PermissionMode::default(),
+            trust,
+            None,
+            &mut asked,
+        );
+        assert!(
+            path_result(&turn.results[0]).contains("does not accept a request for a path"),
+            "{label}: {}",
+            turn.results[0]
+        );
+        assert!(paths.lock().unwrap().is_empty(), "{label}: asked");
+        assert!(turn.workspace.path_reach().is_empty(), "{label}: held");
+    }
+}
+
+/// SANDBOX-28: a no, and a run with nobody to ask, grant nothing. Bypass is the one way through
+/// without a person, as for a scope. A rule an allow list or a project file could write to say yes
+/// to `request_path` does not answer for the person.
+#[test]
+fn a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("answers");
+    let call = [asking_for(&places.beside, true)];
+
+    let mut declined = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let paths = declined.paths.clone();
+    let mut asking = bravebot_agent::Confining::new(
+        &mut declined,
+        bravebot_agent::PermissionMode::default(),
+        false,
+    );
+    let turn = path_turn(
+        "path-declined",
+        &places,
+        &call,
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut asking,
+    );
+    assert_eq!(paths.lock().unwrap().len(), 1, "a no needs a question");
+    assert!(
+        path_result(&turn.results[0]).starts_with("refused"),
+        "{}",
+        turn.results[0]
+    );
+    assert!(turn.workspace.path_reach().is_empty());
+
+    let turn = path_turn(
+        "path-unattended",
+        &places,
+        &call,
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut bravebot_agent::confirm::Unattended,
+    );
+    assert!(
+        turn.workspace.path_reach().is_empty(),
+        "an unattended run was granted reach"
+    );
+
+    let mut unattended = bravebot_agent::confirm::Unattended;
+    let mut bypass = bravebot_agent::Confining::new(
+        &mut unattended,
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+    );
+    let turn = path_turn(
+        "path-bypass",
+        &places,
+        &call,
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypass,
+    );
+    assert_eq!(
+        turn.workspace.path_reach().len(),
+        1,
+        "the mode that asks nothing did not approve it"
+    );
+
+    let mut declined = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let paths = declined.paths.clone();
+    let turn = path_turn(
+        "path-allow-rule",
+        &places,
+        &call,
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        Some(rules(&[], &[], &["Edit(**)", "Bash(*)", "Read(**)"])),
+        &mut declined,
+    );
+    assert_eq!(
+        paths.lock().unwrap().len(),
+        1,
+        "an allow rule answered for the person"
+    );
+    assert!(turn.workspace.path_reach().is_empty());
+}
+
+/// SANDBOX-28: the tool is on the list a confining turn offers.
+#[test]
+fn the_tool_is_offered_where_runs_are_confined() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("offered");
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let turn = path_turn(
+        "path-offered",
+        &places,
+        &[running("uname")],
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut asked,
+    );
+    assert!(
+        turn.first.contains(r#""name":"request_path""#),
+        "{}",
+        turn.first
     );
 }

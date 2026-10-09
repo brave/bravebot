@@ -611,6 +611,68 @@ pub fn command(typed: &Typed<'_>, argument: &str) -> String {
     allow(&store, typed, argument)
 }
 
+fn path_access(row: &crate::workspace::PathReach) -> String {
+    match row.write {
+        true => t!(reach_access_writes).to_string(),
+        false => t!(reach_access_reads).to_string(),
+    }
+}
+
+/// The rows `/reach paths` lists for the paths the person let programs reach this session, each
+/// numbered as `/reach paths remove <number>` counts them (SANDBOX-28). What `/status` shows, so
+/// the two cannot word a path differently. The planner's reason is not carried: it is the
+/// planner's text and the row is the person's record of what they allowed.
+pub fn requested_paths_listed(held: &[crate::workspace::PathReach]) -> Vec<String> {
+    held.iter()
+        .enumerate()
+        .map(|(at, row)| {
+            t!(
+                path_listed,
+                number = (at + 1).to_string(),
+                access = path_access(row),
+                path = row.path.display().to_string()
+            )
+            .to_string()
+        })
+        .collect()
+}
+
+/// `/reach paths` and `/reach paths remove <number>`, or `None` for an argument that is neither
+/// (SANDBOX-28). Nothing here reads or writes a file: the paths are the workspace's, for the
+/// session.
+pub fn requested_paths_command(
+    workspace: &crate::workspace::Workspace,
+    argument: &str,
+) -> Option<String> {
+    let rest = argument.trim().strip_prefix("paths")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let rest = rest.trim();
+    if rest.is_empty() {
+        let held = requested_paths_listed(&workspace.path_reach());
+        return Some(match held.is_empty() {
+            true => t!(path_none).to_string(),
+            false => held.join("\n"),
+        });
+    }
+    let Some(number) = rest.strip_prefix("remove") else {
+        return Some(t!(path_usage).to_string());
+    };
+    let Ok(number) = number.trim().parse::<usize>() else {
+        return Some(t!(path_usage).to_string());
+    };
+    Some(match workspace.end_path_reach(number) {
+        Some(ended) => t!(
+            path_removed,
+            access = path_access(&ended),
+            path = ended.path.display().to_string()
+        )
+        .to_string(),
+        None => t!(path_refused_number, number = number.to_string()).to_string(),
+    })
+}
+
 fn listing(held: &[Grant]) -> String {
     if held.is_empty() {
         return t!(reach_none).to_string();
@@ -752,6 +814,60 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
 mod tests {
     use super::*;
     use crate::testutil::scratch_dir;
+
+    /// SANDBOX-28: `/reach paths` lists what was let through `request_path`, `remove` ends one by its
+    /// number and says so, a number that names none ends none, and anything else is the usage line.
+    /// Another word after `/reach` is not this command's, so the rest of `/reach` still reads it.
+    #[test]
+    fn reach_paths_lists_ends_and_leaves_other_words_alone() {
+        let workspace = {
+            let root = scratch_dir("request-path-listing");
+            std::fs::create_dir_all(&root).expect("scratch");
+            crate::workspace::Workspace::new(root).expect("workspace")
+        };
+        let command = |argument: &str| requested_paths_command(&workspace, argument);
+
+        assert_eq!(command("paths"), Some(t!(path_none).to_string()));
+        workspace.grant_path_reach(PathBuf::from("/data/in"), false, "reads".to_string());
+        workspace.grant_path_reach(PathBuf::from("/data/out"), true, "writes".to_string());
+
+        let listed = command("paths").expect("the listing");
+        let rows: Vec<&str> = listed.lines().collect();
+        assert_eq!(rows.len(), 2, "{listed}");
+        assert!(rows[0].starts_with("1.") && rows[0].contains("reads /data/in"));
+        assert!(rows[1].starts_with("2.") && rows[1].contains("reads and writes /data/out"));
+        assert!(
+            !listed.contains("writes\n"),
+            "the planner's reason was listed"
+        );
+
+        assert_eq!(
+            command("paths remove 9"),
+            Some(t!(path_refused_number, number = "9").to_string())
+        );
+        assert_eq!(workspace.path_reach().len(), 2);
+        for malformed in [
+            "paths remove",
+            "paths remove x",
+            "paths forget 1",
+            "paths remove 0",
+        ] {
+            let said = command(malformed).expect("a reply");
+            assert!(
+                said == t!(path_usage) || said == t!(path_refused_number, number = "0"),
+                "{malformed}: {said}"
+            );
+            assert_eq!(workspace.path_reach().len(), 2, "{malformed}");
+        }
+        let removed = command("paths remove 1").expect("a reply");
+        assert!(removed.contains("/data/in"), "{removed}");
+        assert_eq!(workspace.path_reach().len(), 1);
+        assert_eq!(workspace.path_reach()[0].path, Path::new("/data/out"));
+
+        for other in ["", "remove 1", "pathsx", "docker", "paths-elsewhere"] {
+            assert_eq!(command(other), None, "{other:?}");
+        }
+    }
 
     /// A fresh directory under `target/`, as the shell canonicalises it.
     fn fresh(name: &str) -> PathBuf {

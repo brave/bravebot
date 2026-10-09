@@ -1533,6 +1533,23 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         }
     }
 
+    /// The path as the person will see it granted, the planner's reason under it, and what a yes
+    /// does not do.
+    fn confirm_path(&mut self, request: &bravebot_agent::confirm::PathRequest) -> Decision {
+        let shown_path = shown(&request.path.display().to_string());
+        let lines = [
+            match request.write {
+                true => t!(path_writes, path = shown_path.as_str()).to_string(),
+                false => t!(path_reads, path = shown_path.as_str()).to_string(),
+            },
+            t!(path_why, why = shown(&request.why).as_str()).to_string(),
+            t!(path_explained).to_string(),
+            t!(path_not_trusted).to_string(),
+        ];
+        self.about(Held::Question);
+        self.ask(&lines, t!(path_title))
+    }
+
     /// The url a yes declares, pictured like every other word a server wrote, under the one the
     /// declaration names now and above the host and port it reaches.
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {

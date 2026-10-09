@@ -307,7 +307,7 @@ authority, which is the one thing a definition is not.
 <a id="ADDRESS-8"></a>
 ### ADDRESS-8: the tools withheld from every delegate are not withheld here, except what arms a later turn
 
-Asking a person, writing the task list, fetching a URL, asking for a second opinion on quarantined
+Asking a person, asking a person for reach to a path, writing the task list, fetching a URL, asking for a second opinion on quarantined
 content and spawning a delegate are offered to an addressed run wherever the session holds them,
 subject to [ADDRESS-7](#ADDRESS-7) like anything else. Scheduling a next turn and watching a file
 are not offered, and nothing else the run is offered tells it to use them.
