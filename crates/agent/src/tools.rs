@@ -6850,16 +6850,16 @@ fn requested_from(arguments: &Value) -> Result<Vec<bravebot_sandbox::scope::Requ
 
 /// Whether this turn may be asked for a credential scope at all.
 ///
-/// Only in the strict sandbox mode, where the profile is the whole of what a program reaches and a
-/// name from the menu is the one way to widen it; `standard` already reads the machine and `off`
-/// has no profile to add to. Not in a workspace the person has not trusted, where the files the
-/// line names are content nobody vouched for and a credential lent to a script a checkout wrote is
-/// the case SANDBOX-16 keeps scopes from. A turn nobody is at to ask is refused by the confirmer
-/// the prompt goes to, since a request is always asked about.
+/// In `strict` and `standard`, where a name from the menu is the one way to widen what a program
+/// reaches past the credential table. Not in `off`, which has no profile to add to. Not in a
+/// workspace the person has not trusted, where the files the line names are content nobody vouched
+/// for and a credential lent to a script a checkout wrote is the case SANDBOX-16 keeps scopes
+/// from. A turn nobody is at to ask is refused by the confirmer the prompt goes to, since a
+/// request is always asked about.
 fn requests_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> Result<(), String> {
-    let strict = tools.confine_runs && tools.sandbox == bravebot_sandbox::SandboxMode::Strict;
+    let confined = tools.confine_runs && tools.sandbox != bravebot_sandbox::SandboxMode::Off;
     let trusted = policy.trusts_path(&tools.workspace.trust_key("."));
-    match strict && trusted {
+    match confined && trusted {
         true => Ok(()),
         false => Err(NOT_ACCEPTING_REQUESTS.to_string()),
     }

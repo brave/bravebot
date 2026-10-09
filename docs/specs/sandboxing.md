@@ -925,9 +925,9 @@ directories the programs could read and write, that beyond those they reached on
 toolchain list or credential scope added for the steps that named one, the toolchain lists the plan
 brought by name and the credential scopes it brought by name, or `none`, and whether the network
 was open or closed and, if closed, the reasons that kept it for the steps that had one
-([SANDBOX-20](#SANDBOX-20)). Under the mode `strict`, where the session has a profile directory, the description and this
-sentence also name the menu a `run` call may ask from ([SANDBOX-26](#SANDBOX-26)); in every other
-mode they name none, since none is accepted. The sentence is the same words for exit 1 and exit 2.
+([SANDBOX-20](#SANDBOX-20)). Under the modes `strict` and `standard`, where the session has a profile directory, the description
+and this sentence also name the menu a `run` call may ask from ([SANDBOX-26](#SANDBOX-26)); under
+`off` they name none, since none is accepted. The sentence is the same words for exit 1 and exit 2.
 A result whose steps all
 exited zero carries no such sentence. The sentence is composed from the same two decisions the policy is
 ([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
@@ -957,9 +957,10 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::turn::a_failed_job_on_a_confining_turn_says_what_it_ran_under`
 `verified-by: bravebot_agent::tools::the_statement_follows_the_sandbox_mode`
 `verified-by: bravebot_agent::confine::a_strict_stage_does_not_read_the_machine`
-`verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_only_where_a_request_is_accepted`
-`verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_only_in_strict`
+`verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_where_a_request_is_accepted`
+`verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_in_strict_and_standard`
 `verified-by: bravebot_agent::turn::the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu`
+`verified-by: bravebot_agent::turn::the_failure_sentence_names_the_menu_under_standard`
 
 <a id="SANDBOX-20"></a>
 ### SANDBOX-20: a session may close the network, and a stage keeps it only for a reason it carries
@@ -1525,9 +1526,12 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
   answers that last past the line are the two that remember the scope as reach ([SANDBOX-27](#SANDBOX-27)).
 - What it prints is not trusted on a vouch's account: a line that asked for a scope has its output
   quarantined as an unvouched line's is ([RUN-4](tools/run.md#RUN-4)).
+- Accepted in `strict` and `standard` ([SANDBOX-22](#SANDBOX-22)). `standard` reads the machine
+  except the credential table ([SANDBOX-12](#SANDBOX-12)), so a scope there lifts the part of that table
+  it names.
 - Refused, with one sentence that does not say which setting withheld it, in a session whose mode is
-  not `strict` ([SANDBOX-22](#SANDBOX-22)), which already reads the machine or has no profile, with
-  no profile directory, and in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)).
+  `off`, which has no profile to add to, with no profile directory, and in a workspace the person
+  has not trusted ([TRUST-7](trust-map.md#TRUST-7)).
   A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
   approves it, as it approves any run.
 - A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
@@ -1559,7 +1563,8 @@ for a different line.
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
 `verified-by: bravebot_agent::turn::a_standing_answer_to_a_request_remembers_nothing`
-`verified-by: bravebot_agent::turn::scopes_are_refused_under_standard_and_under_off`
+`verified-by: bravebot_agent::turn::scopes_are_refused_under_off`
+`verified-by: bravebot_agent::turn::scopes_are_asked_about_and_run_under_standard`
 `verified-by: bravebot_agent::turn::scopes_are_refused_in_a_workspace_the_person_declined_to_trust`
 `verified-by: bravebot_agent::turn::scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given`
 `verified-by: bravebot_agent::turn::a_scope_outside_the_menu_is_an_error`
