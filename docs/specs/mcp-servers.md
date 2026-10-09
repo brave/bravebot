@@ -1459,8 +1459,10 @@ and is not put to the person or sent to the server. Loading changes what is offe
 about who is asked: a loaded tool is put to the person before each call as any other is
 ([SERVERS-7](#SERVERS-7)). The search is not over descriptions and nothing is chosen by what a server
 wrote, so no decision is taken on bytes a person did not vouch for ([SERVERS-8](#SERVERS-8)). No
-description of a tool is sent until it is loaded. `load_tool` is offered only where the turn keeps
-server tools, so a delegate whose definition drops them is offered no loader
+description of a tool is sent until it is loaded. `load_tool` is offered only where the run holds a
+server and `--tools` has not taken servers away. A reader, a checker, a definition with a `tools:`
+line and no `mcpServers:` line, a delegate whose `mcp_servers` leaves it none and a run limited by
+`--tools` are offered no loader, and a call to one is refused as any unknown name is
 ([TOOL-6](tools/tool-surface.md#TOOL-6)). A turn below the size, and every turn without the
 setting, is offered every tool in full and no `load_tool`.
 
@@ -1473,6 +1475,10 @@ text is shown and decides nothing from it.
 `verified-by: bravebot_agent::mcp::a_call_to_a_deferred_tool_that_is_not_loaded_is_refused_and_reaches_no_one`
 `verified-by: bravebot_agent::mcp::a_loaded_tool_is_still_put_to_the_person_before_each_call`
 `verified-by: bravebot_agent::mcp::tools_under_the_threshold_are_offered_in_full_with_no_loader`
+`verified-by: bravebot_agent::mcp::a_delegate_holding_no_server_is_offered_no_loader_and_cannot_call_one`
+`verified-by: bravebot_agent::mcp::a_delegate_holding_the_server_is_offered_the_loader_and_loads_through_it`
+`verified-by: bravebot_agent::mcp::an_addressed_worker_with_a_tools_line_is_offered_no_loader_unless_it_names_the_server`
+`verified-by: bravebot_cli::running::a_tools_list_offers_no_loader_for_deferred_server_tools`
 `verified-by: bravebot_config::settings::only_a_positive_size_sets_the_mcp_deferral_threshold`
 
 ## Testing this with the weather server

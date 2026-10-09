@@ -3052,3 +3052,197 @@ fn tools_under_the_threshold_are_offered_in_full_with_no_loader() {
     assert!(names.contains(&FORECAST.to_string()), "{names:?}");
     assert!(!names.contains(&"load_tool".to_string()), "{names:?}");
 }
+
+/// Run a deferring turn whose planner spawns a delegate with `spawn`, whose own planner then names
+/// `load_tool`. Returns the delegate's requests, what the person was asked and the MCP methods the
+/// server was sent past its handshake.
+fn defer_to_a_delegate(name: &str, spawn: &str) -> Delegated {
+    let scratch = Scratch::new(name);
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat_by_marker(vec![
+        (
+            PARENT,
+            vec![
+                tool_request("spawn_agent", spawn),
+                reply_with("waiting"),
+                reply_with("the delegate reported"),
+            ],
+        ),
+        (
+            DELEGATED,
+            vec![
+                tool_request("load_tool", r#"{"name":"weather:get_forecast"}"#),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        1,
+        Task::new(PARENT).with_mcp(Some(session)),
+        &mut asked,
+    );
+    let delegate = rounds(&chat)
+        .into_iter()
+        .filter(|body| body.contains(DELEGATED) && !body.contains(PARENT))
+        .collect();
+    Delegated {
+        delegate,
+        asked,
+        called: methods(&server),
+    }
+}
+
+/// SERVERS-16: a delegate that holds no server is offered no `load_tool`, because it has no tool to
+/// load, and its call to one is refused as an unknown name. A reader and a checker hold none by
+/// kind, and a worker spawned keeping no server holds none by its call.
+#[test]
+fn a_delegate_holding_no_server_is_offered_no_loader_and_cannot_call_one() {
+    for (name, spawn) in [
+        (
+            "reader",
+            format!(r#"{{"kind":"reader","task":"{DELEGATED}"}}"#),
+        ),
+        (
+            "checker",
+            format!(r#"{{"kind":"checker","task":"{DELEGATED}"}}"#),
+        ),
+        (
+            "worker-keeping-none",
+            format!(r#"{{"kind":"worker","task":"{DELEGATED}","mcp_servers":[]}}"#),
+        ),
+    ] {
+        let Delegated {
+            delegate,
+            asked,
+            called,
+        } = defer_to_a_delegate(&format!("deferred-delegate-{name}"), &spawn);
+        let [first, second, ..] = delegate.as_slice() else {
+            panic!("the {name} made {} requests", delegate.len());
+        };
+        assert_eq!(
+            asked.lists.len(),
+            1,
+            "{name}: the turn did not settle the list, so this says nothing"
+        );
+        assert!(
+            !offered_names(first).contains(&"load_tool".to_string()),
+            "{name}: was offered a loader: {:?}",
+            offered_names(first)
+        );
+        assert!(
+            answer_to_the_call(second).contains("no such tool"),
+            "{name}: its call to load_tool was not refused: {}",
+            answer_to_the_call(second)
+        );
+        assert!(
+            asked.calls.is_empty(),
+            "{name}: a call was put to the person: {:?}",
+            asked.calls
+        );
+        assert!(called.is_empty(), "{name}: the server heard {called:?}");
+    }
+}
+
+/// SERVERS-16: the control for the test above. A worker that holds the server is offered the
+/// loader, loads the tool through it, and is offered the definition on its next request.
+#[test]
+fn a_delegate_holding_the_server_is_offered_the_loader_and_loads_through_it() {
+    let spawn = format!(r#"{{"kind":"worker","task":"{DELEGATED}"}}"#);
+    let Delegated {
+        delegate, asked, ..
+    } = defer_to_a_delegate("deferred-delegate-worker", &spawn);
+    let [first, second, ..] = delegate.as_slice() else {
+        panic!("the worker made {} requests", delegate.len());
+    };
+    let before = offered_names(first);
+    assert!(before.contains(&"load_tool".to_string()), "{before:?}");
+    assert!(!before.contains(&FORECAST.to_string()), "{before:?}");
+    assert!(
+        offered_names(second).contains(&FORECAST.to_string()),
+        "the loaded tool was not offered on the next request: {:?}",
+        offered_names(second)
+    );
+    assert!(asked.calls.is_empty(), "{:?}", asked.calls);
+}
+
+/// SERVERS-16: a definition's `tools:` line selects no server unless an `mcpServers:` line names
+/// one, so an addressed worker with only the first holds none and is offered no loader, and its call
+/// to `load_tool` is refused. The same definition naming the weather server holds it and loads.
+#[test]
+fn an_addressed_worker_with_a_tools_line_is_offered_no_loader_unless_it_names_the_server() {
+    for (name, line, holds) in [
+        ("tools-only", "tools: read_file\n", false),
+        (
+            "tools-and-server",
+            "tools: read_file\nmcpServers: weather\n",
+            true,
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("deferred-addressed-{name}"));
+        let home = Scratch::new(&format!("deferred-addressed-{name}-home"));
+        std::fs::create_dir_all(home.path.join("agents"))
+            .expect("create the definitions directory");
+        std::fs::write(
+            home.path.join("agents").join("scout.md"),
+            format!(
+                "---\nname: scout\ndescription: Looks things up.\nkind: worker\n{line}---\n\nSCOUT-BY-DEFINITION\n"
+            ),
+        )
+        .expect("write the definition");
+        let (url, server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let _ = methods(&server);
+        let (endpoint, chat) = serve_chat(vec![
+            tool_request("load_tool", r#"{"name":"weather:get_forecast"}"#),
+            reply_with("done"),
+        ]);
+        let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+        run_deferring(
+            &endpoint,
+            &scratch.project(),
+            1,
+            Task::new("what is the forecast")
+                .with_home(Some(home.path.clone()))
+                .addressing(Some("scout".to_string()))
+                .with_mcp(Some(session)),
+            &mut asked,
+        );
+        let sent = rounds(&chat);
+        let [first, second, ..] = sent.as_slice() else {
+            panic!("{name}: the turn made {} rounds", sent.len());
+        };
+        assert!(
+            first.contains("SCOUT-BY-DEFINITION"),
+            "{name}: the turn did not run under the definition, so this says nothing: {first}"
+        );
+        assert_eq!(
+            offered_names(first).contains(&"load_tool".to_string()),
+            holds,
+            "{name}: {:?}",
+            offered_names(first)
+        );
+        assert_eq!(
+            offered_names(second).contains(&FORECAST.to_string()),
+            holds,
+            "{name}: {}",
+            answer_to_the_call(second)
+        );
+        if !holds {
+            assert!(
+                answer_to_the_call(second).contains("no such tool"),
+                "{name}: {}",
+                answer_to_the_call(second)
+            );
+            assert!(asked.calls.is_empty(), "{name}: {:?}", asked.calls);
+            assert!(
+                methods(&server).is_empty(),
+                "{name}: the server was sent something"
+            );
+        }
+    }
+}

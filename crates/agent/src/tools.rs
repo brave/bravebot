@@ -3243,8 +3243,8 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         None => target_of(policy, &name, tools.slots, &arguments),
     };
     // `load_tool` is offered only where a turn defers its server tools, so a definition's `tools:`
-    // line cannot name it and `--tools` cannot take it away: with either holding the server's tools
-    // back the offer is not deferred at all.
+    // line cannot name it and `--tools` cannot take it away: a `tools:` line without `mcpServers:`
+    // selects no server, and with either holding the server's tools back the offer is not deferred.
     let loads_a_tool = name == "load_tool" && tools.mcp.is_some_and(|offer| offer.is_deferred());
     let why = why_of(policy, &name, &arguments);
     reporter.tool_started(
