@@ -10814,7 +10814,58 @@ fn permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force() {
     );
 }
 
-/// CLI-28: a command line that names no call is refused with the status for an argument, and
+/// CLI-27: the same rule once the person granted it at the question is in force, so it decides as
+/// the allow it is, names the grant as the place it came from, and is not also reported as waiting.
+///
+/// The record is seeded rather than written by a session, because the answer is the person's and
+/// the question that collects it needs a terminal.
+#[test]
+fn permissions_check_counts_a_checkouts_allow_rule_the_person_granted() {
+    let (scratch, checkout) = rules_in_two_layers("cli-running-permissions-check-granted");
+    let settings = checkout.join(".bravebot").join("settings.json");
+    let workspace = checkout.canonicalize().expect("canonical checkout");
+    let granted = scratch.path.join(".bravebot").join("granted");
+    std::fs::create_dir_all(&granted).expect("create the record directory");
+    // Written out rather than encoded, since this crate's tests carry no JSON library. A path that
+    // needed escaping would produce a line the record skips, so it is refused here instead.
+    for path in [&workspace, &settings] {
+        let shown = path.display().to_string();
+        assert!(
+            !shown.contains(['"', '\\']),
+            "the scratch path needs JSON escaping, so this test would seed an unreadable line: {shown}"
+        );
+    }
+    std::fs::write(
+        granted.join(format!(
+            "{}.jsonl",
+            bravebot_agent::home::key_for(&workspace)
+        )),
+        format!(
+            concat!(
+                r#"{{"workspace":"{}","session":"an-earlier-session","#,
+                r#""rule":"Bash(make *)","path":"{}"}}"#,
+                "\n"
+            ),
+            workspace.display(),
+            settings.display(),
+        ),
+    )
+    .expect("seed the record");
+
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Bash", "make", "test"]),
+        [
+            "decision: allow".to_string(),
+            "rule: Bash(make *)".to_string(),
+            format!(
+                "file: granted at the question for this workspace, written in {}",
+                settings.display()
+            ),
+        ]
+    );
+}
+
+/// CLI-27: a command line that names no call is refused with the status for an argument, and
 /// nothing is printed on stdout for a script to take as an answer.
 #[test]
 fn permissions_check_refuses_a_command_line_that_names_no_call() {
