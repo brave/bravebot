@@ -317,6 +317,22 @@ pub fn proposed(settings: &Settings, profile: Option<&std::path::Path>) -> Vec<P
     dropped_allow_entries(settings, &anchors(profile, false)).0
 }
 
+/// The rules `proposed` holds as an `allow` list of their own, read as [`with_granted`] reads one.
+///
+/// Not in force wherever they are used: it is what a report matches a call against to say that a
+/// rule a checkout wrote would have allowed it once granted ([PERM-15]).
+///
+/// [PERM-15]: ../../../docs/specs/permissions.md
+pub fn as_allow_list(
+    proposed: &[Proposed],
+    profile: Option<&std::path::Path>,
+    workspace: &std::path::Path,
+) -> Permissions {
+    let allow: Vec<String> = proposed.iter().map(|rule| rule.rule.clone()).collect();
+    let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
+    Permissions::parse(&[], &[], &allow, &anchors).0
+}
+
 /// The directories a settings file asked to have opened, in the order it named them.
 ///
 /// Names only, and a name is a request: a file that arrived with a checkout must not be able to

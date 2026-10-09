@@ -16,6 +16,7 @@ pub(crate) const COMMANDS: [&str; 12] = [
     "bug-report",
     "auth",
     "mcp",
+    "permissions",
     "sessions",
     "attach",
     "reply",
@@ -32,6 +33,9 @@ const AUTH: [&str; 2] = ["login", "logout"];
 const MCP: [&str; 8] = [
     "add", "get", "list", "approve", "enable", "disable", "remove", "forget",
 ];
+
+/// What follows `permissions`.
+const PERMISSIONS: [&str; 1] = ["check"];
 
 /// A flag, as the usage table spells it: the long form, the short form where there is one, and
 /// whether a value follows.
@@ -132,6 +136,7 @@ fn bash() -> String {
         case "${{COMP_WORDS[1]}}" in
             auth) COMPREPLY=($(compgen -W "{auth}" -- "$cur")); return 0 ;;
             mcp) COMPREPLY=($(compgen -W "{mcp}" -- "$cur")); return 0 ;;
+            permissions) COMPREPLY=($(compgen -W "{permissions}" -- "$cur")); return 0 ;;
             completion|shell-init) COMPREPLY=($(compgen -W "{shells}" -- "$cur")); return 0 ;;
         esac
     fi
@@ -149,6 +154,7 @@ complete -o default -F _bravebot bravebot
 "#,
         auth = AUTH.join(" "),
         mcp = MCP.join(" "),
+        permissions = PERMISSIONS.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -163,6 +169,7 @@ _bravebot() {{
         case "$words[2]" in
             auth) compadd -- {auth}; return ;;
             mcp) compadd -- {mcp}; return ;;
+            permissions) compadd -- {permissions}; return ;;
             completion|shell-init) compadd -- {shells}; return ;;
         esac
     fi
@@ -183,6 +190,7 @@ fi
 "#,
         auth = AUTH.join(" "),
         mcp = MCP.join(" "),
+        permissions = PERMISSIONS.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -198,6 +206,7 @@ fn fish() -> String {
     for (command, words) in [
         ("auth", AUTH.join(" ")),
         ("mcp", MCP.join(" ")),
+        ("permissions", PERMISSIONS.join(" ")),
         ("completion", SHELLS.join(" ")),
         ("shell-init", SHELLS.join(" ")),
     ] {

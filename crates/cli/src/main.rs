@@ -12,6 +12,7 @@ mod host;
 mod import;
 mod json;
 mod mcp;
+mod permissions_check;
 mod plain;
 mod progress;
 mod sandbox_check;
@@ -399,6 +400,7 @@ fn main() -> ExitCode {
             None => ExitCode::FAILURE,
         },
         Some("mcp") => mcp::command(&args[1..]),
+        Some("permissions") => permissions_check::command(&args[1..]),
         Some("completion") => match completion::command(&args[1..]) {
             Some(()) => ExitCode::SUCCESS,
             None => {
@@ -503,9 +505,11 @@ fn continues_with_a_task(args: &[String]) -> bool {
 /// refused instead of ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_definition(first: Option<&str>) -> Option<String> {
     match first? {
-        command @ ("doctor" | "update" | "bug-report" | "auth" | "mcp" | "sessions" | "attach"
-        | "reply" | "import-leo-creds" | "import-providers" | "completion"
-        | "shell-init") => Some(t!(cli_agent_not_for_a_command, command = command).to_string()),
+        command @ ("doctor" | "update" | "bug-report" | "auth" | "mcp" | "permissions"
+        | "sessions" | "attach" | "reply" | "import-leo-creds" | "import-providers"
+        | "completion" | "shell-init") => {
+            Some(t!(cli_agent_not_for_a_command, command = command).to_string())
+        }
         _ => None,
     }
 }
@@ -565,9 +569,9 @@ fn flag_named(prompts: &SystemPrompts) -> Option<&'static str> {
 /// rather than ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
     match first? {
-        command @ ("doctor" | "update" | "bug-report" | "auth" | "mcp" | "sessions" | "attach"
-        | "reply" | "import-leo-creds" | "import-providers" | "completion"
-        | "shell-init") => Some(
+        command @ ("doctor" | "update" | "bug-report" | "auth" | "mcp" | "permissions"
+        | "sessions" | "attach" | "reply" | "import-leo-creds" | "import-providers"
+        | "completion" | "shell-init") => Some(
             t!(
                 cli_system_prompt_not_for_a_command,
                 flag = flag,
@@ -781,6 +785,7 @@ fn starts_no_program(first: Option<&str>) -> bool {
                 | "--version"
                 | "-V"
                 | "auth"
+                | "permissions"
                 | "sessions"
                 | "attach"
                 | "completion"
@@ -955,6 +960,10 @@ fn print_help() {
         ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
         ("bravebot import-providers", t!(cli_usage_import_providers)),
         ("bravebot mcp <command>", t!(cli_usage_mcp)),
+        (
+            "bravebot permissions check <call>",
+            t!(cli_usage_permissions),
+        ),
         (
             "bravebot completion <bash|zsh|fish>",
             t!(cli_usage_completion),
@@ -1229,10 +1238,9 @@ fn take_tool_limit(args: &mut Vec<String>) -> Result<bravebot_core::tool_set::Li
 /// nothing. Refused rather than ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_tool_set_to_limit(first: &str) -> Option<String> {
     match first {
-        command @ ("doctor" | "update" | "auth" | "mcp" | "sessions" | "attach" | "reply"
-        | "import-leo-creds" | "import-providers" | "completion" | "shell-init") => {
-            Some(t!(cli_tools_not_for_a_command, command = command).to_string())
-        }
+        command @ ("doctor" | "update" | "auth" | "mcp" | "permissions" | "sessions" | "attach"
+        | "reply" | "import-leo-creds" | "import-providers" | "completion"
+        | "shell-init") => Some(t!(cli_tools_not_for_a_command, command = command).to_string()),
         _ => None,
     }
 }
@@ -7295,6 +7303,7 @@ mod tests {
             "bug-report",
             "auth",
             "mcp",
+            "permissions",
             "sessions",
             "attach",
             "reply",
@@ -7420,6 +7429,7 @@ mod tests {
             "bug-report",
             "auth",
             "mcp",
+            "permissions",
             "sessions",
             "attach",
             "reply",
@@ -8100,6 +8110,7 @@ mod tests {
             "--help",
             "--version",
             "auth",
+            "permissions",
             "sessions",
             "attach",
             "completion",
