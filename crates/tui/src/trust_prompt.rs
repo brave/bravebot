@@ -385,8 +385,8 @@ fn answer_for(
         KeyCode::Char('r' | 'R') if keeping && answerable => Response::Answer(Answer::Remember),
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Response::Answer(Answer::Decline),
         // The keys the write and run prompts scroll with, for the same reason (PROMPT-4).
-        KeyCode::Up => Response::Scroll(-1),
-        KeyCode::Down => Response::Scroll(1),
+        KeyCode::Up | KeyCode::Char('k') => Response::Scroll(-1),
+        KeyCode::Down | KeyCode::Char('j') => Response::Scroll(1),
         KeyCode::PageUp => Response::Page(-1),
         KeyCode::PageDown => Response::Page(1),
         KeyCode::Home => Response::Scroll(i32::MIN),
@@ -1591,6 +1591,33 @@ mod tests {
             (KeyCode::End, Response::Scroll(i32::MAX)),
         ] {
             assert_eq!(pressing(code), moving, "{code:?}");
+        }
+    }
+
+    /// `j` and `k` scroll the startup questions a line as Down and Up do, wherever the question
+    /// offers to remember, and are not answers: a person scrolling a long list with them must not
+    /// grant it, and one pressed with Ctrl is not a scroll.
+    #[test]
+    fn j_and_k_scroll_the_question_a_line_and_answer_nothing() {
+        for keeping in [false, true] {
+            let press = |code, modifiers| {
+                answer_for(KeyEvent::new(code, modifiers), false, true, keeping, true)
+            };
+            assert_eq!(
+                press(KeyCode::Char('j'), KeyModifiers::NONE),
+                Response::Scroll(1)
+            );
+            assert_eq!(
+                press(KeyCode::Char('k'), KeyModifiers::NONE),
+                Response::Scroll(-1)
+            );
+            for letter in ['j', 'k'] {
+                assert_eq!(
+                    press(KeyCode::Char(letter), KeyModifiers::CONTROL),
+                    Response::Nothing,
+                    "ctrl-{letter}"
+                );
+            }
         }
     }
 

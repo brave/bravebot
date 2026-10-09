@@ -1409,7 +1409,7 @@ run-keep-reach-scopes = l'accès retenu est { $scopes }, en lecture seule
 run-keep-reach-still-asked =
     la ligne reste soumise à chaque fois, avec cet accès affiché, et rien de ce qu'elle affiche n'est approuvé
 run-keep-reach-lifetimes =
-    m vaut pour cette session. k vaut jusqu'à son retrait, dans cette copie de travail, ou dans toute copie pour un programme auquel l'accès appartient, comme git pour remote.
+    m vaut pour cette session. e vaut jusqu'à son retrait, dans cette copie de travail, ou dans toute copie pour un programme auquel l'accès appartient, comme git pour remote.
 run-keep-reach-toolchains =
     { $toolchains } n'est pas retenu : une liste de chaînes d'outils est redemandée à chaque fois
 run-keep-reach-where = c'est écrit ici :
