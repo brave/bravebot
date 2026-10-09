@@ -34,6 +34,7 @@ cli-usage-continue-task = Send a one-shot task as the next turn of the most rece
 cli-usage-fork = Fork a session and start exploring a different path
 cli-usage-doctor = Check configuration and confinement
 cli-usage-doctor-sandbox = Run everyday workflows under the sandbox and report which work
+cli-usage-update = Print the command that updates this copy
 cli-usage-bug-report = Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
 cli-usage-import = Import a Leo Premium subscription
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
@@ -163,6 +164,7 @@ cli-unknown-option = unknown option: { $flag }
 cli-completion-needs-a-shell = completion takes one of bash, zsh or fish
 cli-shell-init-needs-a-shell = shell-init takes one of bash, zsh or fish
 cli-bug-report-takes-nothing-else = bug-report takes no arguments
+cli-update-takes-nothing-else = update takes no arguments
 bug-report-no-state-directory = bug-report writes nothing in an incognito session or where there is no home directory
 bug-report-not-written = the bug report was not written: { $problem }
 cli-file-needs-a-path = --file requires a path
@@ -2564,6 +2566,16 @@ session-vetting-in-force =
 # installs whatever is newest when it runs.
 update-available =
     a newer bravebot is out (this is { $running }); update with: { $command }
+# Printed by `bravebot update`. The command is passed in for the reason it is above: which line
+# updates this copy depends on how it was installed, and it is not a translator's to reword.
+# Nothing is asked of a registry, so this says how to update rather than whether to.
+update-how = update with: { $command }
+# Printed by `bravebot update` for a copy neither the npm package nor the install script put
+# here, a build from source above all. There is no command to name, and naming one would replace
+# a binary this program did not install.
+update-not-installed-by-us =
+    this copy was not installed by the npm package or by the install script, so there is no update
+    command for it. A build from source is updated by pulling and building again.
 session-started-server = running the { $language } language server for this session ({ $program })
 # Said when a person agrees to offer a server's tools to the model. The list is recorded, so it
 # is offered again in later sessions until the server's list changes.

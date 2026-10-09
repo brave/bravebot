@@ -19,6 +19,7 @@ pub mod env_var {
 }
 
 pub mod hooks;
+pub mod install;
 pub mod keys;
 pub mod limit;
 mod managed;

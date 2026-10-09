@@ -10,6 +10,7 @@ governs:
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
   - crates/cli/src/plain.rs
+  - crates/cli/src/update.rs
   - crates/config/src/keys.rs
   - crates/tui/src/hidden.rs
 documented-by:
@@ -1403,3 +1404,35 @@ the managed floor, not a partial read of it.
 `verified-by: bravebot_cli::running::a_locked_run_refuses_the_bypass_flag_and_a_background_start`
 `verified-by: bravebot_cli::running::a_locked_run_loads_none_of_the_customizations_a_safe_one_leaves_out`
 `verified-by: bravebot_config::locked::a_locked_process_makes_the_bypass_mode_unreachable_whatever_the_layers_said`
+
+<a id="CLI-28"></a>
+### CLI-28: `update` says the command that updates this copy, and runs nothing
+
+`bravebot update` prints the command for the way this copy was installed: the npm package's line
+for one the npm launcher started, and the install script's own line for the binary that script
+recorded putting there. A copy neither of those put here, a build from source above all, is told
+there is no update command for it and that a build is updated by building again; that is a success
+rather than a failure, since nothing about the machine is wrong. It takes no argument, and a word
+after it is refused with the status for an argument (CLI-6).
+
+Nothing is fetched, so the command is the same whether or not a newer version has been published,
+and the output never names a version. The command is a literal per installation and no part of it
+comes from a file, an environment variable or a response.
+
+**Why.** How to update is a question with an answer the program already holds and the person does
+not: which of the two installers put this binary here is not something somebody can read off their
+own machine, and the two commands are not interchangeable. The npm line installs a package
+manager's copy, so sent to a script install it leaves the running binary untouched and a second one
+elsewhere; the script's line writes over the path the script recorded, so sent to a build from
+source it would replace a binary this program did not install.
+
+It prints rather than runs for the same reason the startup notice prints: replacing the running
+binary is an effect nobody approved by typing one word, and the line goes to a shell the person
+reads first. A copy nothing here installed gets no command rather than a guess, which is the rule
+the startup notice already follows by saying nothing to such a copy
+([LAYER-1](layering.md#LAYER-1) puts the facts both read in the configuration surface).
+
+`verified-by: bravebot_cli::running::update_says_the_command_for_the_way_this_copy_was_installed`
+`verified-by: bravebot_cli::running::update_says_there_is_no_command_for_a_build_from_source`
+`verified-by: bravebot_cli::running::update_takes_no_argument`
+`verified-by: bravebot_config::install::each_installation_is_updated_the_way_it_was_installed`

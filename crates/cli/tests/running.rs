@@ -9322,6 +9322,84 @@ fn a_shell_init_with_no_script_to_print_is_refused_with_the_argument_status() {
     }
 }
 
+/// CLI-28. The npm launcher's word is what makes a copy an npm install, and the install script's
+/// recorded path is what makes one a script install. The regression this rejects is the two being
+/// interchangeable: an npm copy sent the curl line gains a second binary and updates the one that
+/// is not running, and a script copy sent the npm line is told to install a package manager's copy
+/// instead of replacing itself.
+#[test]
+fn update_says_the_command_for_the_way_this_copy_was_installed() {
+    let scratch = Scratch::new("cli-running-update-npm");
+    let output = bravebot(
+        &scratch.path,
+        &[("BRAVEBOT_INSTALLED_VIA", "npm")],
+        &["update"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stdout.contains("npm install -g @brave/bravebot@latest"),
+        "the npm command is missing: {stdout}"
+    );
+    assert!(
+        !stdout.contains("install.sh"),
+        "an npm install was sent the script: {stdout}"
+    );
+
+    // A script install is the binary the script recorded, which here is the one the test runs.
+    let recorded = Scratch::new("cli-running-update-script").with_state(
+        "installed-by",
+        &format!("{}\n", env!("CARGO_BIN_EXE_bravebot")),
+    );
+    let output = bravebot(&recorded.path, &[], &["update"]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stdout.contains("install.sh"),
+        "the install script is missing: {stdout}"
+    );
+    assert!(
+        !stdout.contains("npm install"),
+        "a script install was sent the npm command: {stdout}"
+    );
+}
+
+/// CLI-28. A build from source is the common case for anybody working on this, and there is no
+/// command for it. The regression this rejects is naming one anyway, which would have somebody
+/// curl a release over a binary this program did not install, and failing the run over a machine
+/// where nothing is wrong.
+#[test]
+fn update_says_there_is_no_command_for_a_build_from_source() {
+    let scratch = Scratch::new("cli-running-update-source");
+    let output = bravebot(&scratch.path, &[], &["update"]);
+    let (stdout, stderr) = said(&output);
+
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        !stdout.contains("npm install") && !stdout.contains("install.sh"),
+        "a command was named for a copy nothing installed: {stdout}"
+    );
+    assert!(
+        stdout.contains("no update command"),
+        "nothing was said about why there is no command: {stdout}"
+    );
+}
+
+/// CLI-28. A word after it is refused rather than ignored, with the argument status, so a person
+/// who typed `bravebot update now` is told rather than shown a command as though they had asked
+/// for the plain one.
+#[test]
+fn update_takes_no_argument() {
+    let scratch = Scratch::new("cli-running-update-refused");
+    for arguments in [&["update", "now"][..], &["update", "--json"][..]] {
+        let output = bravebot(&scratch.path, &[], arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert_eq!(stdout, "", "{arguments:?} printed on stdout");
+        assert!(stderr.contains("BB1002"), "{arguments:?}: {stderr}");
+    }
+}
+
 /// What an interactive bash made of `commands` printed, with `bravebot` on its path replaced by a
 /// program that prints its arguments and then its standard input between markers.
 ///

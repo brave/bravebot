@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/update.rs
   - crates/tui/src/app.rs
+  - crates/config/src/install.rs
   - npm/bin/bravebot.js
   - install.sh
 documented-by: docs/website/docs/quickstart.md
@@ -48,10 +49,10 @@ The recorded path has to be the binary that is running, since a checkout on a ma
 has a script install is not a script install: the command would replace the other copy rather
 than theirs.
 
-`verified-by: bravebot_tui::update::the_launcher_saying_npm_is_what_makes_it_an_npm_install`
-`verified-by: bravebot_tui::update::the_binary_the_script_recorded_is_a_script_install`
-`verified-by: bravebot_tui::update::a_binary_other_than_the_recorded_one_is_not_a_script_install`
-`verified-by: bravebot_tui::update::an_installation_nothing_recorded_is_left_alone`
+`verified-by: bravebot_config::install::the_launcher_saying_npm_is_what_makes_it_an_npm_install`
+`verified-by: bravebot_config::install::the_binary_the_script_recorded_is_a_script_install`
+`verified-by: bravebot_config::install::a_binary_other_than_the_recorded_one_is_not_a_script_install`
+`verified-by: bravebot_config::install::an_installation_nothing_recorded_is_left_alone`
 
 <a id="UPDATE-3"></a>
 ### UPDATE-3: the command offered updates the copy that is running
@@ -62,6 +63,11 @@ not from the environment.
 **Why.** This is a line somebody pastes into a shell, so no part of it may come from anywhere a
 value arrives from. Offering the wrong one of the two is its own harm and not a smaller one: the
 npm command against a script install puts a second copy on the machine and updates neither.
+
+The same two literals answer `bravebot update` ([CLI-28](cli.md#CLI-28)), which is why they and
+the installation they are chosen by sit in the configuration surface rather than beside the
+startup line: a presentation crate may not reach another one
+([LAYER-1](layering.md#LAYER-1)), and two copies of the pair would be two commands to keep in step.
 
 `verified-by: bravebot_tui::update::a_newer_version_is_announced_along_with_the_command_that_installs_it`
 `verified-by: bravebot_tui::update::a_script_install_is_given_the_script_again`

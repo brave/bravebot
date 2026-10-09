@@ -28,45 +28,22 @@
 //! copy on 0.9.0 that last asked while 0.10.0 was newest would be told 0.10.0 is out, and updating
 //! would install 0.11.0.
 
+use bravebot_config::install::{Install, installed_how};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_i18n::t;
 use bravebot_net::{Egress, Request};
 use std::fmt;
-use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bravebot_session::audit::Trail;
-
-/// How this copy was installed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Install {
-    /// The npm package. Its launcher runs this binary and says so.
-    Npm,
-    /// The install script, which recorded where it put the binary.
-    Script,
-}
-
-/// What the npm launcher sets [`bravebot_config::env_var::INSTALLED_VIA`] to.
-const NPM: &str = "npm";
 
 /// The registry entry for the npm package, which answers with the published version.
 const NPM_URL: &str = "https://registry.npmjs.org/@brave/bravebot/latest";
 
 /// The newest release of this repository, which answers with the tag it was published under.
 const RELEASES_URL: &str = "https://api.github.com/repos/brave/bravebot/releases/latest";
-
-/// What updates an npm install.
-const NPM_COMMAND: &str = "npm install -g @brave/bravebot@latest";
-
-/// What updates a script install: the same line that installed it, which takes the newest release
-/// and puts it where this one already is.
-const SCRIPT_COMMAND: &str =
-    "curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | sh";
-
-/// The file the install script writes the installed path into.
-const INSTALLED_BY_FILE: &str = "installed-by";
 
 /// Where the last ask of each registry is recorded.
 const CACHE_FILE: &str = "update-check";
@@ -83,19 +60,23 @@ const CACHE_TEMPORARY: &str = "update-check.tmp";
 /// launches still makes one request.
 const GOOD_FOR: u64 = 60 * 60;
 
-impl Install {
-    /// The command that updates a copy installed this way.
-    ///
-    /// A literal per installation, never composed: this is a line somebody pastes into a shell,
-    /// so no part of it comes from a file, an environment variable or a response.
-    pub fn update_command(self) -> &'static str {
-        match self {
-            Self::Npm => NPM_COMMAND,
-            Self::Script => SCRIPT_COMMAND,
-        }
-    }
-
+/// What an installation answers about the registry it came from.
+///
+/// An extension trait rather than methods on [`Install`] itself, because the registries are this
+/// crate's business: the type says how a copy was installed and what command updates it, and
+/// nothing in the configuration surface asks anybody what the newest version is.
+trait Registry {
     /// Who is asked what the newest version is.
+    fn url(self) -> &'static str;
+    /// The field of that answer holding the version.
+    fn field(self) -> &'static str;
+    /// What a stored answer records about where it came from.
+    fn source(self) -> &'static str;
+    /// The other way of installing, whose record shares the file with this one's.
+    fn other(self) -> Self;
+}
+
+impl Registry for Install {
     fn url(self) -> &'static str {
         match self {
             Self::Npm => NPM_URL,
@@ -103,7 +84,6 @@ impl Install {
         }
     }
 
-    /// The field of that answer holding the version.
     fn field(self) -> &'static str {
         match self {
             Self::Npm => "version",
@@ -111,8 +91,6 @@ impl Install {
         }
     }
 
-    /// What a stored answer records about where it came from.
-    ///
     /// Kept in the file so an answer from one registry is not read as an answer from the other on
     /// a machine where both installations have existed.
     fn source(self) -> &'static str {
@@ -122,7 +100,6 @@ impl Install {
         }
     }
 
-    /// The other way of installing, whose record shares the file with this one's.
     fn other(self) -> Self {
         match self {
             Self::Npm => Self::Script,
@@ -201,54 +178,6 @@ fn line(install: Install, running: Version, latest: Version) -> Option<String> {
 /// The version this binary was built as.
 fn running_version() -> Option<Version> {
     parse_version(env!("CARGO_PKG_VERSION"))
-}
-
-/// How this copy was installed, or `None` for one nothing here can offer a command for.
-fn installed_how() -> Option<Install> {
-    method(
-        std::env::var(bravebot_config::env_var::INSTALLED_VIA)
-            .ok()
-            .as_deref(),
-        // Compared against the known install locations to report how bravebot was installed.
-        // A wrong answer downgrades to "unknown"; nothing is granted on the strength of it.
-        // nosemgrep: rust.lang.security.current-exe.current-exe
-        std::env::current_exe().ok().as_deref(),
-        recorded_install().as_deref(),
-    )
-}
-
-/// Decide from the launcher's word and the recorded path, so neither the environment nor the
-/// filesystem is needed to test it.
-///
-/// The recorded path has to be the binary that is actually running. A checkout built from source,
-/// on a machine where the script installed a copy as well, is not a script install: it is a build
-/// nothing here knows how to update, and telling its user to curl over the top of it would replace
-/// somebody else's copy rather than theirs.
-fn method(via: Option<&str>, running: Option<&Path>, recorded: Option<&Path>) -> Option<Install> {
-    if via == Some(NPM) {
-        return Some(Install::Npm);
-    }
-    match (running, recorded) {
-        (Some(running), Some(recorded)) if same_file(running, recorded) => Some(Install::Script),
-        _ => None,
-    }
-}
-
-/// Whether two paths name the same binary, following symlinks where they resolve.
-///
-/// A directory on `PATH` is often a link, so the path a process was started by and the path the
-/// script wrote down can spell the same file differently.
-fn same_file(left: &Path, right: &Path) -> bool {
-    let resolved = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    left == right || resolved(left) == resolved(right)
-}
-
-/// Where the install script says it put the binary.
-fn recorded_install() -> Option<PathBuf> {
-    let path = bravebot_agent::home::directory()?.join(INSTALLED_BY_FILE);
-    let contents = std::fs::read_to_string(path).ok()?;
-    let recorded = contents.lines().next()?.trim();
-    (!recorded.is_empty()).then(|| PathBuf::from(recorded))
 }
 
 /// What an earlier launch recorded about this installation's registry, where it recorded anything.
@@ -809,54 +738,6 @@ mod tests {
     fn a_session_that_records_nothing_asks_nothing() {
         assert!(!worth_asking(false, 1_000_000, None));
         assert!(!worth_asking(false, 1_000_000, Some(1)));
-    }
-
-    /// The launcher is the one thing that knows it is the npm package, since the binary it starts
-    /// is an ordinary file wherever npm happened to unpack it.
-    #[test]
-    fn the_launcher_saying_npm_is_what_makes_it_an_npm_install() {
-        assert_eq!(
-            method(Some("npm"), None, None),
-            Some(Install::Npm),
-            "the launcher was not believed"
-        );
-        assert_eq!(
-            method(Some("something else"), None, None),
-            None,
-            "a word nothing sets was taken for an installation"
-        );
-    }
-
-    #[test]
-    fn the_binary_the_script_recorded_is_a_script_install() {
-        assert_eq!(
-            method(
-                None,
-                Some(Path::new("/usr/local/bin/bravebot")),
-                Some(Path::new("/usr/local/bin/bravebot"))
-            ),
-            Some(Install::Script)
-        );
-    }
-
-    /// A checkout built from source on a machine that also has a script install is a build nothing
-    /// here can update, and a command that replaced the other copy would be worse than silence.
-    #[test]
-    fn a_binary_other_than_the_recorded_one_is_not_a_script_install() {
-        assert_eq!(
-            method(
-                None,
-                Some(Path::new("/home/someone/bravebot/target/debug/bravebot")),
-                Some(Path::new("/usr/local/bin/bravebot"))
-            ),
-            None
-        );
-    }
-
-    /// A build from source, which is neither installation, is told nothing at all.
-    #[test]
-    fn an_installation_nothing_recorded_is_left_alone() {
-        assert_eq!(method(None, Some(Path::new("/tmp/bravebot")), None), None);
     }
 
     /// The version compiled in has to be readable as three numbers, or nothing is ever compared
