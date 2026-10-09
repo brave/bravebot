@@ -426,6 +426,8 @@ impl Sink for BridgeSink {
 // ---------------------------------------------------------------- asking
 
 /// The next number in a session's sequence of question numbers, or nothing once it is used up.
+// A compare-and-swap loop: `fetch_update` is deprecated for `try_update` in current Rust, which
+// the minimum supported version does not have.
 fn next_question(ids: &AtomicU64) -> Option<u64> {
     let mut last = ids.load(Ordering::SeqCst);
     loop {

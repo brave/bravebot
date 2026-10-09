@@ -1313,7 +1313,9 @@ fn a_session_with_no_question_numbers_left_refuses_to_ask() {
     let emitter = Emitter::new(Box::new(move |event| {
         sink.lock().expect("not poisoned").push(event);
     }));
-    let (_answers_tx, answers_rx) = mpsc::channel();
+    // No sender is kept, so a question that wrongly went out is refused at once and the missing
+    // number shows in the events below, instead of the test waiting for an answer.
+    let (_, answers_rx) = mpsc::channel();
     let mut exhausted = BridgeConfirmer::new(
         emitter,
         "s1",

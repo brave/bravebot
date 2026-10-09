@@ -2,7 +2,7 @@
 
 use super::*;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 struct Session {
     bridge: Bridge,
@@ -195,4 +195,29 @@ fn the_bridge_advertises_what_it_promises_about_targets() {
         info["capabilities"]["actionTargets"],
         crate::view::action_targets()
     );
+}
+
+/// A repeated trust reply is refused before the session's state is touched. A running turn holds
+/// that state while it works, so a repeat that took the lock first would wait behind the turn and
+/// hold up the cancel behind it on the dispatch thread.
+#[test]
+fn a_repeated_trust_reply_does_not_wait_behind_a_running_turn() {
+    let mut session = session_running(2);
+    let state = Arc::clone(&session.bridge.open.get(&session.handle).unwrap().state);
+    let held = state.lock().unwrap();
+    let handle = session.handle.clone();
+    let mut bridge = std::mem::replace(&mut session.bridge, Bridge::new(Box::new(|_| {})));
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let line = json!({"id": 1, "method": "trust.reply",
+            "params": {"session": handle, "trusted": true}})
+        .to_string();
+        let _ = sender.send(bridge.dispatch(&Request::parse(&line).unwrap()));
+    });
+    let outcome = receiver.recv_timeout(Duration::from_secs(10));
+    drop(held);
+    let refused = outcome
+        .expect("the repeat waited behind the running turn's hold on the session")
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::NoSuchRequest);
 }
