@@ -766,11 +766,9 @@ fn discover_workspace<S: Sink>(
     }
     // After the root's, so a skill under a directory the session has worked in shadows the
     // project's of the same name, the deeper directory last (INSTR-14).
-    if !bravebot_core::safe::engaged() {
-        for directory in workspace.touched_directories() {
-            let root = format!("{directory}/{WORKSPACE_SKILLS}");
-            discover_workspace_root(policy, workspace, &root, catalogue, notices, &mut skipped);
-        }
+    for directory in workspace.touched_directories() {
+        let root = format!("{directory}/{WORKSPACE_SKILLS}");
+        discover_workspace_root(policy, workspace, &root, catalogue, notices, &mut skipped);
     }
     for (root, names) in skipped {
         let missing = names.len()
