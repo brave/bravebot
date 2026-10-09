@@ -295,7 +295,9 @@ fn plan_rows(plan: &[bravebot_core::todo::Row], width: usize, room: usize) -> Ve
     let mut lines: Vec<Line<'static>> = plan[start..start + shown]
         .iter()
         .map(|task| {
-            let (marker, text) = if task.struck() {
+            let (marker, text) = if task.status == bravebot_core::todo::Status::Cancelled {
+                (dim(), dim().add_modifier(Modifier::CROSSED_OUT))
+            } else if task.struck() {
                 (
                     Style::default().fg(theme::ok()),
                     dim().add_modifier(Modifier::CROSSED_OUT),
