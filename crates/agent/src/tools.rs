@@ -1912,6 +1912,9 @@ impl<'a> Tools<'a> {
         let confinement =
             crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)?
                 .with_network(bravebot_config::run_network())
+                .with_hosts(
+                    bravebot_config::sandbox_network::settled().map(|settled| &settled.hosts),
+                )
                 .with_mode(self.sandbox)
                 .with_filesystem(&bravebot_config::sandbox_filesystem())
                 .with_path_reach(&self.workspace.path_reach());

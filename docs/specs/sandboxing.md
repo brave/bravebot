@@ -1362,11 +1362,19 @@ An empty one pins a list that refuses every host, and filters a session that set
 a person said. A managed value that is not a list of strings, or an `onUnlisted` that is neither
 word, pins nothing and `doctor` names it.
 
+A stage with egress under a set list is started with those variables, and a stage with no egress
+is not, because it reaches nothing. A stage's list is the person's allowed set and the defaults its
+own reasons bring, the remote scope's hosts and its toolchain's registries, so two stages can hold
+different lists. One proxy is started for each distinct list the first time a stage needs it, and
+is kept for the rest of the process. A denied entry that is not a rule fails the stage, since
+dropping it would let the host through, and so does a proxy that cannot be started: a stage is
+never started without the filter its list asks for.
+
 Half built. The list, its defaults, the proxy, the settings that carry the list through the
-layers and the managed pin are written and tested, and nothing starts a proxy for a session. Unbuilt:
-policy rows that allow only the proxy's port, the environment injection in
-`confine.rs`, the prompt for an unlisted host, the trace record and the `/status` line, and refusing
-the stage with the SANDBOX-19 sentence naming the setting.
+layers, the managed pin and the environment injection are written and tested. Unbuilt: policy rows
+that allow only the proxy's port, so a program that ignores the variables still connects directly,
+the prompt for an unlisted host, the trace record and the `/status` line, and refusing the stage
+with the SANDBOX-19 sentence naming the setting.
 
 `verified-by: bravebot_sandbox::hosts::an_exact_entry_covers_that_name_and_no_other`
 `verified-by: bravebot_sandbox::hosts::a_wildcard_covers_names_below_the_domain_and_not_the_domain`
@@ -1384,6 +1392,15 @@ the stage with the SANDBOX-19 sentence naming the setting.
 `verified-by: bravebot_sandbox::proxy::every_decision_is_recorded_with_the_host_and_the_rule_that_decided_it`
 `verified-by: bravebot_sandbox::proxy::the_environment_points_every_proxy_variable_at_the_loopback_port`
 `verified-by: bravebot_sandbox::proxy::dropping_the_proxy_stops_it_listening`
+`verified-by: bravebot_agent::host_proxy::a_stage_holds_the_defaults_its_own_reasons_bring_and_no_others`
+`verified-by: bravebot_agent::host_proxy::a_denied_host_is_refused_although_a_default_covers_it`
+`verified-by: bravebot_agent::host_proxy::a_denied_entry_that_is_no_rule_fails_and_an_allowed_one_is_dropped`
+`verified-by: bravebot_agent::host_proxy::a_list_is_served_by_one_proxy_and_another_list_by_another`
+`verified-by: bravebot_agent::confine::only_a_stage_with_egress_is_pointed_at_the_proxy_and_only_under_a_list`
+`verified-by: bravebot_agent::confine::a_stage_with_a_host_list_is_pointed_at_the_proxy_that_applies_it`
+`verified-by: bravebot_agent::confine::an_assignment_in_the_line_cannot_point_a_stage_elsewhere`
+`verified-by: bravebot_agent::confine::no_allowed_list_means_no_proxy`
+`verified-by: bravebot_agent::confine::a_stage_with_no_egress_is_given_no_proxy`
 `verified-by: bravebot_config::settings::no_allowed_hosts_is_no_list_and_an_empty_one_is_a_list`
 `verified-by: bravebot_config::settings::the_home_layer_may_write_every_host_key`
 `verified-by: bravebot_config::settings::a_checkout_may_deny_a_host_and_never_allow_one`

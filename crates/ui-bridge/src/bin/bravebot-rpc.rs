@@ -70,6 +70,8 @@ fn main() {
         &bravebot_sandbox::rules::Lists::default(),
         &layers,
     );
+    // And the host list a stage is held to (SANDBOX-24).
+    bravebot_config::sandbox_network::settle(&layers);
 
     // One writer behind a lock, so a line from an event and a line from a response cannot
     // interleave. Shared with the bridge, which emits events from whichever thread a turn
