@@ -32315,8 +32315,15 @@ fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not
     let scratch = Scratch::new("delegate-tree-ceiling");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let fan_out = |n: u32| {
-        let each: Vec<String> = (1..=n).map(|i| format!("\"{i}\"")).collect();
+    // The items differ by call, so no two calls are the same call (TURN-9).
+    let mut next = 0;
+    let mut fan_out = |n: u32| {
+        let each: Vec<String> = (0..n)
+            .map(|_| {
+                next += 1;
+                format!("\"{next}\"")
+            })
+            .collect();
         tool_request(
             "spawn_agent",
             &format!(
@@ -46506,13 +46513,19 @@ fn a_turn_may_ask_its_advisor_only_three_times() {
         "advisor-limit",
         Some("advisor-model"),
         vec![
-            tool_request("advisor", AN_ADVISOR_CALL),
+            tool_request("advisor", r#"{"question":"first question","why":"unsure"}"#),
             reply_with("ADVICE-1"),
-            tool_request("advisor", AN_ADVISOR_CALL),
+            tool_request(
+                "advisor",
+                r#"{"question":"second question","why":"unsure"}"#,
+            ),
             reply_with("ADVICE-2"),
-            tool_request("advisor", AN_ADVISOR_CALL),
+            tool_request("advisor", r#"{"question":"third question","why":"unsure"}"#),
             reply_with("ADVICE-3"),
-            tool_request("advisor", AN_ADVISOR_CALL),
+            tool_request(
+                "advisor",
+                r#"{"question":"fourth question","why":"unsure"}"#,
+            ),
             reply_with("done"),
         ],
     );
@@ -47350,13 +47363,13 @@ mod spend_limit {
 
     /// Answers the limit question from a list, one reply per ask, and keeps what it was asked.
     /// Asked more times than it has replies, it says nothing, as an interface that cannot ask does.
-    struct Replies {
+    pub(super) struct Replies {
         replies: std::collections::VecDeque<Vec<Answer>>,
-        asked: Vec<Asking>,
+        pub(super) asked: Vec<Asking>,
     }
 
     impl Replies {
-        fn new(replies: Vec<Vec<Answer>>) -> Self {
+        pub(super) fn new(replies: Vec<Vec<Answer>>) -> Self {
             Self {
                 replies: replies.into(),
                 asked: Vec::new(),
@@ -49053,5 +49066,324 @@ fn a_malformed_edits_argument_is_refused_without_asking_or_writing() {
         assert_eq!(after, "alpha\n", "{name} wrote the file");
         assert!(seen.is_empty(), "{name} reached the prompt");
         assert!(second.contains(refusal), "{name}: {second}");
+    }
+}
+
+/// TURN-9: a call the planner makes for the third time running is held, and the person is asked.
+mod repeated_call {
+    use super::spend_limit::Replies;
+    use super::*;
+    use bravebot_core::ask::Answer;
+
+    fn refuse() -> Vec<Answer> {
+        vec![Answer::Chosen(vec![0])]
+    }
+
+    fn run_it() -> Vec<Answer> {
+        vec![Answer::Chosen(vec![1])]
+    }
+
+    fn stop() -> Vec<Answer> {
+        vec![Answer::Chosen(vec![2])]
+    }
+
+    fn read(file: &str) -> String {
+        tool_request("read_file", &format!(r#"{{"path":"{file}"}}"#))
+    }
+
+    struct Ran {
+        ended: Result<turn::Outcome, bravebot_agent::TurnError>,
+        asked: Vec<bravebot_core::ask::Asking>,
+        requests: Vec<String>,
+        trail: Vec<String>,
+    }
+
+    /// Runs a scripted turn over a directory holding `a.txt` and `b.txt`, answering questions from
+    /// `replies` and, past them, saying nothing as an interface that cannot ask does.
+    fn run(
+        name: &str,
+        script: Vec<String>,
+        replies: Vec<Vec<Answer>>,
+        wrap: Option<bravebot_agent::PermissionMode>,
+    ) -> Ran {
+        let scratch = Scratch::new(name);
+        std::fs::write(scratch.path.join("a.txt"), "SENTINEL-A\n").unwrap();
+        std::fs::write(scratch.path.join("b.txt"), "SENTINEL-B\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(script);
+        let config = config_for(&endpoint);
+        let mut confirmer = Replies::new(replies);
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let mut sink = RecordingSink::new();
+        let task = Task::new("look at a.txt");
+        let ended = match wrap {
+            Some(mode) => {
+                let mut confining = bravebot_agent::Confining::new(&mut confirmer, mode, false);
+                turn::resume(
+                    &config,
+                    &bravebot_net::Egress::new(),
+                    &workspace,
+                    &task,
+                    &mut bravebot_agent::Conversation::new(),
+                    &mut confining,
+                    &mut reporter,
+                    &mut sink,
+                    trusting_the_workspace(),
+                    bravebot_core::programs::TrustedPrograms::new(),
+                    None,
+                    &bravebot_core::cancel::Cancel::new(),
+                )
+            }
+            None => turn::resume(
+                &config,
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &task,
+                &mut bravebot_agent::Conversation::new(),
+                &mut confirmer,
+                &mut reporter,
+                &mut sink,
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            ),
+        }
+        .outcome;
+        let trail = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed { gate, detail } if *gate == "repeated_call" => {
+                    Some(detail.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        Ran {
+            ended,
+            asked: confirmer.asked,
+            requests: received.try_iter().collect(),
+            trail,
+        }
+    }
+
+    /// How many calls ran, as the results the planner holds at the end: a read that ran carries a
+    /// change token, and the driver's refusal does not.
+    fn calls_run(ran: &Ran) -> usize {
+        tool_results(ran.requests.last().expect("a request"))
+            .matches("change token")
+            .count()
+    }
+
+    /// The third identical call is not run: its place in the conversation holds the driver's
+    /// refusal and not the file, and the person was asked with the tool named. A check that
+    /// counted four, or ran the call before asking, leaves the file in the third result.
+    #[test]
+    fn a_third_identical_call_is_not_run_and_the_person_is_asked() {
+        let ran = run(
+            "repeat-third",
+            vec![
+                read("a.txt"),
+                read("a.txt"),
+                read("a.txt"),
+                reply_with("done"),
+            ],
+            vec![refuse()],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert_eq!(ran.asked.len(), 1);
+        let question = &ran.asked[0].prompts[0].question;
+        assert!(
+            question.contains("read_file") && question.contains("3 times"),
+            "{question}"
+        );
+        assert_eq!(calls_run(&ran), 2, "the third call was run");
+        let told = tool_results(ran.requests.last().unwrap());
+        assert!(told.contains("repetition limit reached"), "{told}");
+        assert_eq!(ran.requests.len(), 4);
+    }
+
+    /// Two identical calls are not enough, and a different argument between them starts the count
+    /// again: the same file read three times with another file read in the middle asks nothing.
+    #[test]
+    fn a_differing_argument_starts_the_count_again() {
+        let ran = run(
+            "repeat-differs",
+            vec![
+                read("a.txt"),
+                read("a.txt"),
+                read("b.txt"),
+                read("a.txt"),
+                read("a.txt"),
+                reply_with("done"),
+            ],
+            vec![],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(
+            ran.asked.is_empty(),
+            "asked about calls that were not three in a row"
+        );
+        assert_eq!(calls_run(&ran), 5);
+        assert!(ran.trail.is_empty());
+    }
+
+    /// A yes runs that call and covers only it: the count starts again, so a sixth identical call
+    /// is the next one asked about and the fourth and fifth are not.
+    #[test]
+    fn a_yes_runs_the_call_once_and_the_count_starts_again() {
+        let ran = run(
+            "repeat-yes",
+            vec![
+                read("a.txt"),
+                read("a.txt"),
+                read("a.txt"),
+                read("a.txt"),
+                read("a.txt"),
+                read("a.txt"),
+                reply_with("done"),
+            ],
+            vec![run_it()],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert_eq!(ran.asked.len(), 2, "asked about the fourth or fifth call");
+        assert_eq!(calls_run(&ran), 5, "the sixth call was run");
+    }
+
+    /// A stop ends the turn at the held call, with no request after it.
+    #[test]
+    fn a_stop_at_the_question_ends_the_turn() {
+        let ran = run(
+            "repeat-stop",
+            vec![
+                read("a.txt"),
+                read("a.txt"),
+                read("a.txt"),
+                reply_with("done"),
+            ],
+            vec![stop()],
+            None,
+        );
+        assert!(
+            matches!(
+                ran.ended,
+                Err(bravebot_agent::TurnError::Cancelled { attempts: Some(0) })
+            ),
+            "{:?}",
+            ran.ended.err()
+        );
+        assert_eq!(ran.requests.len(), 3, "a request went out after the stop");
+        assert!(
+            ran.trail.iter().any(|line| line.contains("chose to stop")),
+            "{:?}",
+            ran.trail
+        );
+    }
+
+    /// Where nobody answers, the call is dropped and the planner told, as a bounded turn drops
+    /// calls after its bound. The turn is not ended.
+    #[test]
+    fn where_nobody_can_be_asked_the_call_is_dropped_and_the_planner_told() {
+        let ran = run(
+            "repeat-nobody",
+            vec![
+                read("a.txt"),
+                read("a.txt"),
+                read("a.txt"),
+                reply_with("done"),
+            ],
+            vec![],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert_eq!(calls_run(&ran), 2);
+        assert!(tool_results(ran.requests.last().unwrap()).contains("repetition limit reached"));
+        assert!(
+            ran.trail
+                .iter()
+                .any(|line| line.contains("nobody could be asked")),
+            "{:?}",
+            ran.trail
+        );
+    }
+
+    /// The question is the person's in every permission mode: bypass asks about nothing else and
+    /// still puts this one.
+    #[test]
+    fn no_permission_mode_answers_the_repeated_call_question() {
+        for mode in [
+            bravebot_agent::PermissionMode::Ask,
+            bravebot_agent::PermissionMode::AcceptEdits,
+            bravebot_agent::PermissionMode::Plan,
+            bravebot_agent::PermissionMode::Bypass,
+        ] {
+            let ran = run(
+                "repeat-mode",
+                vec![
+                    read("a.txt"),
+                    read("a.txt"),
+                    read("a.txt"),
+                    reply_with("done"),
+                ],
+                vec![stop()],
+                Some(mode),
+            );
+            assert_eq!(ran.asked.len(), 1, "{mode:?} did not reach the person");
+            assert_eq!(ran.requests.len(), 3, "{mode:?}");
+        }
+    }
+
+    /// The trail says that a call was held and what came of it, by count. Neither the file the
+    /// planner named nor anything the file held is in the line.
+    #[test]
+    fn the_trail_records_the_count_and_the_answer_and_nothing_the_call_carried() {
+        let ran = run(
+            "repeat-trail",
+            vec![
+                read("a.txt"),
+                read("a.txt"),
+                read("a.txt"),
+                reply_with("done"),
+            ],
+            vec![refuse()],
+            None,
+        );
+        assert_eq!(ran.trail.len(), 1, "{:?}", ran.trail);
+        let line = &ran.trail[0];
+        assert!(
+            line.contains("3 times in a row") && line.contains("not run"),
+            "{line}"
+        );
+        assert!(
+            !line.contains("a.txt") && !line.contains("SENTINEL"),
+            "{line}"
+        );
+    }
+
+    /// Every question has a key of its own: an interface remembers an answer by key.
+    #[test]
+    fn two_held_calls_are_two_questions() {
+        let ran = run(
+            "repeat-keys",
+            vec![
+                read("a.txt"),
+                read("a.txt"),
+                read("a.txt"),
+                read("a.txt"),
+                reply_with("done"),
+            ],
+            vec![refuse(), refuse()],
+            None,
+        );
+        assert_eq!(
+            ran.asked.len(),
+            2,
+            "a call refused once is held again when repeated"
+        );
+        assert_ne!(ran.asked[0].prompts[0].key, ran.asked[1].prompts[0].key);
     }
 }

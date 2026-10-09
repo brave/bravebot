@@ -42,6 +42,7 @@ pub mod programs;
 pub mod reach;
 pub mod regex;
 pub mod remembered;
+mod repeated_call;
 pub mod replace;
 pub mod report;
 pub mod request_view;
