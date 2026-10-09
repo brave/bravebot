@@ -10118,6 +10118,41 @@ mod tests {
             .collect()
     }
 
+    /// The frame drawn after the terminal changed size is the one a terminal of that size would
+    /// have drawn from the start: the hint row sits on the new bottom row and is fitted to the new
+    /// width, nothing left from the old layout. Both directions, since a narrowing leaves a row too
+    /// wide behind and a widening leaves one too short.
+    #[test]
+    fn a_frame_drawn_after_a_resize_is_the_frame_of_a_terminal_that_size_from_the_start() {
+        let session = typed("a line in the box");
+        for (from, to) in [((100, 30), (40, 12)), ((40, 12), (100, 30))] {
+            let mut terminal = Terminal::new(TestBackend::new(from.0, from.1)).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    draw(frame, &session);
+                })
+                .expect("first draw succeeds");
+            terminal.backend_mut().resize(to.0, to.1);
+            terminal
+                .draw(|frame| {
+                    draw(frame, &session);
+                })
+                .expect("draw after the resize succeeds");
+
+            let mut fresh = Terminal::new(TestBackend::new(to.0, to.1)).expect("terminal");
+            fresh
+                .draw(|frame| {
+                    draw(frame, &session);
+                })
+                .expect("fresh draw succeeds");
+            assert_eq!(
+                terminal.backend().buffer(),
+                fresh.backend().buffer(),
+                "{from:?} to {to:?} left the old layout on the screen"
+            );
+        }
+    }
+
     fn typed(text: &str) -> Session {
         let mut session = Session::new("test");
         for c in text.chars() {
