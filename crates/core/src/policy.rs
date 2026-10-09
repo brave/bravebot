@@ -742,6 +742,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.fetching = None;
     }
 
+    /// Whether a `fetch_url` call is between [`Policy::before_fetch`] and
+    /// [`Policy::fetch_finished`].
+    ///
+    /// For the egress path to scope the check on what a name resolves to the way
+    /// [`Policy::before_network`] scopes its host confinement: to the fetch, not to the
+    /// connections a person set up themselves.
+    pub fn fetch_in_flight(&self) -> bool {
+        self.fetching.is_some()
+    }
+
     /// Confine egress to where a declared server is, until the request reports back.
     ///
     /// A remote server is reached over the network and nowhere else, so the declaration's host
@@ -10926,6 +10936,23 @@ five
             policy.before_network("https://elsewhere.test/x").is_ok(),
             "a finished fetch went on confining where the turn could reach"
         );
+    }
+
+    /// The egress path scopes its check of what a name resolves to by this, so it has to be true
+    /// from the approval to the end of the call and not after.
+    #[test]
+    fn a_fetch_is_in_flight_from_its_approval_until_it_finishes() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        assert!(!policy.fetch_in_flight());
+
+        let url = "https://example.com/start";
+        policy.endorse_fetch(url);
+        policy.before_fetch(url).expect("the fetch was allowed");
+        assert!(policy.fetch_in_flight());
+
+        policy.fetch_finished();
+        assert!(!policy.fetch_in_flight());
     }
 
     /// A declared server is one destination and a redirect names another, so the hop is refused

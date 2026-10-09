@@ -28,6 +28,7 @@
 
 #![forbid(unsafe_code)]
 
+mod address;
 pub mod transport;
 
 pub use transport::{Transport, TrustError, TrustRoots};
@@ -112,6 +113,12 @@ pub enum EgressError {
     InvalidUrl { url: String, detail: String },
     /// A redirect would have continued an https chain over cleartext http.
     InsecureRedirect { url: String },
+    /// The host resolved to an address that is not public: this machine, a private network, a link
+    /// local address or a metadata service.
+    ///
+    /// Carries the URL and nothing of the address. Where it was found is a fact about the network
+    /// the answer came from, and the request was never sent.
+    AddressRefused { url: String },
     /// Transport failure.
     Transport {
         url: String,
@@ -149,6 +156,12 @@ impl fmt::Display for EgressError {
             Self::InsecureRedirect { url } => {
                 write!(f, "{url} was redirected out of https to cleartext http")
             }
+            Self::AddressRefused { url } => {
+                write!(
+                    f,
+                    "{url} was not fetched: its host is not at a public address"
+                )
+            }
             Self::Transport { url, detail, .. } => {
                 write!(f, "request to {url} failed: {detail}")
             }
@@ -177,6 +190,9 @@ impl EgressError {
             | Self::InvalidUrl { .. }
             // The same chain answers the same way, so another attempt is the same downgrade.
             | Self::InsecureRedirect { .. }
+            // A name answers where it pointed a moment ago, and a person is not told to try again
+            // at something that was refused for where it is.
+            | Self::AddressRefused { .. }
             // The same reply takes as long again and is billed again.
             | Self::OutOfTime { .. }
             // The one error that says the reply is not wanted. Sending it again would be
@@ -207,6 +223,7 @@ impl EgressError {
             // The detail here is this crate's own sentence about a shape, so it survives.
             Self::InvalidUrl { detail, .. } => Self::InvalidUrl { url, detail },
             Self::InsecureRedirect { .. } => Self::InsecureRedirect { url },
+            Self::AddressRefused { .. } => Self::AddressRefused { url },
             // The detail here is the transport's, and a transport reports a URL it could not use
             // by quoting it: `ureq::Error::BadUri` is "bad uri: <the whole string>". Keeping the
             // ones that do not quote it would mean reading the detail to decide, which is a
@@ -428,6 +445,10 @@ impl Request {
 /// The one way out of the process.
 pub struct Egress {
     agent: ureq::Agent,
+    /// The same configuration, resolving through [`address::GuardedResolver`]. A fetch in flight is
+    /// sent with this one and everything else with `agent`, so a local model endpoint on loopback
+    /// is untouched.
+    guarded: ureq::Agent,
     /// What the agent was configured with, so a request stating its own reply bound can have the
     /// phases that carry it worked out again the same way.
     timeouts: Timeouts,
@@ -493,10 +514,53 @@ impl Egress {
             // Recomputed on every read, which is what makes it a gap rather than a total.
             .timeout_recv_body(Some(timeouts.idle))
             .build();
+        let guarded = ureq::Agent::with_parts(
+            config.clone(),
+            ureq::unversioned::transport::DefaultConnector::default(),
+            address::GuardedResolver::new(),
+        );
         Self {
             agent: config.into(),
+            guarded,
             timeouts,
         }
+    }
+
+    /// As built, with the lookup a fetch in flight makes replaced, so a test can state what a name
+    /// resolves to without a name server.
+    #[cfg(test)]
+    fn guarded_by(mut self, resolver: address::GuardedResolver) -> Self {
+        self.guarded = ureq::Agent::with_parts(
+            self.agent.config().clone(),
+            ureq::unversioned::transport::DefaultConnector::default(),
+            resolver,
+        );
+        self
+    }
+
+    /// The agent for one request: the guarded one for a fetch in flight that no proxy stands in
+    /// front of.
+    ///
+    /// A proxy resolves the target itself, and ureq resolves the proxy's own host through the
+    /// resolver instead, so guarding that lookup would refuse a proxy on this machine and check
+    /// nothing about the target. That cost is recorded in `docs/specs/tools/fetch-url.md`.
+    fn agent_for(&self, fetching: bool, url: &str) -> &ureq::Agent {
+        if fetching && !self.proxied(url) {
+            &self.guarded
+        } else {
+            &self.agent
+        }
+    }
+
+    /// Whether a proxy stands between this machine and `url`'s host.
+    fn proxied(&self, url: &str) -> bool {
+        let Ok(uri) = url.parse::<ureq::http::Uri>() else {
+            return false;
+        };
+        self.agent
+            .config()
+            .proxy()
+            .is_some_and(|proxy| !proxy.is_no_proxy(&uri))
     }
 
     /// Send a request, checking the policy before the initial URL and before every
@@ -603,12 +667,7 @@ impl Egress {
         let Ok(uri) = url.parse::<ureq::http::Uri>() else {
             return false;
         };
-        let proxied = self
-            .agent
-            .config()
-            .proxy()
-            .is_some_and(|proxy| !proxy.is_no_proxy(&uri));
-        !proxied && uri.host().is_some_and(names_this_machine)
+        !self.proxied(url) && uri.host().is_some_and(names_this_machine)
     }
 
     /// The redirect loop itself: send, revalidate, follow, and hand back the body reader unread.
@@ -623,6 +682,7 @@ impl Egress {
     ) -> Result<(u16, Option<String>, Box<dyn std::io::Read + Send>), EgressError> {
         let mut url = request.url.clone();
         let mut hops = 0;
+        let fetching = policy.fetch_in_flight();
 
         loop {
             require_http_scheme(&url)?;
@@ -636,8 +696,14 @@ impl Egress {
                 && hops == 0
                 && self.reaches_here(&url);
             let response = match cancel {
-                Some(cancel) => self.send_watching(request, &url, patient, cancel)?,
-                None => send(&self.agent, self.timeouts, request, &url, patient)?,
+                Some(cancel) => self.send_watching(request, &url, patient, fetching, cancel)?,
+                None => send(
+                    self.agent_for(fetching, &url),
+                    self.timeouts,
+                    request,
+                    &url,
+                    patient,
+                )?,
             };
             let status = response.0;
 
@@ -683,10 +749,15 @@ impl Egress {
         request: &Request,
         url: &str,
         patient: bool,
+        fetching: bool,
         cancel: &Cancel,
     ) -> Result<Sent, EgressError> {
         let (answered, waiting) = std::sync::mpsc::channel();
-        let (agent, hop, target) = (self.agent.clone(), request.clone(), url.to_string());
+        let (agent, hop, target) = (
+            self.agent_for(fetching, url).clone(),
+            request.clone(),
+            url.to_string(),
+        );
         let timeouts = self.timeouts;
         std::thread::spawn(move || {
             // A send that fails means the caller stopped, so there is nobody left to answer.
@@ -769,6 +840,11 @@ fn send(
             if matches!(request.reply, Some(ReplyBound::Whole(_))) =>
         {
             return Err(EgressError::OutOfTime {
+                url: url.to_string(),
+            });
+        }
+        Err(e) if address::is_refusal(&e) => {
+            return Err(EgressError::AddressRefused {
                 url: url.to_string(),
             });
         }
@@ -863,6 +939,7 @@ fn failure_fields(
         EgressError::MissingLocation { .. } => ("missing_location", None),
         EgressError::InvalidUrl { .. } => ("invalid_url", None),
         EgressError::InsecureRedirect { .. } => ("insecure_redirect", None),
+        EgressError::AddressRefused { .. } => ("address_refused", None),
         EgressError::Transport { .. } => ("transport", None),
         EgressError::OutOfTime { .. } => ("out_of_time", None),
         EgressError::Status { status, .. } => ("status", Some(*status)),
@@ -1517,5 +1594,310 @@ mod tests {
         }
 
         assert!(read_capped(Box::new(Interrupted)).is_err());
+    }
+
+    /// What `names` resolve to, one answer per lookup in order, the last one repeating. Counts the
+    /// lookups, since a second one is how an answer would differ from the address connected to.
+    #[derive(Debug)]
+    struct Answers {
+        lookups: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        answers: Vec<Vec<std::net::IpAddr>>,
+    }
+
+    impl ureq::unversioned::resolver::Resolver for Answers {
+        fn resolve(
+            &self,
+            uri: &ureq::http::Uri,
+            _: &ureq::config::Config,
+            _: ureq::unversioned::transport::NextTimeout,
+        ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+            let nth = self
+                .lookups
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let answer = &self.answers[nth.min(self.answers.len() - 1)];
+            let mut found = self.empty();
+            for ip in answer {
+                found.push(std::net::SocketAddr::new(*ip, uri.port_u16().unwrap_or(80)));
+            }
+            Ok(found)
+        }
+    }
+
+    fn ip(text: &str) -> std::net::IpAddr {
+        text.parse().expect("an address")
+    }
+
+    fn loopback_only(address: std::net::IpAddr) -> bool {
+        address == ip("127.0.0.1")
+    }
+
+    /// An egress whose fetches resolve through `answers`, with `admits` standing in for the
+    /// classification where a test needs an address it can actually connect to.
+    fn egress_resolving(
+        answers: Vec<Vec<&str>>,
+        admits: fn(std::net::IpAddr) -> bool,
+    ) -> (Egress, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let lookups = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let resolver = Answers {
+            lookups: lookups.clone(),
+            answers: answers
+                .into_iter()
+                .map(|answer| answer.into_iter().map(ip).collect())
+                .collect(),
+        };
+        let egress = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+        )
+        .guarded_by(address::GuardedResolver::over(resolver, admits));
+        (egress, lookups)
+    }
+
+    /// A listener that counts connections and answers each with `responses` in turn.
+    fn serve_counting(
+        responses: Vec<String>,
+    ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = connections.clone();
+        std::thread::spawn(move || {
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    if line == "\r\n" {
+                        break;
+                    }
+                    line.clear();
+                }
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (port, connections)
+    }
+
+    fn page(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn redirect(location: &str) -> String {
+        format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    /// Runs `request` as a `fetch_url` call would: approved, then in flight.
+    fn fetched(egress: &Egress, request: Request) -> Result<Response, EgressError> {
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "fetch a page");
+        let mut sink = bravebot_core::event::NullSink;
+        let Ok(mut policy) = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        ) else {
+            panic!("policy begins");
+        };
+        policy.endorse_fetch(&request.url);
+        assert!(policy.before_fetch(&request.url).is_ok(), "approved");
+        let outcome = egress.fetch(&mut policy, request, Label::untrusted_public());
+        policy.fetch_finished();
+        outcome
+    }
+
+    #[test]
+    fn a_name_resolving_to_a_non_public_address_is_refused_before_any_request_is_sent() {
+        for answer in [
+            "10.1.2.3",
+            "192.168.0.7",
+            "172.20.0.1",
+            "169.254.169.254",
+            "fe80::1",
+            "fd00:ec2::254",
+            "100.100.100.200",
+            "::ffff:169.254.169.254",
+        ] {
+            let (egress, lookups) = egress_resolving(vec![vec![answer]], address::is_public);
+            let outcome = fetched(&egress, Request::get("http://docs.example.test:9/page"));
+            assert!(
+                matches!(&outcome, Err(EgressError::AddressRefused { url }) if url == "http://docs.example.test:9/page"),
+                "{answer}: {outcome:?}"
+            );
+            assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
+
+    /// Only the lookup is guarded. A listener on loopback that does answer shows the refusal came
+    /// before the connection and not from there being nothing to connect to.
+    #[test]
+    fn a_refused_address_is_never_connected_to() {
+        let (port, connections) = serve_counting(vec![page("secret")]);
+        let (egress, _) = egress_resolving(vec![vec!["127.0.0.1"]], address::is_public);
+        let outcome = fetched(
+            &egress,
+            Request::get(format!("http://rebind.example.test:{port}/")),
+        );
+        assert!(matches!(outcome, Err(EgressError::AddressRefused { .. })));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// An answer holding one address that is not public is the name pointing somewhere it should
+    /// not, however many of the others are fine.
+    #[test]
+    fn one_non_public_address_among_public_ones_refuses_the_name() {
+        let (port, connections) = serve_counting(vec![page("x")]);
+        let (egress, _) = egress_resolving(vec![vec!["127.0.0.1", "10.0.0.1"]], loopback_only);
+        let outcome = fetched(
+            &egress,
+            Request::get(format!("http://mixed.example.test:{port}/")),
+        );
+        assert!(matches!(outcome, Err(EgressError::AddressRefused { .. })));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// The same name on the next hop is looked up again and classified again, so an answer that
+    /// changes between hops is caught on the hop it changed.
+    #[test]
+    fn a_redirect_hop_resolving_to_a_non_public_address_is_refused_and_names_the_url_asked_for() {
+        // A path-absolute Location keeps the host, so the redirect is one the approval allows.
+        let (port, connections) = serve_counting(vec![redirect("/second"), page("not reached")]);
+        let (egress, lookups) = egress_resolving(
+            vec![vec!["127.0.0.1"], vec!["169.254.169.254"]],
+            |address| address == ip("127.0.0.1") || address::is_public(address),
+        );
+        let asked = format!("http://hop.example.test:{port}/first");
+        let outcome = fetched(&egress, Request::get(&asked));
+
+        match outcome {
+            Err(EgressError::AddressRefused { url }) => assert_eq!(url, asked),
+            other => panic!("expected the second hop refused: {other:?}"),
+        }
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 2);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            connections.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "only the first hop was sent"
+        );
+    }
+
+    /// The connection goes to the address that was classified: one lookup per hop, whatever a
+    /// later lookup would have said.
+    #[test]
+    fn the_connection_is_made_to_the_address_that_was_classified() {
+        let (port, connections) = serve_counting(vec![page("served")]);
+        let (egress, lookups) =
+            egress_resolving(vec![vec!["127.0.0.1"], vec!["10.255.255.1"]], loopback_only);
+        let response = fetched(
+            &egress,
+            Request::get(format!("http://pinned.example.test:{port}/")),
+        )
+        .expect("the classified address is connected to");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A host written as an address is what the person approved, so nothing it resolves to is a
+    /// surprise to refuse.
+    #[test]
+    fn an_approved_host_that_is_itself_an_address_is_fetched() {
+        let (port, _) = serve_counting(vec![page("local")]);
+        let egress = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+        );
+        let response = fetched(&egress, Request::get(format!("http://127.0.0.1:{port}/")))
+            .expect("an address literal is not a name");
+        assert_eq!(response.status, 200);
+    }
+
+    /// Everything but a fetch keeps the agent it had: the model endpoint a person runs on
+    /// loopback is reached by name too.
+    #[test]
+    fn a_request_that_is_not_a_fetch_may_still_resolve_to_this_machine() {
+        let (port, _) = serve_counting(vec![page("model")]);
+        let egress = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+        );
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "ask the model");
+        let mut sink = bravebot_core::event::NullSink;
+        let mut policy = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy begins");
+        let response = egress
+            .fetch(
+                &mut policy,
+                Request::get(format!("http://localhost:{port}/")),
+                Label::untrusted_public(),
+            )
+            .expect("no fetch is in flight");
+        assert_eq!(response.status, 200);
+    }
+
+    /// A proxy resolves the target, and ureq asks this resolver for the proxy's own address, so a
+    /// guarded lookup there would refuse a proxy on this machine and check nothing about the
+    /// target.
+    #[test]
+    fn a_proxied_fetch_is_not_sent_through_the_guarded_lookup() {
+        let proxied = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, Some("http://127.0.0.1:3128"), None),
+        );
+        assert!(std::ptr::eq(
+            proxied.agent_for(true, "http://docs.example.com/"),
+            &proxied.agent
+        ));
+
+        let direct = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+        );
+        assert!(std::ptr::eq(
+            direct.agent_for(true, "http://docs.example.com/"),
+            &direct.guarded
+        ));
+        assert!(std::ptr::eq(
+            direct.agent_for(false, "http://docs.example.com/"),
+            &direct.agent
+        ));
+    }
+
+    #[test]
+    fn a_refused_address_is_a_failure_that_says_nothing_of_the_address_and_is_not_retried() {
+        let error = EgressError::AddressRefused {
+            url: "http://docs.example.com/".into(),
+        };
+        assert!(!error.is_transient());
+        let text = error.to_string();
+        assert!(text.contains("http://docs.example.com/"));
+        let fields = failure_fields("http://docs.example.com/", &error, Duration::ZERO)
+            .expect("a refusal is logged");
+        assert!(fields.iter().any(
+            |(name, value)| *name == "kind" && format!("{value:?}").contains("address_refused")
+        ));
     }
 }
