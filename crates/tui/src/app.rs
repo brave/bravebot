@@ -3642,6 +3642,7 @@ fn handed_to_the_background(
     session: &Session,
     resumable: Option<bravebot_session::sessions::Resumable>,
     lost: Option<&str>,
+    incognito: bool,
 ) -> Result<Ended, String> {
     if !cfg!(unix) {
         return Err(t!(bg_unsupported).to_string());
@@ -3656,7 +3657,7 @@ fn handed_to_the_background(
         return Err(t!(session_bg_keeps_nothing_running).to_string());
     }
     let Some(left) = resumable else {
-        return Err(match bravebot_core::incognito::engaged() {
+        return Err(match incognito {
             true => t!(session_bg_incognito).to_string(),
             false => t!(session_bg_nothing_recorded).to_string(),
         });
@@ -4526,6 +4527,7 @@ fn event_loop(
                 &session,
                 stored.to_resume(),
                 BACKGROUND_LOSES.get().map(String::as_str),
+                bravebot_core::incognito::engaged(),
             ) {
                 Ok(ended) => return Ok(ended),
                 Err(refused) => session.note(refused),
@@ -25966,7 +25968,7 @@ mod tests {
             (editing, Mode::AcceptEdits),
             (planning, Mode::Plan),
         ] {
-            match handed_to_the_background(&session, a_record(), None) {
+            match handed_to_the_background(&session, a_record(), None, false) {
                 Ok(Ended::Background { left, mode }) => {
                     assert_eq!(mode, expected);
                     assert_eq!(left.directory, std::path::PathBuf::from("/work"));
@@ -25984,7 +25986,7 @@ mod tests {
         }
         let session = Session::new("none").starting_in_bypass();
         assert_eq!(
-            handed_to_the_background(&session, a_record(), None).unwrap_err(),
+            handed_to_the_background(&session, a_record(), None, false).unwrap_err(),
             t!(session_bg_bypass).to_string()
         );
     }
@@ -25998,7 +26000,7 @@ mod tests {
         }
         let session = Session::new("none");
         let refused =
-            handed_to_the_background(&session, a_record(), Some("--no-shell")).unwrap_err();
+            handed_to_the_background(&session, a_record(), Some("--no-shell"), false).unwrap_err();
         assert_eq!(
             refused,
             t!(session_bg_option_lost, flag = "--no-shell").to_string()
@@ -26014,16 +26016,19 @@ mod tests {
             return;
         }
         let session = Session::new("none");
-        let refused = handed_to_the_background(&session, None, None).unwrap_err();
-        assert!(
-            refused == t!(session_bg_nothing_recorded) || refused == t!(session_bg_incognito),
-            "{refused}"
+        assert_eq!(
+            handed_to_the_background(&session, None, None, false).unwrap_err(),
+            t!(session_bg_nothing_recorded).to_string()
+        );
+        assert_eq!(
+            handed_to_the_background(&session, None, None, true).unwrap_err(),
+            t!(session_bg_incognito).to_string()
         );
 
         let mut session = Session::new("none");
         session.start_goal("the tests pass".to_string());
         assert_eq!(
-            handed_to_the_background(&session, a_record(), None).unwrap_err(),
+            handed_to_the_background(&session, a_record(), None, false).unwrap_err(),
             t!(session_bg_keeps_nothing_running).to_string()
         );
     }
