@@ -1428,6 +1428,70 @@ mod tests {
         }
     }
 
+    /// SANDBOX-26: under `standard` a requested scope lifts the refusal of its own credential
+    /// directory on a stage that names nothing, and no other. The control is the same stage with
+    /// no request, which is refused all three. The regression it rejects is a request that the
+    /// mode accepts and the profile then ignores, or one that lifts every credential.
+    #[test]
+    fn a_requested_scope_lifts_its_own_refused_directory_under_standard() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let script = step("/bin/sh", &["-c", "aws s3 ls"]);
+            let base = reading_confinement(prelude, &["/work/project"]);
+            assert_eq!(base.mode, SandboxMode::Standard);
+            let control = base.policy(&script, Path::new("/work/project"), &[]);
+            for directory in [".aws", ".kube", ".docker"] {
+                let path = format!("{HOME}/{directory}/credentials");
+                assert!(refuses(&control, &path), "{prelude:?} {directory} control");
+            }
+            for (scope, own) in [
+                (Scope::Aws, ".aws"),
+                (Scope::Kubernetes, ".kube"),
+                (Scope::Docker, ".docker"),
+            ] {
+                let asked = base
+                    .clone()
+                    .with_requested(&[Requested::Scope(scope)])
+                    .policy(&script, Path::new("/work/project"), &[]);
+                for directory in [".aws", ".kube", ".docker"] {
+                    let path = format!("{HOME}/{directory}/credentials");
+                    assert_eq!(
+                        !refuses(&asked, &path),
+                        directory == own,
+                        "{prelude:?} {scope:?} and {directory}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// SANDBOX-26: under `standard` a requested remote scope lends the ssh agent socket to a
+    /// script that names no `git`, and still refuses the private keys in `~/.ssh`. The controls are
+    /// the same stage with no request, and a stage that asked for another scope.
+    #[test]
+    fn a_requested_remote_scope_lends_the_agent_socket_under_standard() {
+        let socket = "/run/agent.sock";
+        let environment = vec![("SSH_AUTH_SOCK".to_string(), socket.to_string())];
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let script = step("/usr/bin/python3", &["pr-fix.py", "start", "1"]);
+            let base = reading_confinement(prelude, &["/work/project"]);
+            let ask = |scope| {
+                base.clone()
+                    .with_requested(&[Requested::Scope(scope)])
+                    .policy(&script, Path::new("/work/project"), &environment)
+            };
+            let control = base.policy(&script, Path::new("/work/project"), &environment);
+            let remote = ask(Scope::Remote);
+            let other = ask(Scope::Aws);
+
+            assert!(writes(&remote, socket), "{prelude:?} remote");
+            assert!(!writes(&control, socket), "{prelude:?} control");
+            assert!(!writes(&other, socket), "{prelude:?} another scope");
+            for policy in [&control, &remote] {
+                assert!(refuses(policy, &format!("{HOME}/.ssh/id_ed25519")));
+            }
+        }
+    }
+
     /// SANDBOX-16, SANDBOX-26: a requested scope reads the place the process environment moves its
     /// tool's configuration to, for a stage whose argv names no tool, and only that scope's
     /// variables. The control is the same stage asked for the scope with the variable unset, and a
