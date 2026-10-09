@@ -790,6 +790,7 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
                 ("sh".into(), Requested::Scope(Scope::Aws)),
                 ("sh".into(), Requested::Scope(Scope::Docker)),
             ],
+            requested_reaches: vec![],
             carried: vec![],
         }),
         record: None,
