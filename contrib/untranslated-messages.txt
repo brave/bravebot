@@ -44,6 +44,9 @@ fr:doctor-scrub-pattern-matched
 fr:doctor-settings-summary-ignored
 fr:doctor-state-directory-logs
 fr:reply-stopping
+fr:request-instruction-file
+fr:request-instruction-files
+fr:request-no-instruction-files
 fr:summary-model-needs-sign-in
 fr:summary-model-not-served
 fr:summary-model-refused
