@@ -113,7 +113,14 @@ pub fn cut(snapshot: &Snapshot, said: &[Said], ordinal: usize) -> Option<Cut> {
     // for the archive is still at the head of the messages where it was.
     let archived = snapshot.archive.len();
     let (messages, archive) = if cut_at <= archived {
-        (snapshot.archive[..cut_at].to_vec(), Vec::new())
+        // Without the skills a compaction sent again: the results they repeat are in the same
+        // list, and both in one request would put the skill in it twice.
+        let restored = snapshot.archive[..cut_at]
+            .iter()
+            .filter(|stored| !matches!(stored.composed, Some(Composed::SkillKept { .. })))
+            .cloned()
+            .collect();
+        (restored, Vec::new())
     } else {
         (
             snapshot.messages[..cut_at - archived].to_vec(),
@@ -365,6 +372,31 @@ mod tests {
             cut.before.archive.is_empty(),
             "nothing is left standing in for"
         );
+    }
+
+    /// A skill a compaction sent again repeats a result that is in the archive too, and a fork
+    /// that restored both would put the skill in the child's request twice.
+    #[test]
+    fn a_fork_inside_the_archive_leaves_out_the_skills_a_compaction_sent_again() {
+        let mut before = snapshot(Vec::new());
+        before.messages.push(Stored::plain(Message::user("third")));
+        before.archive = plain(vec![Message::user("first"), Message::assistant("one")]);
+        before.archive.push(Stored {
+            message: Message::user("You loaded the skill commit-style earlier. BODY"),
+            composed: Some(Composed::SkillKept {
+                name: "commit-style".into(),
+            }),
+            source: None,
+        });
+        before.archive.extend(plain(vec![
+            Message::user("second"),
+            Message::assistant("two"),
+        ]));
+        let said = drawn(&before);
+        assert_eq!(prompts(&said), vec!["first", "second", "third"]);
+
+        let cut = cut(&before, &said, 1).expect("the archived second prompt");
+        assert_eq!(texts(&cut.before.messages), vec!["first", "one"]);
     }
 
     #[test]
