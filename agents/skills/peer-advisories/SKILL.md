@@ -115,8 +115,8 @@ python3 agents/skills/peer-advisories/peer-advisories.py draft --work-dir "$WORK
 Print its output: one title and label set per confirmed defect. The labels follow
 [labelling-issues.md](../../../docs/development/labelling-issues.md): a kind, `security` with
 `needs-security-review` and a `severity/*` only where untrusted content reaches the driver or the
-planner or steers an approved effect, an `area/*` where one is clear, and never an `importance`,
-`urgency` or `size`.
+planner or steers an approved effect, an `area/*` where one is clear, `release-blocking` on every
+one, and never an `importance`, `urgency` or `size`.
 
 ### Step 6: file (zero model tokens)
 
