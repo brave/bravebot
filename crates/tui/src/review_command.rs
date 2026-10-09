@@ -176,6 +176,7 @@ mod tests {
         parse(argument).unwrap_or_else(|| panic!("{argument:?} was refused"))
     }
 
+    /// `/review` with nothing after it is the common case, and it has to need no target word.
     #[test]
     fn a_bare_command_reviews_the_uncommitted_changes() {
         assert_eq!(
@@ -187,6 +188,8 @@ mod tests {
         );
     }
 
+    /// Each reserved word has to select its own target, or the prompt tells the turn to fetch a diff
+    /// other than the one asked for.
     #[test]
     fn each_reserved_word_names_its_target() {
         assert_eq!(asked("staged").target, Target::Staged);
@@ -203,6 +206,8 @@ mod tests {
         );
     }
 
+    /// The focus is the person's own emphasis. Dropping it, or folding it into the ref, changes what
+    /// is reviewed or what the review looks at.
     #[test]
     fn words_after_the_target_are_the_focus() {
         let asked = asked("since main the locking in the cache");
@@ -210,6 +215,8 @@ mod tests {
         assert_eq!(asked.focus.as_deref(), Some("the locking in the cache"));
     }
 
+    /// A sentence that happens to contain `staged` is a focus, not a target. Matching it anywhere,
+    /// or as a prefix of another word, would silently review something else.
     #[test]
     fn a_reserved_word_only_counts_as_the_first_word() {
         let asked = asked("the staged changes");
@@ -219,6 +226,9 @@ mod tests {
         assert_eq!(asked.target, Target::Uncommitted);
     }
 
+    /// A target with no ref, or a pull request that is not a number or a github.com pull address,
+    /// has to be refused with a usage note. Guessing would run `gh` or `git` on a value nobody
+    /// meant.
     #[test]
     fn a_target_word_without_a_usable_name_is_refused() {
         for argument in [
@@ -248,6 +258,8 @@ mod tests {
         assert_eq!(parse(&format!("commit {long}")), None);
     }
 
+    /// The command in the prompt is what the turn runs to fetch the diff, so each target must name
+    /// its own, and the focus must reach the end of the prompt unchanged.
     #[test]
     fn the_prompt_names_the_target_and_carries_the_focus() {
         let text = prompt(&asked("commit abc123 error handling"));
@@ -259,6 +271,8 @@ mod tests {
         assert!(prompt(&asked("pr 7")).contains("gh pr diff 7"));
     }
 
+    /// An `@` path in a program-written prompt would count as the person vouching for that file
+    /// without having typed it.
     #[test]
     fn the_prompt_names_no_path_for_the_person_to_vouch_for() {
         for argument in ["", "staged", "since main", "commit abc", "pr 7"] {
