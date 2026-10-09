@@ -1351,6 +1351,26 @@ fn composed_after_touching(
     touched: &[&str],
     distrusted: &[&str],
 ) -> preamble::Preamble {
+    composed_under_rules(name, files, touched, distrusted, &[])
+}
+
+/// [`composed_after_touching`] with `deny` rules in force. Every rule must parse: a test whose
+/// rule was silently dropped would pass by matching nothing.
+fn composed_under_rules(
+    name: &str,
+    files: &[(&str, &str)],
+    touched: &[&str],
+    distrusted: &[&str],
+    deny: &[&str],
+) -> preamble::Preamble {
+    let deny: Vec<String> = deny.iter().map(|rule| rule.to_string()).collect();
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &deny,
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "a rule in this test did not parse");
     let scratch = Scratch::new(name);
     let project = scratch.directory("project");
     for (path, contents) in files {
@@ -1376,7 +1396,8 @@ fn composed_after_touching(
         &mut sink,
     )
     .expect("policy")
-    .with_trust(store);
+    .with_trust(store)
+    .with_permissions(permissions);
     preamble::compose(
         &mut policy,
         &workspace,
@@ -1475,6 +1496,37 @@ fn a_distrusted_nested_agents_file_never_reaches_the_prompt() {
             .map(|notice| notice.message.as_str())
             .collect::<Vec<_>>(),
         ["pkg/AGENTS.md was not loaded: this directory is not trusted"],
+    );
+}
+
+/// A deny rule covering a nested file keeps it out of the prompt even where the trust map vouches
+/// for its directory, and the person is told which file, as for the project's own (PERM-7).
+#[test]
+fn a_nested_agents_file_a_deny_rule_covers_never_reaches_the_prompt() {
+    let files = [
+        ("pkg/AGENTS.md", "PKG-RULES"),
+        ("lib/AGENTS.md", "LIB-RULES"),
+    ];
+
+    let preamble = composed_under_rules(
+        "nested-denied",
+        &files,
+        &["pkg/a.rs", "lib/a.rs"],
+        &[],
+        &["Read(./pkg/AGENTS.md)"],
+    );
+
+    assert!(!preamble.text.contains("PKG-RULES"), "{}", preamble.text);
+    assert!(
+        preamble.text.contains("LIB-RULES"),
+        "the file no rule covers was left out too: {}",
+        preamble.text
+    );
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+    assert!(
+        preamble.notices[0].message.contains("pkg/AGENTS.md"),
+        "{:?}",
+        preamble.notices
     );
 }
 

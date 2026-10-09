@@ -449,6 +449,7 @@ which file is read.
 `verified-by: bravebot_agent::preamble::a_nested_agents_file_is_in_the_prompt_only_after_a_path_under_it_is_touched`
 `verified-by: bravebot_agent::preamble::nested_agents_files_follow_the_root_one_and_the_deeper_is_last`
 `verified-by: bravebot_agent::preamble::a_distrusted_nested_agents_file_never_reaches_the_prompt`
+`verified-by: bravebot_agent::preamble::a_nested_agents_file_a_deny_rule_covers_never_reaches_the_prompt`
 `verified-by: bravebot_agent::preamble::a_path_outside_the_root_does_not_make_its_directory_a_source`
 `verified-by: bravebot_agent::skills::a_nested_skill_is_offered_after_the_session_works_in_its_directory`
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_and_not_named`
