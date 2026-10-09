@@ -209,6 +209,74 @@ def test_a_rebase_without_a_conflict_leaves_nothing_resolved_to_check():
         assert code == 0 and "CI runs the rest" in out, out
 
 
+def unsignable(clone):
+    """Every commit is to be signed and the signing program fails, as when the signing key is missing."""
+    git("config", "commit.gpgsign", "true", cwd=clone)
+    git("config", "gpg.program", "false", cwd=clone)
+
+
+def test_a_rebase_stopped_by_a_signing_failure_says_so_when_it_starts():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, seed, fork = world(Path(tmp).resolve())
+        git("checkout", "-q", "-b", "clean", "main~1", cwd=seed)
+        (seed / "b.txt").write_text("no conflict\n")
+        git("add", "b.txt", cwd=seed)
+        git("commit", "-q", "-m", "clean change", cwd=seed)
+        git("push", "-q", "-f", str(fork), "clean:feature", cwd=seed)
+        unsignable(pr().here)
+
+        code, out = quietly(pr_fix.start, pr())
+        assert code == 1, out
+        assert "stopped at 1/1: " in out and "clean change" in out, out
+        assert "stopped without a conflict; git said:" in out, out
+        assert "  error: gpg failed to sign the data:" in out, "git's own error is the reason it stopped"
+        assert "hint:" not in out and "edit-todo" not in out, "the hints are not the reason"
+
+
+def test_a_rebase_stopped_by_a_signing_failure_says_so_when_it_continues():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, seed, fork = world(Path(tmp).resolve())
+        git("checkout", "-q", "feature", cwd=seed)
+        (seed / "b.txt").write_text("second\n")
+        git("add", "b.txt", cwd=seed)
+        git("commit", "-q", "-m", "second", cwd=seed)
+        git("push", "-q", str(fork), "feature", cwd=seed)
+        unsignable(pr().here)
+        quietly(pr_fix.start, pr())
+        (pr().tree / "a.txt").write_text("resolved\n")
+
+        code, out = quietly(pr_fix.resume, pr())
+        assert code == 1, out
+        assert "stopped without a conflict; git said:" in out, out
+        assert "  error: gpg failed to sign the data:" in out, "git's own error is the reason it stopped"
+        assert "hint:" not in out and "edit-todo" not in out, "the hints are not the reason"
+
+
+def test_a_step_counter_git_did_not_state_is_left_out_rather_than_printed_as_a_question_mark():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, _ = world(Path(tmp).resolve())
+        quietly(pr_fix.start, pr())
+        state = pr_fix.rebase_dir(pr().tree)
+        assert (state / "msgnum").is_file() and (state / "end").is_file()
+        _, out = quietly(pr_fix.report, pr())
+        assert "stopped at 1/1: " in out, out
+
+        (state / "end").unlink()
+        _, out = quietly(pr_fix.report, pr())
+        assert "stopped: " in out and "?" not in out, out
+
+
+def test_what_git_said_is_cut_to_its_error_and_leaves_the_hints_behind():
+    said = "Rebasing (1/2)\rerror: gpg failed to sign the data:\n(no gpg output)\nerror: failed to write commit object\nhint: Could not execute\nhint:\nhint:     git rebase --continue\n"
+    assert pr_fix.stop_reason(said) == [
+        "error: gpg failed to sign the data:",
+        "(no gpg output)",
+        "error: failed to write commit object",
+    ]
+    assert pr_fix.stop_reason("") == []
+    assert pr_fix.stop_reason("plain words\nmore words\n") == ["more words"], "no error line: the last line"
+
+
 def test_the_resolved_files_choose_the_checks_and_a_file_no_rule_names_chooses_none():
     with tempfile.TemporaryDirectory() as tmp:
         tree = Path(tmp)
