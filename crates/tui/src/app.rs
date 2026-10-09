@@ -27385,6 +27385,6 @@ mod undo_tests;
 #[path = "credential_mode_tests.rs"]
 mod credential_mode_tests;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "kept_jobs_tests.rs"]
 mod kept_jobs_tests;
