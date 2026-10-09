@@ -669,6 +669,15 @@ A hop that keeps the approved host but drops TLS is a separate question, decided
 leaves the process: an `https` chain is not followed into cleartext. See
 [Security](../security/security.md).
 
+**A name that resolves to a non-public address is not fetched.** Approving `docs.example.com` approves
+a name, and a name resolves to whatever its server says. Each hop's host is looked up once, and if any
+address in the answer is loopback, private, link-local (the cloud metadata address among them),
+unique-local, carrier-grade NAT or otherwise reserved, the fetch fails before anything is sent and the
+connection is made only to the addresses that were checked. A URL whose host is written as an address,
+such as `http://127.0.0.1:8080/`, is what you approved and is fetched; `localhost` is a name. Behind a
+proxy the proxy resolves the target, so the check does not apply there. A model running on loopback is
+unaffected, since this applies to `fetch_url` and nothing else.
+
 **A result names the URL you asked for, never where a redirect went.** A fetch that succeeds names it
 as the origin of what came back; one that fails or is refused names it as the request that did not work,
 with the kind of failure. Past the first hop the address a request is on is a string a server wrote into

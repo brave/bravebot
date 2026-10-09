@@ -32101,6 +32101,53 @@ fn a_failed_fetch_names_the_url_that_was_asked_for_and_not_where_a_redirect_went
     );
 }
 
+/// The host a person approves is a name, and a name resolves to whatever its server says. One that
+/// resolves to this machine is refused as the fetch fails, before any request, and the planner is
+/// told which fetch failed and nothing of the address.
+#[test]
+fn a_fetch_to_a_name_that_resolves_to_this_machine_fails_without_reaching_it() {
+    let scratch = Scratch::new("fetch-resolves-locally");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, requests) = serve_pages(vec![page("SENTINEL-LOCAL-BYTES")]);
+    let url = format!("{}/docs", site.replace("127.0.0.1", "localhost"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{url}"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the docs page"),
+        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(&format!("error: fetching {url} failed")),
+        "the planner was not told which fetch failed: {second}"
+    );
+    assert!(
+        !second.contains("127.0.0.1") && !second.contains("SENTINEL-LOCAL-BYTES"),
+        "an address or a body reached the planner's context: {second}"
+    );
+    assert!(
+        requests
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "a request reached the server the name resolved to"
+    );
+}
+
 /// A redirect off the approved host is refused, and the refusal is reported to the planner the
 /// same way a failure is. The host it names was taken out of the server's `Location` header, so
 /// saying it would be the same leak through the gate that stops the request.
