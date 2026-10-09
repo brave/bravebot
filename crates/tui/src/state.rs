@@ -15996,8 +15996,8 @@ mod tests {
         assert_ne!(first, second);
     }
 
-    /// The count is for the session, not the last turn: the question it answers is what the
-    /// whole conversation has cost.
+    /// The `/context` rows must add up to the measured total, so each share is a whole number
+    /// and the rounding remainders are handed out rather than dropped.
     #[test]
     fn a_count_is_apportioned_in_whole_numbers_that_add_up_to_it() {
         assert_eq!(apportion(10, &[1, 1, 1]), vec![4, 3, 3]);
@@ -16012,6 +16012,8 @@ mod tests {
         );
     }
 
+    /// The count is for the session, not the last turn: the question it answers is what the
+    /// whole conversation has cost.
     #[test]
     fn tokens_accumulate_across_turns() {
         let mut s = session();
