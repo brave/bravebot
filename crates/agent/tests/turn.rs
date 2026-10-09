@@ -49386,4 +49386,74 @@ mod repeated_call {
         );
         assert_ne!(ran.asked[0].prompts[0].key, ran.asked[1].prompts[0].key);
     }
+
+    /// A delegate's repeated call is refused without a question: the confirmer it is lent belongs
+    /// to a person watching the session, who would be asked about a worker they cannot see. The
+    /// delegate's planner is told the limit was reached, and the person is asked nothing.
+    #[test]
+    fn a_delegates_repeated_call_is_refused_and_the_person_is_not_asked() {
+        let scratch = Scratch::new("repeat-delegate");
+        std::fs::write(scratch.path.join("a.txt"), "SENTINEL-A\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "LOOK-INTO-A-TXT",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"READ-IT-OFTEN"}"#),
+                    reply_with("waiting on the delegate"),
+                    reply_with("the delegate has reported"),
+                ],
+            ),
+            (
+                "READ-IT-OFTEN",
+                vec![
+                    read("a.txt"),
+                    read("a.txt"),
+                    read("a.txt"),
+                    reply_with("the file was read twice"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let mut confirmer = Replies::new(vec![refuse(), refuse()]);
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let mut sink = RecordingSink::new();
+        let ended = turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("LOOK-INTO-A-TXT"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome;
+        assert!(ended.is_ok(), "{:?}", ended.err());
+
+        let asked = every_request(&received);
+        let delegates: Vec<&String> = asked
+            .iter()
+            .filter(|body| !body.contains("LOOK-INTO-A-TXT"))
+            .collect();
+        let told = tool_results(delegates.last().expect("the delegate reached the endpoint"));
+        assert!(
+            told.contains("repetition limit reached"),
+            "the delegate's third identical call was not refused: {told}"
+        );
+        assert_eq!(
+            told.matches("change token").count(),
+            2,
+            "the delegate's third identical call was run"
+        );
+        assert!(
+            confirmer.asked.is_empty(),
+            "a delegate's repeated call was put to the person: {:?}",
+            confirmer.asked
+        );
+    }
 }
