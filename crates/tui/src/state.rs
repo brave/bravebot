@@ -842,7 +842,7 @@ pub enum Spelled {
 /// decode has no thumbnail. The turn reads the file again under its own policy, exactly as
 /// before; this read decides nothing and sends nothing, and happens off the interface's thread.
 fn preview_of_dropped(found: &crate::dropped::Dropped) -> Option<crate::preview::Preview> {
-    let crate::dropped::Kind::Attachment(media) = found.kind else {
+    let bravebot_filetype::by_name::Kind::Attachment(media) = found.kind else {
         return None;
     };
     if !media.starts_with("image/") {
@@ -892,7 +892,7 @@ pub struct Attached {
     pub name: String,
     /// The path as the user's filesystem names it, for showing them what they attached.
     pub shown: String,
-    pub kind: crate::dropped::Kind,
+    pub kind: bravebot_filetype::by_name::Kind,
 }
 
 /// A picture pasted into the line being typed.
@@ -980,7 +980,7 @@ pub fn without_text_files(commanded: Commanded) -> Commanded {
     let (text, carried) = commanded
         .attached
         .into_iter()
-        .partition::<Vec<_>, _>(|file| file.kind == crate::dropped::Kind::Text);
+        .partition::<Vec<_>, _>(|file| file.kind == bravebot_filetype::by_name::Kind::Text);
     Commanded {
         line: put_back_to_names(&commanded.line, &text),
         pasted: commanded.pasted,
@@ -6678,7 +6678,7 @@ impl Session {
                 }) {
                 Some((found, name)) => {
                     self.attachments_made += 1;
-                    let marker = format!("[{} #{}]", found.noun(), self.attachments_made);
+                    let marker = format!("[{} #{}]", found.kind.noun(), self.attachments_made);
                     if let Some(preview) = preview_of_dropped(found) {
                         self.previews.push((marker.clone(), preview));
                     }
@@ -6753,7 +6753,8 @@ impl Session {
         // words before the turn is built, this marker is sent as it stands: the planner reads
         // "[Image #2]" and counts to the picture that answers it. Translating it would change
         // what the model is given, which is the one thing a change of language must not do.
-        let marker = format!("[Image #{}]", self.attachments_made);
+        let noun = bravebot_filetype::by_name::Kind::Attachment(image.media_type).noun();
+        let marker = format!("[{noun} #{}]", self.attachments_made);
         self.paste(&marker);
         // The bytes are the user's own paste, taken from their clipboard a moment ago. A picture
         // that will not decode, or a terminal that draws none, just has no thumbnail.
@@ -12379,7 +12380,8 @@ mod tests {
     /// Only a dropped picture is drawn: a PDF is pages, and a text file is not a picture at all.
     #[test]
     fn only_a_dropped_picture_is_given_a_thumbnail() {
-        use crate::dropped::{Dropped, Kind};
+        use crate::dropped::Dropped;
+        use bravebot_filetype::by_name::Kind;
         let named = |kind| Dropped {
             path: "/tmp/dropped".into(),
             kind,

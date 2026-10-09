@@ -160,6 +160,27 @@ A screenshot somebody sent you is content you have not read and are vouching for
 turn as trusted input on the strength of the gesture alone.
 :::
 
+### Dropping a file on the desktop app
+
+Drag files onto a conversation in the desktop app and they attach the same way, with the same
+types, markers and grants. Each file gets a marker in the message box where the cursor is and a
+chip above it, with a thumbnail for a picture. Delete the marker, or remove the chip, to take the
+file off. A file whose type nothing takes has its path written into the box. A folder is left out,
+and the app says so. **Plan** is off while a file is attached.
+
+A message you send while a turn is running waits in the queue and keeps its files: it goes as its
+own turn when the running one ends, and carries them then.
+
+### Pasting a picture into the desktop app
+
+Paste a picture into the message box of the desktop app, with Command-V on macOS or Ctrl-V elsewhere, and it attaches
+the way a paste does in the terminal. It gets an `[Image #2]` marker where the cursor is, numbered
+with any files dropped into the same message, and a chip above the box with a thumbnail. Delete the
+marker, or remove the chip, to take it off. A picture wins over the text copied beside it, and a
+paste of text alone lands as text. A picture over 10 MB is refused, and the app says how large it
+was. **Plan** is off while a picture is attached, and a message you send while a turn is
+running keeps its pictures, as it keeps dropped files.
+
 ## Pictures and files on a slash command
 
 A [slash command](../reference/commands.md) that sends words to a model takes a pasted picture or a

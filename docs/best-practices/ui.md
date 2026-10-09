@@ -40,12 +40,18 @@ identity and actions in a header.
 **A UI change adds no shortcut, default, or focus behaviour that lets a keypress or a stray click
 approve a decision card.** A card that appears does not take focus from the composer, and a
 decision is reached by a deliberate action on the card. A file reaches a turn as context in one of
-two ways: the native picker's grant, or an `@` name in the prompt the person sends, which is
-trusted context on the terminal's terms ([NAME-1](../specs/naming-files.md#NAME-1),
+four ways: the native picker's grant, an `@` name in the prompt the person sends, a file a person
+dropped on the window, or a picture a person pasted into the composer. An `@` name is trusted
+context on the terminal's terms ([NAME-1](../specs/naming-files.md#NAME-1),
 [NAME-2](../specs/naming-files.md#NAME-2)). The bridge reads each `@` name back out of the sent
 prompt itself and the agent's workspace confines it to the conversation's folder, so neither the
-renderer nor the main process supplies a path. A drag or a paste attaches nothing. The reasoning is
-in `ui/docs/security.md` and `ui/docs/file-access-security.md`.
+renderer nor the main process supplies a path. A dropped file is taken by the preload only from a
+drop event the browser marks trusted (`isTrusted`), and the main process checks it and grants it by
+an opaque id ([DROP-11](../specs/dropping.md#DROP-11)), so the page never holds the path. A pasted
+picture is taken only from a paste event the browser marks trusted, the main process reads the
+clipboard itself and grants the picture by an opaque id
+([PASTE-11](../specs/pasting.md#PASTE-11)), so the page never holds the bytes. The reasoning is in
+`ui/docs/security.md` and `ui/docs/file-access-security.md`.
 
 ---
 

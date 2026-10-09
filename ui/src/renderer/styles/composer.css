@@ -269,6 +269,35 @@
 }
 .attachment-name:hover { text-decoration: underline; }
 .attachment-name:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; border-radius: var(--radius-chip); }
+/* A dropped file: a thumbnail for a picture, the name, and the marker that stands for it in the
+   draft, which is how a person finds it in the text to delete. */
+.attachment-thumb {
+  flex: none;
+  width: auto;
+  max-width: calc(var(--icon-hero) * 2);
+  height: var(--icon-hero);
+  border-radius: var(--radius-chip);
+  object-fit: cover;
+}
+.attachment-label {
+  min-width: 0;
+  max-width: 24ch;
+  overflow: hidden;
+  font: var(--type-code);
+  color: var(--ink-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A pasted picture has no file name, so its label is words rather than a path. */
+.attachment-label.words {
+  font: var(--type-caption);
+}
+.attachment-marker {
+  flex: none;
+  font: var(--type-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
 .attachment-trust {
   display: inline-flex;
   align-items: center;

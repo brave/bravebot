@@ -16,6 +16,10 @@ bravebot-agent = { path = "../agent" }
 # hands us is not a widening of what this depends on.
 bravebot-aichat = { path = "../aichat" }
 bravebot-config = { path = "../config" }
+# What a dropped file's name says it is, the terminal's rule, so the window marks a drop as it does.
+bravebot-filetype = { path = "../filetype" }
+# The note a window shows for a file too large to attach, in the terminal's words.
+bravebot-i18n = { path = "../i18n" }
 # The rules for an `@` name, the ones the terminal uses, so the window reads a line as it does.
 bravebot-mentions = { path = "../mentions" }
 bravebot-net = { path = "../net" }

@@ -3,11 +3,16 @@ id: DROP
 title: Dropping a file on the window
 status: normative
 governs:
+  - crates/filetype/src/by_name.rs
   - crates/tui/src/dropped.rs
   - crates/tui/src/app.rs
   - crates/agent/src/attached.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/attached.rs
+  - ui/src/main/drops.ts
+  - ui/src/preload/index.ts
+  - ui/src/renderer/staging.ts
+  - ui/src/shared/drops.ts
 documented-by: docs/website/docs/using/context.md
 ---
 
@@ -16,7 +21,8 @@ documented-by: docs/website/docs/using/context.md
 What happens when a person drags a file onto a window, and on what footing it enters the turn.
 What the box does with the marker afterwards is [terminal-input.md](terminal-input.md). The
 terminal is where the gesture is handled and most of this describes it; a front end reaching the
-same grant over the protocol is [DROP-10](#DROP-10).
+same grant over the protocol is [DROP-10](#DROP-10), and the desktop window, which is such a front
+end, is [DROP-11](#DROP-11).
 
 Three gestures put content into a turn on the user's own footing, and each has its own spec:
 [naming-files.md](naming-files.md) for `@` in a prompt, [pasting.md](pasting.md) for Ctrl-V, and
@@ -110,8 +116,9 @@ dispatched at rest carries.
 `verified-by: bravebot_tui::drop::dropping_an_unsupported_type_writes_out_the_path`
 `verified-by: bravebot_tui::dropped::an_unsupported_type_is_a_drop_that_attaches_nothing`
 `verified-by: bravebot_tui::dropped::an_unsupported_file_beside_a_supported_one_leaves_it_attachable`
-`verified-by: bravebot_tui::dropped::an_extension_is_recognised_whatever_its_case`
-`verified-by: bravebot_tui::dropped::the_recognised_types_are_the_ones_claude_code_takes`
+`verified-by: bravebot_filetype::by_name::an_extension_is_recognised_whatever_its_case`
+`verified-by: bravebot_filetype::by_name::the_recognised_types_are_the_ones_claude_code_takes`
+`verified-by: bravebot_filetype::by_name::the_noun_names_what_was_dropped`
 `verified-by: bravebot_tui::app::a_picture_dropped_onto_a_question_goes_with_it`
 `verified-by: bravebot_tui::app::a_picture_dropped_onto_a_task_goes_with_the_plan`
 `verified-by: bravebot_tui::app::a_picture_dropped_onto_a_loop_goes_with_its_first_tick`
@@ -246,7 +253,8 @@ inside the project, and the lists differ in nothing else a caller can see, so ad
 mint the unconfined grant for a file its caller meant as an ordinary one. An operating system
 reports a drop as an absolute path, so a front end loses nothing by it. An entry in `attachments`
 is also refused when its extension is not one the agent carries as bytes, and when the file is
-larger than the agent will carry, so the send fails rather than the turn. `attachments` that is not
+larger than the agent will carry, so the send fails rather than the turn. That refusal's message is
+the note a front end shows for the file, the one `drops.classify` gives ([DROP-11](#DROP-11)). `attachments` that is not
 a list of strings is refused too.
 
 **Why a refusal rather than an entry left out.** A turn that lost the file it was sent with is not
@@ -258,7 +266,51 @@ what the path was for and can say so; the turn cannot.
 `verified-by: bravebot_ui_bridge::dispatch::a_turn_may_name_files_or_none_and_none_is_the_default`
 `verified-by: bravebot_ui_bridge::attaching::a_dropped_picture_and_pdf_reach_the_model_before_a_pasted_picture`
 `verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/sanitise.test.mjs pins its half: a window's turn.send reaches the agent with no dropped, attachments or images list of its own, a path where an attachment id goes sends nothing, and a manifest run forwards a task and a model and nothing else; make check-ui runs it)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/sanitise.test.mjs and ui/scripts/drops.test.mjs pin its half: a window's turn.send reaches the agent with no dropped, attachments or images list of its own, its dropped and attachments are composed only from grants the main process minted, a path where an attachment id or a drop id goes sends nothing, and a manifest run forwards a task and a model and nothing else; make check-ui runs both)`
+
+<a id="DROP-11"></a>
+### DROP-11: the desktop window takes a drop only from a trusted drop event
+
+The window keeps [DROP-1](#DROP-1) by never letting the page name the path. The preload, in its
+isolated world, listens for the drop itself, takes only an event the browser marks trusted, asks
+Electron for each file's path, and sends the paths straight to the main process. A page cannot make
+an event the browser trusts, so the paths came from a person's drag: a page that dispatches its own
+drop event, even one carrying the very files an earlier drop handed it, has nothing taken. The main
+process resolves each path, refuses anything but a regular file, and mints an opaque grant bound
+to the session it was dropped on. The page is told the grant, the file's name, its kind and its
+marker's noun, and for a picture a thumbnail the preload drew. It is never told the path.
+
+What kind of file each is, the noun its marker uses, and whether it is larger than the agent
+will carry come from the bridge's `drops.classify`, which answers from the rules the terminal
+stages a drop by ([DROP-4](#DROP-4)) and the agent's attachment cap. The main process asks it about
+the resolved paths and the sizes it found, and holds no table, cap or wording of its own, so the
+window and the terminal cannot disagree about a file. A picture or PDF over the cap is left out,
+and the window shows the note the bridge built for it, which names the file and says its size and
+the cap in the terminal's words, in `en-US` because the window is in English only.
+
+At send the page names grants, never paths. The main process takes away every list the page sent
+under the bridge's names and then composes `dropped` from the text files and `attachments` from
+the pictures and PDFs, each grant checked again: still there, and still a regular file and not a
+link put in its place. A grant that fails refuses the send with the file's name. A picture or PDF
+that grew past the cap since is refused by `turn.send` ([DROP-10](#DROP-10)) with the same note. A bot's turn keeps its briefing first in `dropped` and the dropped text
+files after it.
+
+The rest follows the terminal where a window can. Each file gets a marker at the caret, numbered
+from one counter per conversation, with a chip beside the box; the draft is what decides, so
+deleting the marker takes the file off and removing the chip deletes the marker
+([DROP-6](#DROP-6)). A type nothing takes has its path written into the box as text and is granted
+nothing ([DROP-4](#DROP-4)). A folder is left out with a note ([DROP-5](#DROP-5)). A run planned
+first takes no drop, so Plan is off while anything is staged.
+
+One part does not follow. A message queued while a turn runs keeps its grants and sends them as
+its own turn when the running one ends, where [DROP-8](#DROP-8) names the file instead. The
+window's queue never joins a running turn: each queued message starts a turn of its own, which is
+the case DROP-8 already says carries its files.
+
+`verified-by: bravebot_ui_bridge::attaching::a_dropped_file_is_classified_by_the_terminals_rules`
+`verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
+`verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
+`verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/drops.test.mjs pins the markers and the main process's grants against a stub bridge whose nouns, cap and notes the agent does not use, so a rule, a number or a wording of the window's own would fail it; ui/scripts/drive-drop.mjs drives a trusted drag into the real app and bridge against a stub model, asserting the markers, the path written for a type nothing takes, the bridge's note for a picture over the cap at the drop and at the send, and that a page-dispatched drop stages nothing; make check-ui runs the test)`
 
 ## Known costs
 
@@ -279,6 +331,13 @@ what the path was for and can say so; the turn cannot.
   queued mid-turn all hand over such a path, and confinement refuses the read when something acts
   on it. What the alternative costs is the reason: admitting the contents means a context message,
   and the requests that would need one fixed the shape of their context before the line was sent.
+- **The desktop trusts the browser's word that a drop was a person's.** The trusted bit on a drop
+  event is what separates a drag from the page's own script, and a renderer compromised below the
+  page, in the browser itself, could forge one. That is the same process boundary every other
+  protection in the window rests on.
+- **A desktop grant is checked at send, and read later.** The main process checks the file between
+  the press and the request, and the agent reads it after. A file swapped in that gap is read as
+  whatever it then is, as a picker's file would be.
 - **A line that both pastes and drops sends its pictures in one order and numbers them in
   another.** Every request puts the dropped files first and the pasted pictures after them, while
   one counter numbers the markers in the order the gestures happened, so `[Image #1]` from a paste

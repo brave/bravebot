@@ -5,6 +5,7 @@ import type { ComposerFooterProps, ProjectChoice } from './components/Composer'
 import { botHistory } from '../shared/bot-history'
 import type { Tab } from '../shared/view'
 import type { FileAttachment } from '../shared/files'
+import { grantsOf, named, sent, type Staged, type Staging } from './staging'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AskAnswer,
@@ -148,10 +149,12 @@ interface Live {
   outcome?: 'complete' | 'failed'
   draftId?: string
   queuePaused?: boolean
-  queued?: { prompt: string; attachments: FileAttachment[] }[]
+  queued?: { prompt: string; attachments: FileAttachment[]; staged: Staged[] }[]
   attachments?: FileAttachment[]
   /** Why the last message did not go: a name written with `@` that is not a text file in the project. */
   sendRefused?: string | null
+  /** What drops and pastes staged in this session's composer, and the counter its markers are numbered by. */
+  staging?: Staging
 }
 
 /**
@@ -226,6 +229,8 @@ async function callBot(request: {
   grounded: boolean
   model: string | null
   attachments?: string[]
+  drops?: string[]
+  pastes?: string[]
 }): Promise<void> {
   const answer = await window.bravebot.sendBotTurn(request)
   if (answer.error) {
@@ -629,7 +634,7 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
-  const send = useCallback(async (prompt: string, target?: string, selectedFiles?: FileAttachment[]) => {
+  const send = useCallback(async (prompt: string, target?: string, selectedFiles?: FileAttachment[], queuedStaged?: Staged[]) => {
     const handle = target ?? handleRef.current
     if (!handle) return
     // Read before the state below is changed, because that is what clears it: this is the turn
@@ -638,6 +643,10 @@ export function App(): React.JSX.Element {
     const bot = sending?.bot ?? null
     const model = sending?.model ?? null
     const attachments = selectedFiles ?? sending?.attachments ?? []
+    // A queued message carries what it named when it was queued. Otherwise it is what the draft
+    // still names: a marker deleted before sending took its file or picture off.
+    const staged = queuedStaged ?? named(sending?.staging, prompt)
+    const grants = grantsOf(staged)
     // The files the prompt names with `@`, asked of the bridge before anything is drawn: a name
     // that cannot go stops the send here, with the message still where it was written. The bridge
     // reads the prompt again at `turn.send`, and that check is the one that decides what goes.
@@ -648,7 +657,7 @@ export function App(): React.JSX.Element {
       updateSession(handle, (old) => old ? {
         ...old,
         sendRefused: refused,
-        queued: queued ? [{ prompt, attachments }, ...(old.queued ?? [])] : old.queued,
+        queued: queued ? [{ prompt, attachments, staged }, ...(old.queued ?? [])] : old.queued,
         queuePaused: queued ? true : old.queuePaused,
       } : old)
       if (!queued && sending) {
@@ -657,8 +666,8 @@ export function App(): React.JSX.Element {
       }
       return
     }
-    const named = Array.isArray(mentioned.ok.files) ? mentioned.ok.files : []
-    const reads = [...new Set([...attachments.map((file) => file.path), ...named])]
+    const mentionedFiles = Array.isArray(mentioned.ok.files) ? mentioned.ok.files : []
+    const reads = [...new Set([...attachments.map((file) => file.path), ...mentionedFiles])]
     // Made here rather than inside the update so its id can be remembered: the agent says where
     // this prompt landed when the turn ends, and that answer has to find the row it belongs to.
     const said = t.userSaid(prompt)
@@ -669,7 +678,15 @@ export function App(): React.JSX.Element {
             summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
             attachments: selectedFiles ? old.attachments : [],
             sendRefused: null,
-            entries: [...old.entries, ...reads.map((path): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path })), said],
+            staging: queuedStaged ? old.staging : sent(old.staging),
+            entries: [
+              ...old.entries,
+              ...reads.map((path): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path })),
+              // A dropped text file is read at the top of the turn as a picked one is. A picture or
+              // a PDF goes in the prompt's own message, whose marker already says so.
+              ...staged.flatMap((item): t.Entry[] => item.via === 'drop' && item.file.kind === 'text' ? [{ kind: 'attached', id: crypto.randomUUID(), path: item.file.name }] : []),
+              said,
+            ],
             awaitingOrdinal: said.id,
             running: true,
             queuePaused: old.queued?.length ? old.queuePaused : false,
@@ -684,9 +701,9 @@ export function App(): React.JSX.Element {
         // would be a window that could have the planner read any file on the machine. So this
         // names the bot and says whether the briefing is due, and the paths are composed over
         // there from a definition this side cannot reach.
-        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id) })
+        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants })
       } else {
-        await call('turn.send', { session: handle, prompt, model, attachments: attachments.map((file) => file.id) })
+        await call('turn.send', { session: handle, prompt, model, attachments: attachments.map((file) => file.id), ...grants })
       }
     } catch (error) {
       if (error instanceof Unconfigurable) {
@@ -727,7 +744,7 @@ export function App(): React.JSX.Element {
       if (!message) continue
       const handle = item.handle
       dequeuing.current.add(handle)
-      void send(message.prompt, handle, message.attachments).finally(() => {
+      void send(message.prompt, handle, message.attachments, message.staged).finally(() => {
         dequeuing.current.delete(handle)
         refreshLives((revision) => revision + 1)
       })
@@ -992,10 +1009,10 @@ export function App(): React.JSX.Element {
     if (!task || !handleRef.current || live?.running || live?.askingTrust || backendReady === false) return
     // A run reads nothing before it plans, so it cannot take attached files, and a bot's turn
     // carries a briefing a run has no place for.
-    if (live?.attachments?.length || live?.bot) return
+    if (live?.attachments?.length || named(live?.staging, task).length || live?.bot) return
     setDraft('')
     void plan(task)
-  }, [draft, live?.running, live?.askingTrust, live?.attachments, live?.bot, plan, backendReady])
+  }, [draft, live?.running, live?.askingTrust, live?.attachments, live?.staging, live?.bot, plan, backendReady])
 
   /** Send whatever is in the composer, on the same terms the Send button uses. */
   const submit = useCallback(() => {
@@ -1381,7 +1398,7 @@ export function App(): React.JSX.Element {
   const startBotChat = useCallback(async (bot: Bot, prompt: string, directory: string | null): Promise<boolean> => {
     const handle = await create(directory ?? bot.home, { slug: bot.slug, model: bot.model })
     if (!handle) return false
-    updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt, attachments: [] }] } : old)
+    updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt, attachments: [], staged: [] }] } : old)
     return true
   }, [create, updateSession])
 
@@ -1606,12 +1623,20 @@ export function App(): React.JSX.Element {
           }).catch((error) => setProblem(String(error)))
         }}
         onRemoveAttachment={(id) => setLive((old) => old ? { ...old, attachments: old.attachments?.filter((file) => file.id !== id) } : old)}
+        onStaging={(handle, staging) => updateSession(handle, (old) => old ? { ...old, staging } : old)}
         queuePaused={live?.queuePaused ?? false}
         onResumeQueued={() => setLive((old) => old ? { ...old, queuePaused: false } : old)}
         queued={live?.queued?.map((message) => message.prompt) ?? []}
         onQueue={() => {
           if (!draft.trim()) return
-          setLive((old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: draft.trim(), attachments: old.attachments ?? [] }], attachments: [] } : old)
+          // The queued message keeps the grants it names, and sends them when its turn comes. The
+          // terminal names the files instead (DROP-8), because its queue joins the running turn.
+          setLive((old) => old ? {
+            ...old,
+            queued: [...(old.queued ?? []), { prompt: draft.trim(), attachments: old.attachments ?? [], staged: named(old.staging, draft) }],
+            attachments: [],
+            staging: sent(old.staging),
+          } : old)
           setDraft('')
         }}
         onRemoveQueued={(index) => setLive((old) => old ? { ...old, queued: old.queued?.filter((_, at) => at !== index) } : old)}

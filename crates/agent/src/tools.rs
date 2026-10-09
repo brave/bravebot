@@ -3616,7 +3616,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // map, so all of them ask about that name and not about the spelling.
     let keyed = workspace.trust_key(&proposed_path);
 
-    let media = crate::workspace::media_for(&proposed_path);
+    let media = bravebot_filetype::by_name::media_for(&proposed_path);
 
     // What a check over this file cost, where one was made. Carried out of the block so it can be
     // put on whatever this call ends up handing back: a check is a model request, and the turn's
@@ -4004,7 +4004,7 @@ pub(crate) fn materialise<S: Sink>(
                 // failure is put into is a sentence the planner reads as the driver's own, so
                 // the name goes back as the reference the planner is holding.
                 .materialise(tool, slot, slots, |path| {
-                    match crate::workspace::media_for(path) {
+                    match bravebot_filetype::by_name::media_for(path) {
                         Some(media) => {
                             picture = Some(media);
                             workspace.attachment_text(path, media)
@@ -6529,9 +6529,9 @@ pub(crate) fn kind_of_file(media: &str) -> &'static str {
     }
 }
 
-/// The extension a copy of a file of this media type is written under, from the driver's table.
+/// The extension a copy of a file of this media type is written under, from the attachable table.
 fn extension_for(media: &str) -> &'static str {
-    crate::workspace::ATTACHABLE
+    bravebot_filetype::by_name::ATTACHABLE
         .iter()
         .find(|(_, named)| *named == media)
         .map_or("bin", |(extension, _)| *extension)

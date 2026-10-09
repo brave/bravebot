@@ -10,18 +10,11 @@
 //! real path stays prose, because prose has other words in it.
 //!
 //! Nothing here decides anything from the contents of a file. It reads names, which the user is
-//! about to see on their own screen, and asks the filesystem whether they exist.
+//! about to see on their own screen, and asks the filesystem whether they exist. What kind of file
+//! each name is comes from `bravebot_filetype::by_name`, which the desktop window asks as well.
 
+use bravebot_filetype::by_name::{Kind, kind_of};
 use std::path::Path;
-
-/// What a dropped file is, and therefore what happens to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    /// Carried to the model as bytes, in the media type named here.
-    Attachment(&'static str),
-    /// Read into the turn as text, the way a file named with `@` is.
-    Text,
-}
 
 /// A file the user dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,172 +22,6 @@ pub struct Dropped {
     /// The path as the filesystem names it, which is what the terminal handed over.
     pub path: String,
     pub kind: Kind,
-}
-
-impl Dropped {
-    /// The word the marker uses, so a user can tell one dropped thing from another.
-    /// Not from a catalog: this word goes into the marker the planner is sent, so it is part of
-    /// what the model reads rather than something a person is being told. See [`Session::attach`].
-    pub fn noun(&self) -> &'static str {
-        match self.kind {
-            Kind::Attachment("application/pdf") => "PDF",
-            Kind::Attachment(_) => "Image",
-            Kind::Text => "File",
-        }
-    }
-}
-
-/// Extensions carried as bytes, with the type to name in the URI.
-///
-/// The set Claude Code takes, and the same table `read_file` decides a picture by: a file dropped
-/// on the terminal and a file a processor is asked about are the same kinds of file, and a second
-/// list here would be a second answer waiting to disagree with that one.
-use bravebot_agent::workspace::ATTACHABLE;
-
-/// Extensions read as text, which is what the model wants of them anyway.
-const TEXTUAL: &[&str] = &[
-    "txt",
-    "md",
-    "markdown",
-    "rst",
-    "adoc",
-    "org",
-    "rs",
-    "py",
-    "js",
-    "jsx",
-    "mjs",
-    "cjs",
-    "ts",
-    "tsx",
-    "vue",
-    "svelte",
-    "json",
-    "jsonc",
-    "yaml",
-    "yml",
-    "toml",
-    "ini",
-    "cfg",
-    "conf",
-    "properties",
-    "env",
-    "html",
-    "htm",
-    "xml",
-    "svg",
-    "css",
-    "scss",
-    "sass",
-    "less",
-    "sh",
-    "bash",
-    "zsh",
-    "fish",
-    "ps1",
-    "bat",
-    "c",
-    "h",
-    "cc",
-    "cpp",
-    "cxx",
-    "hpp",
-    "hh",
-    "java",
-    "kt",
-    "kts",
-    "go",
-    "rb",
-    "php",
-    "swift",
-    "m",
-    "mm",
-    "cs",
-    "scala",
-    "clj",
-    "cljs",
-    "ex",
-    "exs",
-    "erl",
-    "hs",
-    "lua",
-    "pl",
-    "pm",
-    "r",
-    "jl",
-    "dart",
-    "zig",
-    "nim",
-    "sql",
-    "graphql",
-    "proto",
-    "csv",
-    "tsv",
-    "log",
-    "diff",
-    "patch",
-    "lock",
-    "gradle",
-    "tf",
-    "tfvars",
-    "dockerfile",
-    "mk",
-    "cmake",
-];
-
-/// Names that are text without an extension to say so.
-const TEXTUAL_NAMES: &[&str] = &[
-    "makefile",
-    "dockerfile",
-    "readme",
-    "license",
-    "licence",
-    "changelog",
-    "authors",
-    "notice",
-    "gemfile",
-    "rakefile",
-    "procfile",
-    "justfile",
-    "vagrantfile",
-    "brewfile",
-];
-
-/// What a path's name says it is, or `None` for something neither carried nor read.
-///
-/// A `.dmg` lands here, and the interface writes its path out rather than pretending to attach it.
-pub fn kind_of(path: &str) -> Option<Kind> {
-    let name = Path::new(path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())?;
-
-    // Split on the last dot ourselves rather than asking for an extension, so a name that is all
-    // extension, `.gitignore`, is read as a name and not as an extension of nothing.
-    let extension = name.rsplit_once('.').map(|(stem, ext)| {
-        if stem.is_empty() {
-            String::new()
-        } else {
-            ext.to_string()
-        }
-    });
-
-    if let Some(extension) = &extension {
-        if let Some((_, media)) = ATTACHABLE.iter().find(|(ext, _)| ext == extension) {
-            return Some(Kind::Attachment(media));
-        }
-        if TEXTUAL.contains(&extension.as_str()) {
-            return Some(Kind::Text);
-        }
-    }
-
-    // A name with no usable extension: `Makefile`, or `.gitignore`, whose whole name is the name.
-    let bare = name.strip_prefix('.').unwrap_or(&name);
-    if TEXTUAL_NAMES.contains(&bare) || bare.starts_with("gitignore") || bare.starts_with("gitattr")
-    {
-        return Some(Kind::Text);
-    }
-
-    None
 }
 
 /// The files a paste names, or nothing at all when the paste is not a drop.
@@ -474,58 +301,6 @@ mod tests {
         let found = dropped_with("/tmp/a.png /tmp/b.dmg", all);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].path, "/tmp/a.png");
-    }
-
-    #[test]
-    fn the_recognised_types_are_the_ones_claude_code_takes() {
-        for name in ["a.png", "a.jpg", "a.jpeg", "a.gif", "a.webp"] {
-            assert!(
-                matches!(kind_of(name), Some(Kind::Attachment(media)) if media.starts_with("image/")),
-                "{name} is not an image"
-            );
-        }
-        assert_eq!(kind_of("a.pdf"), Some(Kind::Attachment("application/pdf")));
-        for name in [
-            "a.rs",
-            "a.md",
-            "a.json",
-            "Makefile",
-            "Dockerfile",
-            ".gitignore",
-        ] {
-            assert_eq!(kind_of(name), Some(Kind::Text), "{name} is not text");
-        }
-        for name in ["a.dmg", "a.zip", "a.mp4", "a.so"] {
-            assert_eq!(kind_of(name), None, "{name} should not be taken");
-        }
-    }
-
-    /// Case is the filesystem's business, not the user's.
-    #[test]
-    fn an_extension_is_recognised_whatever_its_case() {
-        assert_eq!(
-            kind_of("/tmp/SHOT.PNG"),
-            Some(Kind::Attachment("image/png"))
-        );
-    }
-
-    #[test]
-    fn the_noun_names_what_was_dropped() {
-        let image = Dropped {
-            path: "a.png".into(),
-            kind: Kind::Attachment("image/png"),
-        };
-        let pdf = Dropped {
-            path: "a.pdf".into(),
-            kind: Kind::Attachment("application/pdf"),
-        };
-        let text = Dropped {
-            path: "a.rs".into(),
-            kind: Kind::Text,
-        };
-        assert_eq!(image.noun(), "Image");
-        assert_eq!(pdf.noun(), "PDF");
-        assert_eq!(text.noun(), "File");
     }
 
     /// An unterminated quote is not something a terminal emits, so it is a paste.

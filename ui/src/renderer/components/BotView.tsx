@@ -175,6 +175,8 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
       attachments={[]}
       onAttach={noop}
       onRemoveAttachment={noop}
+      staged={[]}
+      onRemoveStaged={noop}
       onPreview={noop}
       queued={[]}
       queuePaused={false}

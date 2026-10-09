@@ -819,7 +819,7 @@ mod tests {
             marker: "[Image #1]".to_string(),
             name: "shot.png".to_string(),
             shown: "/home/me/shot.png".to_string(),
-            kind: crate::dropped::Kind::Attachment("image/png"),
+            kind: bravebot_filetype::by_name::Kind::Attachment("image/png"),
         };
         let mut running = Running::begin(request("5m look at [Image #1]")).carrying(
             Vec::new(),
