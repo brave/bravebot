@@ -72,9 +72,10 @@ unreadable has the same effect as no answer.
 
 A turn waiting on a permission request waits for the editor. `session/cancel` stops the turn, the
 question is refused with no effect, and the prompt ends with the stop reason `cancelled`. The end of
-the input refuses every question still waiting.
+the input refuses every question still waiting, so a write that was waiting does not happen.
 
 `verified-by: bravebot_ui_bridge::acp::cancelling_a_prompt_that_waits_on_a_question_refuses_the_question`
+`verified-by: bravebot_ui_bridge::acp::the_end_of_the_input_refuses_a_question_still_waiting`
 
 <a id="ACP-5"></a>
 ### ACP-5: the trust question comes first, and the planner's own questions are not permissions

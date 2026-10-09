@@ -294,6 +294,32 @@ fn cancelling_a_prompt_that_waits_on_a_question_refuses_the_question() {
     assert!(!project.join("output.txt").exists());
 }
 
+/// Input that ends while a write waits on the editor refuses the write. The model is asked again
+/// once the refusal reaches it, which shows the turn went on past the question without the file.
+#[test]
+fn the_end_of_the_input_refuses_a_question_still_waiting() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("ended");
+    let (config, requests, server) = endpoint::endpoint(writing(), None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let session = editor.session(&project);
+    editor.prompt(&session, text("write it"));
+    editor.answer_next(selected("reject-once"));
+    editor.until(|m| m["method"] == "session/request_permission");
+    requests.recv_timeout(endpoint::LIMIT).expect("a request");
+    drop(editor);
+    requests
+        .recv_timeout(endpoint::LIMIT)
+        .expect("the turn never went on past the refused write");
+    server.join().unwrap();
+    assert!(
+        !project.join("output.txt").exists(),
+        "the end of the input let a waiting write land"
+    );
+}
+
 /// No turn starts, and so no model is asked, until the trust question is answered.
 #[test]
 fn no_turn_starts_before_the_trust_question_is_answered() {
