@@ -6,7 +6,7 @@ description: Every tool the model may call, what it takes, and what it is allowe
 
 # Tools
 
-There are nineteen tools, and no way to add another from a configuration file. Each one splits its
+There are twenty tools, and no way to add another from a configuration file. Each one splits its
 arguments into **routing**, the part that decides where the effect lands, and **content**, the part
 that is merely carried.
 
@@ -15,6 +15,7 @@ that is merely carried.
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
 | [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
 | [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output` | none | no |
+| [`repo_map`](#repo_map) | `directory`, `budget` | none | no |
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
@@ -156,6 +157,26 @@ none. The tool description gives the planner the full list, and naming one of th
 lists it.
 
 The glob is literal and the matcher does not backtrack. A truncated listing says it was truncated.
+
+## `repo_map`
+
+Lists the declarations in a directory's source files, the ones other files mention most first. It
+needs no language server, so it answers where [`lsp`](#lsp) cannot be started.
+
+| Parameter | |
+|---|---|
+| `directory` | workspace-relative, defaults to `.` |
+| `budget` | optional; tokens the map may take, 100 to 8000, 1000 unless given |
+
+It reads Rust, Python, JavaScript, TypeScript, Go, Java, Kotlin, C and C++ files, and recognises a
+declaration by the line that opens it, so a signature split over lines is shown by its first line. In
+Java, C and C++ it finds types and macros, not functions or methods. A name is ranked by how many
+other files mention it, so the ranking is a guide, not a call graph.
+
+Only files you vouched for are read. Files you did not are counted and never named, a file holding
+what looks like a credential contributes nothing, and a file a `deny` rule covers is not mapped. A map
+that shows fewer declarations than it found, or stopped at a cap, says so: map a subdirectory, or raise
+`budget`.
 
 ## `search`
 

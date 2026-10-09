@@ -81,6 +81,7 @@ the routing-versus-content split they share.
 | [tools/read-file.md](tools/read-file.md) | `READ` | 8 | `read_file` |
 | [tools/list-files.md](tools/list-files.md) | `LIST` | 5 | `list_files` |
 | [tools/search.md](tools/search.md) | `SEARCH` | 12 | `search` |
+| [tools/repo-map.md](tools/repo-map.md) | `MAP` | 5 | `repo_map` |
 | [tools/read-git.md](tools/read-git.md) | `GIT` | 14 | `read_git` |
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 12 | `lsp` |
 | [tools/write-file.md](tools/write-file.md) | `WRITE` | 5 | `write_file` |

@@ -3051,6 +3051,12 @@ pub(crate) const MAX_ENTRIES: usize = 2_000;
 /// [`Workspace::with_search_caps`] is how one says so.
 pub const MAX_SEARCH_FILES: usize = 100_000;
 
+/// The largest source file a repository map reads, in bytes. Past it a file is generated or data.
+const MAX_MAP_FILE_BYTES: usize = 512 * 1024;
+
+/// The most source a repository map reads in all, in bytes.
+const MAX_MAP_BYTES: usize = 32 * 1024 * 1024;
+
 const MAX_MATCHES: usize = 200;
 const MAX_MATCH_LINE: usize = 500;
 
@@ -3127,7 +3133,7 @@ pub(crate) fn in_repository(named: &str, inside: &str) -> String {
 /// `String::truncate` panics if the index is not a character boundary, so a matching line
 /// containing multi-byte text could otherwise bring down the turn. Truncating to the
 /// nearest boundary at or below the limit keeps the cap a cap.
-fn truncate_on_char_boundary(text: &mut String, limit: usize) {
+pub(crate) fn truncate_on_char_boundary(text: &mut String, limit: usize) {
     if text.len() <= limit {
         return;
     }
@@ -3346,6 +3352,33 @@ pub struct Listing {
     /// A fact about the shape of the walk and never the directory's name: the error that opening
     /// it produced spells that name, which is a name out of the tree and would reach the planner
     /// as a sentence the driver wrote (LIST-2).
+    pub unreadable: bool,
+}
+
+/// The result of a repository map.
+///
+/// Labelled by the files it was built from, which are only ever files the trust map vouches for,
+/// so a map is trusted whenever it is returned. What it says of the files it left out is a count
+/// and never a name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoMap {
+    /// Files with their declarations, most referenced first. Empty when none was found.
+    pub body: String,
+    /// Declarations found in the files read.
+    pub found: usize,
+    /// Declarations the body shows.
+    pub shown: usize,
+    /// Source files read.
+    pub files: usize,
+    /// Source files left out because the trust map does not vouch for them.
+    pub unvouched: usize,
+    /// Source files left out for another reason: unreadable, over the size caps, or holding what
+    /// looks like a credential. One count for the three, so the planner is not told which file
+    /// held one.
+    pub skipped: usize,
+    /// Whether a cap on files or bytes stopped the walk or the reading short.
+    pub truncated: bool,
+    /// Whether a directory beneath the one named could not be opened.
     pub unreadable: bool,
 }
 
@@ -3599,6 +3632,131 @@ impl Workspace {
                 Listing {
                     files: found,
                     directories: stopped_at,
+                    truncated,
+                    unreadable,
+                },
+                label,
+            ))
+        })
+    }
+
+    /// A ranked map of the declarations in the source files beneath `directory`.
+    ///
+    /// The directory and the budget are routing. Only a file the trust map vouches for is opened:
+    /// which files those are is a question about the map, answered from the path alone, so no
+    /// byte of an unvouched file is read and none can steer what is read. The map is labelled by
+    /// the files it was built from, hence trusted, and the others are counted and not named.
+    /// A file holding what looks like a credential contributes nothing (CRED-15), since a
+    /// declaration can be a binding with the value on the same line.
+    pub fn repo_map<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        directory: &Labelled<String>,
+        budget: usize,
+    ) -> Result<Labelled<RepoMap>, WorkspaceError> {
+        policy.capture_files(|policy, _capture| {
+            policy.before_capability(Capability::FileRead)?;
+            policy.before_action("repo_map", "directory", Role::Routing, directory)?;
+
+            let relative =
+                directory
+                    .clone()
+                    .into_trusted()
+                    .map_err(|_| WorkspaceError::Invalid {
+                        path: "<untrusted>".into(),
+                        reason: "the directory was not trusted",
+                    })?;
+            let root = self.resolve(&relative)?;
+            if root.is_file() {
+                return Err(WorkspaceError::Invalid {
+                    path: relative,
+                    reason: "a repository map is made of a directory, not a file",
+                });
+            }
+
+            let patterns: Vec<String> = crate::repo_map::EXTENSIONS
+                .iter()
+                .map(|extension| format!("*.{extension}"))
+                .collect();
+            let under = self.relative_display(&root);
+            let wanted = Some(Wanted {
+                patterns: &patterns,
+                under: &under,
+            });
+            let mut paths = Vec::new();
+            let mut ignored = Vec::new();
+            let denied = |path: &str| policy.read_is_denied(path);
+            let mut collected = Collected {
+                files: &mut paths,
+                stopped_at: &mut ignored,
+                withheld: false,
+                unreadable: false,
+            };
+            let hit_the_cap = self.walk_filtered(
+                &root,
+                wanted,
+                None,
+                self.search_files,
+                &denied,
+                &mut collected,
+            )?;
+            let unreadable = collected.unreadable;
+            paths.sort();
+
+            let (vouched, unvouched): (Vec<String>, Vec<String>) = paths
+                .into_iter()
+                .partition(|path| !policy.read_is_quarantined(path));
+            let label =
+                policy.observe_paths(Capability::FileRead, vouched.iter().map(String::as_str))?;
+
+            let mut texts: Vec<(String, String)> = Vec::new();
+            let mut skipped = 0usize;
+            let mut bytes = 0usize;
+            let mut truncated = hit_the_cap;
+            for path in vouched {
+                let absolute = self.root.join(&path);
+                let size = std::fs::metadata(&absolute).map_or(usize::MAX, |meta| {
+                    usize::try_from(meta.len()).unwrap_or(usize::MAX)
+                });
+                if size > MAX_MAP_FILE_BYTES {
+                    skipped += 1;
+                    continue;
+                }
+                if bytes + size > MAX_MAP_BYTES {
+                    truncated = true;
+                    break;
+                }
+                let Ok(text) = std::fs::read_to_string(&absolute) else {
+                    skipped += 1;
+                    continue;
+                };
+                bytes += text.len();
+                let held = Labelled::new(text, policy.label_in_force(&path));
+                if !policy.scan_a_read("repo_map", &path, 1, &held).is_empty() {
+                    skipped += 1;
+                    continue;
+                }
+                let Ok(text) = policy.read_trusted_content("repo_map", &held) else {
+                    skipped += 1;
+                    continue;
+                };
+                texts.push((path, text));
+            }
+
+            let sources: Vec<crate::repo_map::Source<'_>> = texts
+                .iter()
+                .map(|(path, text)| crate::repo_map::Source { path, text })
+                .collect();
+            let built = crate::repo_map::build(&sources, budget);
+
+            Ok(Labelled::new(
+                RepoMap {
+                    body: built.body,
+                    found: built.found,
+                    shown: built.shown,
+                    files: texts.len(),
+                    unvouched: unvouched.len(),
+                    skipped,
                     truncated,
                     unreadable,
                 },

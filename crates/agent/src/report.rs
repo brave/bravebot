@@ -983,6 +983,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "list_files" => t!(verb_list_files),
         "search" => t!(verb_search),
         "read_git" => t!(verb_read_git),
+        "repo_map" => t!(verb_repo_map),
         "lsp" => t!(verb_lsp),
         "write_file" => t!(verb_write_file),
         "edit_file" => t!(verb_edit_file),

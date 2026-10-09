@@ -219,9 +219,8 @@ pub fn gating_capability(tool: &str) -> Option<Capability> {
         // LSP-9: asking a server is its own grant, so a delegate holding file reads has not
         // thereby been given one.
         "lsp" => Some(Capability::LanguageServer),
-        "read_file" | "list_files" | "search" | "read_git" | "spawn_processor" | "load_skill" => {
-            Some(Capability::FileRead)
-        }
+        "read_file" | "list_files" | "search" | "read_git" | "repo_map" | "spawn_processor"
+        | "load_skill" => Some(Capability::FileRead),
         // A delegate is a model call, and every kind holds this so it can make its own. What a
         // delegate it spawns may hold is its own set narrowed again, so this adds nothing to it.
         "spawn_agent" => Some(Capability::WebFetch),

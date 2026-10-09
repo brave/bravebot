@@ -1260,9 +1260,10 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   it needs the durable salt and the store above, so this is the cost of not having them yet rather
   than a separate gap.
 
-- **`read_file` and `read_git` are the only reads that are scanned.** CRED-15 runs at the tools
-  whose whole purpose is putting a file's text in front of the planner, now or as it stood in a
-  commit. Three other results carry a vouched file's
+- **`read_file`, `read_git` and `repo_map` are the only reads that are scanned.** CRED-15 runs at
+  the tools whose whole purpose is putting a file's text in front of the planner, now or as it stood
+  in a commit, and at the map, which drops a file with a finding without asking, since it shows
+  declaration lines and not one path a person could answer for. Three other results carry a vouched file's
   bytes there and are not scanned: `search` quotes the lines it matched, `load_skill` carries the
   body of a skill, and `read_output` hands over what a program printed. Each needs its own answer
   rather than the same one. A search walks many files at once and mixes vouched ones with

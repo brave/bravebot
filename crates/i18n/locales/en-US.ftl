@@ -3097,6 +3097,8 @@ verb-list-files = List
 verb-search = Search
 # The history of a repository, read without starting git.
 verb-read-git = History
+# A map of the declarations in a directory's source files.
+verb-repo-map = Map
 # A question put to a language server rather than to the files: "Look up" reads as asking
 # something that knows the code, where "Search" reads as looking through it.
 verb-lsp = Look up

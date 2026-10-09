@@ -671,6 +671,37 @@ fn table(
             }),
         ),
         Tool::function(
+            "repo_map",
+            "Get a map of the code in a directory: the declarations (functions, types, classes, \
+             constants) its source files make, each with the line it is on and the line that \
+             opens it, the ones other files mention most first. Use it first on a project you \
+             have not read, or to find where something lives, instead of listing the tree and \
+             reading files one at a time. It reads Rust, Python, JavaScript and TypeScript, Go, \
+             Java and Kotlin, and C and C++ files, needs no language server, and shows names \
+             and signatures only, never bodies: read_file reads the lines it points at. In \
+             Java and in C and C++ it finds types and macros but not functions or methods. It maps \
+             only files you have been allowed to read; files nobody vouched for are counted, \
+             never named, and a file that holds what looks like a credential is left out.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "directory": {
+                        "type": "string",
+                        "description": "Workspace-relative directory to map. Defaults to \".\". \
+                                        Map a subdirectory rather than raising budget when the \
+                                        project is large."
+                    },
+                    "budget": {
+                        "type": "integer",
+                        "description": "Roughly how many tokens the map may take. Defaults to \
+                                        1000, at least 100 and at most 8000. A map that did not \
+                                        fit says how many declarations it left out."
+                    }
+                },
+                "required": []
+            }),
+        ),
+        Tool::function(
             "lsp",
             "Ask a language server about a symbol: where it is defined, what refers to it, what \
              implements it, what calls it. Use this instead of search when the question is about \
@@ -2869,6 +2900,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "list_files" => Some("directory"),
         "search" => Some("pattern"),
         "read_git" => Some("query"),
+        "repo_map" => Some("directory"),
         "lsp" => Some("path"),
         "load_skill" | "load_tool" => Some("name"),
         "fetch_url" => Some("url"),
@@ -3277,6 +3309,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         "list_files" => list_files(policy, tools.workspace, &arguments),
         "search" => search(policy, tools.workspace, &arguments),
         "read_git" => read_git(policy, tools, confirmer, &arguments),
+        "repo_map" => repo_map(policy, tools.workspace, &arguments),
         "lsp" => lsp(policy, tools, confirmer, &arguments),
         "write_file" => write_file(policy, tools, confirmer, &arguments),
         "edit_file" => edit_file(
@@ -4786,6 +4819,127 @@ fn list_files<S: Sink>(
             workspace_failure(policy, "list_files", "directory", &e, &proposed_dir)
         )),
     }
+}
+
+/// `repo_map`: the declarations of the source files beneath a directory that the trust map
+/// vouches for, ranked, as a result the planner may read.
+fn repo_map<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    arguments: &Value,
+) -> Produced {
+    let proposed = argument(arguments, "directory").unwrap_or_else(|| {
+        Labelled::new(
+            ".".to_string(),
+            bravebot_core::label::Label::untrusted_public(),
+        )
+    });
+    let directory = match policy.promote_confined_read("repo_map", "directory", &proposed) {
+        Ok(d) => d,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    let proposed_dir = match policy.read_planner_argument("repo_map", "directory", &proposed) {
+        Ok(directory) => directory,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    // Mapping a tree is reading it, so a rule that keeps it from being read keeps it from being
+    // mapped.
+    if let Err(refusal) = refuse_denied_path(policy, workspace, Purpose::Read, &proposed_dir) {
+        return Produced::problem(refusal);
+    }
+    // A plain number like a depth or a limit: it sizes a confined read and names nothing.
+    let budget = arguments
+        .get("budget")
+        .and_then(Value::as_u64)
+        .map_or(crate::repo_map::DEFAULT_BUDGET, |budget| {
+            budget.min(usize::MAX as u64) as usize
+        });
+
+    match workspace.repo_map(policy, &directory, budget) {
+        Ok(map) => {
+            let note = note_for(policy, "repo_map", &map, |map| {
+                format!(
+                    "{}, {} shown",
+                    tally(map.found, "declaration", "declarations"),
+                    map.shown
+                )
+            });
+            let incomplete = {
+                let shaped = policy.render_in_place("repo_map", &map, |map| {
+                    map.truncated || map.unreadable || map.shown < map.found
+                });
+                let proof = policy.authorise_display_release(
+                    "whether a repository map left declarations or files out",
+                );
+                shaped.declassify(&proof)
+            };
+            let rendered = policy.render_in_place("repo_map", &map, |map| map_as_told(&map));
+            let glimpsed = policy.render_in_place("repo_map", &map, |map| map.body);
+            Produced {
+                glimpsed: Some(glimpsed),
+                ..Produced::new(rendered, proposed_dir, note)
+                    .of_content()
+                    .capped(incomplete)
+            }
+        }
+        Err(e) => Produced::problem(format!(
+            "error: {}",
+            workspace_failure(policy, "repo_map", "directory", &e, &proposed_dir)
+        )),
+    }
+}
+
+/// A map with what it left out said after it, in the driver's words.
+///
+/// Counts only: a file left out is never named, and the three reasons a file is skipped for
+/// are one count so a finding is not told to the planner.
+fn map_as_told(map: &crate::workspace::RepoMap) -> String {
+    let mut told = if map.found == 0 {
+        "(no declarations found in the source files you may read)".to_string()
+    } else {
+        map.body.clone()
+    };
+    let mut notes = Vec::new();
+    if map.shown < map.found {
+        notes.push(format!(
+            "this map shows {} of {} declarations, most referenced first: map a subdirectory, \
+             or raise budget, to see others",
+            map.shown, map.found
+        ));
+    }
+    if map.truncated {
+        notes.push(
+            "the walk stopped at a cap on files or bytes, so this map is incomplete: map a \
+             subdirectory"
+                .to_string(),
+        );
+    }
+    if map.unreadable {
+        notes.push(
+            "part of this tree could not be read and is not in this map, so it says nothing \
+             about what is there"
+                .to_string(),
+        );
+    }
+    if map.unvouched > 0 {
+        notes.push(format!(
+            "{} left out because nobody vouched for {}",
+            tally(map.unvouched, "source file was", "source files were"),
+            if map.unvouched == 1 { "it" } else { "them" }
+        ));
+    }
+    if map.skipped > 0 {
+        notes.push(format!(
+            "{} left out as unreadable, too large or not safe to show",
+            tally(map.skipped, "source file was", "source files were")
+        ));
+    }
+    if !notes.is_empty() {
+        told.push_str("\n\n(");
+        told.push_str(&notes.join("; "));
+        told.push(')');
+    }
+    told
 }
 
 /// How many lines of a processor's remark are drawn beside the diff it describes.
@@ -11010,6 +11164,7 @@ mod tests {
                 "todo_write",
                 "search",
                 "read_git",
+                "repo_map",
                 "lsp",
                 "spawn_processor",
                 "load_skill",
