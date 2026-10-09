@@ -1496,6 +1496,8 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_row_at_or_under_a_refusal_is_dropped_whichever_way_each_is_spelled`
 `verified-by: bravebot_sandbox::rules::an_entry_the_file_system_resolves_to_a_verbatim_path_is_kept_in_the_ordinary_spelling`
 `verified-by: bravebot_sandbox::rules::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
+`verified-by: bravebot_sandbox::rules::a_verbatim_path_that_is_not_text_is_not_taken_for_its_lossy_lookalike`
+`verified-by: bravebot_sandbox::rules::a_stage_with_a_denial_inside_its_grant_is_refused_by_the_windows_backend`
 `verified-by: bravebot_sandbox::policy::a_write_row_above_a_write_refusal_is_spread_around_it`
 `verified-by: bravebot_sandbox::linux::a_stage_is_refused_a_write_the_policy_refuses_and_keeps_the_rest`
 `verified-by: bravebot_sandbox::macos::the_profile_orders_every_row_from_the_widest_path_to_the_narrowest`

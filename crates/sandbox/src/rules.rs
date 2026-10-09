@@ -626,11 +626,12 @@ const MAX_PATH: usize = 260;
 /// directory named by the person or found on `PATH`, and a refusal and a grant for one directory
 /// would not be found to meet. A network path keeps its prefix, since without it the path names
 /// something else, and so does a path too long for the ordinary spelling, which only the prefixed
-/// one can name.
+/// one can name. A path that is not text is returned as it is, since a lossy rendering of it would
+/// name another path once the prefix is taken off.
 pub fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
     let stripped = path
-        .to_string_lossy()
-        .strip_prefix(r"\\?\")
+        .to_str()
+        .and_then(|text| text.strip_prefix(r"\\?\"))
         .filter(|rest| {
             let bytes = rest.as_bytes();
             bytes.len() >= 3
@@ -1404,6 +1405,26 @@ mod tests {
         }
     }
 
+    /// A name that is not text has no ordinary spelling to be given: reading it lossily and taking
+    /// the prefix off would name the path that spells its replacement character, which is another
+    /// file.
+    #[cfg(unix)]
+    #[test]
+    fn a_verbatim_path_that_is_not_text_is_not_taken_for_its_lossy_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = PathBuf::from(OsStr::from_bytes(b"\\\\?\\C:\\work\\tool-\xff"));
+        let lookalike = PathBuf::from("\\\\?\\C:\\work\\tool-\u{FFFD}");
+
+        assert_eq!(without_verbatim_prefix(invalid.clone()), invalid);
+        assert_eq!(
+            without_verbatim_prefix(lookalike),
+            PathBuf::from("C:\\work\\tool-\u{FFFD}")
+        );
+        assert!(!under(&invalid, Path::new("C:\\work\\tool-\u{FFFD}")));
+    }
+
     /// An entry is resolved in the spelling a grant is written in, so a stage's session row and a
     /// person's `denyRead` of a file inside it can be found to meet. The file system is given
     /// what Windows returns, a `\\?\` path, since no other host returns one.
@@ -1470,6 +1491,31 @@ mod tests {
             assert_eq!(held.unreadable, [PathBuf::from(denied)], "{grant} {denied}");
             let held = denial(List::DenyWrite, denied).apply(policy);
             assert_eq!(held.unwritable, [PathBuf::from(denied)], "{grant} {denied}");
+        }
+    }
+
+    /// The Windows backend cannot subtract from a grant, so it starts no stage whose policy holds a
+    /// refusal. A refusal left out of the policy by a difference in spelling leaves it nothing to
+    /// refuse, and the stage starts with the path readable and writable.
+    #[test]
+    fn a_stage_with_a_denial_inside_its_grant_is_refused_by_the_windows_backend() {
+        use crate::windows::refusal_for;
+
+        for (grant, denied) in [
+            (GRANT, SECRET),
+            (GRANT, SECRET_VERBATIM),
+            (GRANT_VERBATIM, SECRET),
+            (GRANT_VERBATIM, SECRET_VERBATIM),
+        ] {
+            let policy = SandboxPolicy::strict()
+                .allow_subprocesses()
+                .allow_read(grant)
+                .allow_write(grant);
+            assert!(refusal_for(&policy).is_none(), "{grant}");
+            for list in [List::DenyRead, List::DenyWrite] {
+                let held = denial(list, denied).apply(policy.clone());
+                assert!(refusal_for(&held).is_some(), "{grant} {denied}");
+            }
         }
     }
 
