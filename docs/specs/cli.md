@@ -1402,3 +1402,4 @@ the managed floor, not a partial read of it.
 `verified-by: bravebot_cli::running::a_locked_run_reads_no_settings_layer_from_the_checkout`
 `verified-by: bravebot_cli::running::a_locked_run_refuses_the_bypass_flag_and_a_background_start`
 `verified-by: bravebot_cli::running::a_locked_run_loads_none_of_the_customizations_a_safe_one_leaves_out`
+`verified-by: bravebot_config::locked::a_locked_process_makes_the_bypass_mode_unreachable_whatever_the_layers_said`
