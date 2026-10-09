@@ -324,6 +324,25 @@ const SSH_READABLE: &[&str] = &[
     ".ssh/id_ed25519_sk.pub",
 ];
 
+/// The locations under `home` that hold credentials or the state directory, which a stage of a
+/// `run` command is refused on `prelude` (SANDBOX-12).
+///
+/// The Windows table is the shared one: the platform tables add nothing there. A Windows
+/// container cannot be refused a location inside a directory it is granted, so the caller checks
+/// the directories it would grant against this list instead.
+pub fn credential_locations(prelude: Prelude, home: &Path) -> Vec<PathBuf> {
+    let platform = match prelude {
+        Prelude::MacOs => MACOS_CREDENTIAL_DIRECTORIES,
+        Prelude::Linux => LINUX_CREDENTIAL_DIRECTORIES,
+        Prelude::Windows => &[],
+    };
+    CREDENTIAL_DIRECTORIES
+        .iter()
+        .chain(platform)
+        .map(|row| under(home, row))
+        .collect()
+}
+
 /// The rows a stage of a `run` command gets before its plan is read.
 ///
 /// On Linux and macOS a stage reads the whole machine except the locations in the credential
@@ -358,13 +377,8 @@ pub fn run_base(
         policy = policy.deny_read(MACOS_SYSTEM_KEYCHAINS);
     }
     if let Some(home) = home {
-        let platform = match prelude {
-            Prelude::MacOs => MACOS_CREDENTIAL_DIRECTORIES,
-            Prelude::Linux => LINUX_CREDENTIAL_DIRECTORIES,
-            Prelude::Windows => &[],
-        };
-        for row in CREDENTIAL_DIRECTORIES.iter().chain(platform) {
-            policy = policy.deny_read(under(home, row));
+        for location in credential_locations(prelude, home) {
+            policy = policy.deny_read(location);
         }
         for row in SSH_READABLE {
             policy = policy.allow_read(under(home, row));
@@ -666,6 +680,25 @@ mod tests {
 
         assert_eq!(run.readable, keyed.readable);
         assert!(run.unreadable.is_empty());
+    }
+
+    /// The credential table the Windows caller checks its grants against names the state
+    /// directory and the same shared rows the other platforms refuse, and the run base refuses
+    /// exactly the table on the platforms that refuse anything.
+    #[test]
+    fn the_credential_locations_are_the_rows_the_run_base_refuses() {
+        let home = Path::new(A_HOME);
+        let windows = credential_locations(Prelude::Windows, home);
+
+        for row in [".bravebot", ".ssh", ".aws", ".config/gcloud"] {
+            assert!(windows.contains(&under(home, row)), "{row}");
+        }
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            let refused = a_run_base(prelude).unreadable;
+            for location in credential_locations(prelude, home) {
+                assert!(refused.contains(&location), "{prelude:?} {location:?}");
+            }
+        }
     }
 
     /// Without a home directory only the absolute refusal can apply, and the policy still means

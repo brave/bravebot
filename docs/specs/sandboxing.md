@@ -924,6 +924,16 @@ since a socket is reached through a write ([SANDBOX-3](#SANDBOX-3)). Nothing els
 credential directory, no directory above a session directory, and no socket for a stage without the
 remote scope.
 
+On Windows a stage is also refused when a directory the session was opened on is, holds or lies
+inside one of the credential locations under the home directory ([SANDBOX-12](#SANDBOX-12)): the
+state directory `~/.bravebot`, which holds `settings.json`, `~/.ssh`, `~/.aws` and the rest of the
+shared table. The row would be a read and write grant, and a Windows container cannot be refused a
+path inside a grant, so the refusal is made before the policy is built and no grant is written. The
+paths are compared by component without regard to case, and a credential location is compared in
+the form it is named and in its resolved form. A session opened on a project directory is not
+affected. Linux and macOS grant such a directory and refuse the locations inside it, so the
+refusal does not apply there.
+
 Every input is the compiled step a person read, the session's own directories or the process's own
 environment. Nothing a program printed, and no value the model supplied beyond the plan, reaches a
 row. Rows that name an absent path are created or left out as [SANDBOX-9](#SANDBOX-9) and
@@ -950,6 +960,12 @@ open the home.
 `verified-by: bravebot_sandbox::windows::what_every_container_reads_is_the_machines_own_directories`
 `verified-by: bravebot_sandbox::windows::nothing_else_is_taken_to_be_readable_by_every_container`
 `verified-by: bravebot_sandbox::windows::a_write_grant_under_a_system_directory_still_needs_its_entry`
+`verified-by: bravebot_agent::confine::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
+`verified-by: bravebot_agent::confine::a_windows_session_inside_a_credential_location_is_refused`
+`verified-by: bravebot_agent::confine::a_windows_session_is_compared_to_the_credential_locations_without_regard_to_case`
+`verified-by: bravebot_agent::confine::a_windows_session_beside_the_credential_locations_is_not_refused`
+`verified-by: bravebot_agent::confine::a_windows_session_with_one_root_on_the_home_directory_is_refused_whatever_the_others_are`
+`verified-by: bravebot_sandbox::base::the_credential_locations_are_the_rows_the_run_base_refuses`
 
 <a id="SANDBOX-19"></a>
 ### SANDBOX-19: the planner is told its programs are confined, and a failed step says what it ran under

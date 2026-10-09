@@ -595,6 +595,12 @@ about the profile this agent resolved for itself, which it knows, rather than ab
 that resolves them is a program this agent started all the same, so it is handed what the person's
 own environment holds and none of what this agent authenticates with.
 
+**The state directory is out of a Windows grant.** A stage on Windows is refused when a directory
+the session was opened on is, holds or lies inside `~/.bravebot`, since the grant would hand a
+program the gateway keys and `settings.json` and a Windows container cannot be refused a path
+inside it ([SANDBOX-18](sandboxing.md#SANDBOX-18)). Linux and macOS refuse the directory inside
+the grant ([SANDBOX-12](sandboxing.md#SANDBOX-12)).
+
 **The record is closed elsewhere.** No field of the trail can hold a credential, because
 [TRACE-2](trace.md#TRACE-2) admits only a gate name, a capability, a label, a path or a slot id.
 That is a stronger answer than a redaction rule and it is why this clause does not restate one; what
@@ -605,6 +611,7 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_not_one_of_this_agents_own`
 `verified-by: bravebot_config::scrub::the_variables_a_provider_block_names_are_withheld`
 `verified-by: bravebot_agent::exec::a_gateways_environment_token_does_not_reach_a_program_it_runs`
+`verified-by: bravebot_agent::confine::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
 
 <a id="CRED-15"></a>
 ### CRED-15: what a turn reads is scanned before the planner receives it
