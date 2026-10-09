@@ -69,6 +69,22 @@ fn a_countdown_is_owed_a_frame(counting_down: bool, since_drawn: Duration) -> bo
 /// tenth of a second, so the wait for a key has to be shorter than that for it to be drawn.
 const FACE_POLL: Duration = Duration::from_millis(40);
 
+/// Whether the opening screen owes its face a frame: the face is on screen and is held differently
+/// from the last time it was looked at. Every other screen has no face to repaint.
+fn a_face_is_owed_a_frame(
+    opening: bool,
+    held: crate::avatar::Look,
+    shown: crate::avatar::Look,
+) -> bool {
+    opening && held != shown
+}
+
+/// How long to wait for a key. Short only while a face on the opening screen can move, so a
+/// session past its first message, or one that asked for no motion, does not wake any faster.
+fn wait_for_a_key(opening: bool, stilled: bool) -> Duration {
+    if opening && !stilled { FACE_POLL } else { POLL }
+}
+
 /// Asks for motion reported only while a button is held.
 ///
 /// Sent after [`EnableMouseCapture`], which asks for all three tracking modes at once, including
@@ -4065,18 +4081,12 @@ fn event_loop(
                         // The face on the opening screen blinks and glances without a key, and is
                         // drawn again only when how it is held has changed.
                         let opening = render::opening_screen(&session);
-                        if opening {
-                            let held = crate::avatar::look_now();
-                            if held != face_held {
-                                face_held = held;
-                                needs_draw = true;
-                            }
+                        let held = crate::avatar::look_now();
+                        if a_face_is_owed_a_frame(opening, held, face_held) {
+                            face_held = held;
+                            needs_draw = true;
                         }
-                        let wait = if opening && !crate::indicator::stilled() {
-                            FACE_POLL
-                        } else {
-                            POLL
-                        };
+                        let wait = wait_for_a_key(opening, crate::indicator::stilled());
                         // Through the reader rather than the terminal, so a run is seen whole.
                         if !input::poll(wait)? {
                             continue;
@@ -16678,6 +16688,32 @@ mod tests {
         ));
         assert!(a_countdown_is_owed_a_frame(true, COUNTDOWN));
         assert!(a_countdown_is_owed_a_frame(true, Duration::from_secs(9)));
+    }
+
+    /// The frame a face is owed, and the ones it is not. A face held as it was is left alone, and a
+    /// screen that is not the opening one has no face to repaint, whatever the clock says.
+    #[test]
+    fn a_face_is_owed_a_frame_only_on_the_opening_screen_and_only_when_its_look_changed() {
+        use crate::avatar::Look;
+        let open = Look::default();
+        let shut = Look {
+            away: false,
+            blink: true,
+        };
+        assert!(a_face_is_owed_a_frame(true, shut, open));
+        assert!(a_face_is_owed_a_frame(true, open, shut));
+        assert!(!a_face_is_owed_a_frame(true, open, open));
+        assert!(!a_face_is_owed_a_frame(false, shut, open));
+    }
+
+    /// The short wait belongs to the opening screen with motion allowed, and to nothing else.
+    #[test]
+    fn the_wait_for_a_key_is_short_only_while_a_face_can_move() {
+        assert_eq!(wait_for_a_key(true, false), FACE_POLL);
+        assert_eq!(wait_for_a_key(true, true), POLL);
+        assert_eq!(wait_for_a_key(false, false), POLL);
+        assert_eq!(wait_for_a_key(false, true), POLL);
+        assert!(FACE_POLL < POLL);
     }
 
     /// The bare word reads the loop rather than starting one, and sends nothing: between ticks the
