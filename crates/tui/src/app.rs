@@ -3669,6 +3669,9 @@ fn rewind(
     };
     stored.retain_rewind_coverage(&point.coverage);
     let gaps = point.coverage.gaps();
+    // Read off the point before anything is removed. The display prompts of the rewound turns go
+    // with them (SESSION-19), so after the removal there is nothing left to put back.
+    let undone = point.prompt;
     let snapshot = point.snapshot;
     let refused = bravebot_agent::rewind::restore(
         workspace,
@@ -3699,6 +3702,10 @@ fn rewind(
     session.transcript.truncate(snapshot.transcript_len);
     session.rewind_history();
     stored.truncate_audit(session.turns + 1);
+    // The prompt that was undone goes back into the box, so the next thing the person does is
+    // edit it and send it again rather than retype it. After the history removal, which is what
+    // takes the prompt off the display, and from the point rather than from the display.
+    session.return_prompt(&undone);
 
     if snapshot.turns == 0
         && !snapshot.was_wrote
@@ -25383,6 +25390,65 @@ mod tests {
             "the rewind put back the name the session had before it was renamed"
         );
         assert_eq!(after.turns, 1, "the turn left the record with the rewind");
+    }
+
+    /// SESSION-19: the prompt a rewind undid comes back into the box. It has to be read off the
+    /// point, since the rewind removes the rewound turns' display prompts, and from the earliest
+    /// of the turns gone back past, which is the request the session now stands before.
+    #[test]
+    fn undoing_a_turn_puts_its_prompt_back_in_the_box() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-rewind-prompt");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut trust = TrustStore::new(&root);
+        let mut programs = TrustedPrograms::new();
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut session = Session::new("none");
+        let mut conversation = Conversation::new();
+
+        // Two turns, with distinct prompts: going back past both must return the earlier one.
+        for prompt in ["rename the parser module", "add a test for the parser"] {
+            let start = conversation.recounted().len();
+            type_line(&mut session, prompt);
+            session.submit().expect("the prompt is sent");
+            let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
+            session.rewind.open(point, prompt.to_string());
+            session.prompt_recorded(conversation.recounted().len());
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant("done"));
+            session.complete("done", vec![], 10);
+            session.record_turn(start, &conversation);
+        }
+        assert_eq!(session.rewind.points().len(), 2);
+        assert!(session.input().is_empty(), "the box did not start empty");
+
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            2,
+        );
+
+        assert_eq!(
+            session.input(),
+            "rename the parser module",
+            "the prompt the session now stands before did not come back"
+        );
+        assert_eq!(
+            session.turns, 0,
+            "the session did not go back past both turns"
+        );
     }
 
     /// The bare word is the list, which is the surface the command exists for: seeing what a
