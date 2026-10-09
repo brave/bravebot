@@ -33,6 +33,7 @@ pub mod mcp;
 pub mod memory;
 pub mod mode;
 pub mod outcome;
+pub mod output_schema;
 pub mod permission_mode;
 pub mod permissions;
 pub mod preamble;

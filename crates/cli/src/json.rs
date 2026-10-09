@@ -80,6 +80,9 @@ pub struct Report<'a> {
     pub refusals: &'a [Refusal],
     /// The driver's own words about what loaded and what did not.
     pub notices: &'a [String],
+    /// The reply as one line of JSON, where `--output-schema` was given and the reply matched it
+    /// (CLI-28). Already JSON, written as it is.
+    pub structured: Option<&'a str>,
 }
 
 /// One JSON string, quoted and escaped.
@@ -163,6 +166,10 @@ pub fn render(report: &Report<'_>) -> String {
         ("calls", calls),
         ("refusals", refusals),
         ("notices", strings(report.notices)),
+        (
+            "structured",
+            report.structured.unwrap_or("null").to_string(),
+        ),
     ])
 }
 
@@ -315,6 +322,7 @@ mod tests {
             calls,
             refusals,
             notices: &[],
+            structured: None,
         }
     }
 
@@ -387,6 +395,7 @@ mod tests {
             calls: &[],
             refusals: &[],
             notices: &[],
+            structured: None,
         });
 
         assert_eq!(
@@ -396,8 +405,26 @@ mod tests {
                 r#""identifier":"BB1003","message":"l'adresse n'a pas de schema","#,
                 r#""reply":"","model":"","agent":null,"session":null,"steps":0,"#,
                 r#""tokens":{"total":0,"output":0,"context":0,"cache_read":0,"cache_written":0},"#,
-                r#""calls":[],"refusals":[],"notices":[]}"#,
+                r#""calls":[],"refusals":[],"notices":[],"structured":null}"#,
             )
+        );
+    }
+
+    /// The value is already JSON, so it is written as itself and not quoted into a string, which
+    /// is the difference between a field a script indexes and one it has to parse again.
+    #[test]
+    fn a_structured_reply_is_a_value_and_not_a_string() {
+        let mut report = finished(Ending::Done, &[], &[]);
+        report.structured = Some(r#"{"verdict":"pass"}"#);
+        let written = render(&report);
+
+        assert!(
+            written.ends_with(r#""notices":[],"structured":{"verdict":"pass"}}"#),
+            "{written}"
+        );
+        assert!(
+            render(&finished(Ending::Done, &[], &[])).ends_with(r#""structured":null}"#),
+            "a run given no schema says so with a null"
         );
     }
 

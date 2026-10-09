@@ -13377,6 +13377,73 @@ fn without_a_chosen_effort_no_level_is_requested() {
     );
 }
 
+/// A schema the person supplied must reach the service, or the flag asks for a shape and sends
+/// nothing that asks for it.
+#[test]
+fn an_output_schema_is_requested_with_the_planners_request() {
+    let scratch = Scratch::new("output-schema-requested");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve(&reply_with(r#"{"verdict":"pass"}"#));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let schema = bravebot_agent::output_schema::OutputSchema::parse(
+        r#"{"type":"object","required":["verdict"]}"#,
+    )
+    .expect("a schema in the subset");
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("anything").with_output_schema(Some(schema)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let body: serde_json::Value =
+        serde_json::from_str(&received.recv().expect("request body")).expect("a JSON body");
+    assert_eq!(
+        body["response_format"],
+        serde_json::json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": "reply",
+                "schema": {"type": "object", "required": ["verdict"]}
+            }
+        }),
+        "the schema was not requested"
+    );
+}
+
+/// A turn nobody gave a schema sends the request it always sent.
+#[test]
+fn without_an_output_schema_no_response_format_is_requested() {
+    let scratch = Scratch::new("no-output-schema");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("anything"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(
+        !body.contains("response_format"),
+        "a shape was requested by a turn that was given none: {body}"
+    );
+}
+
 /// Choosing nothing is not choosing "", so a turn with no choice falls back to the configured
 /// default rather than sending an empty field the server would reset anyway.
 #[test]

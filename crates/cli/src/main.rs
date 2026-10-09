@@ -369,7 +369,8 @@ fn main() -> ExitCode {
         // would otherwise be caught below as unknown options.
         Some(
             "-p" | "--print" | "--mode" | "--model" | "--advisor" | "--effort" | "--file"
-            | "--add-dir" | "--trust-workspace" | "--trace" | "--json" | "--json-stream",
+            | "--add-dir" | "--trust-workspace" | "--trace" | "--json" | "--json-stream"
+            | "--output-schema",
         ) => run_task(&args, skip_permissions, agent, prompts),
         Some("doctor") if args.get(1).map(String::as_str) == Some("--sandbox-check") => {
             match args.len() {
@@ -1034,6 +1035,7 @@ fn print_help() {
         ("--trace", t!(cli_option_trace)),
         ("--json", t!(cli_option_json)),
         ("--json-stream", t!(cli_option_json_stream)),
+        ("--output-schema <path>", t!(cli_option_output_schema)),
         ("--incognito", t!(cli_option_incognito)),
         ("--safe", t!(cli_option_safe)),
         ("--locked", t!(cli_option_locked)),
@@ -1283,6 +1285,8 @@ struct Invocation {
     stream: bool,
     /// The earlier session this run carries on (CLI-25).
     resume: Option<continued::Resume>,
+    /// The file holding the JSON Schema the reply must match (CLI-28).
+    output_schema: Option<String>,
 }
 
 /// Parse `<prompt> [--file path]... [--add-dir path]... [--mode name] [--model name]
@@ -1301,6 +1305,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut json = false;
     let mut stream = false;
     let mut resume = None;
+    let mut output_schema = None;
     let mut index = 0;
 
     while index < args.len() {
@@ -1394,6 +1399,15 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 resume = Some(continued::Resume::Latest);
                 index += 1;
             }
+            // Refused when blank for the reason `--model` is: a script that computed an empty
+            // variable asked for a shape and would otherwise get free prose, untold.
+            "--output-schema" => match args.get(index + 1).map(|path| path.trim()) {
+                Some(path) if !path.is_empty() => {
+                    output_schema = Some(path.to_string());
+                    index += 2;
+                }
+                _ => return Err(t!(cli_output_schema_needs_a_path).to_string()),
+            },
             "--json" => {
                 json = true;
                 index += 1;
@@ -1430,6 +1444,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         json,
         stream,
         resume,
+        output_schema,
     })
 }
 
@@ -1460,6 +1475,7 @@ fn run_task(
         json: as_json,
         stream: as_stream,
         resume,
+        output_schema,
     } = invocation;
 
     // Read before the emptiness check below, since `cat notes.md | bravebot -p` is a complete
@@ -1498,6 +1514,23 @@ fn run_task(
             t!(cli_advisor_not_with_a_manifest),
         );
     }
+    // A manifest run has a reply per step and none for the run, so there is no one reply to hold to
+    // a schema.
+    if output_schema.is_some() && mode == Mode::Manifest {
+        return stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_output_schema_not_with_a_manifest),
+        );
+    }
+    // Read and vetted before anything is sent, so a schema outside what is checked is a refused
+    // argument and not a constraint the run quietly did not hold the reply to.
+    let output_schema = match output_schema.as_deref().map(load_output_schema).transpose() {
+        Ok(schema) => schema,
+        Err(complaint) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+        }
+    };
     // A manifest run's steps are planned and run from the plan, not chosen from a list of tools, so
     // the flags would be taken and limit nothing.
     if !bravebot_core::tool_set::settled().is_none() && mode == Mode::Manifest {
@@ -1736,6 +1769,7 @@ fn run_task(
         .with_cache(bravebot_agent::home::cache())
         .with_model(model_asked_for(named, pick.into_model()))
         .with_advisor(advisor)
+        .with_output_schema(output_schema)
         // The flag, then the settings layers and the saved pick ranked as BACKEND-43 ranks them.
         // The layers are the only route a machine where nobody ever opens the interface has to a
         // level that outlives one run.
@@ -1850,6 +1884,21 @@ fn run_task(
     // The same listing says whether that model reads an effort level, which is the other thing a
     // run cannot learn anywhere else.
     let reads_effort = bravebot_tui::app::adopt_listing_for_model(&mut config, &model);
+
+    // A model that cannot be asked for a reply of a given shape refuses the flag before anything
+    // is sent, rather than answering in prose that the check afterwards fails (CLI-28). Bedrock has
+    // no field for it here, and a roster row that states its parameters without one says the
+    // service would ignore it.
+    if task.output_schema.is_some()
+        && (config.bedrock_for(&model).is_some()
+            || !bravebot_tui::app::reads_structured_output(&config, &model))
+    {
+        return stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_output_schema_not_served, model = model.as_str()),
+        );
+    }
 
     // A level goes out only where the listing describing the model in force says it is read
     // (BACKEND-22). What is recorded stays recorded: the choice applies again the moment a model
@@ -2012,12 +2061,25 @@ fn run_task(
                 not_served.is_some(),
             );
 
+            // Held to the schema only once the turn is otherwise a success: a run that failed for
+            // another reason keeps that reason, and a reply that was not asked for in this shape
+            // has nothing to be held to (CLI-28).
+            let (ending, structured, off_schema) = match (&task.output_schema, ending) {
+                (Some(schema), Ending::Done) => match schema.check(outcome.reply_for_display()) {
+                    Ok(value) => (ending, Some(value), None),
+                    Err(broke) => (Ending::Schema, None, Some(off_schema_message(&broke))),
+                },
+                _ => (ending, None, None),
+            };
+
             // Built before the reply is chosen, because with `--json` the result object is what
             // goes on stdout in the reply's place and it has to hold the reply itself.
             let rendered = as_json.then(|| {
                 json::render(&json::Report {
                     ending,
-                    message: failure_of_a_turn(ending, not_served.as_deref()),
+                    message: off_schema
+                        .as_deref()
+                        .or_else(|| failure_of_a_turn(ending, not_served.as_deref())),
                     reply: outcome.reply_for_display(),
                     model: &outcome.model,
                     agent: outcome.addressed.as_ref().map(|addressed| addressed.name()),
@@ -2033,6 +2095,7 @@ fn run_task(
                     calls: reporter.calls(),
                     refusals: &refusals(sink.recorded()),
                     notices: &outcome.notices,
+                    structured: structured.as_deref(),
                 })
             });
 
@@ -2045,11 +2108,23 @@ fn run_task(
                 ending,
                 not_served: not_served.as_deref(),
             };
-            report(
-                &mut std::io::stdout().lock(),
-                &mut std::io::stderr().lock(),
-                &finished,
-            );
+            // Nothing of a reply that is off its schema goes where a pipe would take it for the
+            // shape it asked for. With `--json` the object holds it, beside the status that says so.
+            match (&off_schema, as_json) {
+                (Some(_), false) => report(
+                    &mut std::io::sink(),
+                    &mut std::io::stderr().lock(),
+                    &finished,
+                ),
+                _ => report(
+                    &mut std::io::stdout().lock(),
+                    &mut std::io::stderr().lock(),
+                    &finished,
+                ),
+            }
+            if let Some(complaint) = &off_schema {
+                eprintln!("{}", ending.told(complaint));
+            }
             ending.code()
         }
         // A run that stopped is the one worth looking at, so what it produced is printed
@@ -2101,6 +2176,64 @@ fn run_task(
             stopped
         }
     }
+}
+
+/// The schema a path names, read and vetted, or the sentence that says why it cannot be used.
+fn load_output_schema(path: &str) -> Result<bravebot_agent::output_schema::OutputSchema, String> {
+    use bravebot_agent::output_schema::{OutputSchema, SchemaError};
+    let text = std::fs::read_to_string(path).map_err(|err| {
+        t!(
+            cli_output_schema_unreadable,
+            path = path,
+            problem = err.to_string()
+        )
+        .to_string()
+    })?;
+    OutputSchema::parse(&text).map_err(|err| {
+        match err {
+            SchemaError::NotJson => t!(cli_output_schema_not_json, path = path),
+            SchemaError::NotAnObject { at } => {
+                t!(cli_output_schema_not_an_object, path = path, at = at)
+            }
+            SchemaError::Unsupported { at, keyword } => t!(
+                cli_output_schema_unsupported,
+                path = path,
+                at = at,
+                keyword = keyword
+            ),
+            SchemaError::Malformed { at, keyword } => t!(
+                cli_output_schema_malformed,
+                path = path,
+                at = at,
+                keyword = keyword
+            ),
+        }
+        .to_string()
+    })
+}
+
+/// Why a finished reply is not the shape it was asked for, naming where in it and which rule.
+///
+/// Built from a position and a rule alone, so nothing the reply spelt reaches the sentence.
+fn off_schema_message(broke: &bravebot_agent::output_schema::Mismatch) -> String {
+    use bravebot_agent::output_schema::Rule;
+    let problem = match broke.rule {
+        Rule::NotJson => t!(cli_output_schema_rule_not_json),
+        Rule::Type => t!(cli_output_schema_rule_type),
+        Rule::Enum => t!(cli_output_schema_rule_enum),
+        Rule::Const => t!(cli_output_schema_rule_const),
+        Rule::Required => t!(cli_output_schema_rule_required),
+        Rule::Extra => t!(cli_output_schema_rule_extra),
+        Rule::Length => t!(cli_output_schema_rule_length),
+        Rule::Count => t!(cli_output_schema_rule_count),
+        Rule::Range => t!(cli_output_schema_rule_range),
+    };
+    t!(
+        cli_output_schema_mismatch,
+        at = broke.at.as_str(),
+        problem = problem
+    )
+    .to_string()
 }
 
 /// Whether a result object was asked for, read straight off the command line.
@@ -2236,6 +2369,7 @@ fn what_ran(
         calls,
         refusals,
         notices,
+        structured: None,
     })
 }
 
@@ -7378,6 +7512,29 @@ mod tests {
         ] {
             let err = parse_invocation(&typed).expect_err("must refuse");
             assert!(err.contains("--model"), "{typed:?}: {err}");
+        }
+    }
+
+    /// `--output-schema` names the file holding the schema, and a run that gave none has none.
+    #[test]
+    fn an_output_schema_flag_names_the_file_holding_the_schema() {
+        let parsed = parse_invocation(&args(&["--output-schema", "verdict.json", "do a thing"]))
+            .expect("parses");
+        assert_eq!(parsed.output_schema.as_deref(), Some("verdict.json"));
+        assert_eq!(parsed.prompt, "do a thing");
+        let none = parse_invocation(&args(&["do a thing"])).expect("parses");
+        assert_eq!(none.output_schema, None);
+    }
+
+    #[test]
+    fn an_output_schema_flag_naming_no_file_is_refused() {
+        for typed in [
+            args(&["--output-schema"]),
+            args(&["--output-schema", "", "do a thing"]),
+            args(&["--output-schema", "   ", "do a thing"]),
+        ] {
+            let err = parse_invocation(&typed).expect_err("refused");
+            assert!(err.contains("--output-schema"), "{typed:?}: {err}");
         }
     }
 
