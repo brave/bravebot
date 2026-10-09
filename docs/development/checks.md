@@ -47,8 +47,10 @@ the Rust build.
 
 CI runs its heavier jobs only where a change could fail them.
 [contrib/affected-checks.py](../../contrib/affected-checks.py) reads the paths a pull request
-touches and says which of Rust, the desktop app, the cross-builds, the website, the npm lockfiles
-and the dependency policy they could affect. The specs, security, locales, versions and narration
+touches and says which of Rust, the desktop app, the cross-builds, the Windows installers, the
+website, the npm lockfiles and the dependency policy they could affect. On a pull request the
+Windows installers are built and installed only for a change to the scripts that make them; main
+and every tag build and install them whatever changed. The specs, security, locales, versions and narration
 jobs take seconds and run on every change. A change to a crate needs the desktop jobs when the desktop app
 builds that crate, which is any crate the two bridge crates name, however far down. A job skipped
 by its condition reports success, and branch protection counts that as passing, so every doubt runs

@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-AREAS = ("rust", "ui", "build", "docs", "npm", "deps")
+AREAS = ("rust", "ui", "build", "installers", "docs", "npm", "deps")
 EVERYTHING = frozenset(AREAS)
 NOTHING = frozenset()
 
@@ -47,9 +47,12 @@ READ_BY_INSTALLER_TESTS = {
     "npm/scripts/postinstall.js": frozenset({"npm", "rust"}),
 }
 
-# The scripts that build, fuse and check the Windows installers. CI runs them only in the job
+# The scripts that build, fuse and check the Windows installers. CI runs them only in the jobs
 # after the cross-build, so a change to one needs the cross-build too, or the job that installs
-# the result is skipped and reports success.
+# the result is skipped and reports success. Nothing else on a pull request needs the installers:
+# a change to the lockfile, a manifest or a build script runs the cross-build, which links every
+# target, and is packaged and installed on Windows once it lands, since main and every tag build
+# and install them whatever changed.
 WINDOWS_INSTALLER_SCRIPTS = (
     "ui/scripts/windows-installer.mjs", "ui/scripts/check-windows-install.mjs",
     "ui/scripts/package.mjs", "ui/scripts/fuses.mjs",
@@ -116,7 +119,7 @@ def classify(path, desktop):
     if path in READ_BY_INSTALLER_TESTS:
         return READ_BY_INSTALLER_TESTS[path]
     if path in WINDOWS_INSTALLER_SCRIPTS:
-        return frozenset({"ui", "build"})
+        return frozenset({"ui", "build", "installers"})
     if path.startswith("extension/"):
         # The job for the desktop UI runs the extension's tests, and a Rust test reads its files.
         return frozenset({"rust", "ui"})
@@ -301,10 +304,10 @@ CASES = (
     ("docs/website/package-lock.json", {"docs", "npm"}),
     ("ui/src/App.tsx", {"ui"}),
     ("ui/package.json", {"ui", "npm"}),
-    ("ui/scripts/windows-installer.mjs", {"ui", "build"}),
-    ("ui/scripts/check-windows-install.mjs", {"ui", "build"}),
-    ("ui/scripts/package.mjs", {"ui", "build"}),
-    ("ui/scripts/fuses.mjs", {"ui", "build"}),
+    ("ui/scripts/windows-installer.mjs", {"ui", "build", "installers"}),
+    ("ui/scripts/check-windows-install.mjs", {"ui", "build", "installers"}),
+    ("ui/scripts/package.mjs", {"ui", "build", "installers"}),
+    ("ui/scripts/fuses.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/windows-installer.test.mjs", {"ui"}),
     ("packages/agent-client/src/common/client.ts", {"ui"}),
     ("packages/agent-client/test-fixtures/wire-contract.json", {"rust", "ui"}),
@@ -459,7 +462,7 @@ def selftest():
         checks.append(("a branch is its commits, its edits and its new files, not the base's",
                        got == wanted, got))
 
-    for area in set(AREAS) - {"build"}:
+    for area in set(AREAS) - {"build", "installers"}:
         runs = targets({area}, HOST) + targets({area}, CONTAINERS)
         checks.append((f"a local run needing {area} runs a gate for it", bool(runs), runs))
     containers = targets({"rust"}, CONTAINERS)
