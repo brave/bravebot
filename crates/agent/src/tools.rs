@@ -549,6 +549,17 @@ fn table(
                                         without a second call. Lines of context are not \
                                         matches and do not count toward the match cap or the \
                                         offset."
+                    },
+                    "output": {
+                        "type": "string",
+                        "enum": ["lines", "files", "count"],
+                        "description": "What to return. 'lines' (the default) is the matching \
+                                        lines. 'files' is only the paths of the files with a \
+                                        match, each once. 'count' is how many lines match in \
+                                        each file and in all. Use files or count to survey \
+                                        where something occurs without paying for the lines; \
+                                        they ignore offset and context and are not held to the \
+                                        match cap."
                     }
                 },
                 "required": ["pattern"]
@@ -9145,6 +9156,33 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
 /// not match, and a `--` line between groups that are not adjacent in the file, so a gap is not
 /// read as the lines having been next to each other.
 fn match_lines(found: &crate::workspace::Matches) -> String {
+    use crate::workspace::SearchOutput;
+    match found.output {
+        SearchOutput::Lines => {}
+        SearchOutput::Files => {
+            return found
+                .tallies
+                .iter()
+                .map(|t| t.path.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+        SearchOutput::Count => {
+            if found.tallies.is_empty() {
+                return String::new();
+            }
+            let mut rows: Vec<String> = found
+                .tallies
+                .iter()
+                .map(|t| format!("{}: {}", t.path, t.lines))
+                .collect();
+            rows.push(format!(
+                "total: {}",
+                tally(found.matched, "matching line", "matching lines")
+            ));
+            return rows.join("\n");
+        }
+    }
     if found.context.is_empty() {
         return found
             .matches
@@ -9261,7 +9299,28 @@ fn search<S: Sink>(
         .unwrap_or(0)
         .min(usize::MAX as u64) as usize;
 
-    match workspace.grep_around(
+    // Routing as well: a closed set of names for how the result is shaped, matched the way
+    // read_git's query is. A name off the list is refused rather than guessed at.
+    let output = match argument(arguments, "output") {
+        None => crate::workspace::SearchOutput::Lines,
+        Some(proposed) => match policy.promote_confined_read("search", "output", &proposed) {
+            Ok(promoted) => match promoted
+                .into_trusted()
+                .ok()
+                .and_then(|name| crate::workspace::SearchOutput::named(name.trim()))
+            {
+                Some(output) => output,
+                None => {
+                    return Produced::problem(
+                        "error: 'output' must be one of lines, files or count",
+                    );
+                }
+            },
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        },
+    };
+
+    match workspace.grep_shaped(
         policy,
         &patterns,
         &directory,
@@ -9269,12 +9328,17 @@ fn search<S: Sink>(
         case_sensitive,
         offset,
         context,
+        output,
     ) {
         Ok(found) => {
             let note = note_for(policy, "search", &found, |found| {
                 format!(
                     "{} in {}",
-                    tally(found.matches.len(), "match", "matches"),
+                    if found.output.summarises() {
+                        tally(found.matched, "matching line", "matching lines")
+                    } else {
+                        tally(found.matches.len(), "match", "matches")
+                    },
                     tally(found.searched, "file", "files")
                 )
             });
@@ -9296,7 +9360,8 @@ fn search<S: Sink>(
                         found.truncated
                             || found.unvisited
                             || found.timed_out
-                            || found.context_truncated,
+                            || found.context_truncated
+                            || found.tallies_truncated,
                         found.paging(),
                     )
                 });
@@ -9317,7 +9382,7 @@ fn search<S: Sink>(
             let had_include = include.is_some();
 
             let rendered = policy.render_in_place("search", &found, |found| {
-                let mut body = if found.matches.is_empty() {
+                let mut body = if found.is_empty() {
                     // The three ways a search comes back empty, which used to print the same
                     // sentence. Files were read and the needle was not in them, which is an
                     // answer. Or the include glob selected nothing, so nothing was read and
@@ -9374,6 +9439,27 @@ fn search<S: Sink>(
                         "\n\n(this search ran out of time after {} files and did not read the \
                          rest; narrow it with a directory or an include glob)",
                         found.searched
+                    ));
+                }
+                if found.output.summarises() && (found.unvisited || found.timed_out) {
+                    // Nothing in a list of paths or counts looks short, which is why it is said:
+                    // what the walk never read cannot be in it.
+                    body.push_str(
+                        "\n\n(the files and counts above are a lower bound: the search did not \
+                         read the whole tree)",
+                    );
+                }
+                if found.tallies_truncated {
+                    body.push_str(&format!(
+                        "\n\n(this lists the first {} files with a match and the result is \
+                         incomplete; {}narrow the pattern or search a subdirectory to see the \
+                         rest)",
+                        found.tallies.len(),
+                        if found.output == crate::workspace::SearchOutput::Count {
+                            "the total above covers every match that was read; "
+                        } else {
+                            ""
+                        }
                     ));
                 }
                 if found.context_truncated {

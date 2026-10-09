@@ -45425,3 +45425,137 @@ mod spend_limit {
         assert!(ran.asked.is_empty());
     }
 }
+
+/// What the planner is shown for each shape: paths alone, or a count per file and a total, with no
+/// matching line in either.
+#[test]
+fn a_search_asks_for_files_or_a_count_through_the_tool() {
+    let scratch = Scratch::new("search-output-through-the-tool");
+    std::fs::write(scratch.path.join("a.txt"), "needle\nneedle\n").unwrap();
+    std::fs::write(scratch.path.join("b.txt"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for (output, wanted) in [
+        ("files", "a.txt\\nb.txt"),
+        ("count", "a.txt: 2\\nb.txt: 1\\ntotal: 3 matching lines"),
+    ] {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2(
+                "search",
+                &format!(r#"{{"pattern":"needle","directory":".","output":"{output}"}}"#),
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let task = Task::new("survey needle");
+        turn::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::Unattended,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+
+        let _first = received.recv().expect("first request");
+        let second = received.recv().expect("second request");
+        assert!(
+            second.contains(wanted),
+            "{output}: not the shape asked for: {second}"
+        );
+        assert!(
+            !second.contains("a.txt:1:"),
+            "{output}: a matching line came back: {second}"
+        );
+    }
+}
+
+/// An output name off the list is refused rather than read as the default, which would answer a
+/// question the planner did not ask.
+#[test]
+fn a_search_output_off_the_list_is_refused() {
+    let scratch = Scratch::new("search-output-refused");
+    std::fs::write(scratch.path.join("a.txt"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "search",
+            r#"{"pattern":"needle","directory":".","output":"everything"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("survey needle");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("must be one of lines, files or count"),
+        "{second}"
+    );
+}
+
+/// Quarantine is the default footing, and a list of paths that came from a walk which stopped short
+/// looks complete. The claim has to reach the planner beside the reference.
+#[test]
+fn a_quarantined_capped_files_result_still_says_it_is_incomplete() {
+    let scratch = Scratch::new("search-files-capped-quarantined");
+    for n in 0..12 {
+        std::fs::write(scratch.path.join(format!("f{n:05}.txt")), "needle\n").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(10), None);
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "search",
+            r#"{"pattern":"needle","directory":".","output":"files"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("survey needle");
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("f00000.txt"),
+        "the paths reached the model, so this is not the quarantined case: {second}"
+    );
+    assert!(
+        second.contains("incomplete"),
+        "a capped files result made no claim to a planner that may not read it: {second}"
+    );
+}
