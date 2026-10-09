@@ -5591,6 +5591,32 @@ pub fn adopt_listing_for_model(config: &mut Config, model: &str) -> bool {
     reads_effort(&models, model)
 }
 
+/// Whether a reply matching a schema can be asked of `model`, as far as its listing says.
+///
+/// True for a model no listing describes and for a row that states no parameters, which is every
+/// Brave roster row and every settings-file model: neither is the roster saying the field would be
+/// ignored, and refusing a run on the strength of silence would decide against the person. False
+/// only where a row states its parameters and names neither of the two a gateway uses for it.
+pub fn reads_structured_output(config: &Config, model: &str) -> bool {
+    list_models(config, Some(model))
+        .map(|models| lists_structured_output(&models, model))
+        .unwrap_or(true)
+}
+
+/// Whether the roster lets `chosen` be asked for a schema. Split from the fetch so the matching is
+/// testable without a server.
+fn lists_structured_output(models: &[bravebot_aichat::models::Model], chosen: &str) -> bool {
+    models
+        .iter()
+        .find(|model| model.key == chosen)
+        .and_then(|model| model.advertised.parameters.as_ref())
+        .is_none_or(|parameters| {
+            parameters
+                .iter()
+                .any(|it| it == "structured_outputs" || it == "response_format")
+        })
+}
+
 /// Whether the roster says the model a request names reads an effort level: the pick where there is
 /// one, and the configured default where there is none.
 ///
@@ -10079,6 +10105,29 @@ mod tests {
             bravebot_config::DEFAULT_CONTEXT_BUDGET
         );
         assert!(config.budget_is_guessed());
+    }
+
+    #[test]
+    fn a_schema_is_refused_only_where_the_roster_states_parameters_without_it() {
+        let row = |key: &str, parameters: Option<&[&str]>| bravebot_aichat::models::Model {
+            key: key.to_string(),
+            advertised: bravebot_aichat::models::Advertised {
+                parameters: parameters.map(|them| them.iter().map(|it| it.to_string()).collect()),
+                ..Default::default()
+            },
+            ..bravebot_aichat::models::Model::automatic()
+        };
+        let models = [
+            row("silent", None),
+            row("capable", Some(&["tools", "structured_outputs"])),
+            row("also-capable", Some(&["response_format"])),
+            row("incapable", Some(&["tools", "reasoning"])),
+        ];
+        assert!(lists_structured_output(&models, "silent"));
+        assert!(lists_structured_output(&models, "capable"));
+        assert!(lists_structured_output(&models, "also-capable"));
+        assert!(!lists_structured_output(&models, "incapable"));
+        assert!(lists_structured_output(&models, "a-model-nothing-lists"));
     }
 
     /// A reply arrives as hundreds of messages and a draw rebuilds the whole transcript, so a

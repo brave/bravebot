@@ -44,7 +44,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 38] = [
+const FLAGS: [Flag; 39] = [
     flag("plain", None, false),
     flag("bg", None, false),
     flag("resume", Some('r'), false),
@@ -75,6 +75,7 @@ const FLAGS: [Flag; 38] = [
     flag("trace", None, false),
     flag("json", None, false),
     flag("json-stream", None, false),
+    flag("output-schema", None, true),
     flag("incognito", None, false),
     flag("safe", None, false),
     flag("locked", None, false),

@@ -10290,3 +10290,201 @@ fn a_run_tells_the_planner_about_the_references_only_the_person_declared() {
         );
     }
 }
+
+/// The reply a streamed frame carries, with the quotes and backslashes of a JSON reply escaped so
+/// it survives being written into a string.
+fn escaped(text: &str) -> String {
+    let quoted = serde_json::to_string(text).expect("a string encodes");
+    quoted[1..quoted.len() - 1].to_string()
+}
+
+const A_VERDICT_SCHEMA: &str = r#"{
+    "type": "object",
+    "properties": {"verdict": {"enum": ["pass", "fail"]}},
+    "required": ["verdict"],
+    "additionalProperties": false
+}"#;
+
+/// CLI-28: the schema is sent with the request, and a reply that matches it ends the run as any
+/// other does, with the value in `structured` beside the reply.
+#[test]
+fn a_reply_matching_the_output_schema_is_returned_as_a_value() {
+    let reply = r#"{"verdict": "pass"}"#;
+    let gateway = a_gateway(r#"["tools", "structured_outputs"]"#, move |_| {
+        streamed(&escaped(reply))
+    });
+    let scratch =
+        Scratch::new("cli-running-output-schema-match").with_settings(&settings_for(&gateway));
+    std::fs::write(scratch.path.join("verdict.json"), A_VERDICT_SCHEMA).expect("write the schema");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "--output-schema",
+            "verdict.json",
+            "--json",
+            "-p",
+            "judge it",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(result["structured"], serde_json::json!({"verdict": "pass"}));
+    assert_eq!(result["reply"], reply);
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    let asked: serde_json::Value = serde_json::from_str(&asked).expect("a JSON body");
+    assert_eq!(
+        asked["response_format"]["json_schema"]["schema"]["required"],
+        serde_json::json!(["verdict"]),
+        "the schema was not sent: {asked}"
+    );
+
+    // Without the flag for an object, stdout carries the reply as it came.
+    let plain = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--output-schema", "verdict.json", "-p", "judge it"],
+    );
+    let (stdout, stderr) = said(&plain);
+    assert_eq!(plain.status.code(), Some(0), "{stderr}");
+    assert_eq!(stdout.trim(), reply);
+}
+
+/// CLI-28, CLI-6: a reply that does not match ends on a status of its own. With `--json` the object
+/// says where and still holds the reply, and `structured` is null.
+#[test]
+fn a_reply_off_the_output_schema_ends_on_its_own_status() {
+    let gateway = a_gateway(r#"["tools", "structured_outputs"]"#, |_| {
+        streamed(&escaped(r#"{"verdict": "maybe"}"#))
+    });
+    let scratch =
+        Scratch::new("cli-running-output-schema-mismatch").with_settings(&settings_for(&gateway));
+    std::fs::write(scratch.path.join("verdict.json"), A_VERDICT_SCHEMA).expect("write the schema");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "--output-schema",
+            "verdict.json",
+            "--json",
+            "-p",
+            "judge it",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(6), "{stderr}");
+    assert!(stderr.contains("BB1006"), "{stderr}");
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["status"], 6);
+    assert_eq!(result["reason"], "schema");
+    assert_eq!(result["identifier"], "BB1006");
+    assert_eq!(result["structured"], serde_json::Value::Null);
+    assert_eq!(result["reply"], r#"{"verdict": "maybe"}"#);
+    assert!(
+        result["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("$.verdict")),
+        "{stdout}"
+    );
+}
+
+/// CLI-28, CLI-5: without `--json` a reply off the schema leaves stdout empty, so a pipe cannot
+/// take prose for the shape it asked for, and a matching reply is written as it came.
+#[test]
+fn a_reply_off_the_output_schema_writes_nothing_to_stdout() {
+    let gateway = a_gateway(r#"["tools", "structured_outputs"]"#, |_| {
+        streamed("I think it passes.")
+    });
+    let scratch =
+        Scratch::new("cli-running-output-schema-prose").with_settings(&settings_for(&gateway));
+    std::fs::write(scratch.path.join("verdict.json"), A_VERDICT_SCHEMA).expect("write the schema");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--output-schema", "verdict.json", "-p", "judge it"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(6), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("BB1006"), "{stderr}");
+}
+
+/// CLI-28: a run given no schema says `structured` is null, and its reply is not read as JSON.
+#[test]
+fn a_run_given_no_output_schema_has_a_null_structured_field() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch =
+        Scratch::new("cli-running-output-schema-absent").with_settings(&settings_for(&gateway));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(result["structured"], serde_json::Value::Null);
+}
+
+/// CLI-28: a model whose roster row names its parameters and not structured output is refused
+/// before a chat request is sent, and so is a schema outside what is checked.
+#[test]
+fn an_output_schema_that_cannot_be_honoured_is_refused_before_the_run() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning"]"#);
+    let scratch =
+        Scratch::new("cli-running-output-schema-refused").with_settings(&settings_for(&gateway));
+    std::fs::write(scratch.path.join("verdict.json"), A_VERDICT_SCHEMA).expect("write the schema");
+    std::fs::write(scratch.path.join("ref.json"), r##"{"$ref": "#/defs/x"}"##)
+        .expect("write the schema");
+
+    let unserved = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--output-schema", "verdict.json", "-p", "judge it"],
+    );
+    let (_, stderr) = said(&unserved);
+    assert_eq!(unserved.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("--output-schema"), "{stderr}");
+
+    for (arguments, wanted) in [
+        (vec!["--output-schema", "ref.json", "-p", "x"], "$ref"),
+        (
+            vec!["--output-schema", "missing.json", "-p", "x"],
+            "missing.json",
+        ),
+        (vec!["--output-schema", "", "-p", "x"], "--output-schema"),
+        (vec!["--output-schema"], "--output-schema"),
+        (
+            vec!["--output-schema", "verdict.json", "--mode", "manifest", "x"],
+            "manifest",
+        ),
+    ] {
+        let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, &arguments);
+        let (_, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stderr.contains(wanted), "{arguments:?}: {stderr}");
+    }
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a chat request was sent by a run that was refused"
+    );
+}

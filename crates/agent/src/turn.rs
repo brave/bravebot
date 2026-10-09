@@ -806,6 +806,14 @@ pub struct Task {
     /// Supplied per turn for the reason `model` is: where the choice is kept is the caller's
     /// business.
     pub effort: Option<Effort>,
+    /// The schema the person running this task supplied for its reply, sent with each of the
+    /// planner's requests.
+    ///
+    /// The planner's own requests only: a delegate is built with none, and a compaction summary and
+    /// a manifest step are not the reply the person asked a shape of. Held here rather than checked
+    /// here, because whether the finished reply conforms is the caller's question to put once the
+    /// turn has ended.
+    pub output_schema: Option<crate::output_schema::OutputSchema>,
     /// How many tool-calling rounds this turn may make, or `None` for no bound.
     ///
     /// The caller's business, like `model` and `home`, because the right answer depends on who is
@@ -1067,6 +1075,7 @@ impl Task {
             advisor: None,
             model: None,
             effort: None,
+            output_schema: None,
             tick: None,
             // No watches unless a caller says it keeps some, for the reason `rounds` is bounded
             // by default: a default cannot know whether anybody is there to read a fire.
@@ -1252,6 +1261,15 @@ impl Task {
     /// Ask for a particular amount of thinking rather than the service's own default.
     pub fn with_effort(mut self, effort: Option<Effort>) -> Self {
         self.effort = effort;
+        self
+    }
+
+    /// Ask for a reply that matches a schema the person supplied.
+    pub fn with_output_schema(
+        mut self,
+        schema: Option<crate::output_schema::OutputSchema>,
+    ) -> Self {
+        self.output_schema = schema;
         self
     }
 
@@ -4127,6 +4145,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     let model = turn_model.as_deref().unwrap_or(&config.default_model);
                     let (messages, marks) = conversation.with_system_marked(&system_text);
                     let request = ChatRequest::new(model, messages).with_effort(effort);
+                    let request = match &task.output_schema {
+                        Some(schema) => request.with_response_format(Some(
+                            bravebot_aichat::protocol::ResponseFormat::json_schema(
+                                schema.value().clone(),
+                            ),
+                        )),
+                        None => request,
+                    };
                     let request = if may_call_tools {
                         request.with_tools(offered.clone())
                     } else {
