@@ -345,6 +345,8 @@ pub struct Entry {
     pub shown: Option<Shown>,
     /// A few lines of what this call handed the planner, drawn plainly because the planner read them.
     pub returned: Option<Returned>,
+    /// Whether the person expanded this call past its glimpse or its twelve lines of change.
+    pub expanded: bool,
     /// The delegate this entry stands for, for a [`Speaker::Delegate`] entry.
     ///
     /// Its own lines live here rather than in the transcript around it. Several delegates work at
@@ -375,6 +377,7 @@ impl Entry {
             landing: None,
             shown: None,
             returned: None,
+            expanded: false,
             activity: None,
             delegate: None,
             answered_as: None,
@@ -391,6 +394,7 @@ impl Entry {
             landing: None,
             shown: None,
             returned: None,
+            expanded: false,
             activity: None,
             delegate: None,
             answered_as: None,
@@ -422,6 +426,7 @@ impl Entry {
             landing: None,
             shown: None,
             returned: None,
+            expanded: false,
             activity: None,
             delegate: None,
             answered_as: None,
@@ -439,6 +444,7 @@ impl Entry {
             landing: None,
             shown: None,
             returned: None,
+            expanded: false,
             activity: None,
             delegate: None,
             answered_as: None,
@@ -456,6 +462,7 @@ impl Entry {
             landing: None,
             shown: None,
             returned: None,
+            expanded: false,
             activity: None,
             delegate: None,
             answered_as: None,
@@ -476,6 +483,7 @@ impl Entry {
             landing: None,
             shown: None,
             returned: None,
+            expanded: false,
             activity: Some(activity),
             delegate: None,
             answered_as: None,
@@ -498,6 +506,7 @@ impl Entry {
             landing: None,
             shown: None,
             returned: None,
+            expanded: false,
             activity: None,
             delegate: None,
             answered_as: None,
@@ -1006,6 +1015,9 @@ pub struct PastedText {
     pub text: String,
 }
 
+/// How many lines of results a session holds for the key that expands them.
+const SESSION_EXPANDABLE_LINES: usize = 20_000;
+
 /// What the last frame laid the transcript out to.
 ///
 /// Written back after every draw, because none of it is knowable before one: the answers exist
@@ -1035,6 +1047,9 @@ pub struct Laid {
     /// A match is reached at the row the line holding it begins at, as a prompt is: a line the
     /// width wraps is several rows of the screen and one entry here.
     pub matches: Vec<u16>,
+    /// The first row, the last row and the transcript index of each call that has more to show
+    /// than it draws, top to bottom. Empty unless the scroller is open.
+    pub expandable: Vec<(u16, u16, usize)>,
 }
 
 /// What the info panel names the session by: its name, its directory, its branch and its links.
@@ -1449,6 +1464,9 @@ pub struct Session {
     history_search: Option<crate::history_search::Search>,
     /// What the last frame laid the transcript out to.
     pub laid: Laid,
+    /// How many lines of results are held for expansion across the session, so what a long
+    /// session keeps is bounded.
+    expandable_lines: usize,
     /// What this platform can confine a process to, reported so the user knows what it offers.
     ///
     /// Not a boundary this session is inside: it confines a process running code we did not write,
@@ -1988,6 +2006,7 @@ impl Session {
             finished: None,
             cleared_by_interrupt: false,
             offered_all_prompts: false,
+            expandable_lines: 0,
             offered_to_leave: false,
             key_arrived_alone: true,
             image_on_clipboard: false,
@@ -2491,6 +2510,7 @@ impl Session {
         // A new conversation has sent nothing yet, so Up starts from nothing of its own.
         self.history.forget_session();
         self.transcript.clear();
+        self.expandable_lines = 0;
         self.last_request = None;
         self.turns = 0;
         self.turn_history.clear();
@@ -3255,7 +3275,12 @@ impl Session {
     ///
     /// Dropped where there is no call to put it under, since a few lines of a file without the
     /// line saying which file read as something the session said.
-    pub fn returned(&mut self, returned: Returned) {
+    pub fn returned(&mut self, mut returned: Returned) {
+        // A delegate's calls cannot be expanded, and past the session's bound a call keeps only
+        // its glimpse and says how much it left out.
+        let delegates = self.attributed_to.is_some();
+        let held = self.expandable_lines;
+        let mut kept = 0;
         if let Some(entry) = self
             .working_lines()
             .iter_mut()
@@ -3265,8 +3290,14 @@ impl Session {
             })
             .find(|entry| entry.speaker == Speaker::Tool)
         {
+            if delegates || held.saturating_add(returned.whole.len()) > SESSION_EXPANDABLE_LINES {
+                returned.whole = returned.lines.clone();
+            } else {
+                kept = returned.whole.len();
+            }
             entry.returned = Some(returned);
         }
+        self.expandable_lines += kept;
     }
 
     /// Show the person quarantined content the planner was not shown.
@@ -9799,6 +9830,32 @@ impl Session {
         }
     }
 
+    /// Expand the call nearest the top of the view, among those on the screen, past its glimpse or its twelve lines of change,
+    /// or collapse it again, and keep the view on it.
+    ///
+    /// `relaid` lays the transcript out afresh, since the rows move once a call changes size.
+    /// Only the session's own transcript expands: a delegate's block draws its calls as one row.
+    pub fn toggle_expanded(&mut self, relaid: impl Fn(&Session) -> Laid) {
+        if self.watched_delegate().is_some() {
+            return;
+        }
+        let top = self.top_row();
+        let bottom = top.saturating_add(self.laid.height);
+        let Some(&(start, _, index)) = self
+            .laid
+            .expandable
+            .iter()
+            .find(|(start, end, _)| *end >= top && *start < bottom)
+        else {
+            return;
+        };
+        if let Some(entry) = self.transcript.get_mut(index) {
+            entry.expanded = !entry.expanded;
+        }
+        self.laid = relaid(self);
+        self.scroller_to_row(start.min(top));
+    }
+
     /// Start typing a search, with nothing in it yet.
     pub fn begin_search(&mut self) {
         if let Some(scroller) = &mut self.scroller {
@@ -11633,6 +11690,7 @@ mod tests {
                 lines: vec!["a note".to_string()],
                 total: 1,
                 from_the_end: false,
+                whole: vec!["a note".to_string()],
             };
             session.returned(glimpse.clone());
 
@@ -17138,7 +17196,34 @@ mod tests {
                 lines: vec![line.to_string()],
                 total: 1,
                 from_the_end: false,
+                whole: vec![line.to_string()],
             }
+        }
+
+        /// SCROLL-10: a session holds a bounded number of lines for expansion, and a call past the
+        /// bound keeps its glimpse and still counts what it left out.
+        #[test]
+        fn a_session_holds_a_bounded_number_of_lines_for_expansion() {
+            let mut s = Session::new("kernel-enforced");
+            let big = |lines: usize| Returned {
+                lines: vec!["a".to_string()],
+                total: lines,
+                from_the_end: false,
+                whole: vec!["a".to_string(); lines],
+            };
+            let mut held = Vec::new();
+            for _ in 0..(SESSION_EXPANDABLE_LINES / 500 + 1) {
+                s.finish_activity(Activity::running("Read", "f").done("500 lines"));
+                s.returned(big(500));
+                held.push(s.transcript.last().unwrap().returned.clone().unwrap());
+            }
+            assert_eq!(held[0].whole.len(), 500);
+            let last = held.last().unwrap();
+            assert_eq!(
+                last.whole, last.lines,
+                "the bound did not cut the last call"
+            );
+            assert_eq!(last.total, 500);
         }
 
         /// VIEW-24: a glimpse is of the call that just finished, so it goes under that call and

@@ -1389,6 +1389,10 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             session.toggle_scroller_help();
             Action::Redraw
         }
+        KeyCode::Char('x') => {
+            session.toggle_expanded(render::as_last_drawn);
+            Action::Redraw
+        }
         KeyCode::Char('v')
             if !ctrl && session.status != Status::Working && !session.viewing_request() =>
         {
@@ -10578,6 +10582,7 @@ mod tests {
                 rows: 100,
                 prompts: Vec::new(),
                 matches: Vec::new(),
+                expandable: Vec::new(),
             });
 
             handle_key_while_working(&mut session, ctrl('u'));
@@ -11053,6 +11058,7 @@ mod tests {
                 rows: 100,
                 prompts: vec![0, 30, 60],
                 matches: Vec::new(),
+                expandable: Vec::new(),
             });
             session
         }
@@ -11604,6 +11610,7 @@ mod tests {
                 rows: 300,
                 prompts: Vec::new(),
                 matches: Vec::new(),
+                expandable: Vec::new(),
             });
             session.open_scroller();
             type_keys(&mut session, "1000b");
@@ -11627,6 +11634,7 @@ mod tests {
                 rows: 100,
                 prompts: vec![10, 40, 70],
                 matches: Vec::new(),
+                expandable: Vec::new(),
             });
             session.open_scroller();
 
@@ -11658,6 +11666,7 @@ mod tests {
                 rows: 100,
                 prompts: Vec::new(),
                 matches: vec![20, 50, 80],
+                expandable: Vec::new(),
             });
             session.open_scroller();
             session.scroller_to_first_row();
@@ -12020,6 +12029,37 @@ mod tests {
                 session.scroll, 0,
                 "the press that put the list away also moved"
             );
+        }
+
+        /// SCROLL-10: `x` expands the call the view is on, sends nothing, and a second press
+        /// collapses it.
+        #[test]
+        fn x_expands_the_call_the_view_is_on_and_a_second_press_collapses_it() {
+            use bravebot_agent::report::{Activity, Landing, Returned};
+            let mut session = Session::new("kernel-enforced");
+            session.finish_activity(Activity::running("Run", "make").done("ok"));
+            session.landed(Landing::Context);
+            let lines: Vec<String> = (0..30).map(|n| format!("out {n}")).collect();
+            session.returned(Returned {
+                lines: lines[..5].to_vec(),
+                total: 30,
+                from_the_end: false,
+                whole: lines,
+            });
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 10;
+            session.laid = render::as_last_drawn(&session);
+            let collapsed = render::as_text(&session);
+            assert!(!collapsed.contains("out 29"), "{collapsed}");
+
+            let pressed = handle_key(&mut session, key(KeyCode::Char('x')));
+            assert_eq!(pressed, Action::Redraw);
+            assert!(render::as_text(&session).contains("out 29"));
+
+            session.laid = render::as_last_drawn(&session);
+            handle_key(&mut session, key(KeyCode::Char('x')));
+            assert_eq!(render::as_text(&session), collapsed);
         }
 
         #[test]
