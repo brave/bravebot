@@ -895,7 +895,7 @@ open the home.
 `verified-by: bravebot_agent::confine::an_assignment_in_front_of_a_push_removes_its_scope`
 `verified-by: bravebot_agent::confine::a_program_at_the_top_of_the_home_is_granted_as_a_file_and_not_as_the_home`
 `verified-by: bravebot_agent::confine::the_path_outside_the_home_is_read_and_the_homes_own_bin_brings_no_parent`
-`verified-by: bravebot_agent::confine::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
+`verified-by: bravebot_sandbox::rules::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
 `verified-by: bravebot_sandbox::windows::what_every_container_reads_is_the_machines_own_directories`
 `verified-by: bravebot_sandbox::windows::nothing_else_is_taken_to_be_readable_by_every_container`
 `verified-by: bravebot_sandbox::windows::a_write_grant_under_a_system_directory_still_needs_its_entry`
@@ -1424,8 +1424,10 @@ tried names the file in `doctor`. The managed file may pin each list: a pinned `
 added to the person's and cannot be lifted by an entry at or beneath it.
 
 A path is absolute, `~/`-prefixed or relative to the first directory the session was opened on. An
-entry that climbs out of the directory it is read from, holds `..` where it is absolute, or starts
-with `~` in a session that names no home directory is refused. Each path is judged where it leads: the
+entry is resolved to, and compared with a row in, one spelling, so that a Windows drive path with
+the `\\?\` prefix the file system returns is the same path as the one without it. An entry that
+climbs out of the directory it is read from, holds `..` where it is absolute, or starts with `~` in
+a session that names no home directory is refused. Each path is judged where it leads: the
 part of it that is on disk is resolved through its links. `~`, `/`, a drive root and the home directory
 or any directory above it are refused as `allowWrite` rows, since a stage that wrote there would be
 confined to nothing ([SANDBOX-2](#SANDBOX-2)). No list adds reach to `~/.ssh` or anything inside it,
@@ -1489,6 +1491,11 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_denial_beats_the_stages_own_rows_and_a_narrower_row_of_the_persons_stands`
 `verified-by: bravebot_sandbox::rules::a_denial_with_no_grant_above_it_is_not_added`
 `verified-by: bravebot_sandbox::rules::a_write_row_above_a_credential_location_does_not_write_it`
+`verified-by: bravebot_sandbox::rules::a_denial_inside_a_grant_is_added_whichever_way_each_is_spelled`
+`verified-by: bravebot_sandbox::rules::a_denial_outside_every_grant_is_not_added_in_either_spelling`
+`verified-by: bravebot_sandbox::rules::a_row_at_or_under_a_refusal_is_dropped_whichever_way_each_is_spelled`
+`verified-by: bravebot_sandbox::rules::an_entry_the_file_system_resolves_to_a_verbatim_path_is_kept_in_the_ordinary_spelling`
+`verified-by: bravebot_sandbox::rules::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
 `verified-by: bravebot_sandbox::policy::a_write_row_above_a_write_refusal_is_spread_around_it`
 `verified-by: bravebot_sandbox::linux::a_stage_is_refused_a_write_the_policy_refuses_and_keeps_the_rest`
 `verified-by: bravebot_sandbox::macos::the_profile_orders_every_row_from_the_widest_path_to_the_narrowest`

@@ -20,7 +20,7 @@ use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base, run_base, with_security_cache};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
-use bravebot_sandbox::rules::{Lists, Rules};
+use bravebot_sandbox::rules::{Lists, Rules, without_verbatim_prefix};
 use bravebot_sandbox::scope::{Reach, Requested, Scope, environment_reach, requested_reach};
 use bravebot_sandbox::toolchain::Toolchain;
 use std::ffi::OsStr;
@@ -1069,32 +1069,6 @@ fn lookup(environment: &[(String, String)], name: &str, fold_case: bool) -> Opti
 
 fn canonical(path: &Path) -> PathBuf {
     without_verbatim_prefix(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
-}
-
-/// The longest path, in characters, the ordinary spelling of a Windows path can name.
-const MAX_PATH: usize = 260;
-
-/// `path` without the `\\?\` that Windows puts in front of a resolved drive path.
-///
-/// The prefix means "do not interpret this", and the call that writes a grant onto a path is
-/// documented for the ordinary spelling. Left on, a row would also differ in text from the same
-/// directory named by the person or found on `PATH`. A network path keeps its prefix, since
-/// without it the path names something else, and so does a path too long for the ordinary spelling,
-/// which only the prefixed one can name.
-fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
-    let stripped = path
-        .to_string_lossy()
-        .strip_prefix(r"\\?\")
-        .filter(|rest| {
-            let bytes = rest.as_bytes();
-            bytes.len() >= 3
-                && rest.len() < MAX_PATH
-                && bytes[0].is_ascii_alphabetic()
-                && bytes[1] == b':'
-                && bytes[2] == b'\\'
-        })
-        .map(PathBuf::from);
-    stripped.unwrap_or(path)
 }
 
 /// The system temporary directory with its links followed, which is how a backend matches it.
@@ -3190,29 +3164,6 @@ mod tests {
             !session.join("late.txt").exists(),
             "the stage before the refused one was left running"
         );
-    }
-
-    /// The `\\?\` form `canonicalize` gives on Windows names a drive path no row can be compared
-    /// with, so it is dropped there; a UNC path keeps it, since without it the path names
-    /// something else.
-    #[test]
-    fn a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does() {
-        let long_verbatim = format!(r"\\?\C:\{}", "a".repeat(MAX_PATH));
-        for (given, expected) in [
-            (r"\\?\C:\Users\a", r"C:\Users\a"),
-            (r"\\?\d:\", r"d:\"),
-            (r"\\?\UNC\server\share\a", r"\\?\UNC\server\share\a"),
-            (r"\\?\C:", r"\\?\C:"),
-            (&long_verbatim, &long_verbatim),
-            (r"C:\Users\a", r"C:\Users\a"),
-            ("/home/a", "/home/a"),
-        ] {
-            assert_eq!(
-                without_verbatim_prefix(PathBuf::from(given)),
-                PathBuf::from(expected),
-                "{given}"
-            );
-        }
     }
 
     /// Windows reads `Path` and `PATH` as one variable, so a step setting one must replace the
