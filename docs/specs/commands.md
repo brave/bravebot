@@ -29,7 +29,7 @@ a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has 
 belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12. `/init` starts an ordinary turn, but the words that turn is given and
 when it is refused are CMD-13. `/review` is the same kind of turn, and what it is given and what
 it may not do are CMD-18. `/request` shows the request a turn built, which is
-[TRACE-9](trace.md#TRACE-9)'s.
+[TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -278,7 +278,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/limit` in every form; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches only what the session keeps | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
@@ -805,6 +805,37 @@ directory listing, keep CMD-1 and CMD-7 whole.
 `verified-by: bravebot_tui::prompt_files::a_name_a_command_claims_is_never_a_file`
 `verified-by: bravebot_tui::prompt_files::a_body_that_opens_with_a_command_is_refused`
 `verified-by: bravebot_tui::prompt_files::a_file_that_cannot_be_used_is_refused_rather_than_ignored`
+
+<a id="CMD-19"></a>
+### CMD-19: `/context` divides the measured count of the last request into fixed sections
+
+`/context` takes no argument, so `/context` followed by words is a prompt (CMD-2). It reports the
+count the server gave for the last request ([INPUT-22](terminal-input.md#INPUT-22)) shared out over
+eight sections written in this program: the system prompt, the instruction files, the skill list,
+the tool definitions, what the person typed, what the planner wrote, tool results, and other
+messages. A section is chosen from the role and the origin the driver recorded for a span, and its
+size is the length in bytes of what was sent, scaled to the measured count with the remainders
+given out so the rows add up to it. No name is read from a file, a result or a skill, no row is
+chosen by what a span says, and a section with nothing in it has no row. It reads what the session
+holds and sends nothing, so it is carried out as it is typed while a turn runs (CMD-8).
+
+It breaks down the last request only. Where nothing has been measured, or there is no budget to
+divide by, it says so as the context reading does; after a compaction it says that the conversation was
+compacted, since the request on hand is of the conversation that was shortened; and where a count
+is known but this session has built no request, it says that. None of these is drawn as a row of
+zeros or as nothing. The figures are marked approximate, because bytes are not tokens.
+
+**Why.** One percentage cannot tell a person whether tool definitions, instructions or a few large
+results fill the window, and so whether to compact, clear or trim what is loaded. Every input here is
+a length the driver already holds, so nothing branches on untrusted content.
+
+`verified-by: bravebot_tui::app::the_context_command_divides_the_measured_total_by_section`
+`verified-by: bravebot_tui::app::the_context_command_says_when_nothing_has_been_measured`
+`verified-by: bravebot_tui::app::the_context_command_does_not_describe_a_conversation_it_has_no_request_for`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_context_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::state::a_count_is_apportioned_in_whole_numbers_that_add_up_to_it`
+`verified-by: bravebot_agent::request_view::the_size_of_the_tool_definitions_is_what_was_sent`
 
 ## Known costs
 

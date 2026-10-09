@@ -1991,6 +1991,20 @@ session-limit-set-below-spent = the session limit is { $limit } tokens, and { $s
 session-limit-cleared = the session has no spend limit
 session-limit-unknown = { $figure } is not a limit. Use a whole number of tokens, with k or m after it for thousands or millions, or off to remove the limit
 request-none-yet = No request has been sent to the model in this session yet.
+# What /context reports. The section names are fixed words, and none is read from a file or a result.
+context-not-measured = The context has not been measured yet, so there is no breakdown.
+context-compacted = The conversation was compacted after the last request was measured, so that breakdown no longer describes it. The next request measures it again.
+context-no-request = The context has been measured, but this session has sent no request of its own to break down yet.
+context-total = Last request
+context-approximate = shares of the bytes sent, scaled to the measured total
+context-section-system = System prompt
+context-section-instructions = Instruction files
+context-section-skills = Skills
+context-section-tools = Tool definitions
+context-section-typed = What you typed
+context-section-planner = What the planner wrote
+context-section-results = Tool results
+context-section-other = Other messages
 # The first row of the view /request opens. The words below it are the request as it went.
 request-title = The last request sent to { $model }, read from the request itself
 request-tools = Tools offered: { $names }
@@ -2279,6 +2293,7 @@ jobs-command-takes =
 
 command-status = Report this session, what it may touch, and what it has spent
 command-cost = Show what each turn of this session has spent
+command-context = Show what fills the context window, by category
 command-limit = Show the session's spend limit, set it in tokens, or remove it
 command-request = Show the last request sent to the model, and where each part of it came from
 command-model = Choose which model to think with

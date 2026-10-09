@@ -12,6 +12,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 |---|---|---|
 | `/status` | | Report this session, what it may touch, and what it has spent |
 | `/cost` | | Show what each turn of this session has spent |
+| `/context` | | Show what fills the context window, by category |
 | `/request` | | Show the last request sent to the model, and where each part of it came from |
 | `/model` | | Choose which model to think with |
 | `/theme` | `[name]` | Choose which theme paints the interface |
@@ -117,6 +118,18 @@ The view is read from the request that was sent, not rebuilt from the transcript
 the model did not. It writes nothing to disk, and an incognito session is unchanged. Typed while a
 turn runs it answers at once; It is the transcript scroller, so it scrolls and closes as that does. The view is of the main conversation, not of a
 delegate's. It takes no argument: `/request` followed by words is a prompt.
+
+## `/context`
+
+Reports what the last request was made of, as the count the server gave for it shared out over
+fixed sections: the system prompt, instruction files, the skill list, tool definitions, what you
+typed, what the planner wrote, tool results, and other messages. A section with nothing in it has no
+row. Typed while a turn runs, it answers at once.
+
+The figures are scaled from the bytes of each section to the measured count, so they add up to it and
+are approximate. Only the last request is broken down, since the cache split and sizes are not kept
+per turn. Before anything is measured it says so, and after a compaction it says the conversation was
+compacted. It takes no argument: `/context` followed by words is a prompt.
 
 ## `/cost`
 
@@ -1050,7 +1063,7 @@ beside the line. A command that cannot carry it gets words in place of a picture
 place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, so a marker stays in
 it and the picture or file goes with it.
 
-**While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/limit`, `/copy`,
+**While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
 `/watch`, `/panel`, `/caffeinate`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop

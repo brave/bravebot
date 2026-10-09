@@ -1162,6 +1162,45 @@ pub enum Occupancy {
     },
 }
 
+/// The sections `/context` divides a request into, as indexes into the byte counts.
+const CONTEXT_SYSTEM: usize = 0;
+const CONTEXT_INSTRUCTIONS: usize = 1;
+const CONTEXT_SKILLS: usize = 2;
+const CONTEXT_TOOLS: usize = 3;
+const CONTEXT_TYPED: usize = 4;
+const CONTEXT_PLANNER: usize = 5;
+const CONTEXT_RESULTS: usize = 6;
+const CONTEXT_OTHER: usize = 7;
+
+/// Divide `total` in proportion to `weights`, in whole numbers that add up to exactly `total`.
+///
+/// Each part is rounded down and what is left over goes one apiece to the parts with the largest
+/// remainders, so the shares of a measured count always sum to it. All zeros where the weights
+/// are, since nothing says what the total is made of.
+pub(crate) fn apportion(total: u64, weights: &[u64]) -> Vec<u64> {
+    let sum: u128 = weights.iter().map(|weight| u128::from(*weight)).sum();
+    if sum == 0 {
+        return vec![0; weights.len()];
+    }
+    let mut shares: Vec<u64> = weights
+        .iter()
+        .map(|weight| (u128::from(total) * u128::from(*weight) / sum) as u64)
+        .collect();
+    let mut left = total - shares.iter().sum::<u64>();
+    let mut by_remainder: Vec<usize> = (0..weights.len()).collect();
+    by_remainder.sort_by_key(|index| {
+        std::cmp::Reverse(u128::from(total) * u128::from(weights[*index]) % sum)
+    });
+    for index in by_remainder {
+        if left == 0 {
+            break;
+        }
+        shares[index] += 1;
+        left -= 1;
+    }
+    shares
+}
+
 impl Occupancy {
     /// How full the context is, as a percentage, or `None` where nothing has been measured.
     pub fn percent(&self) -> Option<u64> {
@@ -9151,6 +9190,77 @@ impl Session {
         self.report(crate::status::Report { lines });
     }
 
+    /// Put what the last request was made of in the transcript, by category (`/context`).
+    ///
+    /// Read from the view of the request the driver built and the count the server reported for
+    /// it, and never from the transcript. Each section is a length in bytes of something the
+    /// driver composed or carried, scaled to the measured total, so no row is chosen by reading
+    /// what a result says and the section names are fixed words.
+    pub fn report_context(&mut self) {
+        let used = match self.occupancy {
+            Occupancy::Measured { used, budget, .. } if budget > 0 => used,
+            Occupancy::Compacted { .. } => {
+                self.note(t!(context_compacted));
+                return;
+            }
+            _ => {
+                self.note(t!(context_not_measured));
+                return;
+            }
+        };
+        let Some(view) = self.last_request.as_ref() else {
+            self.note(t!(context_no_request));
+            return;
+        };
+
+        let mut bytes = [0u64; 8];
+        bytes[CONTEXT_TOOLS] = view.tools_bytes;
+        for span in &view.spans {
+            use bravebot_agent::request_view::Provenance;
+            let section = match (span.role, &span.provenance) {
+                ("system", Provenance::TrustedFile(_)) => CONTEXT_INSTRUCTIONS,
+                ("system", Provenance::Trusted("skill list")) => CONTEXT_SKILLS,
+                ("system", _) => CONTEXT_SYSTEM,
+                ("user", Provenance::Typed | Provenance::TypedWithFiles) => CONTEXT_TYPED,
+                ("assistant", _) => CONTEXT_PLANNER,
+                ("tool", _) => CONTEXT_RESULTS,
+                _ => CONTEXT_OTHER,
+            };
+            bytes[section] += span.text.len() as u64;
+        }
+        let shares = apportion(used, &bytes);
+        let names = [
+            t!(context_section_system),
+            t!(context_section_instructions),
+            t!(context_section_skills),
+            t!(context_section_tools),
+            t!(context_section_typed),
+            t!(context_section_planner),
+            t!(context_section_results),
+            t!(context_section_other),
+        ];
+
+        let mut lines = vec![crate::status::Line::new(
+            t!(context_total),
+            format!(
+                "{} · {}",
+                crate::status::tokens(used),
+                crate::render::context_reading(self)
+            ),
+        )];
+        for (name, share) in names.iter().zip(shares) {
+            if share == 0 {
+                continue;
+            }
+            lines.push(
+                crate::status::Line::new(name, crate::status::tokens(share))
+                    .with_note(t!(cost_share, percent = share * 100 / used)),
+            );
+        }
+        self.report(crate::status::Report { lines });
+        self.note(t!(context_approximate));
+    }
+
     /// Put a status report in the transcript, one note per line.
     ///
     /// In the transcript rather than over the screen, so it scrolls back with everything else and
@@ -13958,6 +14068,7 @@ mod tests {
                 },
             ],
             tools: vec!["read_file".to_string()],
+            tools_bytes: 0,
         }
     }
 
@@ -15887,6 +15998,20 @@ mod tests {
 
     /// The count is for the session, not the last turn: the question it answers is what the
     /// whole conversation has cost.
+    #[test]
+    fn a_count_is_apportioned_in_whole_numbers_that_add_up_to_it() {
+        assert_eq!(apportion(10, &[1, 1, 1]), vec![4, 3, 3]);
+        assert_eq!(apportion(777, &[0, 300, 0, 700]).iter().sum::<u64>(), 777);
+        assert_eq!(apportion(100, &[0, 0]), vec![0, 0]);
+        assert_eq!(apportion(0, &[5, 5]), vec![0, 0]);
+        assert_eq!(
+            apportion(u64::MAX, &[u64::MAX, u64::MAX])
+                .iter()
+                .sum::<u64>(),
+            u64::MAX
+        );
+    }
+
     #[test]
     fn tokens_accumulate_across_turns() {
         let mut s = session();
