@@ -189,6 +189,23 @@ pub fn name_a_settings_file(path: PathBuf) {
     let _ = NAMED.set(path);
 }
 
+/// Whether this process was started with `--locked`, which reads no project or local settings layer.
+static LOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Read only the home layer, the managed one and the file [`name_a_settings_file`] named, for the
+/// rest of this process, and make the bypass mode unreachable.
+///
+/// Called once, from the entry point, before anything has read a setting. One way, for the reason
+/// the other process-wide switches have no way back.
+pub fn lock() {
+    LOCKED.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// Whether [`lock`] was called.
+pub fn locked() -> bool {
+    LOCKED.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// The file [`name_a_settings_file`] named, for a caller reading the layers of a directory the
 /// process did not start in, which [`Settings::load`] cannot.
 pub fn named_settings_file() -> Option<&'static Path> {
@@ -625,10 +642,14 @@ impl Settings {
         let home_layer = home.map(|home| user_settings_file(&home));
         // A found layer the command line also named is left out here and read at the end, since
         // reading it at its own position would let a later found layer beat it (BACKEND-24).
+        // A locked process reads no layer from a checkout: the project and local files arrive with
+        // the clone, and the run was asked to answer to nothing but the person's own file and the
+        // one the command line named.
+        let checkout = cwd.filter(|_| !locked());
         let found_layers = [
             home_layer.clone(),
-            cwd.map(project_settings_file),
-            cwd.map(local_settings_file),
+            checkout.map(project_settings_file),
+            checkout.map(local_settings_file),
         ]
         .map(|layer| layer.filter(|layer| Some(layer.as_path()) != named));
         let [home_path, project_path, local_path] = found_layers;
@@ -1920,7 +1941,7 @@ impl Narrowing {
 
     /// Whether the bypass mode is to be unreachable.
     pub fn makes_bypass_unreachable(self) -> bool {
-        self.bypass_unreachable == Some(true)
+        self.bypass_unreachable == Some(true) || locked()
     }
 
     /// Whether either key was named at all.

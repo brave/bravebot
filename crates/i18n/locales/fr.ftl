@@ -138,6 +138,10 @@ cli-option-json-stream = Afficher un événement par ligne sur stdout pendant l'
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
 cli-option-safe =
     Ne charger ni hooks, ni skills, ni définitions, ni serveurs MCP, ni AGENTS.md. La connexion, le modèle et les permissions s'appliquent toujours
+cli-option-locked =
+    Comme --safe, et ne lire aucun fichier de réglages du projet ou local, et refuser --dangerously-skip-permissions
+cli-locked-refuses-bypass =
+    --dangerously-skip-permissions est refusé avec --locked : une exécution verrouillée n'ouvre jamais le mode bypass
 cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
