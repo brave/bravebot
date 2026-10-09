@@ -36142,6 +36142,168 @@ fn a_hook_fires_when_the_tool_it_names_finishes() {
     );
 }
 
+/// HOOK-2: `tool-finished` is "whatever came of it", so a call the workspace refused still fires
+/// the hook written for it. A hook fired only on success would leave a formatter silent exactly
+/// when a person most wants to know the call did not do what it was asked.
+#[cfg(unix)]
+#[test]
+fn a_hook_fires_for_a_call_that_was_refused() {
+    let scratch = Scratch::new("hooks-refused-call");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho \"$1\" >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            "{{\"on\": \"tool-finished\", \"tool\": \"read_file\", \"run\": [{note}, \"read\"]}}"
+        ),
+    );
+
+    // Outside the workspace and outside everything opened, which is refused rather than read.
+    let outside = scratch
+        .path
+        .with_file_name("bravebot-turn-hooks-refused-outside.txt");
+    std::fs::write(&outside, "OUTSIDE-BODY").expect("a file outside");
+    let arguments = format!(r#"{{"path":"{}"}}"#, outside.display());
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", &arguments),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let ran = turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read it").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    std::fs::remove_file(&outside).ok();
+    ran.expect("a refused call does not fail the turn");
+
+    assert!(
+        !sent.iter().any(|request| request.contains("OUTSIDE-BODY")),
+        "the call was not refused, so this says nothing about a refused one"
+    );
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt"))
+        .expect("the hook did not fire for a call that was refused");
+    assert_eq!(fired, "read\n");
+}
+
+/// HOOK-2: the turn moments belong to the turn a person asked for, so one that spawns a delegate
+/// still fires each once. A delegate that fired them as well would run a person's "turn is over"
+/// command when only part of the turn was.
+#[cfg(unix)]
+#[test]
+fn a_delegate_fires_neither_turn_moment() {
+    let scratch = Scratch::new("hooks-delegate-turn-moments");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho \"$1\" >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            "{{\"on\": \"turn-started\", \"run\": [{note}, \"began\"]}},
+             {{\"on\": \"turn-finished\", \"run\": [{note}, \"ended\"]}}"
+        ),
+    );
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request("read_file", r#"{"path":"a.txt"}"#),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        !reporter.delegated.is_empty(),
+        "no delegate ran, so this says nothing about one"
+    );
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt")).expect("the hooks ran");
+    assert_eq!(fired, "began\nended\n");
+}
+
+/// HOOK-2: `turn-finished` fires however the turn ended, and a cancelled turn is one that ended.
+/// The commonest thing attached to it is telling somebody who walked away.
+#[cfg(unix)]
+#[test]
+fn a_hook_fires_when_the_turn_is_over_though_it_was_cancelled() {
+    let scratch = Scratch::new("hooks-cancelled-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho \"$1\" >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"turn-finished\", \"run\": [{note}, \"ended\"]}}"),
+    );
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("never reached")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    cancel.cancel();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("anything").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        &cancel,
+    )
+    .expect_err("a cancelled turn does not produce an answer");
+
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt"))
+        .expect("the hook did not fire for a turn that was cancelled");
+    assert_eq!(fired, "ended\n");
+}
+
 /// HOOK-6: a hook that ended badly is said out loud and changes nothing about the turn.
 #[cfg(unix)]
 #[test]
