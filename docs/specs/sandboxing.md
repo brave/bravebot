@@ -433,7 +433,8 @@ and `~/Library/Safari`; on Linux also `~/.local/share/keyrings`, `~/.password-st
 `~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/chromium` and `~/.mozilla`. Three
 kinds of file in `~/.ssh` hold no secret and are read: `config`, `known_hosts` and the default
 public keys (`id_rsa.pub`, `id_dsa.pub`, `id_ecdsa.pub`, `id_ecdsa_sk.pub`, `id_ed25519.pub`,
-`id_ed25519_sk.pub`). On macOS the file `~/Library/Keychains/login.keychain-db` is also read, with
+`id_ed25519_sk.pub`). A public key at another name is read by a stage that carries the remote
+scope when `config` names it ([SANDBOX-16](#SANDBOX-16)). On macOS the file `~/Library/Keychains/login.keychain-db` is also read, with
 the directory around it and every other file in it still refused, because `gh` and git's
 `osxkeychain` helper keep their tokens in that keychain and open its database file themselves.
 Opening a keychain also makes the Security framework write its framework database, which is the
@@ -659,9 +660,23 @@ git accepts of `--upload-pack`, `--receive-pack`, `--exec`, `--template`, `--con
 or `ssh+git`, before a `--` or after one; where a `gh` argv holds `--`; and where `kubectl` is
 given `--kubeconfig` or `docker` is given `--config`. A stage reaches its own scope and no other.
 No scope names a private key or `~/.ssh` as a directory. The remote scope reads `~/.ssh/config`,
-`~/.ssh/known_hosts`, the public key at each name ssh looks for by default, `~/.gitconfig`,
-`~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`, and writes
-`~/.ssh/known_hosts` alone, as a file. A tool's directory is read and never written.
+`~/.ssh/known_hosts`, the public key at each name ssh looks for by default, the public key file
+each `IdentityFile` line of `~/.ssh/config` names, `~/.gitconfig`, `~/.git-credentials`,
+`~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`, and writes `~/.ssh/known_hosts` alone,
+as a file. A tool's directory is read and never written.
+
+A line `IdentityFile <name>` in the user's own `~/.ssh/config` adds the file `<name>.pub`, and one
+whose name already ends in `.pub` adds that file. The keyword is matched without regard to case
+and its value may follow `=`. A name is absolute or begins `~/` or `%d/`. A name holding another `%`
+token or a `$`, or a relative one, adds nothing, and neither does a line that is not valid UTF-8,
+which is skipped whole and never rewritten into a name it did not spell. A file is added only where it exists as a regular
+file, where the file a link leads to is named `*.pub`, and where that file is not in a credential
+location other than `~/.ssh` ([SANDBOX-12](#SANDBOX-12)), and the row is the file a link leads to.
+The `.pub` name is the only thing added, so a line that names a private key adds the public file
+beside it and never the key. `Include`, `Match` and a repository's `core.sshCommand` are not
+followed, `~/.ssh/config` is read up to 1 MiB, and at most 32 files are added. A file that cannot
+be read adds nothing. Only the remote scope reads the configuration. A key that `-i` names in a
+`core.sshCommand` is read only if the configuration also lists it as an `IdentityFile`.
 
 Where a variable moves what a tool reads, the stage also reads the place the variable names, as that
 place and read only: for `gh`, `GH_CONFIG_DIR` if the environment the stage starts with sets it, else
@@ -710,7 +725,12 @@ shown in the prompt because a credential scope is what the prompt says it is, an
 is not one anybody approved. Only the environment the stage starts with counts: an assignment
 written in front of the line removes the scope, so a model-written `GH_CONFIG_DIR=` moves nothing.
 A file is judged where it is rather than where its directory is: what is granted is the one file the
-person named, and `~/.ssh` is where a key would be. `~/.bravebot` is refused the same way, since a
+person named, and `~/.ssh` is where a key would be. ssh reads the `.pub` file of an identity to choose
+the key the agent offers, so a key the person's configuration pins by name needs the same read as one
+at a default name; with `IdentitiesOnly yes` and no such read, ssh offers nothing and the host answers
+`Permission denied (publickey)`. The configuration is the person's own file, which a stage in
+standard mode cannot write, and a line in it can add only a file named `*.pub`, so reading it adds no
+private key. A repository's `core.sshCommand` is not read because it decides what runs. `~/.bravebot` is refused the same way, since a
 variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](#SANDBOX-12)).
 
 `verified-by: bravebot_sandbox::scope::an_operation_that_talks_to_a_remote_carries_the_remote_scope`
@@ -747,6 +767,13 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_agent::confine::a_requested_scope_reads_the_configuration_its_variable_moves`
 `verified-by: bravebot_agent::confine::the_prompt_names_a_location_the_environment_moved_for_a_requested_scope`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_what_ssh_reads_and_never_a_private_key`
+`verified-by: bravebot_sandbox::scope::an_identity_file_in_the_ssh_configuration_adds_its_public_key`
+`verified-by: bravebot_sandbox::scope::an_identity_file_that_is_not_a_public_key_adds_nothing`
+`verified-by: bravebot_sandbox::scope::a_named_public_key_behind_a_link_is_read_where_it_leads`
+`verified-by: bravebot_sandbox::scope::an_identity_file_line_that_is_not_text_adds_nothing_and_its_lossy_lookalike_is_not_read`
+`verified-by: bravebot_sandbox::scope::an_identity_file_whose_name_is_not_text_adds_neither_it_nor_its_lookalike`
+`verified-by: bravebot_sandbox::scope::the_ssh_configuration_adds_a_bounded_number_of_keys_to_the_remote_scope_alone`
+`verified-by: bravebot_sandbox::macos::a_remote_stage_reads_a_public_key_its_configuration_names_and_never_the_private_one`
 `verified-by: bravebot_agent::confine::the_prompt_the_line_and_the_policy_agree_on_which_credential_a_stage_lifts`
 
 <a id="SANDBOX-17"></a>
@@ -1182,7 +1209,8 @@ in the stage's profile, the plan the person endorses names it with the day it wa
 failure line ([SANDBOX-19](#SANDBOX-19)) names a remembered scope as it names any other.
 
 The inputs to a grant are a person's typed words, the compiled step, the closed table and the
-process environment, and nothing else. In particular:
+process environment, and nothing else, except that the remote scope also reads the `IdentityFile`
+lines of the person's `~/.ssh/config` ([SANDBOX-16](#SANDBOX-16)). In particular:
 
 - A directory is judged as `--add-dir` judges one, when it is allowed and again when it is used:
   absolute, no `..`, existing, not the home or above it, not `~/.ssh` or `~/.bravebot` or inside either, and a link by
@@ -1772,7 +1800,8 @@ A stage reaches its own row and no other: a `docker` stage reaches neither the r
 reached only as the one login file the base reads ([SANDBOX-12](#SANDBOX-12)). The remote scope is `~/.ssh/config` and `~/.ssh/known_hosts` to read with `known_hosts` also
 to write, that write row naming a file rather than a directory so that an account with no
 `known_hosts` gets one rather than a push that fails ([SANDBOX-11](#SANDBOX-11)), the public key at
-each name ssh looks for by default, `~/.gitconfig`, and the stores an https helper reads:
+each name ssh looks for by default and each `IdentityFile` of `~/.ssh/config` names, `~/.gitconfig`,
+and the stores an https helper reads:
 `~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`. The login keychain
 file is read by the base whatever scope a stage carries ([SANDBOX-12](#SANDBOX-12)), and the
 system service that holds it is reached whatever scope a stage carries (the last section's list of
@@ -1782,9 +1811,10 @@ names is a write row for a stage that carries the remote scope and for no other
 nothing, the file is made by ssh, which can do so only into a `~/.ssh` already there, so an account
 without one records no host a confined push meets. A push signs through the agent and needs no
 private key, and the public half is in the scope because that is what ssh reads to name an identity
-to the agent where a configuration file pins one. What that costs is a key kept at a name of a
-person's own: ssh without `IdentitiesOnly` offers every key the agent holds and signs anyway, and a
-host pinned with `IdentitiesOnly` to such a key leaves ssh neither half to name it by. A push does
+to the agent where a configuration file pins one, and a key pinned at a name of the person's own is
+read through the `IdentityFile` line that pins it. A key named only by a repository's
+`core.sshCommand` is not read: ssh without `IdentitiesOnly` offers every key the agent holds and
+signs anyway, and one with it needs the key listed as an `IdentityFile`. A push does
 need `known_hosts`, since a host it cannot verify is a push that fails. Both transports are in one
 scope because which one a remote uses is written in a configuration file, and no file's contents
 decide a scope.
