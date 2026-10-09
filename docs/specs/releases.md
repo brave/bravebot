@@ -79,7 +79,7 @@ adds a way to get it wrong without adding a decision. The review still happens: 
 read before it lands, and [RELEASE-4](#RELEASE-4) refuses to tag anything that is not on the
 trunk at the remote.
 
-`verified-by: by-construction (the bump target commits an explicit list of paths and contains no push or tag, and refuses when one of those paths is already modified)`
+`verified-by: by-construction (the bump target commits an explicit list of paths and contains no push or tag, and refuses when one of those paths is already modified; it runs contrib/release-preflight.py before changing any file, and make check-scripts runs that script's selftest, which pins each warning, that a declined prompt or no terminal without YES=1 stops the bump, and that YES=1 goes on)`
 
 <a id="RELEASE-3"></a>
 ### RELEASE-3: GitHub Actions does not publish a GitHub release
