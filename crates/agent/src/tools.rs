@@ -4952,6 +4952,7 @@ fn write_file<S: Sink, C: Confirmer>(
         },
         Body {
             body,
+            check_with_server: true,
             changes_anything,
             remark,
             body_from,
@@ -4972,6 +4973,9 @@ struct Landing {
 /// What a write carries, and what is known about it without reading it.
 struct Body {
     body: Labelled<String>,
+    /// Whether a language server that is already running is asked about the file once it is
+    /// written (LSP-12). Only `write_file` says so.
+    check_with_server: bool,
     /// `false` only where the kernel filled the slot from the very file it is written to.
     changes_anything: bool,
     remark: Option<Remark>,
@@ -5004,6 +5008,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     } = landing;
     let Body {
         body,
+        check_with_server,
         changes_anything,
         remark,
         body_from,
@@ -5157,6 +5162,11 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         Ok(_) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed { note, changes, .. } = reviewed;
+            let checked = if check_with_server {
+                diagnostics_after_a_write(policy, tools, &proposed_path)
+            } else {
+                None
+            };
 
             // What the model is told, which is what its own account of the turn will repeat. It
             // used to be told "wrote" either way, and would go on to say it had created a file
@@ -5183,6 +5193,11 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                     body_from
                 ),
             };
+            let done = match checked {
+                Some(said) if done.ends_with('.') => format!("{done} {said}"),
+                Some(said) => format!("{done}. {said}"),
+                None => done,
+            };
             confirmed(done, carried_note(note, &scanned))
                 .with_changes(changes)
                 .marked_untrusted(!body_label.is_trusted())
@@ -5199,6 +5214,47 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             )
         )),
     }
+}
+
+/// What a language server that is already running says about a file the planner has just written,
+/// as a sentence for the result, or `None` where there is nothing to say (LSP-12).
+///
+/// Never starts a server: that is an approved action and a write is not the approval. The
+/// sentence is counts and line numbers in this repository's words, so it is the driver's own
+/// text; what makes it the file's is that it is only given where the trust map vouches for the
+/// file it describes, the same footing [LSP-3](../../../docs/specs/tools/lsp.md) puts a location
+/// on. Nothing branches on what the server said: the outcome goes to the renderer whole.
+fn diagnostics_after_a_write<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    proposed_path: &str,
+) -> Option<String> {
+    let servers = tools.servers.as_deref_mut()?;
+    // Without `.` components, since the server is matched by the URI of the path it was sent.
+    let absolute = servers
+        .root()
+        .join(proposed_path)
+        .components()
+        .collect::<std::path::PathBuf>()
+        .to_string_lossy()
+        .into_owned();
+    // Asked before anything is recorded, so a write with no server to ask leaves no trace of one.
+    if !servers.covers(&absolute) {
+        return None;
+    }
+    // The file's own entry, which the write has just set from the body's trust (TRUST-4), so a
+    // body that came out of quarantined content leaves a file that reports nothing.
+    let label = policy
+        .observe_paths(
+            bravebot_core::capability::Capability::LanguageServer,
+            [absolute.as_str()],
+        )
+        .ok()?;
+    if !label.is_trusted() {
+        return None;
+    }
+    let outcome = servers.diagnostics(policy, &absolute)?;
+    Some(crate::lsp::describe_diagnostics(&outcome))
 }
 
 /// Bring the files a delegate wrote in a kept checkout back into the working directory, one
@@ -5504,6 +5560,7 @@ fn bring_back<S: Sink, C: Confirmer>(
                 proposed_path: found.released,
             },
             Body {
+                check_with_server: false,
                 body,
                 changes_anything: true,
                 remark: None,

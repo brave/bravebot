@@ -24,7 +24,7 @@ pub mod server;
 #[cfg(test)]
 mod testutil;
 
-pub use protocol::{Location, Operation, SymbolKind};
+pub use protocol::{Diagnostics, Location, Operation, SymbolKind};
 pub use server::{
     BuildTooling, Declared, Language, Question, Roster, Served, Server, Servers, Starting,
 };

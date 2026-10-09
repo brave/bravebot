@@ -11,8 +11,9 @@
 //! [`run`]: ../../../docs/specs/tools/run.md
 
 use crate::protocol::{
-    Operation, RpcNotification, RpcRequest, RpcResponse, content_length, frame, hover_text,
-    initialize_params, locations_in, path_to_uri, position_params, reference_params,
+    Diagnostics, Operation, RpcNotification, RpcRequest, RpcResponse, content_length,
+    diagnostics_in, frame, hover_text, initialize_params, locations_in, path_to_uri,
+    position_params, reference_params,
 };
 use crate::{Answer, LspError, LspResult};
 use bravebot_core::capability::Capability;
@@ -42,6 +43,20 @@ use std::time::{Duration, Instant};
 /// worse off than one told in twenty seconds. Reaching the bound is not a failure: LSP-7 answers
 /// from what the index has and says plainly that it may be short.
 pub const MAX_INDEX_WAIT: Duration = Duration::from_secs(20);
+
+/// How long a write waits for the server's verdict on the file it just wrote.
+///
+/// LSP-12. Short, because the caller is a `write_file` that has already landed and the wait is on
+/// top of it: a server that cannot say within this is reported as not having said, which is not a
+/// claim that the file is clean. Syntax errors arrive well inside it from every server this
+/// repository knows; type errors that need a build may not.
+pub const MAX_DIAGNOSTICS_WAIT: Duration = Duration::from_secs(3);
+
+/// How long after one report to wait for a revised one.
+///
+/// A server often publishes a fast first pass and refines it, so the first notice is not taken as
+/// the last. Bounded by [`MAX_DIAGNOSTICS_WAIT`] as a whole.
+const DIAGNOSTICS_SETTLE: Duration = Duration::from_millis(300);
 
 /// How long a single request may take once the index has settled.
 pub const MAX_REQUEST_WAIT: Duration = Duration::from_secs(20);
@@ -612,6 +627,12 @@ pub struct Server {
     /// A server that reports no progress never settles, and waiting out [`MAX_INDEX_WAIT`] on every
     /// question would make each one that slow. It is waited on once and answers partial after.
     waited: bool,
+    /// The version last sent for each document the server has been told about, by URI.
+    ///
+    /// A document already open is changed rather than opened again, which a server may ignore, so
+    /// a question or a diagnostics check after a write puts the bytes on disk in front of it
+    /// either way, and versions only ever go up.
+    opened: HashMap<String, i64>,
 }
 
 /// Shows what it is but nothing it has sent, so a log line cannot leak a file's contents.
@@ -861,6 +882,7 @@ impl Server {
             began_work: false,
             told_finished: false,
             waited: false,
+            opened: HashMap::new(),
         };
         server.initialize()?;
         Ok(server)
@@ -1035,7 +1057,7 @@ impl Server {
     ///
     /// The contents are read off disk and handed straight over. This module never looks at them; see
     /// the note in [`Server::ask`] about why passing them through is a carry rather than a read.
-    fn open(&mut self, path: &str, uri: &str) -> LspResult<()> {
+    fn send_open(&mut self, path: &str, uri: &str) -> LspResult<()> {
         let text = std::fs::read_to_string(path).map_err(|e| LspError::Transport {
             language: self.served.clone(),
             detail: format!("could not read {path} to open it: {e}"),
@@ -1065,7 +1087,71 @@ impl Server {
                     "text": text,
                 }
             })),
-        )
+        )?;
+        self.opened.insert(uri.to_string(), 1);
+        Ok(())
+    }
+
+    /// Put the file as it is on disk in front of the server: opened if it has not seen it, changed
+    /// if it has.
+    fn open(&mut self, path: &str, uri: &str) -> LspResult<()> {
+        let Some(version) = self.opened.get(uri).copied() else {
+            return self.send_open(path, uri);
+        };
+        let text = std::fs::read_to_string(path).map_err(|e| LspError::Transport {
+            language: self.language,
+            detail: format!("could not read {path} to send it: {e}"),
+        })?;
+        self.notify(
+            "textDocument/didChange",
+            Some(serde_json::json!({
+                "textDocument": { "uri": uri, "version": version + 1 },
+                "contentChanges": [{ "text": text }],
+            })),
+        )?;
+        self.opened.insert(uri.to_string(), version + 1);
+        Ok(())
+    }
+
+    /// What the server says is wrong with a file, as it stands on disk now.
+    ///
+    /// LSP-12. Sends the file and waits up to [`MAX_DIAGNOSTICS_WAIT`] for the server to publish
+    /// about it, taking the last notice that arrives. `None` is the server not having said
+    /// anything in time, which is a different fact from a notice with nothing in it. The index is
+    /// not waited for: [`Diagnostics`]' caller is told through [`Server::is_indexed`] whether what
+    /// came back may be short.
+    pub fn diagnostics(&mut self, path: &str) -> LspResult<Option<Diagnostics>> {
+        let uri = path_to_uri(path);
+        // What was already queued predates the bytes about to be sent, so a notice in it describes
+        // a version of the file that is gone.
+        while let Ok(Some(message)) = self.next_message(Duration::ZERO) {
+            self.note_progress(&message);
+        }
+        self.open(path, &uri)?;
+        let sent = self.opened.get(&uri).copied().unwrap_or(1);
+
+        let deadline = Instant::now() + MAX_DIAGNOSTICS_WAIT;
+        let mut latest = None;
+        let mut quiet_from: Option<Instant> = None;
+        loop {
+            let mut remaining = deadline.saturating_duration_since(Instant::now());
+            if let Some(since) = quiet_from {
+                remaining = remaining
+                    .min((since + DIAGNOSTICS_SETTLE).saturating_duration_since(Instant::now()));
+            }
+            if remaining.is_zero() {
+                return Ok(latest);
+            }
+            // A server that closes its output is the one failure here: a timeout is an answer.
+            let Some(message) = self.next_message(remaining)? else {
+                return Ok(latest);
+            };
+            self.note_progress(&message);
+            if let Some(found) = diagnostics_in(&message, &uri, sent) {
+                latest = Some(found);
+                quiet_from = Some(Instant::now());
+            }
+        }
     }
 
     /// Notice a server saying it has finished indexing.
@@ -1157,9 +1243,9 @@ impl Server {
 
         // The protocol requires a document be opened before it is asked about: a server answers
         // `file not found` otherwise, however plainly the file exists on disk, because its own view
-        // of a document is the one the client told it about. Sent per question rather than tracked,
-        // since re-opening an open document is defined to be harmless and a cache would be a second
-        // account of what the server knows, waiting to disagree with the first.
+        // of a document is the one the client told it about. Sent per question, as a change where the
+        // server already holds the document: opening an open document again is a protocol error
+        // that servers tolerate differently, and the bytes on disk may have moved since it was told.
         //
         // The bytes travel through this function and are never examined. That is the carry the label
         // rules permit and it is worth being exact about: nothing here branches on the contents,
@@ -1527,6 +1613,40 @@ impl Servers {
 
         let server = self.running.get_mut(&key).expect("just inserted if absent");
         server.ask(question)
+    }
+
+    /// Whether a server is running for this file's language.
+    pub fn covers(&self, path: &str) -> bool {
+        Language::for_path(path).is_some_and(|language| self.running.contains_key(&language))
+    }
+
+    /// What a running server says is wrong with a file just written, or `None` where there is
+    /// nothing to ask.
+    ///
+    /// LSP-12. Never starts a server, and never asks anyone anything: starting one is an approved
+    /// action under [LSP-5](../../../docs/specs/tools/lsp.md), and a write is not that approval.
+    /// So `None` is a run without the capability, a path no server is configured for, and a
+    /// language with no server running, and a caller says nothing about the file in those cases.
+    /// `Some(Err(_))` is a server that was there and failed. The second field is whether the
+    /// index was still building.
+    pub fn diagnostics<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        path: &str,
+    ) -> Option<LspResult<(Option<Diagnostics>, bool)>> {
+        if !policy.holds_capability(Capability::LanguageServer) {
+            return None;
+        }
+        let server = self.running.get_mut(&Language::for_path(path)?)?;
+        // Recorded as the capability use it is, and only now that a server is there to use.
+        if let Err(denial) = policy.before_capability(Capability::LanguageServer) {
+            return Some(Err(LspError::Denied(denial)));
+        }
+        Some(
+            server
+                .diagnostics(path)
+                .map(|found| (found, !server.is_indexed())),
+        )
     }
 
     /// Where the server about to start keeps its index.
@@ -3200,6 +3320,49 @@ while IFS= read -r header; do
 done
 "#;
 
+    /// A server that publishes diagnostics when told about a document: one error on opening it,
+    /// none on a change. `$SILENT` makes it say nothing at all, and `$QUIET_ON_CHANGE` says nothing on
+    /// a change, and `$LATE_NOTICE` publishes an error after answering a definition, which leaves a
+    /// notice queued once the question is over.
+    ///
+    /// The two differ so that what a test reads says which message the client sent, and whether it
+    /// read a notice from before the file changed.
+    #[cfg(unix)]
+    const DIAGNOSING_SERVER: &str = r#"#!/bin/sh
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r _blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  uri=$(printf '%s' "$body" | sed -n 's/.*"uri":"\([^"]*\)".*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"rustAnalyzer/cachePriming","value":{"kind":"end"}}}'
+      ;;
+    *'"textDocument/definition"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[]}"
+      [ -z "$LATE_NOTICE" ] || reply "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"$uri\",\"diagnostics\":[{\"severity\":1,\"range\":{\"start\":{\"line\":6,\"character\":0}},\"message\":\"late\"}]}}"
+      ;;
+    *'"textDocument/didOpen"'*)
+      [ -n "$SILENT" ] || reply "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"$uri\",\"diagnostics\":[{\"severity\":1,\"range\":{\"start\":{\"line\":6,\"character\":0}},\"message\":\"opened\"}]}}"
+      ;;
+    *'"textDocument/didChange"'*)
+      [ -n "$SILENT" ] || [ -n "$QUIET_ON_CHANGE" ] || reply "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"$uri\",\"diagnostics\":[]}}"
+      ;;
+    *'"shutdown"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+  esac
+done
+"#;
+
     /// One scratch directory per test, for the reason [`REJECTS_A_POSITION`] gives. nextest runs each
     /// test in a process of its own, where [`LAUNCHING`] orders nothing, so a shared name lets one
     /// test's setup delete the server another test is running.
@@ -3291,6 +3454,30 @@ done
             routing,
             bravebot_core::policy::ReleasePlan::new(),
             bravebot_core::capability::CapabilitySet::from_iter([Capability::LanguageServer]),
+            sink,
+        )
+        .expect("policy")
+    }
+
+    #[cfg(unix)]
+    const DIAGNOSING: &str = "bravebot-lsp-diagnosing";
+
+    #[cfg(unix)]
+    fn the_diagnosing_server(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn a_policy_holding<'sink>(
+        sink: &'sink mut bravebot_core::event::RecordingSink,
+        capabilities: impl IntoIterator<Item = Capability>,
+    ) -> Policy<'sink, bravebot_core::event::RecordingSink> {
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "check");
+        Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter(capabilities),
             sink,
         )
         .expect("policy")
@@ -3569,5 +3756,187 @@ done
             servers.target(&question),
             Ok(Target::Builtin(Language::Rust))
         ));
+    }
+
+    /// LSP-12: what a running server says about a file is its error lines, read from the notice
+    /// it published after the file was last sent, and a change reaches it as a change.
+    ///
+    /// Two things the script lets this tell apart. The server publishes one error on `didOpen` and
+    /// none on `didChange`, so a client that sent the file as another open reads the first answer
+    /// again. And opening the document for the question already queued a notice carrying that one
+    /// error, so a client that read what was waiting rather than what followed the file reads the
+    /// error a second time.
+    #[cfg(unix)]
+    #[test]
+    fn a_running_server_reports_the_notice_that_follows_the_file_it_was_sent() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING);
+        std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_diagnosing_server,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the question starts the server");
+
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);
+        let (found, partial) = servers
+            .diagnostics(&mut policy, path)
+            .expect("a server is running for this file")
+            .expect("the server answered");
+        assert_eq!(
+            found,
+            Some(Diagnostics::default()),
+            "the notice the change produced, which has no errors"
+        );
+        assert!(!partial);
+    }
+
+    /// LSP-12: a notice published before the file changed is not the answer about the file after
+    /// it. A server that publishes on open and says nothing on the change leaves the open's notice
+    /// queued, and reading it would report an error the new bytes may not have.
+    #[cfg(unix)]
+    #[test]
+    fn a_notice_from_before_the_file_changed_is_not_the_answer() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING);
+        std::fs::write(
+            scratch.join("server"),
+            DIAGNOSING_SERVER.replacen(
+                "while IFS=",
+                "QUIET_ON_CHANGE=1\nLATE_NOTICE=1\nwhile IFS=",
+                1,
+            ),
+        )
+        .expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_diagnosing_server,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the question starts the server");
+
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);
+        let (found, _partial) = servers
+            .diagnostics(&mut policy, path)
+            .expect("a server is running for this file")
+            .expect("the server did not fail");
+        assert_eq!(found, None, "the notice from before the change was read");
+    }
+
+    /// LSP-12: a server that says nothing is reported as having said nothing, which is not a claim
+    /// that the file is clean.
+    #[cfg(unix)]
+    #[test]
+    fn a_silent_server_is_not_reported_as_finding_no_errors() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING);
+        std::fs::write(
+            scratch.join("server"),
+            DIAGNOSING_SERVER.replacen("while IFS=", "SILENT=1\nwhile IFS=", 1),
+        )
+        .expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_diagnosing_server,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the question starts the server");
+
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);
+        let (found, _partial) = servers
+            .diagnostics(&mut policy, path)
+            .expect("a server is running for this file")
+            .expect("a quiet server is not a failed one");
+        assert_eq!(found, None);
+    }
+
+    /// LSP-12: a write is not the approval a server needs. With none running there is nothing to
+    /// ask and nothing is started; with one running, a run that was not granted the capability is
+    /// not answered from it.
+    #[cfg(unix)]
+    #[test]
+    fn diagnostics_start_no_server_and_need_the_capability() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING);
+        std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_diagnosing_server,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);
+        assert!(servers.diagnostics(&mut policy, path).is_none());
+        assert_eq!(
+            servers.running(),
+            0,
+            "asking for diagnostics started a server"
+        );
+
+        ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the question starts the server");
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, []);
+        assert!(servers.diagnostics(&mut policy, path).is_none());
+        // And a file no server is configured for has nothing to ask.
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);
+        assert!(
+            servers
+                .diagnostics(&mut policy, &format!("{path}.txt"))
+                .is_none()
+        );
     }
 }

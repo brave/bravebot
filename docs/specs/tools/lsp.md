@@ -539,6 +539,67 @@ table server ([RUN-12](run.md#RUN-12)); a value is never repeated by a log line 
 `verified-by: bravebot_tui::confirm::a_declared_server_is_asked_about_with_its_arguments_and_as_unknown`
 `verified-by: bravebot_ui_bridge::wire::a_server_prompt_carries_what_would_run_and_whether_it_builds`
 
+<a id="LSP-12"></a>
+### LSP-12: a write is checked by a server that is already running, and reports lines, never prose
+
+After `write_file` lands a file, a language server for that file's language that is **already
+running** is asked what it makes of the file, and the result says how many errors it found and the
+line each starts on, how many warnings, and how many notes of any other kind. A write never starts
+a server and never asks anyone about one: starting a server is the approval [LSP-5](#LSP-5)
+describes, and a write is not that approval. With no server running for the language, with no
+server configured for it, or in a run that was not granted the capability ([LSP-9](#LSP-9)), the
+result says nothing about the file.
+
+This is not an operation of the `lsp` tool. [LSP-1](#LSP-1)'s list is the set of questions a
+planner may put, and it is unchanged: the planner names no operation here and chooses nothing, so
+there is no routing field to promote.
+
+**What is read.** Only the severity of each diagnostic and the line its range starts on. The
+`message`, the `code`, the `source` and the related information are never deserialised, so
+[LSP-5](#LSP-5)'s rule that a server's prose stays out of the planner's context is kept by the type
+that carries the result and not by a caller remembering to drop a field. The sentence the planner
+reads is this repository's own, built from the counts and the line numbers.
+
+**Why counts and lines are reliable enough to report, and prose is not.** A line number is a
+position the server says, which [LSP-3](#LSP-3) already treats as structure, and a count is a
+number of them. They can be wrong, since a server may be out of date or still indexing, so the
+result says what it does not know: a server still indexing is reported as such, and a server that
+published nothing inside the bound is reported as not having reported, in words that cannot be
+read as "no errors" ([LSP-6](#LSP-6)'s reason, applied to a file rather than a symbol). A report
+of no errors is worded "no errors reported yet" and as nothing stronger, since a server that
+publishes a quick pass and refines it later has not said the file is clean. A server that was
+running and failed is reported as having failed, in fixed words, and none of what it said about
+the failure is carried.
+
+**Labelled by the file it describes.** The result is given only for a file the trust map vouches
+for after the write, and a write sets that from the trust of the bytes written
+([TRUST-4](../trust-map.md#TRUST-4)). So a file written from `contents_ref`, whose bytes came out
+of quarantine, is untrusted once written and reports nothing: the server's view of bytes nobody
+vouched for is not put in the planner's context.
+
+**Bounded.** The server is sent the file as it now stands, as a change where it already holds the
+document (a version that only goes up, so a notice that names an older version is passed over, and
+so is one already waiting when the file was sent), and given a few seconds to publish. A first notice is not taken as the last for a short
+time after it, since servers publish a quick pass and then refine it. Type errors that need a
+build may arrive after the bound, and the wording says a report may be short. A set another run
+holds for the length of a question, a prompt included, is not waited for.
+
+**Why not a read operation.** The planner's alternative is a build, and a build is a `run` a
+person approves. This gives the common case, a syntax or type error in the file just written, in
+the same turn and at the cost of one notice from a server somebody already approved. It does not
+replace a build, and OpenCode's own documentation says language-server feedback is not always a
+net positive; the cost here is a wait of at most the bound per write.
+
+`verified-by: bravebot_lsp::protocol::a_diagnostic_carries_a_line_and_a_severity_and_no_prose`
+`verified-by: bravebot_lsp::server::a_running_server_reports_the_notice_that_follows_the_file_it_was_sent`
+`verified-by: bravebot_lsp::server::a_silent_server_is_not_reported_as_finding_no_errors`
+`verified-by: bravebot_lsp::server::a_notice_from_before_the_file_changed_is_not_the_answer`
+`verified-by: bravebot_lsp::server::diagnostics_start_no_server_and_need_the_capability`
+`verified-by: bravebot_agent::lsp::a_report_of_no_errors_is_not_a_server_that_said_nothing`
+`verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
+`verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
+`verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`
+
 ## Known costs
 
 - **A declared server's own build tooling is unknown, so the prompt cannot say what it runs.**
