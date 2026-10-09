@@ -201,7 +201,9 @@ returned, or else the target of the turn on screen. The only choice the client m
 reported value to send; it derives no target of its own. It names none, and so stops whatever is
 running as Stop always has, in three cases: the runtime does not advertise it, a send has not been
 answered so the target of the turn it starts is not yet known, or the view has ended and shows a
-stale turn. The result is `cancelled: true` or `false` as the bridge answered when a target was
+stale turn. A target the caller gives is never dropped: against a runtime that does not advertise it,
+the cancel is refused with `UnsupportedError` and nothing is sent, since the runtime would stop
+whatever is running instead. The result is `cancelled: true` or `false` as the bridge answered when a target was
 named, and `null` when none was.
 
 `verified-by: by-construction (packages/agent-client/test-fixtures/scenarios/cancel-names-the-target-on-screen.json, cancel-names-the-target-it-is-given.json, cancel-names-the-new-target-when-turn-numbers-go-back.json, cancel-while-a-send-is-unanswered-names-no-target.json and cancel-without-action-targets-names-no-target.json run under four chunkings, and tests/real-rpc.test.ts drives a real bravebot-rpc through a delayed cancel for an earlier turn, a cancel after a rewind that numbers a turn again, and a cancel of the turn just sent)`

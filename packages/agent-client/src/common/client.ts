@@ -194,6 +194,9 @@ class Session implements AgentSession {
   }
 
   async cancel(target?: number): Promise<CancelResult> {
+    // An explicit target asks to stop that turn only. A runtime that cannot name one would stop
+    // whatever is running instead, so the request is refused.
+    if (target !== undefined && !this.namesTargets) throw new UnsupportedError('this runtime cannot cancel a named turn')
     // Name what to stop when the runtime can use it, so a cancel that arrives late cannot reach a
     // turn that began after the one meant. A caller names it. Otherwise it is the turn on screen,
     // unless a send is unanswered (the target of the turn it starts is not known) or the view has

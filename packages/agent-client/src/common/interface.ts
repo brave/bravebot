@@ -15,7 +15,7 @@ export interface TargetInfo {
 export interface SendResult {
   /** The turn number the bridge accepted the prompt as. Completion is reported by the view. */
   turn: number
-  /** What a cancel names to stop this turn. Unlike `turn`, it is never reused, so it stays exact after a rewind. */
+  /** What a cancel names to stop this turn. Unlike `turn`, it is never reused, so it stays exact after a rewind. 0 from a runtime that reports no targets. */
   target: number
 }
 
@@ -65,7 +65,8 @@ export interface AgentSession {
   answer(request: number, answers: AskAnswer[]): Promise<void>
   /**
    * Ask the bridge to cancel a turn, which also refuses a pending question. `target` is the one a
-   * `SendResult` or the view reported; without it the turn on screen is named. The view reports the outcome.
+   * `SendResult` or the view reported; without it the turn on screen is named. A runtime that cannot name
+   * a target refuses one with `UnsupportedError` rather than stop something else. The view reports the outcome.
    */
   cancel(target?: number): Promise<CancelResult>
   close(): Promise<CloseOutcome>

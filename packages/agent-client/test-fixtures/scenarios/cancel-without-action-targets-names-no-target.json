@@ -1,6 +1,6 @@
 {
   "name": "cancel-without-action-targets-names-no-target",
-  "description": "Against a runtime that does not advertise action targets, a cancel names only the session, as that runtime understands it.",
+  "description": "Against a runtime that does not advertise action targets, a cancel names only the session, as that runtime understands it, and a cancel that names a target is refused instead of stopping whatever is running.",
   "steps": [
     {"start": "a", "call": "createSession", "args": {"workspace": "work"}},
     {"expectRequest": "info", "method": "agent.info", "params": {}},
@@ -17,6 +17,8 @@
     {"start": "cancel", "call": "cancel", "session": "a"},
     {"expectRequest": "c", "method": "turn.cancel", "params": {"session": "s1"}},
     {"send": [{"id": "$c", "ok": {}}]},
-    {"await": "cancel", "result": {"cancelled": null}}
+    {"await": "cancel", "result": {"cancelled": null}},
+    {"start": "named", "call": "cancel", "session": "a", "args": {"target": 5}},
+    {"await": "named", "error": {"name": "UnsupportedError"}}
   ]
 }
