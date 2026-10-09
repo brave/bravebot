@@ -1269,6 +1269,27 @@ mcp-move-not-recorded =
 mcp-move-no-handshake = { $alias } did not complete its handshake where its reply pointed: { $reason }
 mcp-move-again = { $alias } was redirected again, off where it was just moved, so that was refused
 
+## Programs asking for one more path for the session
+
+path-title = let programs reach another path?
+path-reads = programs this session starts may read { $path }
+path-writes = programs this session starts may read and write { $path }
+path-why = the planner says: { $why }
+path-explained =
+    Every command the planner runs from now until this session ends gets it. Nothing is written to
+    disk, so the next session asks again. /reach paths lists what was allowed and
+    /reach paths remove <number> ends one.
+path-not-trusted =
+    The directory is not marked trusted: what is in it is still labelled as it was, and a file
+    there is no more believed than before.
+path-yes = Yes, for this session
+path-no = No
+path-listed = { $number }. every command also { $access } { $path }, for this session
+path-none = no path was requested this session
+path-removed = ended: commands no longer { $access } { $path }
+path-refused-number = no requested path is numbered { $number }
+path-usage = /reach paths lists the paths programs were allowed to reach this session. /reach paths remove <number> ends one.
+
 ## Vouching for a directory, asked once when a session starts somewhere new
 
 trust-directory-title = trust this directory?
@@ -1537,7 +1558,7 @@ run-carries-remembered = { $sentence } (remembered for this command, allowed { $
 run-carries-remembered-read = { $program } also reads { $path } (remembered for this command, allowed { $date })
 run-carries-remembered-write = { $program } also reads and writes { $path } (remembered for this command, allowed { $date })
 # The /reach command: what it lists, what it says it did, and why it did nothing.
-reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one.
+reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one. /reach paths lists the paths a session was let reach, and /reach paths remove <number> ends one.
 reach-none = no reach is remembered for any command
 reach-listed = { $number }. { $command } also { $access } { $entry }, allowed { $date }, { $lifetime }
 reach-access-reads = reads
@@ -1812,6 +1833,10 @@ count-commands = { $count ->
     [one] { $count } command
    *[other] { $count } commands
     }
+count-requested-paths = { $count ->
+    [one] { $count } path
+   *[other] { $count } paths
+    }
 count-reach-grants = { $count ->
     [one] { $count } grant
    *[other] { $count } grants
@@ -1973,6 +1998,8 @@ status-remembered-this-session = remembered in this session
 status-remembered-earlier = remembered in an earlier session
 status-remembered-where = delete a line from { $path } to be asked again
 status-reach = Remembered reach
+status-requested-paths = Requested paths
+status-requested-paths-note = programs this session starts may reach these; the directories are not trusted. /reach paths remove <number> ends one
 status-reach-note = added to the plan of the command each names; /reach remove <number> forgets one
 status-remembered-and-more = { $count ->
     [one] … and 1 more, { $earlier } of them from an earlier session
@@ -2988,6 +3015,7 @@ verb-todo-write = Plan
 verb-spawn-processor = Isolated processor
 verb-load-skill = Skill
 verb-ask-user = Ask
+verb-request-path = Reach
 verb-run = Run
 verb-read-output = Read output
 verb-vet-content = Vet

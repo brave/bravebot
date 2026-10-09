@@ -366,6 +366,13 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+        self.asked(
+            |held| held.confirm_path(request),
+            |refuse| refuse.confirm_path(request),
+        )
+    }
+
     fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
         self.asked(
             |held| held.confirm_move(request),
@@ -584,6 +591,11 @@ mod tests {
             ) -> crate::confirm::CallDecision {
                 crate::confirm::Unattended.confirm_mcp_call(r)
             }
+            /// Refuses. This double answers no question about reach.
+            fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+                Decision::Reject
+            }
+
             fn confirm_move(
                 &mut self,
                 r: &crate::confirm::MoveRequest,

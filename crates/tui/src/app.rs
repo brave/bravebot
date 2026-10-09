@@ -1055,6 +1055,7 @@ fn status_report(
     let reach = bravebot_agent::home::directory()
         .map(|home| bravebot_agent::reach::listed(&home, stored.id(), workspace.root()))
         .unwrap_or_default();
+    let requested_paths = bravebot_agent::reach::requested_paths_listed(&workspace.path_reach());
     crate::status::report(&crate::status::Facts {
         session_name: stored.title(),
         session_id: stored.id(),
@@ -1096,6 +1097,7 @@ fn status_report(
                 path: store.path(),
             }),
         reach: &reach,
+        requested_paths: &requested_paths,
         kept_trust: kept
             .as_ref()
             .map(|(when, path, root)| crate::status::KeptTrust {
@@ -4420,7 +4422,9 @@ fn event_loop(
             Action::Reach(argument) => {
                 let home = bravebot_agent::home::directory();
                 let profile = bravebot_agent::home::profile();
+                let paths = bravebot_agent::reach::requested_paths_command(&workspace, &argument);
                 session.note(match home.as_deref() {
+                    _ if paths.is_some() => paths.unwrap_or_default(),
                     Some(home) => bravebot_agent::reach::command(
                         &bravebot_agent::reach::Typed {
                             home,
@@ -7591,6 +7595,11 @@ fn manifest_animated(
                         bravebot_agent::confirm::Decision::Reject,
                     ));
                 }
+                crate::remote_confirm::ToMain::Path(_) => {
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Path(
+                        bravebot_agent::confirm::Decision::Reject,
+                    ));
+                }
                 // What is left announces rather than asks, so nothing waits on it. The manifest is the
                 // task list, so no list changes; there is no planner to delegate or to be interjected
                 // at; and a run's steps report through `Started` and `Finished` above.
@@ -8376,6 +8385,13 @@ fn run_turn_animated(
                     }
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Move(answer.decision()));
                 }
+                crate::remote_confirm::ToMain::Path(request) => {
+                    let answer = crate::confirm::ask_path(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Path(answer.decision()));
+                }
                 crate::remote_confirm::ToMain::Ask(asking) => {
                     // A planner that loops back over the same decision should not make the user
                     // restate it. The note is what keeps that from being invisible: an answer given
@@ -8704,6 +8720,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         ToMain::ToolList(_) => Reply::ToolList(Decision::Reject),
         ToMain::McpCall(_) => Reply::McpCall(CallDecision::reject()),
         ToMain::Move(_) => Reply::Move(Decision::Reject),
+        ToMain::Path(_) => Reply::Path(Decision::Reject),
         ToMain::Ask(_) => Reply::Ask(Vec::new()),
         ToMain::PromptRecorded(_)
         | ToMain::RequestBuilt(_)
@@ -21543,6 +21560,8 @@ mod tests {
                 "~/work write always -- make",
             ),
             ("/reach remove 2", "remove 2"),
+            ("/reach paths", "paths"),
+            ("/reach paths remove 1", "paths remove 1"),
         ] {
             type_line(&mut session, line);
             assert_eq!(

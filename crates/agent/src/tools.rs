@@ -1201,6 +1201,41 @@ fn table(
         ),
     ];
 
+    if running.offered() {
+        tools.push(Tool::function(
+            "request_path",
+            "Ask the user to let the programs you start with run reach one path outside the \
+             workspace, for the rest of this session. Use it when a run was refused or failed \
+             because it could not read or write a path you need, and name that path. The user is \
+             shown the path and your reason and answers yes or no. A yes lasts until the session \
+             ends or the user ends it, applies to every later run, and does not make the \
+             directory trusted: files in it are still not believed any more than before. It \
+             never reaches a filesystem root, the home directory or a directory above it, \
+             credential locations, or a pattern, and it is refused where the user turned the \
+             sandbox off or the workspace is not trusted. It does not widen read_file, \
+             write_file or edit_file, which stay inside the workspace and the directories the \
+             user added with /add-dir.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "One existing absolute path, or one beginning ~/, e.g. \
+                                        /opt/toolchain/include. A file or a directory; a \
+                                        directory covers what is inside it."
+                    },
+                    "write": {
+                        "type": "boolean",
+                        "description": "True when programs must also write there. Writing \
+                                        implies reading. Defaults to false, which asks for \
+                                        reading only."
+                    }
+                },
+                "required": ["path"]
+            }),
+        ));
+    }
+
     if arming.offered() {
         tools.push(Tool::function(
             "watch_file",
@@ -1878,7 +1913,8 @@ impl<'a> Tools<'a> {
             crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)?
                 .with_network(bravebot_config::run_network())
                 .with_mode(self.sandbox)
-                .with_filesystem(&bravebot_config::sandbox_filesystem());
+                .with_filesystem(&bravebot_config::sandbox_filesystem())
+                .with_path_reach(&self.workspace.path_reach());
         // Read only where a person is there to see the row it adds: a session with nobody to put
         // a prompt to reads no record, for the reason a remembered line is not read there.
         let grants = match (self.home, self.remembering) {
@@ -2661,6 +2697,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "job_output" => Some("job"),
         "vet_content" => Some("ref"),
         "run" => Some("command"),
+        "request_path" => Some("path"),
         "read_output" => Some("ref"),
         "watch_file" => Some("path"),
         "advisor" => Some("question"),
@@ -3101,6 +3138,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // A delegate's task came from a planner, so the question would ask the person to
         // arbitrate something they never set up. Refused here as well as absent from the list.
         "ask_user" if !tools.delegated => ask_user(policy, confirmer, &arguments),
+        "request_path" if !tools.delegated => request_path(policy, tools, confirmer, &arguments),
         "run" => run(policy, tools, confirmer, reporter, &arguments),
         "read_output" => read_output(policy, tools, confirmer, reporter, &arguments),
         // Not offered to a delegate, so a call from one is answered the way any other unknown
@@ -6811,6 +6849,157 @@ fn credential_refusal_after_a_line(displayed: &str, left: &Left<'_>, stuck: &[St
     Produced::refused_with_a_note(text, note)
 }
 
+/// What a refused request for a path says, whichever setting or rule refused it: the planner learns
+/// that nothing was granted and not which setting withheld the tool.
+const NOT_ACCEPTING_PATHS: &str = "refused: this session does not accept a request for a path. \
+     Say which path the work needs, and what for, so the person can arrange it.";
+
+/// The longest reason a request for a path is drawn with, in characters.
+const LONGEST_PATH_REASON: usize = 300;
+
+/// Whether this turn may be asked for reach to a path at all (SANDBOX-28).
+///
+/// The same turns that may be asked for a credential scope: confined (`Tools::confinement` is
+/// `None` under `off`, which `request_path` checks next), and in a workspace the person has trusted. A project file or a settings layer has no way to say
+/// yes to this, since the only road to a grant is the confirmer, and a turn nobody is at to ask is
+/// refused by the one it is given.
+fn path_requests_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> bool {
+    tools.confine_runs && policy.trusts_path(&tools.workspace.trust_key("."))
+}
+
+/// Ask the person to let programs reach one more path for the session (SANDBOX-28).
+///
+/// `path` is routing: it decides what a program can touch, so it is read through the planner
+/// argument gate and judged by the rules an `allowWrite` entry meets. `why` is content, drawn for
+/// the person and recorded, and decides nothing. The reach is held by the workspace for the session
+/// and written nowhere, and the directory is not marked trusted.
+fn request_path<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    arguments: &Value,
+) -> Produced {
+    use bravebot_sandbox::rules::{RequestRefusal, judged_request};
+
+    let Some(named) = named_argument(arguments, "path") else {
+        return Produced::problem(
+            "error: 'path' is required and must be one absolute path, or one beginning ~/",
+        );
+    };
+    let write = match arguments.get("write") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(write)) => *write,
+        Some(_) => return Produced::problem("error: 'write' must be true or false"),
+    };
+    let Some(why) = named_argument(arguments, WHY) else {
+        return Produced::problem(
+            "error: 'why' is required: say what the programs need the path for",
+        );
+    };
+
+    if !path_requests_accepted(policy, tools) {
+        return Produced::problem(NOT_ACCEPTING_PATHS);
+    }
+    let Some(confinement) = tools.confinement() else {
+        return Produced::problem(NOT_ACCEPTING_PATHS);
+    };
+
+    let path = match policy.read_planner_argument("request_path", "path", &named) {
+        Ok(path) => path,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    if path.chars().any(char::is_control) {
+        return Produced::problem(
+            "error: 'path' holds a control character, which the person could not be shown; \
+             nothing was asked.",
+        );
+    }
+    if let Err(denial) = policy.before_action(
+        "request_path",
+        WHY,
+        bravebot_core::event::Role::Content,
+        &why,
+    ) {
+        return Produced::problem(format!("refused: {denial}"));
+    }
+    let reason: String = why
+        .declassify(&policy.authorise_content_release("request_path", WHY))
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(LONGEST_PATH_REASON)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if reason.is_empty() {
+        return Produced::problem(
+            "error: 'why' is required: say what the programs need the path for",
+        );
+    }
+
+    let judged = judged_request(
+        std::path::Path::new(&path),
+        write,
+        tools.profile,
+        confinement.filesystem(),
+    );
+    let resolved = match judged {
+        Ok(resolved) => resolved,
+        Err(RequestRefusal::Missing) => {
+            return Produced::problem(
+                "error: nothing is at that path, so nothing was asked. Name a path that exists.",
+            );
+        }
+        Err(RequestRefusal::NotAbsolute) => {
+            return Produced::problem(
+                "error: 'path' must be absolute or begin ~/; nothing was asked.",
+            );
+        }
+        Err(RequestRefusal::NoHome) => {
+            return Produced::problem(
+                "error: this session has no home directory to judge the path against; nothing \
+                 was asked.",
+            );
+        }
+        Err(RequestRefusal::Wildcard) => {
+            return Produced::problem(
+                "error: 'path' names one path and takes no pattern; nothing was asked.",
+            );
+        }
+        Err(_) => {
+            return Produced::problem(
+                "refused: that path cannot be reached by a program this way, whatever the \
+                 person answers; nothing was asked. Say which path the work needs, and what \
+                 for, so the person can arrange it.",
+            );
+        }
+    };
+
+    let request = crate::confirm::PathRequest {
+        path: resolved.clone(),
+        write,
+        why: reason.clone(),
+    };
+    match confirmer.confirm_path(&request) {
+        crate::confirm::Decision::Approve => {
+            let shown = resolved.display().to_string();
+            tools.workspace.grant_path_reach(resolved, write, reason);
+            policy.record_path_reach(&shown, write);
+            let access = if write { "read and write" } else { "read" };
+            Produced::new(
+                Labelled::trusted(format!(
+                    "approved: programs you start with run may {access} {shown} for the rest of \
+                     this session. Run the command again."
+                )),
+                String::new(),
+                format!("programs may {access} {shown} this session"),
+            )
+        }
+        crate::confirm::Decision::Reject => Produced::problem(
+            "refused: the person declined, or nobody was there to ask. Nothing was granted.",
+        ),
+    }
+}
+
 /// What a refused request says, whatever refused it: the planner learns that no credential was
 /// added and not which setting withheld it.
 const NOT_ACCEPTING_REQUESTS: &str = "refused: this session does not accept a request for a \
@@ -10271,10 +10460,47 @@ mod tests {
                 "vet_content",
                 "spawn_agent",
                 "fetch_url",
+                "request_path",
                 "watch_file",
                 "schedule_next"
             ]
         );
+    }
+
+    /// SANDBOX-28: the tool is offered where `run` is and withheld where it is not, takes a path
+    /// and an optional write flag, and asks the reason like every other tool.
+    #[test]
+    fn request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason() {
+        let tools = |running| {
+            available(
+                Scheduling::ArrangingALook,
+                Arming::Allowed { free: 1 },
+                Deadlines::BUILT_IN,
+                running,
+            )
+        };
+        assert!(
+            !tools(Running::Withheld)
+                .iter()
+                .any(|tool| tool.function.name == "request_path")
+        );
+        let offered = tools(Running::Offered);
+        let tool = offered
+            .iter()
+            .find(|tool| tool.function.name == "request_path")
+            .expect("offered with run");
+        let parameters = &tool.function.parameters;
+        assert_eq!(parameters["properties"]["path"]["type"], "string");
+        assert_eq!(parameters["properties"]["write"]["type"], "boolean");
+        assert!(parameters["properties"][WHY].is_object());
+        let required: Vec<&str> = parameters["required"]
+            .as_array()
+            .expect("required")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(required.contains(&"path") && required.contains(&WHY));
+        assert!(!required.contains(&"write"));
     }
 
     /// A person watching sees every call and, without this, nothing of what it was for, so every
@@ -10491,6 +10717,10 @@ mod tests {
             assert!(
                 !offered.iter().any(|t| t == "schedule_next"),
                 "a {name} was offered a way to pace a loop it is not a tick of"
+            );
+            assert!(
+                !offered.iter().any(|t| t == "request_path"),
+                "a {name} was offered reach to a path nobody set up for it"
             );
         }
     }
@@ -12297,6 +12527,11 @@ mod tests {
                 _request: &crate::confirm::McpCallRequest,
             ) -> crate::confirm::CallDecision {
                 crate::confirm::CallDecision::reject()
+            }
+
+            /// Refuses. This double answers no question about reach.
+            fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+                Decision::Reject
             }
 
             fn confirm_move(
@@ -14645,6 +14880,144 @@ mod tests {
                 refused[0]
             );
             assert!(!clean, "a turn whose run was refused would end as clean");
+        }
+
+        /// SANDBOX-28: a delegate that names `request_path` anyway is answered as an unknown name,
+        /// the person is not asked, and nothing is held. The first case is the control: the same
+        /// call from a turn that is not a delegate is asked and held, so an implementation that
+        /// refused every call would not pass.
+        #[cfg(unix)]
+        #[test]
+        fn a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked() {
+            use crate::confirm::{
+                CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
+                McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
+                ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
+                WriteRequest,
+            };
+            use bravebot_core::ask::{Answer, Asking};
+
+            #[derive(Default)]
+            struct CountsPathQuestions {
+                asked: usize,
+            }
+
+            impl Confirmer for CountsPathQuestions {
+                fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+                    self.asked += 1;
+                    Decision::Approve
+                }
+                fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+                    WriteDecision::reject()
+                }
+                fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+                    RunDecision::reject()
+                }
+                fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+                    CallDecision::reject()
+                }
+                fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
+                    Vec::new()
+                }
+                fn interjection(&mut self) -> Option<String> {
+                    None
+                }
+            }
+
+            let scratch = Scratch::new("request-path-delegate");
+            let home = scratch.path.join("home");
+            let beside = scratch.path.join("beside");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&beside).unwrap();
+            let home: &'static std::path::Path =
+                Box::leak(home.canonicalize().unwrap().into_boxed_path());
+            let beside = beside.canonicalize().unwrap();
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&project).unwrap();
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": "1",
+                "function": {
+                    "name": "request_path",
+                    "arguments": json!({
+                        "path": beside.display().to_string(),
+                        "write": true,
+                        "why": "the build writes its output there",
+                    })
+                    .to_string(),
+                }
+            }))
+            .expect("a call");
+
+            for (delegated, asked, held) in [(false, 1, 1), (true, 0, 0)] {
+                let workspace = Workspace::new(&project).expect("workspace");
+                let mut trust = bravebot_core::trust::TrustStore::new("/work");
+                trust.trust(".");
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "build it");
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::ShellExec]),
+                    &mut sink,
+                )
+                .expect("policy")
+                .with_trust(trust);
+                let mut confirmer = CountsPathQuestions::default();
+
+                let output = with_tools(&workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.profile = Some(home);
+                    tools.delegated = delegated;
+                    dispatch(
+                        &mut policy,
+                        tools,
+                        &mut confirmer,
+                        &mut crate::report::IgnoreReports,
+                        &call,
+                    )
+                });
+                let said = told(&mut policy, &output.text);
+
+                if delegated {
+                    assert_eq!(said, "error: no such tool 'request_path'");
+                } else {
+                    assert!(said.starts_with("approved:"), "{said}");
+                }
+                assert_eq!(confirmer.asked, asked, "delegated {delegated}: {said}");
+                assert_eq!(
+                    workspace.path_reach().len(),
+                    held,
+                    "delegated {delegated}: {said}"
+                );
+            }
         }
     }
 

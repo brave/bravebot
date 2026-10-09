@@ -29,9 +29,11 @@ that is merely carried.
 | [`spawn_agent`](#spawn_agent) | `kind` | `task`, `each` | not the call, but its writes and runs do |
 | [`load_skill`](#load_skill) | `name` | none | no |
 | [`ask_user`](#ask_user) | the questions | none | it *is* the question |
+| [`request_path`](#request_path) | `path`, `write` | none | **yes, unless you bypass permissions** |
 | [`todo_write`](#todo_write) | none | `todos` | no |
 
-Three more are offered only where they mean something.
+Four more are offered only where they mean something.
+[`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
 [`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
 [`/loop`](commands.md#loop-interval-prompt), and one on a line you typed in a session that can send
 it again. Not to a tick of a loop you gave an interval for, not to a delegate, and not where nothing
@@ -830,6 +832,30 @@ every question is declined rather than answered on your behalf.
 
 This tool is for what the planner cannot find out itself: which of two approaches, whether something
 is in scope, which of two plausible files you meant. Never for a fact about the machine.
+
+## `request_path`
+
+Asks you to let the programs a `run` starts reach one path they otherwise cannot, for the rest of the
+session. A command that fails with `Operation not permitted` on a path outside the directories the
+session was opened on is the usual cause.
+
+| Parameter | |
+|---|---|
+| `path` | one absolute path, or one beginning `~/`; it must exist and may not hold `*` or `?` |
+| `write` | `true` to let programs write it as well as read it; defaults to `false` |
+
+You are shown the path, whether it is to be read or written, and the planner's reason, and you
+answer yes or no. A yes lasts for this session, is not saved, and does **not** mark the directory
+trusted, as [`/add-dir`](commands.md) does. `/reach paths` lists what you have allowed and
+`/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
+the answer is yes without a question.
+
+The same paths are refused as an `allowWrite` entry would be, whatever you would answer, and you are
+not asked: `~`, `/`, a drive root, your home directory and any directory above it, `~/.ssh`,
+`~/.bravebot`, the credential locations and any directory that holds one, such as `~/.config`. A path your `denyRead` or `denyWrite` entries cover is
+refused as well. Nothing is accepted under the sandbox mode `off`, in a workspace you have not
+trusted, in a run with nobody to ask, or in the desktop app, which has no question for it yet. No
+settings file can allow one in advance.
 
 ## `todo_write`
 

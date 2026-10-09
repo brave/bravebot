@@ -539,6 +539,12 @@ pub struct Workspace {
     /// The writes the session made to the working directory by a name the planner typed, in the
     /// order they were made (CHECKOUT-14). Shared for the reason `checkouts` is.
     working_writes: Arc<Mutex<WorkingWrites>>,
+    /// The paths the person let programs reach for this session, oldest first (SANDBOX-28).
+    ///
+    /// Held here and nowhere else: not in the trust map, not on disk, and not in `added`, because a
+    /// path reached by a program is not a path the file tools open or a directory vouched for.
+    /// Shared for the reason `checkouts` is.
+    path_reach: Arc<Mutex<Vec<PathReach>>>,
     /// The directories the person's own settings named, in alias order (REFER-3).
     ///
     /// Each is also in `added`, which is what makes it reachable, so a reference is exactly as
@@ -547,6 +553,16 @@ pub struct Workspace {
     references: Vec<Referenced>,
     /// The entries of the `references` block that were not opened, and why (REFER-3).
     reference_problems: Vec<(String, ReferenceProblem)>,
+}
+
+/// One path the person let programs reach for the session (SANDBOX-28).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathReach {
+    pub path: PathBuf,
+    /// Whether programs may write it as well as read it.
+    pub write: bool,
+    /// What the planner said it was for.
+    pub why: String,
 }
 
 /// Which names the session wrote in the working directory, and when, counted in writes.
@@ -1176,6 +1192,7 @@ impl Workspace {
             checkout_numbers: Arc::new(AtomicU64::new(1)),
             temporary_checkouts: Arc::default(),
             working_writes: Arc::default(),
+            path_reach: Arc::default(),
             references: Vec::new(),
             reference_problems: Vec::new(),
         })
@@ -1491,6 +1508,33 @@ impl Workspace {
     /// The directories added by name, in the order they were added.
     pub fn added_directories(&self) -> &[PathBuf] {
         &self.added
+    }
+
+    /// Let programs reach `path` for the rest of the session. A second grant of a path already
+    /// held keeps one row, writable if either grant was.
+    pub fn grant_path_reach(&self, path: PathBuf, write: bool, why: String) {
+        let mut held = self.path_reach.lock().unwrap_or_else(|e| e.into_inner());
+        match held.iter_mut().find(|row| row.path == path) {
+            Some(row) => {
+                row.write |= write;
+                row.why = why;
+            }
+            None => held.push(PathReach { path, write, why }),
+        }
+    }
+
+    /// The paths programs may reach by the person's leave, oldest first.
+    pub fn path_reach(&self) -> Vec<PathReach> {
+        self.path_reach
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// End the grant numbered `number`, counting from one in `path_reach` order.
+    pub fn end_path_reach(&self, number: usize) -> Option<PathReach> {
+        let mut held = self.path_reach.lock().unwrap_or_else(|e| e.into_inner());
+        (number >= 1 && number <= held.len()).then(|| held.remove(number - 1))
     }
 
     /// Work in `directory` from now on, which must exist.
@@ -5088,6 +5132,59 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::io;
+
+    /// SANDBOX-28: reach is held by the workspace, in the order it was given and numbered from one,
+    /// shared by a clone (a delegate's view), upgraded and never downgraded by a second grant, and
+    /// ended by number. A number that names no row ends nothing.
+    #[test]
+    fn path_reach_is_numbered_shared_upgraded_and_ended() {
+        let workspace = {
+            let root = crate::testutil::scratch_dir("path-reach-held");
+            std::fs::create_dir_all(&root).expect("scratch");
+            Workspace::new(root).expect("workspace")
+        };
+        let clone = workspace.clone();
+        assert!(workspace.path_reach().is_empty());
+
+        workspace.grant_path_reach(PathBuf::from("/data/a"), false, "reads a".to_string());
+        clone.grant_path_reach(PathBuf::from("/data/b"), true, "writes b".to_string());
+        workspace.grant_path_reach(PathBuf::from("/data/a"), true, "now writes a".to_string());
+        workspace.grant_path_reach(PathBuf::from("/data/b"), false, "reads b".to_string());
+
+        let held = clone.path_reach();
+        assert_eq!(held.len(), 2);
+        assert_eq!(
+            (held[0].path.as_path(), held[0].write, held[0].why.as_str()),
+            (Path::new("/data/a"), true, "now writes a")
+        );
+        assert!(held[1].write, "a later read-only grant downgraded a write");
+
+        assert!(workspace.end_path_reach(0).is_none());
+        assert!(workspace.end_path_reach(3).is_none());
+        assert_eq!(workspace.path_reach().len(), 2);
+        let ended = workspace.end_path_reach(1).expect("the first row");
+        assert_eq!(ended.path, Path::new("/data/a"));
+        assert_eq!(clone.path_reach().len(), 1);
+        assert_eq!(clone.path_reach()[0].path, Path::new("/data/b"));
+    }
+
+    /// SANDBOX-28: reach lasts for the session. A workspace opened afresh holds none, and moving the
+    /// root does not carry it into a different tree or drop it.
+    #[test]
+    fn a_new_workspace_holds_no_path_reach() {
+        let first = {
+            let root = crate::testutil::scratch_dir("path-reach-first");
+            std::fs::create_dir_all(&root).expect("scratch");
+            Workspace::new(root).expect("workspace")
+        };
+        first.grant_path_reach(PathBuf::from("/data/a"), true, "x".to_string());
+        let second = {
+            let root = crate::testutil::scratch_dir("path-reach-second");
+            std::fs::create_dir_all(&root).expect("scratch");
+            Workspace::new(root).expect("workspace")
+        };
+        assert!(second.path_reach().is_empty());
+    }
 
     /// A read that asks for more than a page and one that names no limit return the same lines, and
     /// so are the same window: told apart, the second of two reads of one page would be sent again

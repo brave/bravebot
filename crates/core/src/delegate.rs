@@ -184,13 +184,15 @@ impl std::fmt::Display for Kind {
 /// want of a capability: `fetch_url` because every kind holds the capability for reaching the
 /// network so the driver can make its model call, `apply_checkout` because bringing a delegate's
 /// work into the person's tree is the turn's to ask for and not that delegate's, and the rest
-/// because their audience is the person watching the turn. The list is here rather than beside the tool table so that a
+/// because their audience is the person watching the turn (`request_path` among them: a path a
+/// planner's sub-task asked for is reach the person never set up). The list is here rather than beside the tool table so that a
 /// definition naming one of them is answered by the same set the tool list is built from.
 ///
 /// `spawn_agent` is not here. Whether a delegate may delegate is a question about where it sits,
 /// not about what it is, so it is answered by [`MAX_DEPTH`] rather than by name.
-pub const NEVER_DELEGATED: [&str; 6] = [
+pub const NEVER_DELEGATED: [&str; 7] = [
     "ask_user",
+    "request_path",
     "apply_checkout",
     "todo_write",
     "schedule_next",

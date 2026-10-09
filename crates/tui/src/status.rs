@@ -203,6 +203,9 @@ pub struct Facts<'a> {
     ///
     /// Empty says nothing, for the reason no remembered line says nothing.
     pub reach: &'a [String],
+    /// The paths the person let programs reach for this session, one row each as `/reach paths`
+    /// lists it (SANDBOX-28). Empty says nothing.
+    pub requested_paths: &'a [String],
     /// The answer about this directory a session was told to remember, where one is kept and
     /// would settle the next session started here (TRUST-23).
     pub kept_trust: Option<KeptTrust<'a>>,
@@ -840,6 +843,19 @@ pub fn report(facts: &Facts<'_>) -> Report {
         }
     }
 
+    if !facts.requested_paths.is_empty() {
+        lines.push(
+            Line::new(
+                t!(status_requested_paths),
+                t!(count_requested_paths, count = facts.requested_paths.len()),
+            )
+            .with_note(t!(status_requested_paths_note)),
+        );
+        for row in facts.requested_paths {
+            lines.push(Line::new("", row.as_str()));
+        }
+    }
+
     Report { lines }
 }
 
@@ -1029,6 +1045,7 @@ mod tests {
             remembered: None,
             // No reach remembered for any command, on the same footing.
             reach: &[],
+            requested_paths: &[],
             // No answer about the directory kept past a session, on the same footing.
             kept_trust: None,
         }
@@ -1748,6 +1765,35 @@ mod tests {
             "{shown}"
         );
         assert!(shown.contains(t!(status_reach_note)), "{shown}");
+        for row in &rows {
+            assert!(shown.contains(row.as_str()), "{shown}");
+        }
+    }
+
+    /// SANDBOX-28: a path the person let programs reach is listed as `/reach paths` lists it, with
+    /// the note that the directory is not trusted and how to end one. A session that was asked for
+    /// none draws no heading.
+    #[test]
+    fn the_report_lists_the_paths_programs_were_let_reach() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let quiet = rendered(&report(&facts(&config, &trust)));
+        assert!(!quiet.contains(t!(status_requested_paths)), "{quiet}");
+
+        let rows = vec![
+            "1. every command also reads /opt/toolchain, for this session".to_string(),
+            "2. every command also reads and writes /srv/out, for this session".to_string(),
+        ];
+        let mut facts = facts(&config, &trust);
+        facts.requested_paths = &rows;
+        let shown = rendered(&report(&facts));
+
+        assert!(shown.contains(t!(status_requested_paths)), "{shown}");
+        assert!(
+            shown.contains(&t!(count_requested_paths, count = 2)),
+            "{shown}"
+        );
+        assert!(shown.contains(t!(status_requested_paths_note)), "{shown}");
         for row in &rows {
             assert!(shown.contains(row.as_str()), "{shown}");
         }

@@ -135,6 +135,7 @@ fn a_turn_the_session_sends(
             | ToMain::ToolList(_)
             | ToMain::McpCall(_)
             | ToMain::Move(_)
+            | ToMain::Path(_)
             | ToMain::Ask(_) => {
                 panic!("the turn asked something other than its write: {message:?}")
             }

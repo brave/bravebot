@@ -20,6 +20,7 @@ governs:
   - crates/config/src/sandbox_network.rs
   - crates/agent/src/confine.rs
   - crates/agent/src/reach.rs
+  - crates/sandbox/src/rules.rs
   - crates/tui/src/status.rs
 documented-by: docs/website/docs/security/security.md
 ---
@@ -934,10 +935,13 @@ exited zero carries no such sentence. The sentence is composed from the same two
 
 The sentence ends with fixed text, in every mode that produces it, saying that a credential
 location such as `~/.ssh`, `~/.aws` or `~/.kube` cannot be added with `/add-dir` or `--add-dir`,
-and that where the mode accepts a request, a credential scope is how a line reaches one. A planner
+and that where the mode accepts a request, a credential scope is how a line reaches one. It then
+says that any other path a command needs is asked for with the `request_path` tool
+([SANDBOX-28](#SANDBOX-28)), the person is asked, and a yes lasts for the session. A planner
 that meets a refusal on such a location otherwise has no other account of it, and asks the person
 for an `/add-dir` that does nothing. The text is the same for every failure and for exit 1 and
-exit 2.
+exit 2. The menu sentence ends the same way, and the `run` description's
+confinement statement names the tool.
 
 **Why.** A refused step reports `exited 1` and its standard error is quarantined, so the planner
 cannot see that the sandbox refused it. Without this sentence it cannot tell a sandbox refusal from
@@ -962,6 +966,7 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::turn::a_run_that_worked_or_was_not_confined_does_not_say_a_credential_location_cannot_be_added`
 `verified-by: bravebot_agent::tools::the_confinement_statement_is_appended_to_run_on_a_confining_turn_only`
 `verified-by: bravebot_agent::turn::a_failed_run_on_a_confining_turn_says_what_it_ran_under`
+`verified-by: bravebot_agent::confine::a_path_the_person_let_programs_reach_is_held_and_their_own_deny_still_applies`
 `verified-by: bravebot_agent::turn::a_run_that_succeeded_on_a_confining_turn_carries_no_profile_line`
 `verified-by: bravebot_agent::turn::a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_failure`
 `verified-by: bravebot_agent::turn::a_failed_job_on_a_confining_turn_says_what_it_ran_under`
@@ -1457,7 +1462,9 @@ in force with the sentence `doctor` gives; the notice above a conversation count
 not in force and an allowance a project file wrote, as it does a permission rule. It names paths
 where the terminal's `/status` does not, since it is the person's own settings it is showing back
 and `doctor` does the same. The person edits the settings file, and a change applies to the next
-conversation. A command that adds an allowance from a session is not built.
+conversation. A command that adds an allowance from a session is not built; a planner's way to ask
+for reach to one path for the session is `request_path` ([SANDBOX-28](#SANDBOX-28)), which adds no
+entry to a list.
 
 **Why.** The lists are how a person changes what a stage reads and writes without `/add-dir`, the
 only other way to move that reach, which also marks the directory trusted
@@ -1624,6 +1631,73 @@ more than the person read.
 `verified-by: bravebot_tui::confirm::the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them`
 `verified-by: bravebot_tui::confirm::the_keep_keys_wait_for_the_rows_saying_what_they_remember`
 `verified-by: bravebot_tui::confirm::a_prompt_offering_to_keep_a_request_names_what_would_be_kept`
+
+<a id="SANDBOX-28"></a>
+### SANDBOX-28: a planner may ask for reach to one path, and the person is asked every time it is new
+
+`request_path` ([tools/request-path.md](tools/request-path.md)) is how a planner whose stage fails
+for want of a path outside the session's directories asks for it. It takes the `path`, a `write`
+flag (write implies read) and the `why` every tool takes. The person is shown the path as it
+resolves, whether it is to be read or written, and the reason, and answers. A yes lets every program
+a later `run` starts read the path, or read and write it, for the rest of the session. A no, an
+interrupt and a run with nobody to ask grant nothing. The mode that answers every permission
+question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX-26)).
+
+- **The same refusals as an `allowWrite` row** ([SANDBOX-25](#SANDBOX-25)), for a read as for a
+  write: `~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`,
+  `~/.bravebot` and anything inside either, a credential location of the table
+  ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one (`~/.config` holds
+  `~/.config/gcloud`), any path holding a control character, and any path holding `*` or `?`. The path is judged where it leads,
+  through its links. A refused request is not put to the person, and the result says that no answer
+  would change it. A path that does not exist is not asked about either.
+- **The person's own refusals still hold.** A `denyRead` or `denyWrite` entry covering the path
+  refuses the request, and one narrower than a granted path takes its part of the grant back, since
+  the person's rows are applied after the session's.
+- **It is reach and not trust.** Nothing is marked trusted ([TRUST-9](trust-map.md#TRUST-9)) and no
+  file is written; the grant is held by the session and gone with it. Asking again for a path
+  already held is asked like the first request, and a yes only ever widens the grant held: a read
+  answered beside a write held leaves the write. The person may end a grant with
+  `/reach paths remove <number>`.
+- **Not accepted** where the mode is `off`, which has no profile to add to, and in a workspace that
+  is not trusted ([TRUST-7](trust-map.md#TRUST-7)). The result says so and nothing is asked. No
+  settings layer, project file or permission rule grants one in advance, because none names it.
+- **Shown and recorded.** `/status` lists each path held, with its access, and the
+  trace carries one `path_reach` record for each yes, naming the path and the access.
+- **Not delegated.** A delegate is offered no `request_path`, and one it names anyway is answered
+  as an unknown name ([DELEGATE-12](delegation.md#DELEGATE-12)), since a path asked for from inside
+  a sub-task is reach the person never set up.
+- The desktop shows no card for it and refuses, which grants nothing.
+
+**Why.** A stage that cannot write a path the work needs fails with `Operation not permitted`, and
+the planner has no way to say which path it needed. Without a per-path request, the only way to let
+a build write one file is `/add-dir`, which marks the whole directory trusted. A request for one
+path, with the same refusals as the rows a person can write, lets them say yes to that path for a
+single session. What the planner supplies decides nothing: the path is routing and is judged by the
+rules, and the reason is drawn for the person and recorded.
+
+`verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
+`verified-by: bravebot_sandbox::rules::a_request_at_inside_or_above_a_credential_location_is_refused`
+`verified-by: bravebot_sandbox::rules::a_request_for_an_existing_path_is_kept_and_a_link_is_judged_where_it_leads`
+`verified-by: bravebot_sandbox::rules::a_request_for_a_name_that_is_not_utf8_is_kept_as_those_bytes`
+`verified-by: bravebot_sandbox::rules::a_request_under_a_denial_of_the_person_is_refused`
+`verified-by: bravebot_sandbox::rules::granted_rules_add_rows_and_a_denial_of_the_person_still_wins`
+`verified-by: bravebot_agent::confine::a_path_the_person_let_programs_reach_is_held_and_their_own_deny_still_applies`
+`verified-by: bravebot_agent::workspace::path_reach_is_numbered_shared_upgraded_and_ended`
+`verified-by: bravebot_agent::workspace::a_new_workspace_holds_no_path_reach`
+`verified-by: bravebot_agent::reach::reach_paths_lists_ends_and_leaves_other_words_alone`
+`verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
+`verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
+`verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
+`verified-by: bravebot_agent::turn::a_yes_to_a_path_marks_nothing_trusted_and_is_recorded`
+`verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
+`verified-by: bravebot_agent::turn::a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace`
+`verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
+`verified-by: bravebot_agent::turn::the_tool_is_offered_where_runs_are_confined`
+`verified-by: bravebot_tui::confirm::a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do`
+`verified-by: bravebot_tui::confirm::a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
+`verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
+`verified-by: bravebot_cli::plain::a_path_is_asked_in_lines_and_only_a_yes_lets_programs_reach_it`
+`verified-by: bravebot_ui_bridge::refusal::a_request_for_a_path_is_refused_with_no_card_whatever_the_window_would_say`
 
 ## Programs a person asked for
 
