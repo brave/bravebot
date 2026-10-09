@@ -1216,9 +1216,6 @@ mod tests {
         );
     }
 
-    /// The task being worked on is what somebody glancing at the panel looks for, so a plan cut
-    /// to the room keeps it in view. The rows left out above it are counted apart from those below
-    /// it, so a count of finished work is not read as work still to come.
     /// TODO-3 in the panel, which draws the plan a second time and from its own branch. The
     /// transcript test beside this one draws neither, so without this the panel could show a
     /// cancelled task with the finished tick and nothing would fail.
@@ -1281,6 +1278,9 @@ mod tests {
         );
     }
 
+    /// The task being worked on is what somebody glancing at the panel looks for, so a plan cut
+    /// to the room keeps it in view. The rows left out above it are counted apart from those below
+    /// it, so a count of finished work is not read as work still to come.
     #[test]
     fn a_plan_longer_than_the_room_keeps_the_task_in_progress_and_counts_each_side_of_it() {
         let drawn_with = |tasks: usize| {
