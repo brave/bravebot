@@ -913,6 +913,48 @@ mod tests {
         }
     }
 
+    /// TRUST-23, PATH-003: an answer about a repository whose name is not UTF-8 does not settle a
+    /// package of the repository named by its lossy rendering, and the other way round.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_repository_and_its_lossy_lookalike_do_not_answer_for_each_other() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let scratch = Scratch::new("trusted-lossy-lookalike");
+        let home = scratch.path.join("home");
+        let bytes = scratch.path.join(OsStr::from_bytes(b"repo-\xff"));
+        let lookalike = scratch.path.join("repo-\u{FFFD}");
+        for root in [&bytes, &lookalike] {
+            std::fs::create_dir_all(root.join(".git")).expect("a repository");
+            std::fs::create_dir_all(root.join("pkg")).expect("a package");
+        }
+        assert_eq!(
+            crate::home::key_for(&bytes),
+            crate::home::key_for(&lookalike),
+            "this test needs two roots that reduce to one key"
+        );
+
+        for (answered, other) in [(&bytes, &lookalike), (&lookalike, &bytes)] {
+            let identity = Identity::of(answered).expect("an identity");
+            assert!(Store::new(&home, answered).keep(&identity, "a-session", 1));
+
+            let found = super::honoured(Some(&home), None, &answered.join("pkg"))
+                .expect("a package of the repository answered about was asked");
+            assert_eq!(
+                found.kept.root,
+                std::fs::canonicalize(answered).expect("resolved")
+            );
+            assert!(
+                super::honoured(Some(&home), None, &other.join("pkg")).is_none(),
+                "{} was answered for by {}",
+                other.display(),
+                answered.display()
+            );
+            std::fs::remove_dir_all(&home).expect("the answers cleared");
+        }
+    }
+
     /// TRUST-23: where the root found is the home directory or a filesystem root, the answer is
     /// refused as it is for the directory, so a dotfiles repository in the home answers for nothing
     /// below it.
