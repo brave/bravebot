@@ -831,6 +831,15 @@ mod tests {
     }
 
     #[test]
+    fn a_file_link_that_is_not_utf8_names_no_path_and_its_lossy_lookalike_names_its_own() {
+        assert_eq!(path_of("file:///x/tool-%ff"), None);
+        assert_eq!(
+            path_of("file:///x/tool-%EF%BF%BD").as_deref(),
+            Some("/x/tool-\u{fffd}")
+        );
+    }
+
+    #[test]
     fn only_a_selected_approving_option_approves() {
         let selected = |option: &str| json!({"result": {"outcome": {"outcome": "selected", "optionId": option}}});
         assert_eq!(chosen(&selected(ALLOW_ONCE)), Some(ALLOW_ONCE));
