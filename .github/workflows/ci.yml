@@ -25,6 +25,9 @@ env:
   # producing a binary anyone installs. Signed, configured release binaries are built
   # and published by Jenkins, not this workflow.
   BRAVEBOT_ALLOW_UNCONFIGURED_BUILD: "1"
+  # Line tables keep a backtrace's files and lines and drop the rest of the debug info, which is
+  # most of what every test binary costs to compile, link and cache. Nothing here runs a debugger.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   # Which of the jobs below this change could affect, from the paths it touches. A job its
@@ -71,6 +74,11 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only. The repository's caches share a 10 GB allowance, and a pull
+        # request that moves the lockfile saves its own copy of every job's cache, which pushes
+        # main's out and leaves every other pull request building from cold.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -120,6 +128,9 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -175,6 +186,9 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # ring compiles C for whichever target it is built for, so the C half needs a cross compiler
       # even though the Rust half needs none. Nothing is linked: clippy stops before that, which is
@@ -355,6 +369,9 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
         run: cargo build --all --locked
@@ -469,6 +486,9 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -550,6 +570,9 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
