@@ -4,7 +4,7 @@
 //! seed draws the same face in the terminal as in the app.
 
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
@@ -589,20 +589,102 @@ fn paint(
     cells
 }
 
-/// The face a seed describes, as terminal rows of [`WIDTH`] columns, eyes at rest.
-pub fn rows(seed: &str) -> Vec<Vec<Span<'static>>> {
+/// How a face is held at one moment: whether the pupils have crossed to the other side of the
+/// eye, and whether the lids are shut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Look {
+    pub away: bool,
+    pub blink: bool,
+}
+
+/// Range of per-face clock offsets, in seconds, as in `clock.ts`.
+const CYCLE: f64 = 24.0;
+
+/// The hash `motion.ts` uses for timing, over UTF-16 code units as `charCodeAt` sees them.
+fn random_unit(seed: &str) -> f64 {
+    let mut value: u32 = 0x811c_9dc5;
+    for unit in seed.encode_utf16() {
+        value ^= u32::from(unit);
+        value = value.wrapping_mul(0x0100_0193);
+    }
+    value ^= value >> 16;
+    value = value.wrapping_mul(0x7feb_352d);
+    value ^= value >> 15;
+    f64::from(value) / 4_294_967_296.0
+}
+
+fn smooth(x: f64) -> f64 {
+    let c = x.clamp(0.0, 1.0);
+    c * c * (3.0 - 2.0 * c)
+}
+
+fn glance(seconds: f64, seed: &str) -> f64 {
+    let cycle = (seconds / 12.0).floor();
+    let start = 5.0 + random_unit(&format!("{seed}/glance/{cycle}")) * 2.0;
+    let at = seconds.rem_euclid(12.0) - start;
+    let direction = if random_unit(&format!("{seed}/direction/{cycle}")) < 0.5 {
+        -1.0
+    } else {
+        1.0
+    };
+    direction * smooth(at / 0.7) * (1.0 - smooth((at - 1.2) / 1.1))
+}
+
+fn blink(seconds: f64, seed: &str) -> f64 {
+    let cycle = (seconds / 7.0).floor();
+    let start = 1.0 + random_unit(&format!("{seed}/blink/{cycle}")) * 3.5;
+    let at = seconds.rem_euclid(7.0) - start;
+    let one = |elapsed: f64| {
+        if !(0.0..0.16).contains(&elapsed) {
+            1.0
+        } else if elapsed < 0.05 {
+            1.0 - smooth(elapsed / 0.05) * 0.92
+        } else {
+            0.08 + smooth((elapsed - 0.05) / 0.11) * 0.92
+        }
+    };
+    let double = random_unit(&format!("{seed}/double/{cycle}")) < 0.18;
+    one(at).min(if double { one(at - 0.24) } else { 1.0 })
+}
+
+/// How an idle face is held `seconds` into its life, the schedule `clock.ts` gives a bot in a list.
+pub fn look_at(seed: &str, seconds: f64) -> Look {
+    let t = seconds + random_unit(seed) * CYCLE;
+    Look {
+        away: glance(t, seed).abs() > 0.5,
+        blink: blink(t, seed) < 0.5,
+    }
+}
+
+/// How the face of this process is held now. Still where `NO_MOTION` is set.
+pub fn look_now() -> Look {
+    static STARTED: OnceLock<Instant> = OnceLock::new();
+    let seconds = STARTED.get_or_init(Instant::now).elapsed().as_secs_f64();
+    held(startup_seed(), seconds, crate::indicator::stilled())
+}
+
+/// [`look_at`], or the face at rest where no motion was asked for. Taken as an argument so the rule
+/// can be checked without putting a process-wide switch in force under every other test.
+fn held(seed: &str, seconds: f64, still: bool) -> Look {
+    if still {
+        Look::default()
+    } else {
+        look_at(seed, seconds)
+    }
+}
+
+/// The face a seed describes, as terminal rows of [`WIDTH`] columns, held as `look` says.
+pub fn rows(seed: &str, look: Look) -> Vec<Vec<Span<'static>>> {
     let face = build(seed);
     let mut pixels: [[Option<Rgb>; GRID]; GRID] = [[None; GRID]; GRID];
     for (x, y, fill) in &face.cells {
         pixels[*y as usize][*x as usize] = Some(*fill);
     }
+    let gaze = if look.away { -face.gaze } else { face.gaze };
     for (x, y) in face.eyes {
-        let (white, pupil) = if face.gaze > 0 {
-            (x, x + 1)
-        } else {
-            (x + 1, x)
-        };
-        pixels[y as usize][white as usize] = Some(EYE_WHITE);
+        let (white, pupil) = if gaze > 0 { (x, x + 1) } else { (x + 1, x) };
+        let white_fill = if look.blink { EYE_PUPIL } else { EYE_WHITE };
+        pixels[y as usize][white as usize] = Some(white_fill);
         pixels[y as usize][pupil as usize] = Some(EYE_PUPIL);
     }
 
@@ -752,7 +834,7 @@ mod tests {
 
     #[test]
     fn a_face_is_five_rows_of_ten_columns_with_the_eyes_on_it() {
-        let drawn = rows("v2:example-0");
+        let drawn = rows("v2:example-0", Look::default());
         assert_eq!(drawn.len(), ROWS);
         assert!(drawn.iter().all(|row| row.len() == WIDTH));
         let eyes = drawn
@@ -775,17 +857,92 @@ mod tests {
     fn the_lifted_face_keeps_every_cell() {
         for i in 0..300 {
             let seed = format!("v2:lift-{i}");
-            let painted: usize = rows(&seed)
-                .iter()
-                .flatten()
-                .map(|span| match span.content.as_ref() {
-                    " " => 0,
-                    _ if span.style.bg.is_some() => 2,
-                    _ => 1,
-                })
-                .sum();
+            let painted: usize = rows(
+                &seed,
+                Look {
+                    away: i % 2 == 0,
+                    blink: i % 3 == 0,
+                },
+            )
+            .iter()
+            .flatten()
+            .map(|span| match span.content.as_ref() {
+                " " => 0,
+                _ if span.style.bg.is_some() => 2,
+                _ => 1,
+            })
+            .sum();
             assert_eq!(painted, build(&seed).cells.len(), "{seed}");
         }
+    }
+
+    /// Times at which `motion.ts` closes the lids or turns the pupils for `v2:example-0`, and times
+    /// it does not.
+    #[test]
+    fn the_face_blinks_and_glances_when_the_app_does() {
+        let seed = "v2:example-0";
+        for closed in [6.0, 6.05, 13.8, 20.3, 35.6] {
+            assert!(look_at(seed, closed).blink, "{closed}");
+        }
+        for open in [0.0, 5.9, 6.2, 13.0, 14.5, 25.0] {
+            assert!(!look_at(seed, open).blink, "{open}");
+        }
+        for away in [8.5, 9.2, 20.5, 32.2, 44.0, 57.0] {
+            assert!(look_at(seed, away).away, "{away}");
+        }
+        for toward in [0.0, 8.0, 10.0, 15.0, 25.0, 40.0] {
+            assert!(!look_at(seed, toward).away, "{toward}");
+        }
+    }
+
+    #[test]
+    fn the_face_stays_at_rest_where_no_motion_is_asked_for() {
+        assert!(held("v2:example-0", 6.0, false).blink);
+        assert!(held("v2:example-0", 8.5, false).away);
+        for seconds in [6.0, 8.5, 13.8, 20.5] {
+            assert_eq!(held("v2:example-0", seconds, true), Look::default());
+        }
+    }
+
+    #[test]
+    fn a_blink_is_short_and_a_face_is_mostly_still() {
+        let held: Vec<Look> = (0..2400)
+            .map(|step| look_at("v2:example-0", f64::from(step) * 0.05))
+            .collect();
+        let shut = held.iter().filter(|look| look.blink).count();
+        let turned = held.iter().filter(|look| look.away).count();
+        assert!(shut > 0 && shut < held.len() / 20, "shut {shut}");
+        assert!(turned > 0 && turned < held.len() / 5, "turned {turned}");
+    }
+
+    #[test]
+    fn a_look_changes_the_eyes_and_nothing_else() {
+        let at_rest = rows("v2:example-0", Look::default());
+        let shut = rows(
+            "v2:example-0",
+            Look {
+                away: false,
+                blink: true,
+            },
+        );
+        let turned = rows(
+            "v2:example-0",
+            Look {
+                away: true,
+                blink: false,
+            },
+        );
+        let differing = |a: &[Vec<Span<'static>>], b: &[Vec<Span<'static>>]| {
+            a.iter()
+                .flatten()
+                .zip(b.iter().flatten())
+                .filter(|(a, b)| a != b)
+                .count()
+        };
+        assert!(differing(&at_rest, &shut) > 0);
+        assert!(differing(&at_rest, &turned) > 0);
+        assert!(differing(&at_rest, &shut) <= 2);
+        assert!(differing(&at_rest, &turned) <= 4);
     }
 
     #[test]

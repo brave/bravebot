@@ -508,9 +508,10 @@ than cleared, which is what makes the variable a switch rather than an edit.
 ### VIEW-21: `NO_MOTION` stills the glyph, and the counters go on counting
 
 Where `NO_MOTION` is set to anything but the empty string, the glyph beside a running turn stands
-still instead of cycling. It is still drawn, and the elapsed time and the token counts change as
-they always did: a figure that moves when the thing it measures moves is information rather than
-animation.
+still instead of cycling, and the pixel face on the opening screen keeps its eyes open and its
+pupils on one side instead of blinking and glancing. The glyph is still drawn, and the elapsed time
+and the token counts change as they always did: a figure that moves when the thing it measures
+moves is information rather than animation.
 
 It is read from the environment the way the request for no colour is, and answers to presence the
 same way. Where it is not set, the glyph cycles.
@@ -526,6 +527,7 @@ which is drawn before any file this program reads has been looked for.
 
 `verified-by: bravebot_tui::indicator::the_indicator_stands_still_where_no_motion_is_asked_for`
 `verified-by: bravebot_tui::indicator::motion_nobody_declined_still_moves`
+`verified-by: bravebot_tui::avatar::the_face_stays_at_rest_where_no_motion_is_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
 
 

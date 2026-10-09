@@ -84,11 +84,11 @@ fn face_fits(width: u16) -> bool {
 
 /// The face drawn to the left of the mark, one list of spans per row, or nothing where there is no
 /// room for it or no colour was asked for.
-fn face_rows(seed: &str, width: u16, plain: bool) -> Vec<Vec<Span<'static>>> {
+fn face_rows(seed: &str, look: avatar::Look, width: u16, plain: bool) -> Vec<Vec<Span<'static>>> {
     if plain || !face_fits(width) {
         return Vec::new();
     }
-    avatar::rows(seed)
+    avatar::rows(seed, look)
 }
 
 /// Rows the block occupies, so the padding can be measured against what is left.
@@ -239,7 +239,12 @@ pub fn lines_with_network(
     }
 
     if fits(width) {
-        let face = face_rows(avatar::startup_seed(), width, theme::no_color());
+        let face = face_rows(
+            avatar::startup_seed(),
+            avatar::look_now(),
+            width,
+            theme::no_color(),
+        );
         lines.extend(
             LOGO.iter()
                 .enumerate()
@@ -556,7 +561,7 @@ mod tests {
     /// The face sits to the left of the mark on every row of it.
     #[test]
     fn the_face_is_drawn_to_the_left_of_the_mark() {
-        let face = face_rows("v2:example-0", WIDE, false);
+        let face = face_rows("v2:example-0", avatar::Look::default(), WIDE, false);
         assert_eq!(face.len(), LOGO.len());
         for (row, face) in LOGO.iter().zip(&face) {
             let line = mark_row(row, face).to_string();
@@ -570,13 +575,13 @@ mod tests {
     fn a_pane_too_narrow_for_the_face_keeps_the_mark_alone() {
         let width = (INDENT.len() + mark_width()) as u16;
         assert!(fits(width) && !face_fits(width));
-        assert!(face_rows("v2:example-0", width, false).is_empty());
+        assert!(face_rows("v2:example-0", avatar::Look::default(), width, false).is_empty());
         assert!(face_fits(width + (avatar::WIDTH + FACE_GAP.len()) as u16));
     }
 
     /// A request for no colour gets no painted face.
     #[test]
     fn the_face_takes_no_colour_where_none_was_asked_for() {
-        assert!(face_rows("v2:example-0", WIDE, true).is_empty());
+        assert!(face_rows("v2:example-0", avatar::Look::default(), WIDE, true).is_empty());
     }
 }

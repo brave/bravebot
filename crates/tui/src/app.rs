@@ -65,6 +65,10 @@ fn a_countdown_is_owed_a_frame(counting_down: bool, since_drawn: Duration) -> bo
     counting_down && since_drawn >= COUNTDOWN
 }
 
+/// How often to look at the face on the opening screen. A blink keeps the lids shut for about a
+/// tenth of a second, so the wait for a key has to be shorter than that for it to be drawn.
+const FACE_POLL: Duration = Duration::from_millis(40);
+
 /// Asks for motion reported only while a button is held.
 ///
 /// Sent after [`EnableMouseCapture`], which asks for all three tracking modes at once, including
@@ -3986,6 +3990,7 @@ fn event_loop(
     // pointer. Coalescing a burst into one frame is what makes it keep up.
     let mut needs_draw = true;
     let mut drawn_at = Instant::now();
+    let mut face_held = crate::avatar::look_now();
 
     loop {
         // Every pass, so a hold goes as soon as the last turn ends and the loop stops, and one is
@@ -4057,8 +4062,23 @@ fn event_loop(
                         ) {
                             needs_draw = true;
                         }
+                        // The face on the opening screen blinks and glances without a key, and is
+                        // drawn again only when how it is held has changed.
+                        let opening = render::opening_screen(&session);
+                        if opening {
+                            let held = crate::avatar::look_now();
+                            if held != face_held {
+                                face_held = held;
+                                needs_draw = true;
+                            }
+                        }
+                        let wait = if opening && !crate::indicator::stilled() {
+                            FACE_POLL
+                        } else {
+                            POLL
+                        };
                         // Through the reader rather than the terminal, so a run is seen whole.
-                        if !input::poll(POLL)? {
+                        if !input::poll(wait)? {
                             continue;
                         }
                         let taken = input::read()?;

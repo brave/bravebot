@@ -176,7 +176,7 @@ to what it is set to. `NO_COLOR=0` is somebody who set it.
 | Variable | What it does |
 |---|---|
 | `NO_COLOR` | every role is drawn in your terminal's own ink, and none is added |
-| `NO_MOTION` | the glyph beside a running turn stands still instead of cycling |
+| `NO_MOTION` | the glyph beside a running turn stands still instead of cycling, and the face on the opening screen stops blinking and glancing |
 
 `NO_COLOR` outranks the theme in force: the background, the mixed shades, the named slots, the
 gradient across the wordmark and the pixel face beside it are all given up, and the terminal is not asked about its background
