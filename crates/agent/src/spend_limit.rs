@@ -137,7 +137,7 @@ pub fn noun(unit: Unit) -> &'static str {
 }
 
 /// What the session has spent, in the unit a limit counts.
-fn spent_in(unit: Unit, limit: &SpendLimit, tokens: u64) -> u64 {
+pub fn spent_in(unit: Unit, limit: &SpendLimit, tokens: u64) -> u64 {
     match unit {
         Unit::Tokens => tokens,
         Unit::Credits => limit.credits(),

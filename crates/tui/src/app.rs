@@ -5845,10 +5845,7 @@ fn set_advisor(session: &mut Session, config: &Config, word: &str) {
 
 /// What the session has spent, counted in `unit`.
 fn spent_in(session: &Session, unit: bravebot_config::limit::Unit) -> u64 {
-    match unit {
-        bravebot_config::limit::Unit::Tokens => session.spent_tokens(),
-        bravebot_config::limit::Unit::Credits => session.spend_limit().credits(),
-    }
+    bravebot_agent::spend_limit::spent_in(unit, session.spend_limit(), session.spent_tokens())
 }
 
 /// Say what the session's spend limit is, set it from a figure, or remove it.
