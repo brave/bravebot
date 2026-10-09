@@ -734,6 +734,82 @@ mod tests {
         assert!(!entry_of(&directory, "a1b2").exists());
     }
 
+    /// Build the entry for session `a1b2`, then put a link where it was, pointing at a copy of the
+    /// entry whose words are forged and whose stamp is still current.
+    #[cfg(unix)]
+    fn link_the_entry_to_a_forgery(directory: &Path, project: &Path) -> std::path::PathBuf {
+        let body = record(Some("terminal"), vec![said("rotate the signing keys")]);
+        std::fs::write(directory.join("a1b2.json"), &body).expect("write");
+        Corpus::read(project, |_| true);
+        let entry = entry_of(directory, "a1b2");
+        let held = std::fs::read_to_string(&entry).expect("an entry");
+        let forged = directory.join("forged.txt");
+        std::fs::write(&forged, held.replace("signing keys", "forged words")).expect("write");
+        std::fs::remove_file(&entry).expect("remove");
+        std::os::unix::fs::symlink(&forged, &entry).expect("link");
+        forged
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_that_is_a_link_is_not_read_through() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (project, directory) = directory_of("bravebot-search-entry-link");
+        link_the_entry_to_a_forgery(&directory, &project);
+
+        let corpus = Corpus::read(&project, |_| true);
+
+        assert!(found_in(&corpus, "a1b2", "signing keys"));
+        assert!(!found_in(&corpus, "a1b2", "forged words"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_where_an_entry_goes_is_replaced_and_not_written_through() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (project, directory) = directory_of("bravebot-search-entry-link-write");
+        let forged = link_the_entry_to_a_forgery(&directory, &project);
+        let before = std::fs::read(&forged).expect("read");
+
+        Corpus::read(&project, |_| true);
+
+        assert_eq!(std::fs::read(&forged).expect("read"), before);
+        let entry = entry_of(&directory, "a1b2");
+        assert!(
+            std::fs::symlink_metadata(&entry)
+                .expect("an entry")
+                .is_file()
+        );
+        assert!(
+            std::fs::read_to_string(&entry)
+                .expect("read")
+                .contains("signing keys")
+        );
+    }
+
+    #[test]
+    fn a_search_where_nothing_may_be_written_writes_and_removes_nothing() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (project, directory) = directory_of("bravebot-search-incognito");
+        let body = record(Some("terminal"), vec![said("rotate the signing keys")]);
+        std::fs::write(directory.join("a1b2.json"), &body).expect("write");
+        // An entry whose record is gone, which a search would remove if it could write.
+        std::fs::write(entry_of(&directory, "c3d4"), "{}").expect("write");
+        bravebot_core::incognito::engage();
+
+        let corpus = Corpus::read(&project, |_| true);
+
+        assert!(found_in(&corpus, "a1b2", "signing keys"));
+        assert!(!entry_of(&directory, "a1b2").exists());
+        assert!(entry_of(&directory, "c3d4").exists());
+    }
+
     #[test]
     fn a_query_with_no_words_finds_no_line() {
         let query = Query::parse("since:1d").expect("a query");
