@@ -272,7 +272,7 @@ fn run(
         .and_then(|record| record.trust_map(workspace.root()))
         .or_else(|| {
             opening_trust(&mut asking, mode, workspace.root(), |root| {
-                bravebot_agent::trusted::record_for(home.as_deref(), profile.as_deref(), root)
+                bravebot_agent::trusted::honoured(home.as_deref(), profile.as_deref(), root)
             })
         })
     else {
@@ -910,26 +910,31 @@ fn opening_trust<R: BufRead, W: Write>(
     asking: &mut Prompting<R, W>,
     mode: PermissionMode,
     root: &std::path::Path,
-    remembered: impl FnOnce(
-        &std::path::Path,
-    ) -> Option<(
-        bravebot_agent::trusted::Store,
-        bravebot_agent::trusted::Identity,
-    )>,
+    remembered: impl FnOnce(&std::path::Path) -> Option<bravebot_agent::trusted::Honoured>,
 ) -> Option<TrustStore> {
     if let Some(answered) = bravebot_tui::trust_prompt::answered_by(mode, root) {
         return Some(answered);
     }
 
-    if let Some((store, kept)) = remembered(root)
-        .and_then(|(store, identity)| store.kept(&identity).map(|kept| (store, kept)))
-    {
-        asking.say(&t!(
-            cli_plain_trusting_kept,
-            directory = root.display().to_string(),
-            when = bravebot_session::sessions::how_long_ago(kept.at),
-            path = store.path().display().to_string()
-        ));
+    if let Some(bravebot_agent::trusted::Honoured { store, kept }) = remembered(root) {
+        let when = bravebot_session::sessions::how_long_ago(kept.at);
+        let path = store.path().display().to_string();
+        asking.say(&if kept.root == root {
+            t!(
+                cli_plain_trusting_kept,
+                directory = root.display().to_string(),
+                when = when,
+                path = path
+            )
+        } else {
+            t!(
+                cli_plain_trusting_kept_root,
+                directory = root.display().to_string(),
+                root = kept.root.display().to_string(),
+                when = when,
+                path = path
+            )
+        });
         return Some(bravebot_tui::trust_prompt::trusting_the_workspace(root));
     }
 
@@ -2038,7 +2043,7 @@ mod tests {
             Vec::new(),
         );
         let trust = opening_trust(&mut asking, PermissionMode::Ask, root, |root| {
-            bravebot_agent::trusted::record_for(Some(home), None, root)
+            bravebot_agent::trusted::honoured(Some(home), None, root)
         });
         let said = String::from_utf8(asking.output).expect("what was written is text");
         (trust, said)
@@ -2084,6 +2089,36 @@ mod tests {
                 && said.contains(&store.path().display().to_string()),
             "the session did not say which directory the kept answer trusts and where it is kept: \
              {said}"
+        );
+    }
+
+    /// An answer kept about the root of a git worktree settles a session in lines started below it,
+    /// and the line it opens with names that root, as it names the file to take the answer back from.
+    #[test]
+    fn a_remembered_worktree_root_settles_a_session_in_lines_below_it() {
+        let scratch = Remembering::new("plain-remembered-root");
+        let (home, root) = (&scratch.home, &scratch.root);
+        let Some(identity) = bravebot_agent::trusted::Identity::of(root) else {
+            return;
+        };
+        std::fs::create_dir_all(root.join(".git")).expect("a repository");
+        let package = root.join("packages/api");
+        std::fs::create_dir_all(&package).expect("a package");
+        let store = bravebot_agent::trusted::Store::new(home, root);
+        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+        let (trust, said) = opening_with_a_record("", home, &package);
+
+        let trust = trust.expect("the question was put below a remembered root");
+        assert!(trust.is_trusted("src/main.rs"));
+        assert!(
+            !said.contains(t!(trust_directory_title)),
+            "the question was put: {said}"
+        );
+        let named = root.canonicalize().expect("resolved").display().to_string();
+        assert!(
+            said.contains(&named) && said.contains(&store.path().display().to_string()),
+            "the line did not name the root that answered and the file: {said}"
         );
     }
 

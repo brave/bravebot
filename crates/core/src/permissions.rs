@@ -576,6 +576,59 @@ impl Permissions {
         (permissions, rejected)
     }
 
+    /// The paths a definition's `writes:` line lets a delegate edit, read as `Edit` patterns on the
+    /// terms of this host (DELEGATE-28).
+    ///
+    /// A pattern is read as an allow rule would be and nothing more: it is never consulted for a
+    /// grant, only asked whether a path is inside it, by [`Permissions::permits_edit`]. A pattern
+    /// that needs the home directory or the settings directory to mean anything is rejected,
+    /// since a definition is not a settings file and has neither to resolve it against. The host's
+    /// separators and case folding are this value's own, so a limit is spelled as the rules it is
+    /// held beside.
+    pub fn edit_limit(&self, patterns: &[String]) -> (Self, Vec<Rejected>) {
+        let anchors = Anchors {
+            backslash_separates: self.backslash_separates,
+            folds_case: self.folds_case,
+            ..Anchors::none()
+        };
+        let mut rejected = Vec::new();
+        let allow = patterns
+            .iter()
+            .filter_map(
+                |pattern| match Rule::parse(&format!("Edit({pattern})"), &anchors) {
+                    Ok(rule) => Some(rule),
+                    Err(problem) => {
+                        rejected.push(Rejected {
+                            text: pattern.clone(),
+                            ..problem
+                        });
+                        None
+                    }
+                },
+            )
+            .collect();
+        let limit = Self {
+            allow,
+            backslash_separates: anchors.backslash_separates,
+            folds_case: anchors.folds_case,
+            ..Self::default()
+        };
+        (limit, rejected)
+    }
+
+    /// Whether `path` is inside a limit [`Permissions::edit_limit`] read.
+    ///
+    /// A limit with no pattern left contains nothing. A path holding a `..` segment is outside
+    /// every limit, since `docs/../src/a.rs` matches `docs/**` as written and names a file that is
+    /// not under it.
+    pub fn permits_edit(&self, path: &str) -> bool {
+        let keyed = key_of(path, self.backslash_separates, self.folds_case);
+        if segments_of(&keyed).contains(&"..") {
+            return false;
+        }
+        self.for_path(Subject::Edit, path) == Decision::Ruled(Ruling::Allow)
+    }
+
     /// Whether any rule was written at all.
     pub fn is_empty(&self) -> bool {
         self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
@@ -2388,5 +2441,70 @@ mod tests {
             Decision::Ruled(Ruling::Deny),
             "a bare deny stopped covering a host that reduces to nothing"
         );
+    }
+
+    fn limit_of(patterns: &[&str]) -> (Permissions, Vec<Rejected>) {
+        let patterns: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();
+        Permissions::new().edit_limit(&patterns)
+    }
+
+    /// DELEGATE-28. A limit contains what its patterns cover and nothing else, and a path that
+    /// climbs out of a pattern by `..` is not inside it though it matches as written.
+    #[test]
+    fn an_edit_limit_contains_its_patterns_and_no_climbing_out() {
+        let (limit, rejected) = limit_of(&["docs/**", "notes"]);
+        assert!(rejected.is_empty());
+        assert!(limit.permits_edit("docs/a/b.md"));
+        assert!(limit.permits_edit("notes"));
+        for outside in ["src/main.rs", "docs-old/a.md", "docs/../src/main.rs"] {
+            assert!(
+                !limit.permits_edit(outside),
+                "{outside} is inside the limit"
+            );
+        }
+        // A name with no slash floats to any directory, as in a rule (PERM-4).
+        assert!(limit.permits_edit("a/notes"));
+    }
+
+    /// DELEGATE-28. A limit with nothing in it contains nothing, not everything: an empty
+    /// allow list that read as "no limit" would hand the file to whoever left the line empty.
+    #[test]
+    fn an_empty_edit_limit_contains_no_path() {
+        let (limit, rejected) = limit_of(&[]);
+        assert!(rejected.is_empty());
+        assert!(!limit.permits_edit("docs/a.md"));
+        assert!(!limit.permits_edit("a.md"));
+    }
+
+    /// DELEGATE-28. A pattern that needs the home or settings directory is reported and covers
+    /// nothing; the ones beside it still do. A definition has no directory to resolve it against.
+    #[test]
+    fn an_edit_limit_reports_the_patterns_it_cannot_read() {
+        let (limit, rejected) = limit_of(&["~/notes/**", "/rooted/**", "docs/**"]);
+        let said: Vec<&str> = rejected.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(said, ["~/notes/**", "/rooted/**"]);
+        assert!(limit.permits_edit("docs/a.md"));
+        assert!(!limit.permits_edit("notes/a.md"));
+        assert!(!limit.permits_edit("rooted/a.md"));
+    }
+
+    /// DELEGATE-28. The limit is spelled on the host's terms: where case folds, `Docs/**` covers
+    /// `docs/a.md`, and where it does not, it does not.
+    #[test]
+    fn an_edit_limit_follows_the_hosts_case_folding() {
+        for folds_case in [true, false] {
+            let host = read_with(
+                &Anchors {
+                    folds_case,
+                    ..anchors()
+                },
+                &[],
+                &[],
+                &[],
+            );
+            let (limit, _) = host.edit_limit(&["Docs/**".to_string()]);
+            assert_eq!(limit.permits_edit("docs/a.md"), folds_case);
+            assert!(limit.permits_edit("Docs/a.md"));
+        }
     }
 }

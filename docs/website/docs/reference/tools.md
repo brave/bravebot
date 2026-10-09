@@ -14,7 +14,7 @@ that is merely carried.
 |---|---|---|---|
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
 | [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
-| [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context` | none | no |
+| [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive`, `context`, `output` | none | no |
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
@@ -159,6 +159,7 @@ Finds lines matching a **regular expression** in workspace files.
 | `offset` | which match to resume from, to read past the match cap ([below](#a-capped-search-can-be-asked-past-its-cap)) |
 | `case_sensitive` | defaults to true. `(?i)` in the pattern asks for the same thing |
 | `context` | lines to show before and after each match, as `grep -C` does: none unless given, at most 10 |
+| `output` | `lines` (the default), `files` for only the paths of the files with a match, or `count` for the matching lines per file and in all. The last two ignore `offset` and `context` and are not held to the match cap ([below](#files-and-counts)) |
 
 Supported: literals, `.`, `*`, `+`, `?`, `|`, `(...)`, `(?:...)`, `[...]` with ranges and negation,
 `\d`, `\w`, `\s` and their negations, `^`, `$`, `\b`, `\B`, and a backslash before a metacharacter to
@@ -214,6 +215,13 @@ With `context`, each match comes with the lines either side of it, written `path
 match is `path:line: text`, and a `--` line between groups that are not adjacent. Those lines are not
 matches: they count toward neither the match cap nor the offset. A separate cap bounds how many are
 returned, and a search that reached it says it is incomplete.
+
+### Files and counts
+
+`output: files` lists each file holding a match once and no line; `output: count` gives how many
+lines match in each file and in all. Neither is held to the match cap, so a count totals every
+match the walk read. A walk that stopped at the file cap or the time cap says the result is a lower
+bound, and so does a list cut at its own cap of 200 files.
 
 ### The caps are configurable
 

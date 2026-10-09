@@ -86,6 +86,9 @@ cli-plain-takes-nothing-else =
 cli-plain-trusting-kept =
     trusting { $directory } (you said to remember it { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming it from { $path })
+cli-plain-trusting-kept-root =
+    trusting { $directory }, inside { $root } (you said to remember { $root } { $when }; to be asked again, run
+    /forget-trust in bravebot without --plain, or delete the lines naming { $root } from { $path })
 
 # Said when a background session is started again and its earlier conversation was read back from
 # its record (BG-1).
@@ -138,6 +141,10 @@ cli-option-json-stream = Print one event per line on stdout as the run goes, the
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
 cli-option-safe =
     Load none of your own hooks, skills, definitions, MCP servers or AGENTS.md. Sign-in, model and permissions still apply
+cli-option-locked =
+    Like --safe, and also read no project or local settings file, and refuse --dangerously-skip-permissions
+cli-locked-refuses-bypass =
+    --dangerously-skip-permissions is refused with --locked: a locked run never opens the bypass mode
 cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
@@ -1272,9 +1279,9 @@ trust-directory-no = ask me about every write
 # were not shown.
 trust-directory-remember = trust and remember
 trust-directory-remember-explained =
-    r: trust it, and skip this question in later sessions started in exactly this directory
+    r: trust it, and skip this question in later sessions started in this directory, or below it if it is a git root
 trust-directory-remember-exact =
-    A session started inside or above this directory is still asked, and so is one started in a directory deleted and made again here.
+    A session started above it is still asked, and so is one in a nested repository or in a directory deleted and made again here.
 trust-directory-remember-where = /forget-trust takes it back, and it is written down here:
 # Above the keys while the lines saying what r does and where it writes have not been on the screen
 # together, which is when r is not taken. What r does comes first, so a narrow terminal that cuts the
@@ -1824,6 +1831,7 @@ status-directory-untrusted = not trusted, so every write is shown to you
 status-directory-kept = remembered { $when }
 status-directory-kept-note = later sessions started here trust it without asking
 status-directory-kept-where = /forget-trust to be asked again; the answer is kept in { $path }
+status-directory-kept-root-note = later sessions started here trust it without asking, because { $root } was remembered
 status-also-open = Also open
 status-added-directory = added with /add-dir
 status-scratch = Scratch
@@ -1991,6 +1999,20 @@ session-limit-set-below-spent = the session limit is { $limit } tokens, and { $s
 session-limit-cleared = the session has no spend limit
 session-limit-unknown = { $figure } is not a limit. Use a whole number of tokens, with k or m after it for thousands or millions, or off to remove the limit
 request-none-yet = No request has been sent to the model in this session yet.
+# What /context reports. The section names are fixed words, and none is read from a file or a result.
+context-not-measured = The context has not been measured yet, so there is no breakdown.
+context-compacted = The conversation was compacted after the last request was measured, so that breakdown no longer describes it. The next request measures it again.
+context-no-request = The context has been measured, but this session has sent no request of its own to break down yet.
+context-total = Last request
+context-approximate = shares of the bytes sent, scaled to the measured total
+context-section-system = System prompt
+context-section-instructions = Instruction files
+context-section-skills = Skills
+context-section-tools = Tool definitions
+context-section-typed = What you typed
+context-section-planner = What the planner wrote
+context-section-results = Tool results
+context-section-other = Other messages
 # The first row of the view /request opens. The words below it are the request as it went.
 request-title = The last request sent to { $model }, read from the request itself
 request-tools = Tools offered: { $names }
@@ -2279,6 +2301,7 @@ jobs-command-takes =
 
 command-status = Report this session, what it may touch, and what it has spent
 command-cost = Show what each turn of this session has spent
+command-context = Show what fills the context window, by category
 command-limit = Show the session's spend limit, set it in tokens, or remove it
 command-request = Show the last request sent to the model, and where each part of it came from
 command-model = Choose which model to think with
@@ -2504,6 +2527,8 @@ session-trusting-unasked =
 # in this session and the line is the only thing on the screen that says where it came from.
 session-trusting-kept =
     trusting { $directory } (you said to remember it { $when }; /forget-trust to be asked again)
+session-trusting-kept-root =
+    trusting { $directory }, inside { $root } (you said to remember { $root } { $when }; /forget-trust to be asked again)
 session-trust-kept =
     trusting { $directory }, and later sessions started here will not ask; /forget-trust takes it back
 # The answer was given, but writing it down failed, so the next session will ask after all.
@@ -2511,6 +2536,8 @@ session-trust-not-kept =
     trusting { $directory } for this session only: the answer could not be written to { $path }, so the next session here will ask
 session-trust-forgotten =
     the next session started in { $directory } will ask whether to trust it; this one keeps its answer, and /clear starts one that asks
+session-trust-forgotten-root =
+    the next session started in { $directory } or anywhere else in { $root } will ask whether to trust it; this one keeps its answer, and /clear starts one that asks
 session-trust-nothing-to-forget = no answer about { $directory } is kept, so there is nothing to forget
 session-trust-not-forgotten = the answer kept in { $path } could not be removed: { $error }
 # Incognito writes nothing, and removing a line is a write.
@@ -3046,6 +3073,16 @@ delegate-isolation-not-read = { $definition } is loaded without a checkout: its 
 # names for them, joined with a comma, and are not translated: they are what a file has to write to
 # be understood.
 delegate-effort-not-a-level = { $definition } asks for effort { $effort }, which is none of { $levels }, so its delegate keeps the effort of the turn that spawns it
+# A definition's writes line holds patterns that cannot be read: one needing the home or the
+# settings directory, which a definition has neither of, or one that is not a path pattern. They
+# cover no file, so the delegate may write only what the others cover, and nothing at all where none
+# was readable. The definition is its file's path and the patterns are that file's own words, both
+# from a vouched-for file. "writes" is the key and stays as it is.
+delegate-writes-not-read =
+    { $count ->
+        [one] { $definition } has a writes pattern that cannot be read here, so it covers no file: { $patterns }. Its delegate may write only what the other patterns cover, and no file where there are none
+       *[other] { $definition } has writes patterns that cannot be read here, so they cover no file: { $patterns }. Its delegate may write only what the other patterns cover, and no file where there are none
+    }
 # A definition asks for a checkout and is loaded as a reader, either as its own kind line says or
 # because a definition of the same name narrowed it. A reader is never given a checkout. The
 # definition is its file's path.

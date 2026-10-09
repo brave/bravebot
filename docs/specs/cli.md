@@ -1379,3 +1379,27 @@ or narrow them.
 `verified-by: bravebot_cli::running::a_tools_list_offers_no_tool_of_an_approved_server`
 `verified-by: bravebot_cli::running::a_tool_limit_that_limits_nothing_is_refused_by_name`
 `verified-by: bravebot_cli::main::the_tool_limit_is_taken_out_wherever_it_appears`
+
+<a id="CLI-27"></a>
+### CLI-27: `--locked` starts a run that answers to the person's own settings and nothing in the checkout
+
+`--locked` does everything `--safe` does (CLI-22). It also reads settings from only the person's own
+file, the managed file and the file `--settings` names: the project and local layers of the working
+directory are not read, so nothing a clone brought changes the run, a refusal it wrote included. It
+refuses `--dangerously-skip-permissions` before any request is sent, with the status for an argument
+(CLI-6), and makes the bypass mode unreachable in an interface session as `permissions.bypassUnreachable`
+does (see [permission-modes.md](permission-modes.md)). A question nobody can answer is declined as CLI-1 says.
+
+It is taken out of the line wherever it stands, as `--safe` is, and is refused with `--bg`, which
+starts the session in another process that would not carry it.
+
+**Why.** A harness running the agent on a shared machine needs one switch that says the checkout is
+not the authority on how the run behaves. The flag removes what a run may read and refuses the one
+flag that stops the asking, so it adds nothing to what the planner may do. It drops a checkout's own
+`deny` and `ask` rules too: the answer for a checkout that is not trusted is the person's file and
+the managed floor, not a partial read of it.
+
+`verified-by: bravebot_cli::running::a_locked_run_reads_no_settings_layer_from_the_checkout`
+`verified-by: bravebot_cli::running::a_locked_run_refuses_the_bypass_flag_and_a_background_start`
+`verified-by: bravebot_cli::running::a_locked_run_loads_none_of_the_customizations_a_safe_one_leaves_out`
+`verified-by: bravebot_config::locked::a_locked_process_makes_the_bypass_mode_unreachable_whatever_the_layers_said`

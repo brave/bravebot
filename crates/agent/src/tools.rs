@@ -549,6 +549,17 @@ fn table(
                                         without a second call. Lines of context are not \
                                         matches and do not count toward the match cap or the \
                                         offset."
+                    },
+                    "output": {
+                        "type": "string",
+                        "enum": ["lines", "files", "count"],
+                        "description": "What to return. 'lines' (the default) is the matching \
+                                        lines. 'files' is only the paths of the files with a \
+                                        match, each once. 'count' is how many lines match in \
+                                        each file and in all. Use files or count to survey \
+                                        where something occurs without paying for the lines; \
+                                        they ignore offset and context and are not held to the \
+                                        match cap."
                     }
                 },
                 "required": ["pattern"]
@@ -1590,6 +1601,9 @@ pub struct Output {
     /// Recorded by the turn loop only once the planner was shown the result (READ-8): a read that
     /// was quarantined, refused or answered with a notice shows no window.
     pub window: Option<crate::conversation::ReadWindow>,
+    /// Whether this is the planner's task list, accepted, so that a compaction can carry it
+    /// across the cut (COMPACT-16). False for a `todo_write` that was refused.
+    pub task_list: bool,
     /// Whether the text is workspace content rather than the driver's own words about the call.
     pub content: bool,
     /// Whether this call left a file on disk different from how it found it.
@@ -2261,6 +2275,9 @@ struct Produced {
     glimpsed: Option<Labelled<String>>,
     /// The window of a file `text` shows, for the record of what the planner has been shown.
     window: Option<crate::conversation::ReadWindow>,
+    /// Whether `text` is the planner's task list, accepted. A fact about the call rather than
+    /// anything inside `text`, so the turn can record where the list sits without reading it.
+    task_list: bool,
     /// Whether `text` is workspace content rather than the driver's own words about the call.
     ///
     /// What the kernel does with a result is worth reporting only where the result is content:
@@ -2337,6 +2354,7 @@ impl Produced {
             said: None,
             glimpsed: None,
             window: None,
+            task_list: false,
             content: false,
             usage: Usage::default(),
             inference_interval: None,
@@ -2379,6 +2397,7 @@ impl Produced {
             said: None,
             glimpsed: None,
             window: None,
+            task_list: false,
             wakeup: None,
             watch: None,
             content: false,
@@ -2982,6 +3001,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 said: produced.said,
                 glimpsed: produced.glimpsed,
                 window: produced.window,
+                task_list: produced.task_list,
                 content: produced.content,
                 changed_a_file: produced.changed_a_file,
                 ran_a_program: produced.ran_a_program,
@@ -3163,6 +3183,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         said: produced.said,
         glimpsed: produced.glimpsed,
         window: produced.window,
+        task_list: produced.task_list,
         content: produced.content,
         changed_a_file: produced.changed_a_file,
         ran_a_program: produced.ran_a_program,
@@ -4103,8 +4124,7 @@ fn path_argument<S: Sink>(
             // reference is the same file as one the planner typed, so the rule that would have
             // refused the second refuses the first. The path itself stays out of the refusal:
             // what goes back to the planner names the reference, as it does everywhere else.
-            refuse_denied_path(policy, workspace, purpose, &resolved)
-                .map_err(|_| denied_by_rule(&slot.to_string()))?;
+            refuse_denied_path_as(policy, workspace, purpose, &resolved, &slot.to_string())?;
             Ok(PathArgument {
                 path,
                 destination: Destination::Reference,
@@ -4131,22 +4151,57 @@ fn refuse_denied_path<S: Sink>(
     purpose: Purpose,
     path: &str,
 ) -> Result<(), String> {
-    let ask = |policy: &mut Policy<'_, S>, name: &str| match purpose {
-        Purpose::Read => policy.before_read(name),
-        Purpose::Effect => policy.before_write(name),
+    refuse_denied_path_as(policy, workspace, purpose, path, path)
+}
+
+/// [`refuse_denied_path`], naming `shown` in the refusal where the path itself is not to be said.
+fn refuse_denied_path_as<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    purpose: Purpose,
+    path: &str,
+    shown: &str,
+) -> Result<(), String> {
+    let ask = |policy: &mut Policy<'_, S>, name: &str| {
+        match purpose {
+            Purpose::Read => policy.before_read(name),
+            Purpose::Effect => policy.refuse_denied_write(name),
+        }
+        .map_err(|_| denied_by_rule(shown))
     };
-    ask(policy, path).map_err(|_| denied_by_rule(path))?;
+    ask(policy, path)?;
     // Spelled out as well, because a rule anchored at the home directory never matches `~/x`, and
     // the landing below exists only once the home is opened, so until then the refusal would offer
     // opening it for a file a rule refuses once it is.
     let expanded = workspace.expanded(path);
     if expanded != path {
-        ask(policy, &expanded).map_err(|_| denied_by_rule(path))?;
+        ask(policy, &expanded)?;
     }
-    match workspace.landing(path) {
-        Some(landed) => ask(policy, &landed).map_err(|_| denied_by_rule(path)),
-        None => Ok(()),
+    let landing = workspace.landing(path);
+    if let Some(landed) = &landing {
+        ask(policy, landed)?;
     }
+    // A definition's limit is written about workspace-relative names, so it is judged on the name
+    // given in that spelling (`/work/docs/a.md` is `docs/a.md`) and on the file the name lands on
+    // (`docs/link` is wherever the link goes). Both have to be inside: a link outside the limit
+    // that points inside it is outside.
+    if purpose == Purpose::Effect {
+        let given = workspace.spelled_in_workspace(path);
+        let mut judged: Vec<&str> = given
+            .as_deref()
+            .into_iter()
+            .chain(landing.as_deref())
+            .collect();
+        if judged.is_empty() {
+            judged.push(path);
+        }
+        for name in judged {
+            policy
+                .refuse_write_outside_limits(name)
+                .map_err(|_| outside_write_limit(shown))?;
+        }
+    }
+    Ok(())
 }
 
 /// Word a workspace failure about `named` for the planner, recording it first when it is a path
@@ -4203,6 +4258,17 @@ fn denied_by_rule(shown: &str) -> String {
         "refused: a deny rule in the user's settings covers {shown}, so nothing here can \
          reach it. Do not retry, and do not look for another way to the same file: work \
          without it, or say in your reply what you needed it for."
+    )
+}
+
+/// What the planner is told when the definition it runs under limits the files it may write
+/// (DELEGATE-28). Says the limit is the reason, as [`denied_by_rule`] does, since a planner told
+/// only "refused" tries the same call again.
+fn outside_write_limit(shown: &str) -> String {
+    format!(
+        "refused: the definition you run under limits the files you may write, and {shown} is \
+         outside them. Do not retry, and do not look for another way to write it: write only \
+         what is inside the limit, or say in your reply what is left to be written."
     )
 }
 
@@ -5605,7 +5671,9 @@ fn todo_write<S: Sink, R: Reporter>(
         format!("{} of {} done", list.done(), list.len())
     });
 
-    Produced::new(summary, "", note)
+    let mut produced = Produced::new(summary, "", note);
+    produced.task_list = true;
+    produced
 }
 
 /// Say when this turn should be asked again.
@@ -9145,6 +9213,33 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
 /// not match, and a `--` line between groups that are not adjacent in the file, so a gap is not
 /// read as the lines having been next to each other.
 fn match_lines(found: &crate::workspace::Matches) -> String {
+    use crate::workspace::SearchOutput;
+    match found.output {
+        SearchOutput::Lines => {}
+        SearchOutput::Files => {
+            return found
+                .tallies
+                .iter()
+                .map(|t| t.path.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+        SearchOutput::Count => {
+            if found.tallies.is_empty() {
+                return String::new();
+            }
+            let mut rows: Vec<String> = found
+                .tallies
+                .iter()
+                .map(|t| format!("{}: {}", t.path, t.lines))
+                .collect();
+            rows.push(format!(
+                "total: {}",
+                tally(found.matched, "matching line", "matching lines")
+            ));
+            return rows.join("\n");
+        }
+    }
     if found.context.is_empty() {
         return found
             .matches
@@ -9261,7 +9356,28 @@ fn search<S: Sink>(
         .unwrap_or(0)
         .min(usize::MAX as u64) as usize;
 
-    match workspace.grep_around(
+    // Routing as well: a closed set of names for how the result is shaped, matched the way
+    // read_git's query is. A name off the list is refused rather than guessed at.
+    let output = match argument(arguments, "output") {
+        None => crate::workspace::SearchOutput::Lines,
+        Some(proposed) => match policy.promote_confined_read("search", "output", &proposed) {
+            Ok(promoted) => match promoted
+                .into_trusted()
+                .ok()
+                .and_then(|name| crate::workspace::SearchOutput::named(name.trim()))
+            {
+                Some(output) => output,
+                None => {
+                    return Produced::problem(
+                        "error: 'output' must be one of lines, files or count",
+                    );
+                }
+            },
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        },
+    };
+
+    match workspace.grep_shaped(
         policy,
         &patterns,
         &directory,
@@ -9269,12 +9385,17 @@ fn search<S: Sink>(
         case_sensitive,
         offset,
         context,
+        output,
     ) {
         Ok(found) => {
             let note = note_for(policy, "search", &found, |found| {
                 format!(
                     "{} in {}",
-                    tally(found.matches.len(), "match", "matches"),
+                    if found.output.summarises() {
+                        tally(found.matched, "matching line", "matching lines")
+                    } else {
+                        tally(found.matches.len(), "match", "matches")
+                    },
                     tally(found.searched, "file", "files")
                 )
             });
@@ -9296,7 +9417,8 @@ fn search<S: Sink>(
                         found.truncated
                             || found.unvisited
                             || found.timed_out
-                            || found.context_truncated,
+                            || found.context_truncated
+                            || found.tallies_truncated,
                         found.paging(),
                     )
                 });
@@ -9317,7 +9439,7 @@ fn search<S: Sink>(
             let had_include = include.is_some();
 
             let rendered = policy.render_in_place("search", &found, |found| {
-                let mut body = if found.matches.is_empty() {
+                let mut body = if found.is_empty() {
                     // The three ways a search comes back empty, which used to print the same
                     // sentence. Files were read and the needle was not in them, which is an
                     // answer. Or the include glob selected nothing, so nothing was read and
@@ -9374,6 +9496,27 @@ fn search<S: Sink>(
                         "\n\n(this search ran out of time after {} files and did not read the \
                          rest; narrow it with a directory or an include glob)",
                         found.searched
+                    ));
+                }
+                if found.output.summarises() && (found.unvisited || found.timed_out) {
+                    // Nothing in a list of paths or counts looks short, which is why it is said:
+                    // what the walk never read cannot be in it.
+                    body.push_str(
+                        "\n\n(the files and counts above are a lower bound: the search did not \
+                         read the whole tree)",
+                    );
+                }
+                if found.tallies_truncated {
+                    body.push_str(&format!(
+                        "\n\n(this lists the first {} files with a match and the result is \
+                         incomplete; {}narrow the pattern or search a subdirectory to see the \
+                         rest)",
+                        found.tallies.len(),
+                        if found.output == crate::workspace::SearchOutput::Count {
+                            "the total above covers every match that was read; "
+                        } else {
+                            ""
+                        }
                     ));
                 }
                 if found.context_truncated {
@@ -12404,6 +12547,52 @@ mod tests {
             );
         }
 
+        /// The limit is four and four is inside it: a bound that refused the fourth question
+        /// would pass the test above and leave a series of the size the clause allows unaskable.
+        #[test]
+        fn exactly_four_questions_are_asked_whole() {
+            let mut confirmer = Watching::default();
+            let four: Vec<Value> = (0..4)
+                .map(|i| json!({"header": format!("T{i}"), "question": format!("Q{i}?")}))
+                .collect();
+            call(&mut confirmer, json!({"questions": four}));
+            let shown = confirmer.seen.first().expect("the user was asked");
+            let questions: Vec<&str> = shown.prompts.iter().map(|p| p.question.as_str()).collect();
+            assert_eq!(questions, ["Q0?", "Q1?", "Q2?", "Q3?"]);
+        }
+
+        /// One call is one decision. A gate run per question would decide, question by question,
+        /// whether that one is put to the person, and the gate's record would show it as several
+        /// decisions where the call made one.
+        #[test]
+        fn the_gate_runs_once_for_a_call_however_many_questions_it_holds() {
+            let gated = |arguments: Value| {
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut confirmer = Watching::default();
+                ask_user(&mut policy, &mut confirmer, &arguments);
+                sink.events()
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            bravebot_core::event::Event::ActionField { tool, field, .. }
+                                if tool == "ask_user" && field == "questions"
+                        )
+                    })
+                    .count()
+            };
+
+            assert_eq!(gated(one_question()), 1);
+            assert_eq!(gated(three_questions()), 1);
+        }
+
         #[test]
         fn an_empty_list_of_questions_is_an_error() {
             let mut confirmer = Watching::default();
@@ -13400,6 +13589,23 @@ mod tests {
             armed: &mut usize,
             arguments: Value,
         ) -> (Produced, String) {
+            armed_after(
+                bravebot_core::label::Integrity::Trusted,
+                workspace,
+                arming,
+                armed,
+                arguments,
+            )
+        }
+
+        /// The same, from a context that has already met `context`.
+        fn armed_after(
+            context: bravebot_core::label::Integrity,
+            workspace: &Workspace,
+            arming: crate::watch::Arming,
+            armed: &mut usize,
+            arguments: Value,
+        ) -> (Produced, String) {
             let mut sink = RecordingSink::new();
             let mut routing = Routing::new();
             routing.insert_trusted("task", "tell me when a file changes");
@@ -13409,7 +13615,8 @@ mod tests {
                 CapabilitySet::from_iter([Capability::FileRead]),
                 &mut sink,
             )
-            .expect("policy");
+            .expect("policy")
+            .resuming(context);
             let produced = watch_file(
                 &mut policy,
                 workspace,
@@ -13575,7 +13782,11 @@ mod tests {
         #[test]
         fn a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be() {
             let scratch = Scratch::new("escaping");
-            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let inside = scratch.path.join("workspace");
+            std::fs::create_dir_all(&inside).unwrap();
+            // The file exists, so a refusal cannot be a missing file mistaken for the gate.
+            std::fs::write(scratch.path.join("outside.txt"), "hello\n").unwrap();
+            let workspace = Workspace::new(&inside).expect("workspace");
 
             let mut count = 0;
             let (produced, told) = armed(
@@ -13587,6 +13798,30 @@ mod tests {
 
             assert!(told.starts_with("refused:"), "{told}");
             assert_eq!(produced.watch, None);
+            assert_eq!(count, 0, "a watch the gate refused was counted as armed");
+        }
+
+        /// A read of a file is refused once the context has met untrusted content, because what
+        /// the planner proposes is then untrusted too. A watch on a file that exists, inside the
+        /// workspace, is refused for that reason and no other.
+        #[test]
+        fn a_watch_is_refused_once_the_context_has_met_something_untrusted() {
+            let scratch = Scratch::new("armed-untrusted");
+            std::fs::write(scratch.path.join("a.txt"), "hello\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut count = 0;
+            let (produced, told) = armed_after(
+                bravebot_core::label::Integrity::Untrusted,
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path": "a.txt"}),
+            );
+
+            assert!(told.starts_with("refused:"), "{told}");
+            assert_eq!(produced.watch, None);
+            assert_eq!(count, 0, "a watch the gate refused was counted as armed");
         }
 
         /// One field, a path, so the whole of what a person would have to approve is which file

@@ -1744,6 +1744,24 @@ impl Workspace {
         (!Path::new(&landed).components().eq(typed)).then_some(landed)
     }
 
+    /// `named` spelled relative to the workspace root, without asking the file system: `./docs/a.md`
+    /// and `<root>/docs/a.md` are `docs/a.md`, and a link is not followed.
+    ///
+    /// `None` for an absolute name that is not under the root as written, which has no
+    /// workspace-relative spelling; [`Workspace::landing`] is the name it reaches.
+    pub(crate) fn spelled_in_workspace(&self, named: &str) -> Option<String> {
+        let expanded = self.expanded(named);
+        let path = Path::new(&expanded);
+        if path.is_absolute() && !path.starts_with(&self.root) {
+            return None;
+        }
+        let plain: PathBuf = path
+            .components()
+            .filter(|component| !matches!(component, Component::CurDir))
+            .collect();
+        Some(self.relative_display(&plain))
+    }
+
     /// Whether a `deny` rule covers reading `named`, under that name or the one it lands on
     /// (PERM-7), asked without refusing anything.
     ///
@@ -2814,6 +2832,12 @@ pub const MAX_SEARCH_CONTEXT: usize = 10;
 /// Reached, the search keeps the matches and stops adding the lines around them, and says so.
 const MAX_CONTEXT_LINES: usize = 1_000;
 
+/// How many files a `files` or `count` result lists.
+///
+/// The match cap does not bound them, since neither shape returns a match, and a common word can
+/// name a hundred thousand files. A count's total is exact past it; the listing is what stops.
+const MAX_TALLIED_FILES: usize = 200;
+
 /// How long a search may spend opening files, where nothing configured otherwise.
 ///
 /// The match cap already stops a *productive* search early. This is for the other one: a
@@ -3013,6 +3037,48 @@ pub struct Match {
     pub text: String,
 }
 
+/// What shape a search's result takes.
+///
+/// A choice about the call and never about what was read, so it is routing: the walk and the match
+/// loop are the same for all three, and what differs is what is kept from them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchOutput {
+    /// The matching lines, as a search always returned them.
+    #[default]
+    Lines,
+    /// Each file holding a match, once, and no line.
+    Files,
+    /// How many lines match in each file, and in all.
+    Count,
+}
+
+impl SearchOutput {
+    /// The mode a name asks for, or `None` for a name that is not one.
+    pub fn named(name: &str) -> Option<Self> {
+        match name {
+            "lines" => Some(Self::Lines),
+            "files" => Some(Self::Files),
+            "count" => Some(Self::Count),
+            _ => None,
+        }
+    }
+
+    /// Whether this result is a summary of the matches rather than the matches themselves.
+    pub fn summarises(self) -> bool {
+        self != Self::Lines
+    }
+}
+
+/// A file holding matches, and how many lines in it match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileTally {
+    /// Workspace-relative path.
+    pub path: String,
+    /// How many lines of the file match. 1 in a `files` result, which stops reading the file at the
+    /// first.
+    pub lines: usize,
+}
+
 /// A line shown beside a match because it is near one, and not because it matched.
 ///
 /// Kept apart from [`Match`] so that it counts toward neither [`MAX_MATCHES`] nor an offset.
@@ -3063,6 +3129,13 @@ pub struct Matches {
     /// The matches are all there; it is the lines beside the later ones that are missing, which
     /// reads as those matches having nothing near them unless it is said.
     pub context_truncated: bool,
+    /// What this result is: the lines in `matches`, or a summary in `tallies`.
+    pub output: SearchOutput,
+    /// Each file holding a match, in walk order, for a `files` or `count` search. Empty for lines.
+    pub tallies: Vec<FileTally>,
+    /// Whether the cap on listed files cut `tallies` short. `matched` still counts every match the
+    /// walk read, so a `count` total stays whole.
+    pub tallies_truncated: bool,
     /// Whether matches were left out because the match cap was reached.
     pub truncated: bool,
     /// Whether files were left unopened because the walk hit its entry cap.
@@ -3110,6 +3183,11 @@ pub struct Matches {
 }
 
 impl Matches {
+    /// Whether the search returned nothing to show, in whichever shape it was asked for.
+    pub fn is_empty(&self) -> bool {
+        self.matches.is_empty() && self.tallies.is_empty()
+    }
+
     /// Where a further search continues, or that this page fell past the last match.
     ///
     /// `None` for an ordinary complete answer, and for one a cap other than the cap on matches
@@ -3358,7 +3436,43 @@ impl Workspace {
         offset: usize,
         context: usize,
     ) -> Result<Labelled<Matches>, WorkspaceError> {
-        let context = context.min(MAX_SEARCH_CONTEXT);
+        self.grep_shaped(
+            policy,
+            patterns,
+            directory,
+            include,
+            case_sensitive,
+            offset,
+            context,
+            SearchOutput::Lines,
+        )
+    }
+
+    /// [`grep_around`](Self::grep_around) returning the shape `output` asks for.
+    ///
+    /// A `files` or `count` result comes from the same walk and match loop, so it carries the same
+    /// label and the paths and counts are computed from the contents without the driver branching
+    /// on them. The file cap and the time cap apply as they do to lines. The match cap, the offset
+    /// and context do not: no line is returned, so a count totals every match the walk read, and a
+    /// walk that stopped short says so through `unvisited` and `timed_out` as a lower bound.
+    #[allow(clippy::too_many_arguments)]
+    pub fn grep_shaped<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        patterns: &[Labelled<String>],
+        directory: &Labelled<String>,
+        include: Option<&Labelled<String>>,
+        case_sensitive: bool,
+        offset: usize,
+        context: usize,
+        output: SearchOutput,
+    ) -> Result<Labelled<Matches>, WorkspaceError> {
+        let context = if output.summarises() {
+            0
+        } else {
+            context.min(MAX_SEARCH_CONTEXT)
+        };
+        let offset = if output.summarises() { 1 } else { offset };
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
             for pattern in patterns {
@@ -3480,6 +3594,8 @@ impl Workspace {
             // to be distinguishable from happening to have exactly that many matches.
             let mut matches = Vec::new();
             let mut around = Vec::new();
+            let mut tallies: Vec<FileTally> = Vec::new();
+            let mut tallies_truncated = false;
             let mut context_truncated = false;
             let mut searched = 0usize;
             let mut timed_out = false;
@@ -3507,12 +3623,22 @@ impl Workspace {
                 searched += 1;
                 let first_in_file = matches.len();
                 let mut hit_lines = Vec::new();
+                let mut in_file = 0usize;
                 for (index, line) in contents.lines().enumerate() {
                     if matches.len() > MAX_MATCHES {
                         break;
                     }
                     if expressions.iter().any(|pattern| pattern.matches(line)) {
                         matched += 1;
+                        if output.summarises() {
+                            in_file += 1;
+                            // Which files hold a match is the whole answer, so the rest of one is
+                            // not read for a count nobody asked for.
+                            if output == SearchOutput::Files {
+                                break;
+                            }
+                            continue;
+                        }
                         if matched <= skip {
                             continue;
                         }
@@ -3524,6 +3650,16 @@ impl Workspace {
                             text,
                         });
                         hit_lines.push(index);
+                    }
+                }
+                if in_file > 0 {
+                    if tallies.len() >= MAX_TALLIED_FILES {
+                        tallies_truncated = true;
+                    } else {
+                        tallies.push(FileTally {
+                            path: path.clone(),
+                            lines: in_file,
+                        });
                     }
                 }
                 if context > 0 && !hit_lines.is_empty() && !context_truncated {
@@ -3572,6 +3708,9 @@ impl Workspace {
                     matches,
                     context: around,
                     context_truncated,
+                    output,
+                    tallies,
+                    tallies_truncated,
                     truncated,
                     unvisited,
                     timed_out,

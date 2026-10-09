@@ -157,6 +157,9 @@ const STATUS_COMMAND: &str = "/status";
 /// every time somebody checks which directory they are in.
 const COST_COMMAND: &str = "/cost";
 
+/// The line that reports what fills the context window, by category, from the last request.
+const CONTEXT_COMMAND: &str = "/context";
+
 /// The line that opens a read-only view of the last request built for the planner.
 const REQUEST_COMMAND: &str = "/request";
 
@@ -315,7 +318,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 41] {
+pub fn commands() -> [Command; 42] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -327,6 +330,12 @@ pub fn commands() -> [Command; 41] {
             name: COST_COMMAND,
             argument: "",
             description: t!(command_cost),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: CONTEXT_COMMAND,
+            argument: "",
+            description: t!(command_context),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -1033,12 +1042,13 @@ fn status_report(
     // asking what they are carrying should be told what the file says now.
     let record = remembered_record(workspace);
     // Read now for the same reason: another session here may have kept or withdrawn it.
-    let kept = remembering(workspace.root()).and_then(|(store, identity)| {
-        let kept = store.kept(&identity)?;
-        Some((
-            bravebot_session::sessions::how_long_ago(kept.at),
-            store.path().to_path_buf(),
-        ))
+    let kept = honoured(workspace.root()).map(|honoured| {
+        let root = honoured.kept.root.clone();
+        (
+            bravebot_session::sessions::how_long_ago(honoured.kept.at),
+            honoured.store.path().to_path_buf(),
+            Some(root).filter(|root| root != workspace.root()),
+        )
     });
     let checkouts = workspace.session_checkouts();
     // Read now for the same reason: `/reach` in another session here may have added or removed one.
@@ -1088,7 +1098,11 @@ fn status_report(
         reach: &reach,
         kept_trust: kept
             .as_ref()
-            .map(|(when, path)| crate::status::KeptTrust { when, path }),
+            .map(|(when, path, root)| crate::status::KeptTrust {
+                when,
+                path,
+                root: root.as_deref(),
+            }),
     })
 }
 
@@ -1969,6 +1983,10 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if line.trim() == COST_COMMAND {
         session.report_spend();
+        return Action::Redraw;
+    }
+    if line.trim() == CONTEXT_COMMAND {
+        session.report_context();
         return Action::Redraw;
     }
     if let Some(figure) = argument_to(line, LIMIT_COMMAND) {
@@ -6618,6 +6636,16 @@ fn remembering(
     )
 }
 
+/// The answer kept about `root` or the git worktree around it, which settles a session started
+/// there ([`bravebot_agent::trusted::honoured`]).
+fn honoured(root: &std::path::Path) -> Option<bravebot_agent::trusted::Honoured> {
+    bravebot_agent::trusted::honoured(
+        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
+        root,
+    )
+}
+
 /// Seconds since the epoch, which is how a kept answer says when it was given.
 fn seconds_now() -> u64 {
     std::time::SystemTime::now()
@@ -6644,12 +6672,31 @@ fn forget_trust(home: Option<&std::path::Path>, root: &std::path::Path) -> Strin
             path = store.path().display()
         );
     }
-    match store.forget() {
-        Ok(true) => t!(session_trust_forgotten, directory = directory),
-        Ok(false) => t!(session_trust_nothing_to_forget, directory = directory),
+    // The answer about the worktree root above, read before anything is withdrawn: it settles this
+    // directory too, so taking back only the directory's own would leave the next session unasked.
+    let above =
+        trusted::honoured_by_root(Some(home), bravebot_agent::home::profile().as_deref(), root);
+    let own = store.forget();
+    let Some(above) = above else {
+        return match own {
+            Ok(true) => t!(session_trust_forgotten, directory = directory),
+            Ok(false) => t!(session_trust_nothing_to_forget, directory = directory),
+            Err(error) => t!(
+                session_trust_not_forgotten,
+                path = store.path().display(),
+                error = error
+            ),
+        };
+    };
+    match own.and_then(|_| above.store.forget()) {
+        Ok(_) => t!(
+            session_trust_forgotten_root,
+            directory = directory,
+            root = above.kept.root.display()
+        ),
         Err(error) => t!(
             session_trust_not_forgotten,
-            path = store.path().display(),
+            path = above.store.path().display(),
             error = error
         ),
     }
@@ -6682,21 +6729,23 @@ fn opening_trust(
 ) -> Option<(TrustStore, Whence)> {
     let record = remembering(root);
     let where_it_is = root.display();
-    let kept = || {
-        record
-            .as_ref()
-            .and_then(|(store, identity)| store.kept(identity))
-    };
+    let kept = || honoured(root).map(|honoured| honoured.kept);
     let (trust, whence) = match opening_for(beginning, session.permission_mode(), root, kept) {
         Opening::Settled(trust, whence) => (trust, whence),
         // Asked as a session asked just now would be about what else the tree proposes: the person
         // is here, and what they said to remember was this question and no other.
         Opening::Remembered(trust, kept) => {
-            session.note(t!(
-                session_trusting_kept,
-                directory = where_it_is,
-                when = bravebot_session::sessions::how_long_ago(kept.at)
-            ));
+            let when = bravebot_session::sessions::how_long_ago(kept.at);
+            session.note(if kept.root == root {
+                t!(session_trusting_kept, directory = where_it_is, when = when)
+            } else {
+                t!(
+                    session_trusting_kept_root,
+                    directory = where_it_is,
+                    root = kept.root.display(),
+                    when = when
+                )
+            });
             return Some((trust, Whence::Asked));
         }
         Opening::Ask => {
@@ -15226,6 +15275,7 @@ mod tests {
             model: "m".to_string(),
             spans: Vec::new(),
             tools: Vec::new(),
+            tools_bytes: 0,
         });
         assert_eq!(enter_line(&mut session, "/request"), Action::Redraw);
         assert!(session.viewing_request());
@@ -15252,6 +15302,7 @@ mod tests {
             model: "m".to_string(),
             spans: Vec::new(),
             tools: Vec::new(),
+            tools_bytes: 0,
         });
         session.show_request();
         assert_eq!(
@@ -19315,6 +19366,154 @@ mod tests {
         );
     }
 
+    /// A request whose bytes are known by role and origin, for `/context`.
+    fn a_request_of_known_parts() -> bravebot_agent::request_view::RequestView {
+        use bravebot_agent::request_view::{Provenance, RequestView, Span};
+        let span = |role, provenance, size: usize| Span {
+            role,
+            provenance,
+            text: "x".repeat(size),
+        };
+        RequestView {
+            model: "m".to_string(),
+            spans: vec![
+                span("system", Provenance::Driver, 300),
+                span("system", Provenance::TrustedFile("AGENTS.md".into()), 100),
+                span("system", Provenance::Trusted("skill list"), 50),
+                span("user", Provenance::Typed, 80),
+                span("assistant", Provenance::Planner, 120),
+                // Words that read like another section's name; the origin decides, not the words.
+                Span {
+                    role: "tool",
+                    provenance: Provenance::Reference("ref:1".into()),
+                    text: format!("Tool definitions{}", "y".repeat(234)),
+                },
+            ],
+            tools: Vec::new(),
+            tools_bytes: 100,
+        }
+    }
+
+    /// What each row of `/context` says, as the number of tokens it names.
+    fn context_rows(session: &Session) -> Vec<(String, u64)> {
+        said_in_the_transcript(session)
+            .into_iter()
+            .filter_map(|row| {
+                let words: Vec<&str> = row.split_whitespace().collect();
+                let at = words.iter().position(|word| *word == "tokens")?;
+                let figure = words[at - 1].parse().ok()?;
+                Some((words[..at - 1].join(" "), figure))
+            })
+            .collect()
+    }
+
+    /// The breakdown is of a request, so it divides the count the server reported for that request
+    /// and the parts have to add up to it, whatever the remainders of the division were.
+    #[test]
+    fn the_context_command_divides_the_measured_total_by_section() {
+        let mut session = Session::new("none");
+        session.set_last_request(a_request_of_known_parts());
+        session.measured(777, 10_000, false);
+
+        assert_eq!(enter_line(&mut session, "/context"), Action::Redraw);
+
+        let rows = context_rows(&session);
+        let (total, sections) = rows.split_first().expect("a total row");
+        assert_eq!(*total, (t!(context_total).to_string(), 777));
+        assert_eq!(
+            sections.iter().map(|(_, figure)| figure).sum::<u64>(),
+            777,
+            "{sections:?}"
+        );
+        let named = |name: &str| {
+            sections
+                .iter()
+                .find(|(label, _)| label == name)
+                .unwrap_or_else(|| panic!("no {name} row in {sections:?}"))
+                .1
+        };
+        // 1000 bytes in all: a tenth for the definitions, nothing else shares a row.
+        assert_eq!(named(t!(context_section_tools)), 78);
+        assert_eq!(named(t!(context_section_system)), 233);
+        assert_eq!(named(t!(context_section_instructions)), 78);
+        assert_eq!(named(t!(context_section_skills)), 39);
+        assert_eq!(named(t!(context_section_typed)), 62);
+        assert_eq!(named(t!(context_section_planner)), 93);
+        assert_eq!(named(t!(context_section_results)), 194);
+        assert_eq!(sections.len(), 7, "a section with nothing in it has no row");
+        assert!(
+            session
+                .transcript
+                .iter()
+                .all(|entry| entry.speaker == crate::state::Speaker::System)
+        );
+    }
+
+    /// Nothing measured, nothing to divide: the command says so rather than drawing zeros or a
+    /// blank, which INPUT-22 forbids for the reading itself.
+    #[test]
+    fn the_context_command_says_when_nothing_has_been_measured() {
+        let mut session = Session::new("none");
+        session.set_last_request(a_request_of_known_parts());
+        enter_line(&mut session, "/context");
+        assert!(
+            said_in_the_transcript(&session)
+                .iter()
+                .any(|said| said.contains(t!(context_not_measured)))
+        );
+        assert!(context_rows(&session).is_empty());
+
+        // A count with no budget to divide it by is the same footing as nothing measured.
+        let mut session = Session::new("none");
+        session.set_last_request(a_request_of_known_parts());
+        session.measured(500, 0, true);
+        enter_line(&mut session, "/context");
+        assert!(
+            said_in_the_transcript(&session)
+                .iter()
+                .any(|said| said.contains(t!(context_not_measured)))
+        );
+    }
+
+    /// After a compaction the request on hand is of the conversation that was shortened, so it
+    /// is not divided; and a measured session that has sent nothing of its own says that instead.
+    #[test]
+    fn the_context_command_does_not_describe_a_conversation_it_has_no_request_for() {
+        let mut session = Session::new("none");
+        session.set_last_request(a_request_of_known_parts());
+        session.measured(777, 10_000, false);
+        session.compacted(300, 10_000);
+        enter_line(&mut session, "/context");
+        assert!(
+            said_in_the_transcript(&session)
+                .iter()
+                .any(|said| said.contains(t!(context_compacted)))
+        );
+        assert!(context_rows(&session).is_empty());
+
+        let mut session = Session::new("none");
+        session.measured(777, 10_000, false);
+        enter_line(&mut session, "/context");
+        assert!(
+            said_in_the_transcript(&session)
+                .iter()
+                .any(|said| said.contains(t!(context_no_request)))
+        );
+    }
+
+    /// Asking the planner about the context is a question, not a command.
+    #[test]
+    fn a_prompt_containing_the_context_command_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "what does /context show".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("what does /context show".to_string())
+        );
+    }
+
     /// Asking the planner what a session has cost is a question, not a command.
     #[test]
     fn a_prompt_containing_the_cost_command_is_still_a_prompt() {
@@ -20479,6 +20678,7 @@ mod tests {
             vec![
                 ADVISOR_COMMAND,
                 CAFFEINATE_COMMAND,
+                CONTEXT_COMMAND,
                 COPY_COMMAND,
                 COST_COMMAND,
                 EFFORT_COMMAND,
@@ -24121,6 +24321,7 @@ mod tests {
         let kept = bravebot_agent::trusted::Kept {
             session: "1-2".to_string(),
             at: 7,
+            root: here().to_path_buf(),
         };
         for beginning in [Beginning::New, Beginning::Resumed(None)] {
             match opening_for(beginning, PermissionMode::Ask, here(), || {
@@ -24186,6 +24387,41 @@ mod tests {
             said,
             t!(session_trust_forgotten, directory = root.display()),
             "the line did not say the next session will ask",
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `/forget-trust` in a directory below a remembered worktree root withdraws the root's answer,
+    /// which is the one settling this directory, and names the root, so the next session in either
+    /// asks.
+    #[test]
+    fn forgetting_trust_below_a_remembered_root_takes_the_roots_answer_back() {
+        use bravebot_agent::trusted::{Identity, Store};
+
+        let scratch = crate::testutil::scratch_dir("bravebot-app-forget-root-trust");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = scratch.join("repo");
+        let package = root.join("packages/api");
+        std::fs::create_dir_all(root.join(".git")).expect("create");
+        std::fs::create_dir_all(&package).expect("create");
+        let Some(identity) = Identity::of(&root) else {
+            return;
+        };
+        let store = Store::new(&home, &root);
+        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+        let said = forget_trust(Some(&home), &package);
+
+        assert_eq!(store.kept(&identity), None, "the root's answer survived");
+        assert_eq!(
+            said,
+            t!(
+                session_trust_forgotten_root,
+                directory = package.display(),
+                root = root.canonicalize().expect("resolved").display()
+            ),
+            "the line did not name the root"
         );
         let _ = std::fs::remove_dir_all(&scratch);
     }

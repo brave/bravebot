@@ -69,6 +69,7 @@ does not ask whether to trust the checkout, so it reads only the definitions in
 | `model` | no | the model this delegate runs on (`haiku`, `sonnet`, `opus`, or an explicit model identifier); absent or `inherit` means the spawning turn's |
 | `effort` | no | how hard that model is asked to think (`low`, `medium`, `high`, `xhigh` or `max`); absent, empty or `inherit` means the spawning turn's level |
 | `tools` | no | fewer tools than the kind's; absent means the kind's own |
+| `writes` | no | the files a `worker` may write, as the patterns an `Edit(...)` rule takes (`docs/**, README.md`); anything else is refused, and a deny rule still applies inside them. Absent means any file, and an empty line none. It holds a redirection but not a program the delegate runs, so leave `run` out of `tools` to keep source out of reach, and a turn started with `/agent` is your own and is not held to it. Name `.bravebot/memory/**` if it keeps a memory |
 | `skills` | no | the [skills](skills.md) this delegate is offered, out of the ones the turn found; absent means all of them, and an empty line none |
 | `mcpServers` | no | the [MCP servers](mcp-servers.md) a `worker` calls, by alias, out of the ones the turn may; absent means all of them unless `tools` is written, and an empty line none |
 | `rounds` | no | how many rounds of tools this delegate may take before it has to answer, up to its kind's ceiling; absent or empty means the kind's own |

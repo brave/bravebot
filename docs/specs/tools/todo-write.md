@@ -10,7 +10,8 @@ documented-by: docs/website/docs/reference/tools.md
 ## Scope
 
 Recording the planner's own plan. `todos` is content, and there is no routing at all. The result is
-a confirmation.
+a confirmation. The latest accepted list is sent again after a compaction
+([COMPACT-16](../compaction.md#COMPACT-16)).
 
 ## Clauses
 

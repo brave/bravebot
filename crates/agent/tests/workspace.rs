@@ -4516,6 +4516,35 @@ fn search_around(
     found.declassify(&proof)
 }
 
+/// [`search_in`] asking for a summary, over a workspace the caller built so it can cap the walk.
+fn search_summary(
+    workspace: &Workspace,
+    output: bravebot_agent::workspace::SearchOutput,
+) -> bravebot_agent::workspace::Matches {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let found = workspace
+        .grep_shaped(
+            &mut policy,
+            &[Labelled::trusted("needle".to_string())],
+            &Labelled::trusted(".".to_string()),
+            None,
+            true,
+            1,
+            0,
+            output,
+        )
+        .expect("grep succeeds");
+    let proof = policy.authorise_content_release("test", "matches");
+    found.declassify(&proof)
+}
+
 fn context_lines(found: &bravebot_agent::workspace::Matches) -> Vec<(String, usize, String)> {
     found
         .context
@@ -5100,6 +5129,9 @@ fn a_search_that_ran_out_of_time_offers_no_page_and_no_count() {
         matches,
         context: Vec::new(),
         context_truncated: false,
+        output: bravebot_agent::workspace::SearchOutput::Lines,
+        tallies: Vec::new(),
+        tallies_truncated: false,
         truncated,
         unvisited: false,
         timed_out: true,
@@ -8964,4 +8996,113 @@ fn a_checkout_the_record_names_anywhere_but_where_one_was_made_is_not_taken_back
     assert_eq!(unplaced, ["c1", "c2", "x1", "c1", "c9", "c8"]);
     assert_eq!(resumed.session_checkouts(), []);
     assert!(elsewhere.path.exists(), "a path in a record was reached");
+}
+
+/// A survey asks which files, so each one is named once however many lines it holds, and no line
+/// comes back.
+#[test]
+fn a_files_result_lists_each_matching_file_once() {
+    use bravebot_agent::workspace::SearchOutput;
+    let scratch = Scratch::new("search-files-output");
+    std::fs::write(scratch.path.join("a.txt"), "needle\nneedle\nneedle\n").unwrap();
+    std::fs::write(scratch.path.join("b.txt"), "none here\n").unwrap();
+    std::fs::write(scratch.path.join("c.txt"), "x\nneedle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let found = search_summary(&workspace, SearchOutput::Files);
+
+    assert_eq!(
+        found
+            .tallies
+            .iter()
+            .map(|t| t.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a.txt", "c.txt"],
+        "a file with several matches was listed more than once, or one with none was listed"
+    );
+    assert!(found.matches.is_empty(), "a files result carried lines");
+    assert!(!found.is_empty());
+}
+
+/// The reason for the mode: a count is the number of matches in the tree, so it is not held to the
+/// match cap, and it needs no offset probe to learn the total.
+#[test]
+fn a_count_result_totals_every_match_beyond_the_match_cap() {
+    use bravebot_agent::workspace::SearchOutput;
+    let scratch = Scratch::new("search-count-output");
+    std::fs::write(scratch.path.join("a.txt"), "needle\n".repeat(300)).unwrap();
+    std::fs::write(scratch.path.join("b.txt"), "needle\nother\nneedle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let found = search_summary(&workspace, SearchOutput::Count);
+
+    assert_eq!(found.matched, 302, "the total stopped at the match cap");
+    assert_eq!(
+        found
+            .tallies
+            .iter()
+            .map(|t| (t.path.as_str(), t.lines))
+            .collect::<Vec<_>>(),
+        vec![("a.txt", 300), ("b.txt", 2)]
+    );
+    assert!(!found.truncated);
+    assert_eq!(
+        found.paging(),
+        None,
+        "a count offered a page to continue from"
+    );
+}
+
+/// A walk that stopped before the tree ended did not count the tree, and a list of paths looks as
+/// whole as any other. The result has to carry the fact the caller turns into a lower-bound claim.
+#[test]
+fn a_capped_walks_summary_says_it_is_partial() {
+    use bravebot_agent::workspace::SearchOutput;
+    let scratch = Scratch::new("search-count-capped");
+    for n in 0..12 {
+        std::fs::write(scratch.path.join(format!("f{n:05}.txt")), "needle\n").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(10), None);
+
+    for output in [SearchOutput::Files, SearchOutput::Count] {
+        let found = search_summary(&workspace, output);
+        assert!(
+            found.unvisited,
+            "{output:?} hid that the walk stopped short"
+        );
+        assert!(
+            found.tallies.len() < 12,
+            "{output:?} listed files past the walk cap"
+        );
+    }
+}
+
+/// The list of files has a cap of its own, since a common word names more files than anyone wants
+/// listed, and a count's total must stay exact past it.
+#[test]
+fn a_summary_past_the_listing_cap_keeps_the_whole_total() {
+    use bravebot_agent::workspace::SearchOutput;
+    let scratch = Scratch::new("search-count-listing-cap");
+    for n in 0..250 {
+        std::fs::write(
+            scratch.path.join(format!("f{n:05}.txt")),
+            "needle\nneedle\n",
+        )
+        .unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let found = search_summary(&workspace, SearchOutput::Count);
+
+    assert_eq!(found.tallies.len(), 200);
+    assert!(
+        found.tallies_truncated,
+        "the listing was cut and did not say so"
+    );
+    assert_eq!(
+        found.matched, 500,
+        "the total stopped where the listing did"
+    );
 }

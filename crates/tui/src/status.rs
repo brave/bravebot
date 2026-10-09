@@ -215,6 +215,8 @@ pub struct KeptTrust<'a> {
     /// How long ago, already worded.
     pub when: &'a str,
     pub path: &'a Path,
+    /// The git worktree root the answer was kept about, where that is not the working directory.
+    pub root: Option<&'a Path>,
 }
 
 /// The record of lines remembered past a session, as the report needs it.
@@ -357,8 +359,12 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // person would have seen it.
     if let Some(kept) = facts.kept_trust {
         lines.push(
-            Line::new("", t!(status_directory_kept, when = kept.when))
-                .with_note(t!(status_directory_kept_note)),
+            Line::new("", t!(status_directory_kept, when = kept.when)).with_note(match kept.root {
+                Some(root) => {
+                    t!(status_directory_kept_root_note, root = root.display()).to_string()
+                }
+                None => t!(status_directory_kept_note).to_string(),
+            }),
         );
         lines.push(Line::new(
             "",
@@ -1656,6 +1662,7 @@ mod tests {
         facts.kept_trust = Some(KeptTrust {
             when: "3 days ago",
             path: Path::new("/home/someone/.bravebot/trusted/-tmp-project.jsonl"),
+            root: None,
         });
         let shown = rendered(&report(&facts));
         assert!(shown.contains("without asking"), "{shown}");
@@ -1665,6 +1672,22 @@ mod tests {
             "{shown}"
         );
         assert!(shown.contains("/forget-trust"), "{shown}");
+    }
+
+    /// TRUST-24: an answer kept about the worktree root above the directory names that root, since
+    /// the directory itself is not the one a person remembers having answered about.
+    #[test]
+    fn the_report_names_the_root_whose_remembered_answer_settles_the_directory() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut facts = facts(&config, &trust);
+        facts.kept_trust = Some(KeptTrust {
+            when: "3 days ago",
+            path: Path::new("/home/someone/.bravebot/trusted/-tmp-project.jsonl"),
+            root: Some(Path::new("/tmp/project")),
+        });
+        let shown = rendered(&report(&facts));
+        assert!(shown.contains("/tmp/project"), "{shown}");
     }
 
     /// RUN-19: the answer that outlives the session is the one a person can least account for from
