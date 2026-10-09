@@ -310,14 +310,20 @@ fn table(
         ),
         Tool::function(
             "list_files",
-            "List files in the workspace under a directory, recursively unless you give a \
-             depth. Give a glob pattern or a depth to narrow the result rather than listing \
-             everything: depth 1 is the one directory itself, the way ls reads it, and is what \
-             to use when you want to know what a project holds rather than every file it \
-             contains. In a directory you may not read, the names are quarantined and you get \
-             one reference per entry instead, saying of each whether it is a file or a directory \
-             the walk stopped at: use a file's as path_ref to read it, process it, and write it \
-             back, without ever being told what it is called.",
+            format!(
+                "List files in the workspace under a directory, recursively unless you give a \
+                 depth. Give a glob pattern or a depth to narrow the result rather than listing \
+                 everything: depth 1 is the one directory itself, the way ls reads it, and is \
+                 what to use when you want to know what a project holds rather than every file \
+                 it contains. A listing does not enter a directory with one of these names, at \
+                 any depth, and does not report it, so its absence from a result does not mean \
+                 the project has none: {}, and .claude/worktrees. Name one as directory to list \
+                 it. In a directory you may not read, the names are quarantined and you get one \
+                 reference per entry instead, saying of each whether it is a file or a directory \
+                 the walk stopped at: use a file's as path_ref to read it, process it, and write \
+                 it back, without ever being told what it is called.",
+                bravebot_filetype::ignored_directories().join(", ")
+            ),
             json!({
                 "type": "object",
                 "properties": {
@@ -10332,6 +10338,34 @@ mod tests {
                 "{pattern} was flagged"
             );
         }
+    }
+
+    /// LIST-3: a walk skips a fixed list of directory names without reporting them, so the
+    /// description names every one of them. A planner that sees no `vendor` in a listing would
+    /// otherwise read it as absent.
+    #[test]
+    fn list_files_names_every_directory_its_walk_skips() {
+        let offered = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let described = &offered
+            .iter()
+            .find(|t| t.function.name == "list_files")
+            .expect("list_files is offered")
+            .function
+            .description;
+        let skipped = bravebot_filetype::ignored_directories();
+        assert!(skipped.contains(&"vendor") && skipped.contains(&"build"));
+        for name in skipped {
+            assert!(
+                described.contains(&format!("{name},")),
+                "list_files skips {name} and does not say so: {described}"
+            );
+        }
+        assert!(described.contains(".claude/worktrees"));
     }
 
     /// A tool schema is the whole of what the planner is told about the matcher, so syntax
