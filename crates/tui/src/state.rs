@@ -7001,6 +7001,25 @@ impl Session {
         self.todos.clear();
     }
 
+    /// Put a rewound turn's prompt back in the box, for editing and sending again.
+    ///
+    /// Only into an empty box, for the reason [`Session::restore`] is: a line already there was
+    /// typed after the prompt was sent and is what the person is looking at, so the prompt
+    /// arriving would be written over something they are still working on. Shell mode goes off
+    /// with the line, because what arrives is a prompt and not a command.
+    ///
+    /// The words alone. What the prompt named was settled when it was sent, so a marker coming
+    /// back with it would stand for nothing.
+    pub fn return_prompt(&mut self, prompt: &str) {
+        if self.status != Status::Idle || !self.input.trim().is_empty() {
+            return;
+        }
+        self.history.leave();
+        self.set_input(prompt);
+        self.shell = false;
+        self.completion = 0;
+    }
+
     /// Discard whatever has been typed, keeping it as the draft Up brings back first.
     ///
     /// A prompt walked back to is not kept: it is in the history already, and keeping it would
@@ -16104,6 +16123,37 @@ mod tests {
             s.transcript.is_empty(),
             "the prompt was left in the transcript"
         );
+    }
+
+    /// A rewound prompt comes back for editing, which is what makes `/undo` a way to try the
+    /// same request differently rather than only a way to throw the turn away.
+    #[test]
+    fn a_returned_prompt_lands_in_the_box_as_a_prompt() {
+        let mut s = session();
+        s.type_char('!');
+        assert!(s.shell, "shell mode did not arm");
+
+        s.return_prompt("rewrite the parser");
+
+        assert_eq!(s.input, "rewrite the parser");
+        assert!(
+            !s.shell,
+            "the returned prompt landed behind a command marker"
+        );
+    }
+
+    /// Only into an empty box. A line typed after the turn was sent is what the person is looking
+    /// at, and the returning prompt written over it would cost them that line.
+    #[test]
+    fn a_returned_prompt_does_not_overwrite_a_line_being_typed() {
+        let mut s = session();
+        for c in "a newer thought".chars() {
+            s.type_char(c);
+        }
+
+        s.return_prompt("rewrite the parser");
+
+        assert_eq!(s.input, "a newer thought");
     }
 
     /// Earlier exchanges are untouched, so cancelling does not eat the conversation.

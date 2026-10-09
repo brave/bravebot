@@ -543,8 +543,18 @@ conversation. Their display prompts, outcomes, and task lists are removed with t
 reopening after rewind must not restore them, and a new turn that reuses a removed turn number
 inherits none of its metadata.
 
+The prompt the session now stands before goes back into the composer, so it can be edited and sent
+again rather than retyped. It is the prompt of the earliest turn gone back past, read off the
+rewind point rather than off the display, since the display prompts of those turns are removed with
+them. It arrives as a prompt and not as a shell-mode command, and it arrives only into an empty
+composer: a line typed since the turn was sent is what the person is looking at, and the returning
+prompt written over it would cost them that line.
+
 `verified-by: bravebot_tui::sessions::reopened_history_stays_rewound_after_another_save_and_new_turn`
 `verified-by: bravebot_tui::app::rewinding_reopened_history_removes_outcomes_plans_and_audit_before_reuse`
+`verified-by: bravebot_tui::app::undoing_a_turn_puts_its_prompt_back_in_the_box`
+`verified-by: bravebot_tui::state::a_returned_prompt_lands_in_the_box_as_a_prompt`
+`verified-by: bravebot_tui::state::a_returned_prompt_does_not_overwrite_a_line_being_typed`
 
 A complete rewind that goes back past the session's first turn removes its record rather than
 leaving one with nothing in it. A rewind with incomplete coverage, failed restorations or changed file decisions saves its state even there, and a name the user gave the session before that turn stays with
