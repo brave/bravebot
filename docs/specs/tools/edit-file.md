@@ -132,3 +132,4 @@ routing value a person approves alone ([TOOL-2](tool-surface.md)).
 `verified-by: bravebot_agent::turn::a_missing_passage_among_several_changes_nothing_and_names_the_pair`
 `verified-by: bravebot_agent::turn::a_later_edit_matches_the_text_an_earlier_one_wrote`
 `verified-by: bravebot_agent::turn::edits_beside_a_single_pair_or_cancelling_out_are_refused`
+`verified-by: bravebot_agent::turn::a_malformed_edits_argument_is_refused_without_asking_or_writing`

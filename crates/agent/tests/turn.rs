@@ -47720,3 +47720,37 @@ fn edits_beside_a_single_pair_or_cancelling_out_are_refused() {
     assert!(seen.is_empty());
     assert!(second.contains("would change nothing"), "{second}");
 }
+
+/// An `edits` that is not a non-empty array of complete string pairs names no change, so it is
+/// refused with the file untouched and nobody asked, whichever way it is malformed.
+#[test]
+fn a_malformed_edits_argument_is_refused_without_asking_or_writing() {
+    let malformed = [
+        (
+            "edit-many-empty",
+            r#"{"path":"a.txt","edits":[]}"#,
+            "non-empty array",
+        ),
+        (
+            "edit-many-scalar",
+            r#"{"path":"a.txt","edits":"alpha"}"#,
+            "non-empty array",
+        ),
+        (
+            "edit-many-no-new-text",
+            r#"{"path":"a.txt","edits":[{"old_text":"alpha"}]}"#,
+            "'old_text' and 'new_text' strings",
+        ),
+        (
+            "edit-many-number",
+            r#"{"path":"a.txt","edits":[{"old_text":"alpha","new_text":7}]}"#,
+            "'old_text' and 'new_text' strings",
+        ),
+    ];
+    for (name, arguments, refusal) in malformed {
+        let (after, seen, second) = run_one_edit(name, "alpha\n", arguments);
+        assert_eq!(after, "alpha\n", "{name} wrote the file");
+        assert!(seen.is_empty(), "{name} reached the prompt");
+        assert!(second.contains(refusal), "{name}: {second}");
+    }
+}
