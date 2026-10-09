@@ -473,7 +473,7 @@ the notes do, so the last of them is still held apart from whatever is said next
 
 Where `NO_COLOR` is set to anything but the empty string, every role is drawn in the terminal's own
 ink and this program adds none of its own: the background it would paint, the shades it mixes, the
-named slots it asks for, and the gradient across the wordmark. The terminal is not asked about its
+named slots it asks for, the gradient across the wordmark, and the pixel face drawn beside it. The terminal is not asked about its
 background either, since nothing is drawn in a shade picked for one. A theme somebody chose stays
 recorded and paints again once the variable is unset.
 
@@ -500,6 +500,7 @@ than cleared, which is what makes the variable a switch rather than an edit.
 `verified-by: bravebot_tui::theme::text_over_a_fill_that_is_not_painted_takes_no_ink`
 `verified-by: bravebot_tui::theme::a_row_the_cursor_is_on_is_marked_where_no_colour_is_drawn`
 `verified-by: bravebot_tui::logo::the_wordmark_takes_no_colour_where_none_was_asked_for`
+`verified-by: bravebot_tui::logo::the_face_takes_no_colour_where_none_was_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
 
 
@@ -507,9 +508,10 @@ than cleared, which is what makes the variable a switch rather than an edit.
 ### VIEW-21: `NO_MOTION` stills the glyph, and the counters go on counting
 
 Where `NO_MOTION` is set to anything but the empty string, the glyph beside a running turn stands
-still instead of cycling. It is still drawn, and the elapsed time and the token counts change as
-they always did: a figure that moves when the thing it measures moves is information rather than
-animation.
+still instead of cycling, and the pixel face on the opening screen keeps its eyes open and its
+pupils on one side instead of blinking and glancing. The glyph is still drawn, and the elapsed time
+and the token counts change as they always did: a figure that moves when the thing it measures
+moves is information rather than animation.
 
 It is read from the environment the way the request for no colour is, and answers to presence the
 same way. Where it is not set, the glyph cycles.
@@ -525,6 +527,7 @@ which is drawn before any file this program reads has been looked for.
 
 `verified-by: bravebot_tui::indicator::the_indicator_stands_still_where_no_motion_is_asked_for`
 `verified-by: bravebot_tui::indicator::motion_nobody_declined_still_moves`
+`verified-by: bravebot_tui::avatar::the_face_stays_at_rest_where_no_motion_is_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
 
 

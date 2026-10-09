@@ -9,6 +9,7 @@ use bravebot_i18n::t;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::avatar;
 use crate::theme;
 use crate::theme::Rgb;
 
@@ -24,6 +25,11 @@ const LOGO: &[&str] = &[
     "██▄▄█▀░██░  ▀█▄▄██░ ▀██▀░░▀█▄▄▄▀░  ██▄▄█▀░▀█▄▄█▀░  ▀█▄▄",
     " ░░░░░░ ░░   ░░░░░░  ░░░░  ░░░░░░   ░░░░░░ ░░░░░░   ░░░",
 ];
+
+const _: () = assert!(LOGO.len() == avatar::ROWS);
+
+/// The columns between the face and the mark.
+const FACE_GAP: &str = "  ";
 
 /// The character the mark's drop shadow is drawn with.
 ///
@@ -67,6 +73,22 @@ fn mark_width() -> usize {
 /// failure: the name is written out below in any case.
 fn fits(width: u16) -> bool {
     width as usize >= INDENT.len() + mark_width()
+}
+
+/// Whether the face fits to the left of the mark.
+///
+/// Dropped on its own before the mark is, since the mark carries the name.
+fn face_fits(width: u16) -> bool {
+    width as usize >= INDENT.len() + avatar::WIDTH + FACE_GAP.len() + mark_width()
+}
+
+/// The face drawn to the left of the mark, one list of spans per row, or nothing where there is no
+/// room for it or no colour was asked for.
+fn face_rows(seed: &str, look: avatar::Look, width: u16, plain: bool) -> Vec<Vec<Span<'static>>> {
+    if plain || !face_fits(width) {
+        return Vec::new();
+    }
+    avatar::rows(seed, look)
 }
 
 /// Rows the block occupies, so the padding can be measured against what is left.
@@ -127,9 +149,13 @@ fn ink(column: usize, character: char) -> Style {
 }
 
 /// One row of the mark, with the shadow inked apart from the letterform and "brave" apart
-/// from "bot".
-fn mark_row(row: &str) -> Line<'static> {
+/// from "bot", after the row of the face when there is one.
+fn mark_row(row: &str, face: &[Span<'static>]) -> Line<'static> {
     let mut spans = vec![Span::raw(INDENT)];
+    if !face.is_empty() {
+        spans.extend(face.iter().cloned());
+        spans.push(Span::raw(FACE_GAP));
+    }
     let mut run = String::new();
     let mut current: Option<Style> = None;
 
@@ -213,7 +239,17 @@ pub fn lines_with_network(
     }
 
     if fits(width) {
-        lines.extend(LOGO.iter().map(|row| mark_row(row)));
+        let face = face_rows(
+            avatar::startup_seed(),
+            avatar::look_now(),
+            width,
+            theme::no_color(),
+        );
+        lines.extend(
+            LOGO.iter()
+                .enumerate()
+                .map(|(index, row)| mark_row(row, face.get(index).map_or(&[][..], Vec::as_slice))),
+        );
         lines.push(Line::raw(""));
     }
 
@@ -429,7 +465,7 @@ mod tests {
 
     /// The ink each column of a row is drawn in, the margin aside.
     fn inks(row: &str) -> Vec<Option<Color>> {
-        mark_row(row)
+        mark_row(row, &[])
             .spans
             .iter()
             .skip(1)
@@ -520,5 +556,75 @@ mod tests {
             assert_eq!(columns[SEAM - 2], ' ', "the seam cuts a stroke: {row}");
             assert_eq!(columns[SEAM - 1], ' ', "the seam cuts a stroke: {row}");
         }
+    }
+
+    /// The face sits to the left of the mark on every row of it.
+    #[test]
+    fn the_face_is_drawn_to_the_left_of_the_mark() {
+        let face = face_rows("v2:example-0", avatar::Look::default(), WIDE, false);
+        assert_eq!(face.len(), LOGO.len());
+        for (row, face) in LOGO.iter().zip(&face) {
+            let line = mark_row(row, face).to_string();
+            let drawn: String = face.iter().map(|span| span.content.as_ref()).collect();
+            assert_eq!(line, format!("{INDENT}{drawn}{FACE_GAP}{row}"));
+        }
+    }
+
+    /// A pane with room for the mark and not the face keeps the mark, as it always did.
+    #[test]
+    fn a_pane_too_narrow_for_the_face_keeps_the_mark_alone() {
+        let width = (INDENT.len() + mark_width()) as u16;
+        assert!(fits(width) && !face_fits(width));
+        assert!(face_rows("v2:example-0", avatar::Look::default(), width, false).is_empty());
+        assert!(face_fits(width + (avatar::WIDTH + FACE_GAP.len()) as u16));
+    }
+
+    fn opening_lines(width: u16) -> Vec<Line<'static>> {
+        lines_with_network(
+            "kernel-enforced",
+            "premium available",
+            bravebot_sandbox::network::Network::Open,
+            false,
+            width,
+            24,
+        )
+    }
+
+    /// The opening screen itself draws the face, painted, beside every row of the mark, and drops
+    /// it for a width that fits the mark alone.
+    #[test]
+    fn the_opening_screen_draws_the_face_beside_the_mark_and_drops_it_when_narrow() {
+        let mark_only = (INDENT.len() + mark_width()) as u16;
+        for (width, with_face) in [(WIDE, true), (mark_only, false)] {
+            let screen = opening_lines(width);
+            let mut painted = false;
+            for row in LOGO {
+                let line = screen
+                    .iter()
+                    .find(|line| line.to_string().ends_with(row))
+                    .unwrap_or_else(|| panic!("no line ends in the mark row {row:?}"));
+                let text = line.to_string();
+                let lead = text.chars().count() - row.chars().count();
+                if with_face {
+                    assert_eq!(
+                        lead,
+                        INDENT.len() + avatar::WIDTH + FACE_GAP.len(),
+                        "{text:?}"
+                    );
+                    painted |= line.spans[1..=avatar::WIDTH]
+                        .iter()
+                        .any(|span| matches!(span.style.fg, Some(Color::Rgb(..))));
+                } else {
+                    assert_eq!(lead, INDENT.len(), "{text:?}");
+                }
+            }
+            assert_eq!(painted, with_face);
+        }
+    }
+
+    /// A request for no colour gets no painted face.
+    #[test]
+    fn the_face_takes_no_colour_where_none_was_asked_for() {
+        assert!(face_rows("v2:example-0", avatar::Look::default(), WIDE, true).is_empty());
     }
 }

@@ -65,6 +65,26 @@ fn a_countdown_is_owed_a_frame(counting_down: bool, since_drawn: Duration) -> bo
     counting_down && since_drawn >= COUNTDOWN
 }
 
+/// How often to look at the face on the opening screen. A blink keeps the lids shut for about a
+/// tenth of a second, so the wait for a key has to be shorter than that for it to be drawn.
+const FACE_POLL: Duration = Duration::from_millis(40);
+
+/// Whether the opening screen owes its face a frame: the face is on screen and is held differently
+/// from the last time it was looked at. Every other screen has no face to repaint.
+fn a_face_is_owed_a_frame(
+    opening: bool,
+    held: crate::avatar::Look,
+    shown: crate::avatar::Look,
+) -> bool {
+    opening && held != shown
+}
+
+/// How long to wait for a key. Short only while a face on the opening screen can move, so a
+/// session past its first message, or one that asked for no motion, does not wake any faster.
+fn wait_for_a_key(opening: bool, stilled: bool) -> Duration {
+    if opening && !stilled { FACE_POLL } else { POLL }
+}
+
 /// Asks for motion reported only while a button is held.
 ///
 /// Sent after [`EnableMouseCapture`], which asks for all three tracking modes at once, including
@@ -3986,6 +4006,7 @@ fn event_loop(
     // pointer. Coalescing a burst into one frame is what makes it keep up.
     let mut needs_draw = true;
     let mut drawn_at = Instant::now();
+    let mut face_held = crate::avatar::look_now();
 
     loop {
         // Every pass, so a hold goes as soon as the last turn ends and the loop stops, and one is
@@ -4057,8 +4078,17 @@ fn event_loop(
                         ) {
                             needs_draw = true;
                         }
+                        // The face on the opening screen blinks and glances without a key, and is
+                        // drawn again only when how it is held has changed.
+                        let opening = render::opening_screen(&session);
+                        let held = crate::avatar::look_now();
+                        if a_face_is_owed_a_frame(opening, held, face_held) {
+                            face_held = held;
+                            needs_draw = true;
+                        }
+                        let wait = wait_for_a_key(opening, crate::indicator::stilled());
                         // Through the reader rather than the terminal, so a run is seen whole.
-                        if !input::poll(POLL)? {
+                        if !input::poll(wait)? {
                             continue;
                         }
                         let taken = input::read()?;
@@ -16658,6 +16688,32 @@ mod tests {
         ));
         assert!(a_countdown_is_owed_a_frame(true, COUNTDOWN));
         assert!(a_countdown_is_owed_a_frame(true, Duration::from_secs(9)));
+    }
+
+    /// The frame a face is owed, and the ones it is not. A face held as it was is left alone, and a
+    /// screen that is not the opening one has no face to repaint, whatever the clock says.
+    #[test]
+    fn a_face_is_owed_a_frame_only_on_the_opening_screen_and_only_when_its_look_changed() {
+        use crate::avatar::Look;
+        let open = Look::default();
+        let shut = Look {
+            away: false,
+            blink: true,
+        };
+        assert!(a_face_is_owed_a_frame(true, shut, open));
+        assert!(a_face_is_owed_a_frame(true, open, shut));
+        assert!(!a_face_is_owed_a_frame(true, open, open));
+        assert!(!a_face_is_owed_a_frame(false, shut, open));
+    }
+
+    /// The short wait belongs to the opening screen with motion allowed, and to nothing else.
+    #[test]
+    fn the_wait_for_a_key_is_short_only_while_a_face_can_move() {
+        assert_eq!(wait_for_a_key(true, false), FACE_POLL);
+        assert_eq!(wait_for_a_key(true, true), POLL);
+        assert_eq!(wait_for_a_key(false, false), POLL);
+        assert_eq!(wait_for_a_key(false, true), POLL);
+        assert!(FACE_POLL < POLL);
     }
 
     /// The bare word reads the loop rather than starting one, and sends nothing: between ticks the

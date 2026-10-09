@@ -1938,6 +1938,15 @@ fn request_lines(
     (lines, headers)
 }
 
+/// Whether the screen opens on the mark: nothing has been said yet, and no delegate is on view.
+pub(crate) fn opening_screen(session: &Session) -> bool {
+    !session.watching_a_delegate()
+        && session
+            .viewed()
+            .iter()
+            .all(|entry| entry.speaker == Speaker::System)
+}
+
 /// The transcript, and the index of the line each prompt the person typed begins at.
 ///
 /// Two answers from one pass, because working the second out afterwards would mean deciding which
@@ -1962,8 +1971,7 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
     // that has not yet made a call would otherwise satisfy this vacuously and be drawn as an
     // empty session.
     let viewed = session.viewed();
-    let opening = !session.watching_a_delegate()
-        && viewed.iter().all(|entry| entry.speaker == Speaker::System);
+    let opening = opening_screen(session);
     if opening {
         lines.extend(logo::lines(
             &session.confinement,
