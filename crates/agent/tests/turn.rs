@@ -28086,6 +28086,69 @@ fn a_delegate_cannot_write_through_a_link_out_of_the_files_its_definition_names(
     assert!(confirmer.seen.is_empty(), "{:?}", confirmer.seen.len());
 }
 
+/// DELEGATE-28. A link outside the pattern that reaches a file inside it is judged by the name
+/// given as well: the file is covered by `docs/**` and the name is not.
+#[cfg(unix)]
+#[test]
+fn a_delegate_cannot_write_through_a_link_outside_its_files_to_one_inside() {
+    let scratch = Scratch::new("delegate-writes-link-in");
+    let home = Scratch::new("delegate-writes-link-in-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("scribe.md"),
+        "---\nname: scribe\ndescription: Writes the docs.\nkind: worker\nwrites: docs/**\n---\n\nWRITE-DOCS\n",
+    )
+    .expect("write the definition");
+    std::fs::create_dir_all(scratch.path.join("src")).expect("create src");
+    std::fs::create_dir_all(scratch.path.join("docs")).expect("create docs");
+    std::fs::write(scratch.path.join("docs/a.md"), "original\n").expect("seed a.md");
+    std::os::unix::fs::symlink("../docs/a.md", scratch.path.join("src/link.md")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HAVE-THE-SCRIBE-WRITE-BY-LINK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"scribe","task":"WRITE-BY-LINK"}"#),
+                reply_with("waiting"),
+                reply_with("the scribe finished"),
+            ],
+        ),
+        (
+            "WRITE-BY-LINK",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"src/link.md","contents":"clobbered"}"#,
+                ),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAVE-THE-SCRIBE-WRITE-BY-LINK").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("docs/a.md")).unwrap(),
+        "original\n",
+        "a delegate wrote through a name outside its definition's files"
+    );
+    assert!(confirmer.seen.is_empty(), "{:?}", confirmer.seen.len());
+}
+
 /// The directories a session made checkouts in, under its state directory.
 fn checkouts_under(home: &std::path::Path) -> Vec<PathBuf> {
     let mut found = Vec::new();

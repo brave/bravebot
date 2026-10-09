@@ -1037,6 +1037,7 @@ holds ([DELEGATE-4](#DELEGATE-4)), and a limit takes some of it away.
 `verified-by: bravebot_agent::agents::a_project_cannot_hand_back_a_write_limit_a_persons_own_definition_set`
 `verified-by: bravebot_agent::turn::a_delegate_cannot_write_outside_the_files_its_definition_names`
 `verified-by: bravebot_agent::turn::a_delegate_cannot_write_through_a_link_out_of_the_files_its_definition_names`
+`verified-by: bravebot_agent::turn::a_delegate_cannot_write_through_a_link_outside_its_files_to_one_inside`
 `verified-by: bravebot_agent::turn::a_limited_delegates_redirection_is_held_to_its_definitions_files`
 
 ## Known costs

@@ -4160,15 +4160,25 @@ fn refuse_denied_path_as<S: Sink>(
     if let Some(landed) = &landing {
         ask(policy, landed)?;
     }
-    // A definition's limit is about the file written, spelled relative to the workspace as a
-    // pattern is, so it is judged on the name the file lands on where that differs from the one
-    // given: `/work/docs/a.md` and `x/../docs/a.md` are `docs/a.md`, and `docs/link` is wherever
-    // the link goes.
+    // A definition's limit is written about workspace-relative names, so it is judged on the name
+    // given in that spelling (`/work/docs/a.md` is `docs/a.md`) and on the file the name lands on
+    // (`docs/link` is wherever the link goes). Both have to be inside: a link outside the limit
+    // that points inside it is outside.
     if purpose == Purpose::Effect {
-        let judged = landing.as_deref().unwrap_or(path);
-        policy
-            .refuse_write_outside_limits(judged)
-            .map_err(|_| outside_write_limit(shown))?;
+        let given = workspace.spelled_in_workspace(path);
+        let mut judged: Vec<&str> = given
+            .as_deref()
+            .into_iter()
+            .chain(landing.as_deref())
+            .collect();
+        if judged.is_empty() {
+            judged.push(path);
+        }
+        for name in judged {
+            policy
+                .refuse_write_outside_limits(name)
+                .map_err(|_| outside_write_limit(shown))?;
+        }
     }
     Ok(())
 }
