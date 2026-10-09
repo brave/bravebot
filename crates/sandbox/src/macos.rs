@@ -2313,4 +2313,119 @@ int main(void) {
 
         let _ = std::fs::remove_dir_all(&scratch);
     }
+
+    /// An ssh agent started for a test and ended with it.
+    struct AnAgent(std::process::Child);
+
+    impl Drop for AnAgent {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// SANDBOX-16: the signature a commit asks `ssh-keygen -Y sign` for, as the kernel holds it.
+    /// The tool loads the public key `user.signingkey` names and asks the person's agent for the
+    /// signature, so a stage that signs needs that one file and the agent's socket. Without the
+    /// file it fails with "Couldn't load public key", without the socket with "Couldn't connect to
+    /// agent", and with both it signs and still cannot read the private key beside the public one.
+    #[test]
+    fn a_stage_that_signs_loads_the_public_key_and_reaches_the_agent_never_the_private_key() {
+        let (scratch, home, temporary) = a_home_and_a_temporary_directory("sg");
+        let socket = scratch.join("s");
+        if socket.as_os_str().len() > 100 {
+            eprintln!(
+                "skipped: {} is too long for a unix socket",
+                socket.display()
+            );
+            let _ = std::fs::remove_dir_all(&scratch);
+            return;
+        }
+        let keys = home.join(".ssh");
+        std::fs::create_dir_all(&keys).expect("the scratch home is creatable");
+        let private = keys.join("work");
+        let public = keys.join("work.pub");
+        let made = std::process::Command::new("/usr/bin/ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&private)
+            .status()
+            .expect("ssh-keygen is on macOS");
+        assert!(made.success(), "ssh-keygen made no key");
+        let _agent = AnAgent(
+            std::process::Command::new("/usr/bin/ssh-agent")
+                .args(["-D", "-a"])
+                .arg(&socket)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .expect("ssh-agent is on macOS"),
+        );
+        for _ in 0..100 {
+            if socket.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let added = std::process::Command::new("/usr/bin/ssh-add")
+            .arg(&private)
+            .env("SSH_AUTH_SOCK", &socket)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("ssh-add is on macOS");
+        assert!(added.success(), "the agent took no key");
+        std::fs::write(
+            home.join(".gitconfig"),
+            format!(
+                "[gpg]\n\tformat = ssh\n[user]\n\tsigningkey = {}\n",
+                public.display()
+            ),
+        )
+        .expect("the scratch home is writable");
+        let message = temporary.join("message");
+        std::fs::write(&message, "a commit").expect("the scratch directory is writable");
+
+        let run_base =
+            || crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home));
+        let environment = || a_stage_for(&home).with("SSH_AUTH_SOCK", &socket);
+        let sign = |policy: &SandboxPolicy| {
+            let _ = std::fs::remove_file(temporary.join("message.sig"));
+            exit_code_under_with(
+                policy,
+                environment(),
+                "/usr/bin/ssh-keygen",
+                &[
+                    "-Y",
+                    "sign",
+                    "-n",
+                    "git",
+                    "-f",
+                    &public.display().to_string(),
+                    &message.display().to_string(),
+                ],
+                crate::process::Streams {
+                    stdin: crate::process::Stream::Null,
+                    stdout: crate::process::Stream::Null,
+                    stderr: crate::process::Stream::Inherited,
+                },
+            )
+        };
+
+        assert_ne!(sign(&run_base()), Some(0), "signed with no scope");
+        let key_only = crate::scope::Scope::Signing.grant(run_base(), &home);
+        assert_ne!(sign(&key_only), Some(0), "signed with no agent");
+        let key_and_agent = key_only.allow_write(&socket);
+        assert_eq!(sign(&key_and_agent), Some(0), "the signature failed");
+        assert!(temporary.join("message.sig").exists());
+        assert_eq!(
+            exit_code_under(
+                &key_and_agent,
+                environment(),
+                "/bin/cat",
+                &[&private.display().to_string()],
+            ),
+            Some(READ_FAILED),
+            "the private key was read"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
 }

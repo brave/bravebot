@@ -435,7 +435,8 @@ and `~/Library/Safari`; on Linux also `~/.local/share/keyrings`, `~/.password-st
 kinds of file in `~/.ssh` hold no secret and are read: `config`, `known_hosts` and the default
 public keys (`id_rsa.pub`, `id_dsa.pub`, `id_ecdsa.pub`, `id_ecdsa_sk.pub`, `id_ed25519.pub`,
 `id_ed25519_sk.pub`). A public key at another name is read by a stage that carries the remote
-scope when `config` names it ([SANDBOX-16](#SANDBOX-16)). On macOS the file `~/Library/Keychains/login.keychain-db` is also read, with
+scope when `config` names it, and the one `user.signingkey` names by a stage that signs
+([SANDBOX-16](#SANDBOX-16)). On macOS the file `~/Library/Keychains/login.keychain-db` is also read, with
 the directory around it and every other file in it still refused, because `gh` and git's
 `osxkeychain` helper keep their tokens in that keychain and open its database file themselves.
 Opening a keychain also makes the Security framework write its framework database, which is the
@@ -653,12 +654,17 @@ and where its program resolved to `gh` and its argv starts with one of the comma
 talk to the host: `api`, `attestation`, `auth`, `cache`, `gist`, `gpg-key`, `issue`, `label`,
 `org`, `pr`, `project`, `release`, `repo`, `ruleset`, `run`, `search`, `secret`, `ssh-key`,
 `status`, `variable` or `workflow`. It carries `~/.aws`, `~/.kube` or `~/.docker` where its
-program resolved to `aws`, `kubectl` or `docker`. It carries none where a `NAME=value` assignment is
+program resolved to `aws`, `kubectl` or `docker`. It carries the signing scope where its program
+resolved to `git` and its argv is `commit`, `merge`, `rebase`, `cherry-pick`, `revert`, `am` or
+`tag`, with nothing in front of the operation but `-C <directory>`, and the person's own git
+configuration signs with ssh. It carries none where a `NAME=value` assignment is
 written in front of it; where a `git` argv names a program for git to run, which is any abbreviation
 git accepts of `--upload-pack`, `--receive-pack`, `--exec`, `--template`, `--config` or
 `--strategy`, a `-u` or `-c` to `clone`, a `-s` to `pull`, an address holding `::`, or one written
 `<scheme>://` whose scheme is not `ssh`, `git`, `file`, `http`, `https`, `ftp`, `ftps`, `git+ssh`
-or `ssh+git`, before a `--` or after one; where a `gh` argv holds `--`; and where `kubectl` is
+or `ssh+git`, before a `--` or after one; where a signing `git` argv holds any abbreviation of
+`--exec` or `--strategy`, or a `-x` or `-s` to `rebase` or a `-s` to `merge`, which run a command or
+a `git-merge-<name>` from the search path; where a `gh` argv holds `--`; and where `kubectl` is
 given `--kubeconfig` or `docker` is given `--config`. A stage reaches its own scope and no other.
 No scope names a private key or `~/.ssh` as a directory. The remote scope reads `~/.ssh/config`,
 `~/.ssh/known_hosts`, the public key at each name ssh looks for by default, the public key file
@@ -678,6 +684,28 @@ beside it and never the key. `Include`, `Match` and a repository's `core.sshComm
 followed, `~/.ssh/config` is read up to 1 MiB, and at most 32 files are added. A file that cannot
 be read adds nothing. Only the remote scope reads the configuration. A key that `-i` names in a
 `core.sshCommand` is read only if the configuration also lists it as an `IdentityFile`.
+
+A signed commit runs `ssh-keygen -Y sign` with the file `user.signingkey` names. The tool loads that
+public key and asks the agent for the signature, so a stage that signs needs the one file and the
+agent's socket, and never the private key. The signing scope reads that file and the stage may write
+the socket `SSH_AUTH_SOCK` names, as the remote scope may. It is carried only where the person's own
+`~/.gitconfig` or `~/.config/git/config` sets `gpg.format` to `ssh`, so an account that does not sign
+with ssh sees no difference, the network under a closed setting included. The later file and the last
+assignment win, section and variable names are matched without regard to case, a quoted value is
+unquoted and an unquoted `#` or `;` starts a comment. A `[gpg "ssh"]` or `[user "name"]` section is
+another section, a value holding a backslash is not read, and a repository's configuration, an
+`[include]` and `GIT_CONFIG_GLOBAL` are not followed. The key is read where `user.signingkey` is a
+key written out (`ssh-` or `key::`), which needs no file, where it is unset, which signs with the
+agent's first key and needs no file, or where it is an absolute path or one beginning `~/` that
+resolves to an existing regular file named `*.pub` inside the home directory and outside every
+credential location other than `~/.ssh`. A private key, a name nothing is at, a relative path, a path
+holding `..`, a file outside the home and a link that leads out of those places are refused, and
+the stage is told so in the profile line without the value, since the signature then fails. `git
+pull` merges or rebases and signs the commit it makes, so the remote scope reads the same file. The
+scope is not on the menu of [SANDBOX-26](#SANDBOX-26): a line carries it by its argv and the planner
+never names it. The configuration limits are these: `-S<key>` and `--gpg-sign=<key>` in the argv do
+not move the key that is read, and a hook or a `gpg.ssh.program` the plan wrote into `.git` runs
+with the scope, as one runs with the remote scope.
 
 Where a variable moves what a tool reads, the stage also reads the place the variable names, as that
 place and read only: for `gh`, `GH_CONFIG_DIR` if the environment the stage starts with sets it, else
@@ -731,7 +759,12 @@ the key the agent offers, so a key the person's configuration pins by name needs
 at a default name; with `IdentitiesOnly yes` and no such read, ssh offers nothing and the host answers
 `Permission denied (publickey)`. The configuration is the person's own file, which a stage in
 standard mode cannot write, and a line in it can add only a file named `*.pub`, so reading it adds no
-private key. A repository's `core.sshCommand` is not read because it decides what runs. `~/.bravebot` is refused the same way, since a
+private key. A repository's `core.sshCommand` is not read because it decides what runs. Signing is a scope of its
+own so that the agent and the network are not lent to a `git commit` of an account that does not sign
+with ssh, and so that a commit does not read `~/.git-credentials`; the key it needs is one file in
+the person's home that their configuration names, and is read for the same reason `IdentityFile`
+keys are. A configuration of the person's is read for it and a repository's is not, because the
+repository's is a file the plan may write. `~/.bravebot` is refused the same way, since a
 variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](#SANDBOX-12)).
 
 `verified-by: bravebot_sandbox::scope::an_operation_that_talks_to_a_remote_carries_the_remote_scope`
@@ -773,6 +806,24 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_sandbox::scope::a_named_public_key_behind_a_link_is_read_where_it_leads`
 `verified-by: bravebot_sandbox::scope::an_identity_file_line_that_is_not_text_adds_nothing_and_its_lossy_lookalike_is_not_read`
 `verified-by: bravebot_sandbox::scope::an_identity_file_whose_name_is_not_text_adds_neither_it_nor_its_lookalike`
+`verified-by: bravebot_sandbox::scope::an_operation_that_signs_carries_the_signing_scope`
+`verified-by: bravebot_sandbox::scope::a_signing_operation_that_names_a_program_carries_nothing`
+`verified-by: bravebot_sandbox::scope::signing_does_not_change_the_other_scopes`
+`verified-by: bravebot_sandbox::scope::signing_cannot_be_named`
+`verified-by: bravebot_sandbox::scope::the_signing_scope_reads_the_public_key_and_nothing_else`
+`verified-by: bravebot_sandbox::scope::the_signing_scope_reads_nothing_where_the_key_is_refused_or_signing_is_off`
+`verified-by: bravebot_sandbox::scope::the_remote_scope_reads_the_signing_key_as_well`
+`verified-by: bravebot_sandbox::signing::a_public_key_in_the_home_is_the_file_a_stage_that_signs_reads`
+`verified-by: bravebot_sandbox::signing::a_format_other_than_ssh_reads_no_key`
+`verified-by: bravebot_sandbox::signing::a_literal_key_and_no_key_read_no_file`
+`verified-by: bravebot_sandbox::signing::a_value_that_is_not_a_public_key_in_the_home_is_refused`
+`verified-by: bravebot_sandbox::signing::the_last_value_of_the_right_section_is_the_one_read`
+`verified-by: bravebot_sandbox::signing::a_value_with_a_backslash_is_refused`
+`verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_the_key_and_the_agent_where_the_person_signs_with_ssh`
+`verified-by: bravebot_agent::confine::a_stage_that_signs_carries_nothing_where_the_person_does_not_sign_with_ssh`
+`verified-by: bravebot_agent::confine::a_stage_that_does_not_sign_is_not_lent_the_agent`
+`verified-by: bravebot_agent::confine::a_signing_key_no_scope_reads_is_explained_to_the_planner_without_its_path`
+`verified-by: bravebot_sandbox::macos::a_stage_that_signs_loads_the_public_key_and_reaches_the_agent_never_the_private_key`
 `verified-by: bravebot_sandbox::scope::the_ssh_configuration_adds_a_bounded_number_of_keys_to_the_remote_scope_alone`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_a_public_key_its_configuration_names_and_never_the_private_one`
 `verified-by: bravebot_agent::confine::the_prompt_the_line_and_the_policy_agree_on_which_credential_a_stage_lifts`
@@ -984,7 +1035,9 @@ A session carries a network setting, `open` or `closed`, and `open` is the defau
 every stage keeps the egress the base leaves it ([SANDBOX-12](#SANDBOX-12)). Under `closed` a stage
 has none unless it carries one of three reasons: its toolchain list fetches ([SANDBOX-15](#SANDBOX-15)),
 it carries a credential scope ([SANDBOX-16](#SANDBOX-16): the remote, cloud, cluster and container
-scopes alike, since each lends a credential to something reached over a socket or the network), or
+scopes alike, since each lends a credential to something reached over a socket or the network, and
+the signing scope for an account that signs with ssh, since the agent socket is reached through the
+same egress), or
 its program resolved to the file `curl` or `ssh`. Each is read from the compiled step, never from
 what a program printed, and none is granted to a file under a directory the plan may write to, which
 it could have named `curl` itself. A stage that carries one is also granted the resolver ([SANDBOX-3](#SANDBOX-3)) and keeps the unix socket rule

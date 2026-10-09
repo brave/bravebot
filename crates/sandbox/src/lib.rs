@@ -34,6 +34,7 @@ pub mod process;
 pub mod proxy;
 pub mod rules;
 pub mod scope;
+pub mod signing;
 pub mod swap;
 // Compiled under test on every platform as well as on the one it confines, so what this
 // backend decides before a process starts is pinned by every job that runs the suite

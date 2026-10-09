@@ -23,6 +23,7 @@ use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::rules::{Lists, Rules, without_verbatim_prefix};
 use bravebot_sandbox::scope::{Reach, Requested, Scope, environment_reach, requested_reach};
+use bravebot_sandbox::signing;
 use bravebot_sandbox::toolchain::Toolchain;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -242,7 +243,7 @@ impl Confinement {
                 .any(|request| matches!(request, Requested::Toolchain(_)))
         {
             Some("a toolchain that fetches")
-        } else if Scope::of(&step.resolved, &step.args, &step.environment).is_some()
+        } else if self.scope_of(step).is_some()
             || self
                 .requested_for(step)
                 .iter()
@@ -427,8 +428,21 @@ impl Confinement {
         }
         (
             Toolchain::of(&step.resolved).filter(|_| !self.reads_the_machine()),
-            Scope::of(&step.resolved, &step.args, &step.environment),
+            self.scope_of(step),
         )
+    }
+
+    /// The scope the argv of `step` names. A stage that signs carries one only where the person's
+    /// own git configuration signs with ssh, so an account that does not sign sees no change, the
+    /// network under a closed setting included.
+    fn scope_of(&self, step: &Step) -> Option<Scope> {
+        Scope::of(&step.resolved, &step.args, &step.environment).filter(|scope| {
+            *scope != Scope::Signing
+                || self
+                    .home
+                    .as_deref()
+                    .is_some_and(|home| signing::read(home).enabled)
+        })
     }
 
     /// What the profile of each step of `steps` holds beyond the base and the places its programs
@@ -572,7 +586,7 @@ impl Confinement {
                         policy = policy.allow_read(reach.path);
                     }
                 }
-                if scope == Scope::Remote
+                if matches!(scope, Scope::Remote | Scope::Signing)
                     && let Some(socket) = variable(environment, "SSH_AUTH_SOCK")
                 {
                     policy = policy.allow_write(socket);
@@ -643,7 +657,26 @@ impl Confinement {
     /// program chose, since a program's error text is not where the profile is decided. It ends
     /// with the fixed sentence about credential locations.
     pub fn profile(&self, steps: &[&Step]) -> String {
-        format!("{}{CREDENTIAL_LOCATIONS_SENTENCE}", self.reach(steps))
+        let refusal = match self.signing_key_refused(steps) {
+            true => SIGNING_KEY_REFUSED_SENTENCE,
+            false => "",
+        };
+        format!(
+            "{}{refusal}{CREDENTIAL_LOCATIONS_SENTENCE}",
+            self.reach(steps)
+        )
+    }
+
+    /// Whether a step of `steps` signs and the person's `user.signingkey` names a file no scope
+    /// reads, so that the signature fails and the planner is told why.
+    fn signing_key_refused(&self, steps: &[&Step]) -> bool {
+        let Some(home) = self.home.as_deref() else {
+            return false;
+        };
+        steps
+            .iter()
+            .any(|step| self.scope_of(step) == Some(Scope::Signing))
+            && signing::read(home).key == signing::Key::Refused
     }
 
     /// What the programs of `steps` could reach, by name, without the closing fixed sentence.
@@ -968,6 +1001,13 @@ const CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location such as `~/.
      request, a credential scope is how a line reaches one. Any other path a command needs is \
      asked for with the `request_path` tool: the person is asked, and a yes lasts for this \
      session.";
+
+/// Said once to the planner when a step signs and the key `user.signingkey` names is one no scope
+/// reads. It names the setting and never the value, which is the person's.
+const SIGNING_KEY_REFUSED_SENTENCE: &str = " A step that signs a commit reads only a public key: \
+     the `user.signingkey` in the person's own git configuration must be a key written out in \
+     full or an existing `.pub` file inside the home directory, and a private key, a file \
+     elsewhere and a relative path are not read, so signing fails until the person changes it.";
 
 /// The sentence that names the menu, for the planner, and the person is asked about every time.
 fn requests_menu_sentence() -> String {
@@ -3309,5 +3349,149 @@ mod tests {
         assert!(closed.host_environment(&kept).unwrap().is_empty());
         let no_list = closed.with_hosts(Some(&hosts_listing(None)));
         assert!(no_list.host_environment(&kept).unwrap().is_empty());
+    }
+
+    /// A home on disk with the files `files` and a `.gitconfig` holding `gitconfig`, and a
+    /// confinement over it that closes the network.
+    #[cfg(unix)]
+    fn a_confinement_over_a_home_that(
+        name: &str,
+        gitconfig: &str,
+        files: &[&str],
+    ) -> (PathBuf, Confinement) {
+        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("confine-signing-{name}"));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("a home");
+        for file in files {
+            let path = home.join(file);
+            std::fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+            std::fs::write(path, "a key").expect("a file");
+        }
+        std::fs::write(home.join(".gitconfig"), gitconfig).expect("a gitconfig");
+        let home = home.canonicalize().expect("a canonical home");
+        let confined = Confinement::new(
+            Prelude::Windows,
+            PathBuf::from("/tmp"),
+            Some(&home),
+            vec![PathBuf::from("/work/project")],
+            Some(Path::new("/var/scratch")),
+        )
+        .with_network(Network::Closed);
+        (home, confined)
+    }
+
+    #[cfg(unix)]
+    const SIGNS_WITH_A_KEY: &str = "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/keys/work.pub\n";
+
+    /// SANDBOX-16: for a person whose git signs with ssh, a stage that signs is lent the public
+    /// key `user.signingkey` names and the agent socket, keeps the network under a closed setting
+    /// because the socket is tied to it, and is described as doing so in the prompt.
+    #[test]
+    #[cfg(unix)]
+    fn a_stage_that_signs_is_lent_the_key_and_the_agent_where_the_person_signs_with_ssh() {
+        let (home, confined) =
+            a_confinement_over_a_home_that("signs", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
+        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        for args in [
+            vec!["commit", "-m", "x"],
+            vec!["rebase", "main"],
+            vec!["merge", "feature"],
+        ] {
+            let step = step("/usr/bin/git", &args);
+            let policy = confined.policy(&step, Path::new("/work/project"), &environment);
+            let key = home.join("keys/work.pub");
+            assert!(reads(&policy, key.to_str().unwrap()), "{args:?}");
+            assert!(writes(&policy, "/run/agent.sock"), "{args:?}");
+            assert!(
+                !reads(&policy, home.join(".ssh").to_str().unwrap()),
+                "{args:?}"
+            );
+            assert!(policy.allow_network, "{args:?}");
+            assert!(confined.egress(&step), "{args:?}");
+            assert!(
+                confined.profile(&[&step]).contains("a credential scope"),
+                "{args:?}"
+            );
+            let described = confined.describe(&[&step]);
+            assert_eq!(described.carried.len(), 1, "{args:?}");
+            assert_eq!(described.carried[0].scope, Some(Scope::Signing), "{args:?}");
+            assert!(described.carried[0].network, "{args:?}");
+        }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A person whose git does not sign with ssh sees nothing change: a commit carries no scope,
+    /// is lent no socket, and keeps no network under a closed setting.
+    #[test]
+    #[cfg(unix)]
+    fn a_stage_that_signs_carries_nothing_where_the_person_does_not_sign_with_ssh() {
+        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        for gitconfig in [
+            "",
+            "[user]\nsigningkey = ~/keys/work.pub\n",
+            "[gpg]\nformat = openpgp\n[user]\nsigningkey = ~/keys/work.pub\n",
+        ] {
+            let (home, confined) =
+                a_confinement_over_a_home_that("not-signing", gitconfig, &["keys/work.pub"]);
+            let step = step("/usr/bin/git", &["commit", "-m", "x"]);
+            let policy = confined.policy(&step, Path::new("/work/project"), &environment);
+            assert!(!writes(&policy, "/run/agent.sock"), "{gitconfig}");
+            assert!(
+                !reads(&policy, home.join("keys/work.pub").to_str().unwrap()),
+                "{gitconfig}"
+            );
+            assert!(!policy.allow_network, "{gitconfig}");
+            assert!(!confined.egress(&step), "{gitconfig}");
+            assert!(
+                confined.describe(&[&step]).carried.is_empty(),
+                "{gitconfig}"
+            );
+            assert!(!confined.profile(&[&step]).contains("user.signingkey"));
+            std::fs::remove_dir_all(&home).unwrap();
+        }
+    }
+
+    /// A stage that only reads the repository is not lent the agent, whatever the configuration.
+    #[test]
+    #[cfg(unix)]
+    fn a_stage_that_does_not_sign_is_not_lent_the_agent() {
+        let (home, confined) =
+            a_confinement_over_a_home_that("reads", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
+        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        for args in [vec!["status"], vec!["log"], vec!["commit", "--exec=x"]] {
+            let step = step("/usr/bin/git", &args);
+            let policy = confined.policy(&step, Path::new("/work/project"), &environment);
+            assert!(!writes(&policy, "/run/agent.sock"), "{args:?}");
+            assert!(!policy.allow_network, "{args:?}");
+        }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// Where the key is one no scope reads, the signature fails, and the planner is told the
+    /// setting and what it must be, once, without the value the person wrote.
+    #[test]
+    #[cfg(unix)]
+    fn a_signing_key_no_scope_reads_is_explained_to_the_planner_without_its_path() {
+        let (home, confined) = a_confinement_over_a_home_that(
+            "refused",
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/.ssh/id_secret-name\n",
+            &[".ssh/id_secret-name"],
+        );
+        let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
+        let status = step("/usr/bin/git", &["status"]);
+        let line = confined.profile(&[&commit]);
+        assert!(line.contains("`user.signingkey`"), "{line}");
+        assert!(line.contains(".pub"), "{line}");
+        assert!(!line.contains("secret-name"), "{line}");
+        assert!(line.ends_with(CREDENTIAL_LOCATIONS_SENTENCE), "{line}");
+        assert!(!confined.profile(&[&status]).contains("user.signingkey"));
+        std::fs::remove_dir_all(&home).unwrap();
+
+        let (home, confined) =
+            a_confinement_over_a_home_that("accepted", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
+        assert!(!confined.profile(&[&commit]).contains("user.signingkey"));
+        std::fs::remove_dir_all(&home).unwrap();
     }
 }

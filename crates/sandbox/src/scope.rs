@@ -31,6 +31,9 @@ pub enum Scope {
     Kubernetes,
     /// `~/.docker`.
     Docker,
+    /// The public key a signed commit is made with, and the agent that signs with the private
+    /// half. A stage carries it by its argv and never by a request, so it is not on the menu.
+    Signing,
 }
 
 /// What the planner may ask a `run` to add to every stage of one line: a name from a fixed menu of
@@ -80,10 +83,12 @@ impl Scope {
             Self::Aws => "aws",
             Self::Kubernetes => "kubernetes",
             Self::Docker => "docker",
+            Self::Signing => "signing",
         }
     }
 
-    /// The scope a person names by the word the prompt and the planner know it by.
+    /// The scope a person names by the word the prompt and the planner know it by. `Signing` is
+    /// not named: only an argv that signs carries it.
     pub fn named(word: &str) -> Option<Self> {
         [Self::Remote, Self::Aws, Self::Kubernetes, Self::Docker]
             .into_iter()
@@ -104,6 +109,7 @@ impl Scope {
         let name = resolved.file_name()?.to_str()?;
         match name {
             "git" if a_remote_operation(args) => Some(Self::Remote),
+            "git" if a_signing_operation(args) => Some(Self::Signing),
             "gh" if a_command_of_ghs_own(args) => Some(Self::Remote),
             "aws" => Some(Self::Aws),
             "kubectl" if !names_an_option(args, "--kubeconfig") => Some(Self::Kubernetes),
@@ -133,8 +139,16 @@ impl Scope {
                 for public_key in named_public_keys(home) {
                     policy = policy.allow_read(public_key);
                 }
+                // A pull that merges or rebases signs the commit it makes.
+                if let Some(key) = crate::signing::read(home).file() {
+                    policy = policy.allow_read(key);
+                }
                 policy.allow_write_file(under(home, KNOWN_HOSTS))
             }
+            Self::Signing => match crate::signing::read(home).file() {
+                Some(key) => policy.allow_read(key),
+                None => policy,
+            },
             Self::Aws | Self::Kubernetes | Self::Docker => {
                 let mut policy = policy;
                 for row in rows(self) {
@@ -289,7 +303,7 @@ pub fn environment_reach(
 pub fn requested_reach(scope: Scope, home: &Path, environment: &[(String, String)]) -> Vec<Reach> {
     let programs: &[&str] = match scope {
         Scope::Remote => &["gh", "git"],
-        Scope::Aws | Scope::Kubernetes | Scope::Docker => &[""],
+        Scope::Aws | Scope::Kubernetes | Scope::Docker | Scope::Signing => &[""],
     };
     programs
         .iter()
@@ -352,6 +366,7 @@ fn rows(scope: Scope) -> &'static [&'static str] {
         Scope::Aws => &[".aws"],
         Scope::Kubernetes => &[".kube"],
         Scope::Docker => &[".docker"],
+        Scope::Signing => &[],
     }
 }
 
@@ -464,7 +479,7 @@ fn public_name(path: PathBuf) -> Option<PathBuf> {
 
 /// A public key file a configuration named, as the sandbox will be told it, or `None` where it is
 /// refused.
-fn judged_public_key(named: &Path, home: &Path) -> Option<PathBuf> {
+pub(crate) fn judged_public_key(named: &Path, home: &Path) -> Option<PathBuf> {
     let spelled = match named.strip_prefix("~") {
         Ok(beneath) => home.join(beneath),
         Err(_) => named.to_path_buf(),
@@ -566,6 +581,60 @@ fn a_remote_operation(args: &[String]) -> bool {
         _ => return false,
     };
     rest.all(|argument| !names_a_program(argument, short))
+}
+
+/// The `git` operations that write a commit or a tag, and so sign it where the person's
+/// configuration says to.
+const SIGNING_OPERATIONS: [&str; 7] = [
+    "commit",
+    "merge",
+    "rebase",
+    "cherry-pick",
+    "revert",
+    "am",
+    "tag",
+];
+
+/// Whether `args`, the argv after `git`, is an operation that signs what it writes and names no
+/// program of its own.
+///
+/// Read as [`a_remote_operation`] reads an argv: `-C <directory>` is the one option in front of the
+/// operation, which is matched exactly. After it, a long option is refused where it is any
+/// abbreviation of `--exec` or `--strategy`, since the first runs a command between commits and the
+/// second `git-merge-<name>` from the search path, and so is a short one that spells either for the
+/// operation: `-x` and `-s` for `rebase`, `-s` for `merge`. Unlike a remote operation the argv holds
+/// free text, a commit message with `::` in it, so an address is not read.
+fn a_signing_operation(args: &[String]) -> bool {
+    let mut rest = args.iter().map(String::as_str);
+    let operation = loop {
+        match rest.next() {
+            Some("-C") => {
+                if rest.next().is_none() {
+                    return false;
+                }
+            }
+            Some(operation) => break operation,
+            None => return false,
+        }
+    };
+    let short: &[char] = match operation {
+        "rebase" => &['x', 's'],
+        "merge" => &['s'],
+        _ if SIGNING_OPERATIONS.contains(&operation) => &[],
+        _ => return false,
+    };
+    rest.all(|argument| {
+        if let Some(long) = argument.strip_prefix("--") {
+            let name = long.split('=').next().unwrap_or(long);
+            return name.is_empty()
+                || !["exec", "strategy"]
+                    .iter()
+                    .any(|option| option.starts_with(name));
+        }
+        argument
+            .strip_prefix('-')
+            .is_none_or(|cluster| !cluster.chars().any(|flag| short.contains(&flag)))
+    })
 }
 
 /// Whether one argument after the operation names a program for `git` to run.
@@ -786,14 +855,14 @@ mod tests {
     }
 
     /// The scope follows the operation rather than the first word of the argv. One keyed on
-    /// `git` alone hands `~/.git-credentials` to a `git status`, a `git commit` running a
-    /// repository's own hooks, and an alias whose expansion a configuration file decides.
+    /// `git` alone hands `~/.git-credentials` to a `git status`, a `git submodule update` and an
+    /// alias whose expansion a configuration file decides. A `git commit` is not among them for the
+    /// remote scope: it signs, and what it is lent for that is the signing scope.
     #[test]
     fn a_git_operation_that_talks_to_no_remote_carries_none() {
         for line in [
             "",
             "status",
-            "commit -m a-message",
             "log",
             "submodule update --init",
             "remote update",
@@ -805,6 +874,7 @@ mod tests {
         ] {
             assert_eq!(of(GIT, line), None, "git {line}");
         }
+        assert_ne!(of(GIT, "commit -m a-message"), Some(Scope::Remote));
     }
 
     /// A first word `gh` has no command for runs an alias or an extension, a program a
@@ -1859,5 +1929,149 @@ mod tests {
                 path: PathBuf::from("/home/a-person/xdg/gh")
             }]
         );
+    }
+
+    /// SANDBOX-16: an operation that writes a signed commit or tag carries the signing scope, wherever
+    /// the repository it runs in is, and a commit message holding `::` or an address is only text.
+    #[test]
+    fn an_operation_that_signs_carries_the_signing_scope() {
+        for line in [
+            "commit -m message",
+            "commit --amend --no-edit",
+            "commit -m fix::the-thing",
+            "commit -m see:https://example.com/a",
+            "-C ../other commit -m message",
+            "rebase main",
+            "rebase --continue",
+            "rebase -i HEAD~3",
+            "rebase --onto main a b",
+            "merge feature",
+            "merge --no-ff feature",
+            "cherry-pick abc123",
+            "cherry-pick -s abc123",
+            "revert abc123",
+            "am patch.mbox",
+            "tag -s v1",
+        ] {
+            assert_eq!(of(GIT, line), Some(Scope::Signing), "git {line}");
+        }
+        assert_eq!(Scope::Signing.name(), "signing");
+    }
+
+    /// An option that makes git run a program from the argv, or a configuration written in front of
+    /// the operation, leaves the stage with no scope: the signature is then made on the strength of
+    /// a command the plan chose.
+    #[test]
+    fn a_signing_operation_that_names_a_program_carries_nothing() {
+        for line in [
+            "-c core.sshCommand=x commit -m message",
+            "-c gpg.ssh.program=x commit -m message",
+            "--exec-path=/x commit -m message",
+            "--config-env=a=B commit -m message",
+            "rebase --exec make main",
+            "rebase --exe=make main",
+            "rebase --e=make main",
+            "rebase -x make main",
+            "rebase -ix make main",
+            "rebase --strategy=x main",
+            "rebase --str=x main",
+            "rebase -s x main",
+            "merge --strategy=x feature",
+            "merge --s=x feature",
+            "merge -s x feature",
+            "commit --exec=x",
+            "cherry-pick --strategy=x abc",
+            "alias-for-commit",
+            "stash",
+            "status",
+            "log",
+            "diff",
+        ] {
+            assert_eq!(of(GIT, line), None, "git {line}");
+        }
+        let assignment = the_environment(&[("GIT_SSH_COMMAND", "x")]);
+        assert_eq!(
+            Scope::of(Path::new(GIT), &argv("commit -m message"), &assignment),
+            None
+        );
+    }
+
+    /// An operation that talks to a remote stays remote, and only a program named `git` signs.
+    #[test]
+    fn signing_does_not_change_the_other_scopes() {
+        assert_eq!(of(GIT, "push origin main"), Some(Scope::Remote));
+        assert_eq!(of(GIT, "pull --rebase"), Some(Scope::Remote));
+        assert_eq!(of(GIT, "pull -s ours"), None);
+        assert_eq!(of("/usr/bin/gh", "commit"), None);
+        assert_eq!(of("/tmp/not-git", "commit -m message"), None);
+    }
+
+    /// The planner and `/reach` name the credential scopes from a fixed menu, and signing is not
+    /// on it: a line carries it only by the argv that signs, and only for a person who signs.
+    #[test]
+    fn signing_cannot_be_named() {
+        assert_eq!(Scope::named("signing"), None);
+        assert_eq!(Requested::named("signing"), None);
+        assert!(!Requested::MENU.contains(&"signing"));
+    }
+
+    /// A home with `.gitconfig` signing with `~/keys/work.pub`, and an unrelated private key.
+    #[cfg(unix)]
+    fn a_home_that_signs(name: &str) -> PathBuf {
+        let home = a_home_with(name, "", &[".ssh/id_ed25519", "keys/work.pub", "keys/work"]);
+        std::fs::write(
+            home.join(".gitconfig"),
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/keys/work.pub\n",
+        )
+        .unwrap();
+        home
+    }
+
+    /// SANDBOX-16: a stage that signs reads the one public key `user.signingkey` names and nothing
+    /// else of the remote scope: no `~/.ssh`, no known hosts, no private key, no write.
+    #[test]
+    #[cfg(unix)]
+    fn the_signing_scope_reads_the_public_key_and_nothing_else() {
+        let home = a_home_that_signs("signing-scope-grant");
+        let policy = Scope::Signing.grant(SandboxPolicy::strict(), &home);
+        assert_eq!(granted_paths(&policy), [home.join("keys/work.pub")]);
+        assert!(policy.writable.is_empty());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A person who does not sign with ssh, or whose key is no public key in the home, is lent
+    /// nothing: the grant follows the configuration and not the argv.
+    #[test]
+    #[cfg(unix)]
+    fn the_signing_scope_reads_nothing_where_the_key_is_refused_or_signing_is_off() {
+        let home = a_home_that_signs("signing-scope-refused");
+        for gitconfig in [
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/keys/work\n",
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/.ssh/id_ed25519\n",
+            "[gpg]\nformat = ssh\n",
+            "[user]\nsigningkey = ~/keys/work.pub\n",
+        ] {
+            std::fs::write(home.join(".gitconfig"), gitconfig).unwrap();
+            let policy = Scope::Signing.grant(SandboxPolicy::strict(), &home);
+            assert!(granted_paths(&policy).is_empty(), "{gitconfig}");
+        }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// `git pull` merges or rebases and signs the commit it makes, so the remote scope reads the
+    /// key too, and still no private key.
+    #[test]
+    #[cfg(unix)]
+    fn the_remote_scope_reads_the_signing_key_as_well() {
+        let home = a_home_that_signs("signing-remote-grant");
+        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home);
+        assert!(granted_paths(&policy).contains(&home.join("keys/work.pub")));
+        for private in ["keys/work", ".ssh/id_ed25519", ".ssh"] {
+            assert!(
+                !granted_paths(&policy).contains(&home.join(private)),
+                "{private}"
+            );
+        }
+        std::fs::remove_dir_all(&home).unwrap();
     }
 }
