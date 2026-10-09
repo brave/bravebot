@@ -718,3 +718,15 @@ holds no bytes of what the rows contain and the rule is kept ([SCROLL-5](scrolle
 
 `verified-by: bravebot_tui::render::a_held_view_says_how_many_rows_arrived_below_and_the_key_back`
 `verified-by: bravebot_tui::render::a_held_view_on_a_narrow_terminal_drops_the_cue_and_keeps_the_mode`
+
+<a id="VIEW-28"></a>
+### VIEW-28: a change in the terminal's size is drawn without waiting for another event
+
+When the terminal is resized while the box is idle, the interface draws a frame for the new size
+at once, with every row, the hint line and the status row among them, laid out against it.
+
+**Why.** The idle loop drew only for an event that stood for an action, and a resize stood for
+none, so the frame stayed as the old size drew it until a key was pressed. The garbling was worst on
+the bottom rows, which are fitted to the width at the moment they are drawn.
+
+`verified-by: bravebot_tui::app::a_resize_while_idle_asks_for_a_frame`

@@ -3038,6 +3038,32 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
     }
 }
 
+/// What the idle loop does with one event it read: the action a key, a mouse report, a paste, a
+/// return of focus or a change of size stands for. Taken out of the loop so a test can pin that
+/// each event that must reach the screen does.
+fn idle_action(session: &mut Session, taken: TermEvent) -> Action {
+    match taken {
+        // Presses only. Asking for disambiguated keys asks for releases as well, and a
+        // release handled as a press types every character twice.
+        TermEvent::Key(key) if key.kind == KeyEventKind::Release => Action::None,
+        TermEvent::Key(key) => handle_key(session, key),
+        TermEvent::Mouse(mouse) => handle_mouse(session, mouse),
+        TermEvent::Paste(text) => handle_paste(session, &text),
+        // Coming back from copying something is the moment a picture appears on the
+        // clipboard, and the cheapest moment to notice: once per switch away and back,
+        // rather than a clipboard tool spawned on a timer for the whole life of the
+        // session.
+        TermEvent::FocusGained => {
+            session.image_on_clipboard = crate::clipboard::holds_an_image();
+            Action::Redraw
+        }
+        // Nothing else draws after a resize while the box is idle, so the frame, and the hint and
+        // status rows in it, stay as the old size drew them until a key is pressed (VIEW-28).
+        TermEvent::Resize(..) => Action::Redraw,
+        _ => Action::None,
+    }
+}
+
 /// Take what the selection covers and put it on the clipboard.
 ///
 /// What the user swept over is what they saw: wrapped, scrolled and trimmed exactly as it was
@@ -4147,25 +4173,7 @@ fn event_loop(
                         }
                         let taken = input::read()?;
                         took_input(&mut session, &taken);
-                        match taken {
-                            // Presses only. Asking for disambiguated keys asks for releases as well, and a
-                            // release handled as a press types every character twice.
-                            TermEvent::Key(key) if key.kind == KeyEventKind::Release => {
-                                Action::None
-                            }
-                            TermEvent::Key(key) => handle_key(&mut session, key),
-                            TermEvent::Mouse(mouse) => handle_mouse(&mut session, mouse),
-                            TermEvent::Paste(text) => handle_paste(&mut session, &text),
-                            // Coming back from copying something is the moment a picture appears on the
-                            // clipboard, and the cheapest moment to notice: once per switch away and back,
-                            // rather than a clipboard tool spawned on a timer for the whole life of the
-                            // session.
-                            TermEvent::FocusGained => {
-                                session.image_on_clipboard = crate::clipboard::holds_an_image();
-                                Action::Redraw
-                            }
-                            _ => Action::None,
-                        }
+                        idle_action(&mut session, taken)
                     }
                 },
             },
@@ -13382,6 +13390,25 @@ mod tests {
                 "{taken:?} left the offer standing"
             );
         }
+    }
+
+    /// The reported case (#1844). The idle loop drew only for an event that mapped to an action, and
+    /// a resize mapped to none, so the hint and status rows stayed as the old size drew them until a
+    /// key was pressed.
+    #[test]
+    fn a_resize_while_idle_asks_for_a_frame() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            idle_action(&mut session, TermEvent::Resize(40, 10)),
+            Action::Redraw
+        );
+        // Not everything draws: a key release is still nothing, so the fix is not "always redraw".
+        let mut release = key(KeyCode::Char('x'));
+        release.kind = KeyEventKind::Release;
+        assert_eq!(
+            idle_action(&mut session, TermEvent::Key(release)),
+            Action::None
+        );
     }
 
     /// The offer answers the press just made, so anything else withdraws it. Otherwise a press now
