@@ -329,6 +329,9 @@ pub struct Policy<'sink, S: Sink> {
     /// Whether this run's definition named its tools and left `spawn_agent` out, which refuses
     /// every delegate it asks for wherever it sits.
     named_out_delegating: bool,
+    /// The limits on the files this run may write, where its definition or one above it wrote a
+    /// `writes:` line (DELEGATE-28). A path has to be inside every one; none is no limit.
+    write_limits: Vec<crate::permissions::Permissions>,
     /// How many delegates this run has started, which is what numbers the next. A refused or
     /// withdrawn one is not counted.
     spawned: u32,
@@ -478,6 +481,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // tree from its spec with `within`.
             at: None,
             named_out_delegating: false,
+            write_limits: Vec::new(),
             spawned: 0,
             tree: crate::delegate::Tree::default(),
             vouch_asked: std::collections::BTreeSet::new(),
@@ -1268,6 +1272,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn within(mut self, spec: &crate::delegate::DelegateSpec) -> Self {
         self.at = Some(spec.id());
         self.named_out_delegating = spec.named_out_delegating();
+        self.write_limits = spec.write_limits().to_vec();
         self.tree = spec.tree().clone();
         self.hold(
             spec.holds(),
@@ -1339,18 +1344,48 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Deny)
     }
 
-    /// Refuse a write a `deny` rule covers.
+    /// Refuse a write a `deny` rule covers, and one outside the files this run's definition lets it
+    /// write (DELEGATE-28).
     ///
-    /// Both families are consulted: a path nothing may read is a path nothing may replace either,
-    /// so a `Read` deny rule stops a write to it. Claude Code does the same, and the reason is
-    /// that a file whose contents are off limits is not protected if it can be overwritten.
+    /// Both families of rule are consulted: a path nothing may read is a path nothing may replace
+    /// either, so a `Read` deny rule stops a write to it. Claude Code does the same, and the reason
+    /// is that a file whose contents are off limits is not protected if it can be overwritten.
     pub fn before_write(&mut self, path: &str) -> Gated<()> {
+        self.refuse_denied_write(path)?;
+        self.refuse_write_outside_limits(path)
+    }
+
+    /// The `deny` half of [`Policy::before_write`], for a caller that asks the rules about each
+    /// spelling of a file and the definition's limit about the one it lands on.
+    pub fn refuse_denied_write(&mut self, path: &str) -> Gated<()> {
         for subject in [
             crate::permissions::Subject::Edit,
             crate::permissions::Subject::Read,
         ] {
             let decision = self.permissions.for_path(subject, path);
             self.refuse_if_denied("write", decision, path)?;
+        }
+        Ok(())
+    }
+
+    /// Refuse a write to `path` when a limit this run's definition, or one above it, put on the
+    /// files it may write does not cover it (DELEGATE-28).
+    ///
+    /// A question about a path the planner named and a list the person wrote down, so it decides
+    /// from routing alone. It can only take a write away: a path inside every limit is then asked
+    /// of the deny and ask rules and the approval like any other. A limit is written about
+    /// workspace-relative names, so the caller gives the name the file lands on.
+    pub fn refuse_write_outside_limits(&mut self, path: &str) -> Gated<()> {
+        if self
+            .write_limits
+            .iter()
+            .any(|limit| !limit.permits_edit(path))
+        {
+            return Err(self.deny(
+                "write",
+                Principle::Capability,
+                format!("this delegate's definition limits the files it may write, and {path} is outside them"),
+            ));
         }
         Ok(())
     }
@@ -3413,6 +3448,37 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let proof = Declassification::authorise("a delegate's prompt, carried not read");
         let task = task.clone().declassify(&proof);
         let rounds = selected.rounds();
+
+        // The limits this run is under come first and stay, so a delegate cannot write where the
+        // run that started it may not. The definition's own are read here because reading one
+        // needs the host's separators and case folding, which this run's rules hold.
+        let mut limits = self.write_limits.clone();
+        for patterns in selected.write_limits() {
+            let (limit, unread) = self.permissions.edit_limit(patterns);
+            if !unread.is_empty() {
+                let unread: Vec<&str> = unread.iter().map(|r| r.text.as_str()).collect();
+                self.allow(
+                    "delegate",
+                    format!(
+                        "{id}: {} names write patterns that cannot be read here ({}), so it is \
+                         delegated without them",
+                        selected.name(),
+                        unread.join(", ")
+                    ),
+                );
+            }
+            limits.push(limit);
+        }
+        if limits.len() > self.write_limits.len() {
+            self.allow(
+                "delegate",
+                format!(
+                    "{id}: {} may write only the files its definition's writes: lines cover",
+                    selected.name()
+                ),
+            );
+        }
+
         let spec = crate::delegate::DelegateSpec::new(
             id,
             &selected,
@@ -3421,7 +3487,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             rounds,
             self.tree.clone(),
         )
-        .holding(self.holds);
+        .holding(self.holds)
+        .limited_to(limits);
 
         let beneath = if spec.may_delegate() {
             "and a place in this turn's tree of delegates"
@@ -5563,7 +5630,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             self.refuse_if_denied("run", decision, &words.join(" "))?;
         }
         for path in &plan.writes {
-            self.before_write(&path.to_string_lossy())?;
+            self.refuse_denied_write(&path.to_string_lossy())?;
         }
         for path in &plan.reads {
             self.before_read(&path.to_string_lossy())?;
@@ -15409,6 +15476,152 @@ five
             assert!(
                 said(Kind::Worker.most_rounds()),
                 "the trail did not record the bound the ceiling held it to"
+            );
+        }
+
+        /// A scribe definition limited to `docs/**`, installed on a fresh turn's policy.
+        fn scribes_limited_to<'a>(
+            sink: &'a mut RecordingSink,
+            patterns: &[&str],
+        ) -> Policy<'a, RecordingSink> {
+            let mut policy = open_policy(sink);
+            let mut definitions = crate::delegate::Definitions::default();
+            definitions.insert(
+                crate::delegate::Definition::from_file(
+                    "scribe",
+                    "writes the docs",
+                    Kind::Worker,
+                    None,
+                    "",
+                    ".bravebot/agents/scribe.md",
+                )
+                .with_writes(patterns.iter().map(|p| p.to_string()).collect()),
+            );
+            definitions.insert(crate::delegate::Definition::from_file(
+                "helper",
+                "does any job",
+                Kind::Worker,
+                None,
+                "",
+                ".bravebot/agents/helper.md",
+            ));
+            policy.install_delegates(definitions);
+            policy
+        }
+
+        /// DELEGATE-28. A delegate under a definition with a `writes:` line is refused every file
+        /// outside it, under the name given and under one that climbs out, and the turn that
+        /// started it is not limited by it.
+        #[test]
+        fn a_delegate_may_write_only_inside_its_definitions_writes() {
+            let mut turn_sink = RecordingSink::new();
+            let mut turn = scribes_limited_to(&mut turn_sink, &["docs/**"]);
+            let spec = turn
+                .before_delegate(&argument("scribe"), &argument("write it up"), None)
+                .expect("a clean context may delegate");
+
+            let mut sink = RecordingSink::new();
+            let mut scribe = open_policy(&mut sink).within(&spec);
+            assert!(scribe.before_write("docs/guide/a.md").is_ok());
+            for outside in ["src/main.rs", "docs-old/a.md", "docs/../src/main.rs"] {
+                assert!(
+                    scribe.before_write(outside).is_err(),
+                    "{outside} was written outside the limit"
+                );
+            }
+            assert!(
+                turn.before_write("src/main.rs").is_ok(),
+                "the limit reached the turn that started the delegate"
+            );
+        }
+
+        /// DELEGATE-28. The key only narrows: a path inside it that a deny rule covers is still
+        /// refused, and the refusal is the rule's.
+        #[test]
+        fn a_writes_line_cannot_allow_what_a_deny_rule_refuses() {
+            let mut turn_sink = RecordingSink::new();
+            let mut turn = scribes_limited_to(&mut turn_sink, &["docs/**"]);
+            let spec = turn
+                .before_delegate(&argument("scribe"), &argument("write it up"), None)
+                .expect("a clean context may delegate");
+
+            let (denying, _) = crate::permissions::Permissions::parse(
+                &["Edit(docs/private/**)".to_string()],
+                &[],
+                &[],
+                &crate::permissions::Anchors::none(),
+            );
+            let mut sink = RecordingSink::new();
+            let mut scribe = open_policy(&mut sink)
+                .with_permissions(denying)
+                .within(&spec);
+            let err = scribe
+                .before_write("docs/private/key.md")
+                .expect_err("a deny rule was lifted by the key");
+            assert!(format!("{err}").contains("deny rule"), "{err}");
+            assert!(scribe.before_write("docs/public.md").is_ok());
+        }
+
+        /// DELEGATE-28. A pattern nobody can read covers no file, and a line left with none leaves
+        /// the delegate no file to write rather than every one. Named in the trail.
+        #[test]
+        fn an_unreadable_writes_pattern_leaves_no_write_path() {
+            let mut turn_sink = RecordingSink::new();
+            let mut turn = scribes_limited_to(&mut turn_sink, &["~/notes/**"]);
+            let spec = turn
+                .before_delegate(&argument("scribe"), &argument("write it up"), None)
+                .expect("a clean context may delegate");
+
+            let mut sink = RecordingSink::new();
+            let mut scribe = open_policy(&mut sink).within(&spec);
+            for path in ["docs/a.md", "src/main.rs", "a.md"] {
+                assert!(
+                    scribe.before_write(path).is_err(),
+                    "{path} was written under a line with no readable pattern"
+                );
+            }
+            drop(turn);
+            assert!(
+                turn_sink.events().iter().any(|event| matches!(
+                    event,
+                    Event::GatePassed { detail, .. } if detail.contains("~/notes/**")
+                )),
+                "the trail did not name the pattern that could not be read"
+            );
+
+            let mut turn_sink = RecordingSink::new();
+            let mut turn = scribes_limited_to(&mut turn_sink, &["~/notes/**", "docs/**"]);
+            let spec = turn
+                .before_delegate(&argument("scribe"), &argument("write it up"), None)
+                .expect("a clean context may delegate");
+            let mut sink = RecordingSink::new();
+            let mut scribe = open_policy(&mut sink).within(&spec);
+            assert!(scribe.before_write("docs/a.md").is_ok());
+            assert!(scribe.before_write("src/main.rs").is_err());
+        }
+
+        /// DELEGATE-28. A delegate that starts one of its own passes its limit down: the child's
+        /// definition writes none, and it still may not write where its parent may not.
+        #[test]
+        fn a_delegate_started_by_a_limited_one_is_limited_too() {
+            let mut turn_sink = RecordingSink::new();
+            let mut turn = scribes_limited_to(&mut turn_sink, &["docs/**"]);
+            let spec = turn
+                .before_delegate(&argument("scribe"), &argument("write it up"), None)
+                .expect("a clean context may delegate");
+
+            let mut sink = RecordingSink::new();
+            let mut scribe = scribes_limited_to(&mut sink, &["docs/**"]).within(&spec);
+            let child = scribe
+                .before_delegate(&argument("helper"), &argument("do a job"), None)
+                .expect("an unnamed tool list may delegate");
+
+            let mut child_sink = RecordingSink::new();
+            let mut helper = open_policy(&mut child_sink).within(&child);
+            assert!(helper.before_write("docs/a.md").is_ok());
+            assert!(
+                helper.before_write("src/main.rs").is_err(),
+                "a delegate's own delegate wrote where the delegate may not"
             );
         }
 

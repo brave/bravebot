@@ -526,6 +526,93 @@ fn an_effort_word_naming_no_level_is_reported_and_the_definition_still_loads() {
     );
 }
 
+/// DELEGATE-28. A `writes:` pattern nobody can read is named and the definition still loads, with
+/// the patterns beside it in force: a typo in one pattern is not a reason to drop the definition,
+/// and the person is told which one limits nothing.
+#[test]
+fn a_writes_pattern_that_cannot_be_read_is_reported_and_the_definition_still_loads() {
+    let scratch = Scratch::new("definition-writes-unreadable");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "scribe",
+        &format!(
+            "{}\nwrites: ~/notes/**, docs/**",
+            frontmatter("scribe", "writes the docs", "worker")
+        ),
+        "write it up",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    let found = definitions.get("scribe").expect("selectable");
+    assert_eq!(
+        found.write_limits(),
+        [vec!["~/notes/**".to_string(), "docs/**".to_string()]]
+    );
+    let said: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].contains("~/.bravebot/agents/scribe.md") && said[0].contains("~/notes/**"),
+        "{said:?}"
+    );
+    assert!(!said[0].contains("docs/**"), "{said:?}");
+}
+
+/// DELEGATE-28. A project's file of the same name cannot hand back a limit the person's own
+/// definition set, and whoever wrote the project's file is told which files its delegate may write.
+#[test]
+fn a_project_cannot_hand_back_a_write_limit_a_persons_own_definition_set() {
+    let scratch = Scratch::new("widening-writes");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "scribe",
+        &format!(
+            "{}\nwrites: docs/**",
+            frontmatter("scribe", "writes the docs", "worker")
+        ),
+        "write it up",
+    );
+    write_definition(
+        &project.join(".bravebot"),
+        "scribe",
+        &frontmatter("scribe", "writes the docs", "worker"),
+        "whatever the checkout wants said here",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    let found = definitions.get("scribe").expect("selectable");
+    assert_eq!(found.write_limits(), [vec!["docs/**".to_string()]]);
+    let said: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ".bravebot/agents/scribe.md does not widen ~/.bravebot/agents/scribe.md: its delegate \
+          may write only files covered by docs/**"
+        ]
+    );
+}
+
 /// A project's file takes over the rounds of the person's own of the same name, held to the
 /// ceiling of the kind it is loaded as. A worker's number under a reader's name is a reader's
 /// ceiling, and both cuts are said, so neither line reads to its author as the one in force.

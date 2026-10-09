@@ -4124,8 +4124,7 @@ fn path_argument<S: Sink>(
             // reference is the same file as one the planner typed, so the rule that would have
             // refused the second refuses the first. The path itself stays out of the refusal:
             // what goes back to the planner names the reference, as it does everywhere else.
-            refuse_denied_path(policy, workspace, purpose, &resolved)
-                .map_err(|_| denied_by_rule(&slot.to_string()))?;
+            refuse_denied_path_as(policy, workspace, purpose, &resolved, &slot.to_string())?;
             Ok(PathArgument {
                 path,
                 destination: Destination::Reference,
@@ -4152,22 +4151,57 @@ fn refuse_denied_path<S: Sink>(
     purpose: Purpose,
     path: &str,
 ) -> Result<(), String> {
-    let ask = |policy: &mut Policy<'_, S>, name: &str| match purpose {
-        Purpose::Read => policy.before_read(name),
-        Purpose::Effect => policy.before_write(name),
+    refuse_denied_path_as(policy, workspace, purpose, path, path)
+}
+
+/// [`refuse_denied_path`], naming `shown` in the refusal where the path itself is not to be said.
+fn refuse_denied_path_as<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    purpose: Purpose,
+    path: &str,
+    shown: &str,
+) -> Result<(), String> {
+    let ask = |policy: &mut Policy<'_, S>, name: &str| {
+        match purpose {
+            Purpose::Read => policy.before_read(name),
+            Purpose::Effect => policy.refuse_denied_write(name),
+        }
+        .map_err(|_| denied_by_rule(shown))
     };
-    ask(policy, path).map_err(|_| denied_by_rule(path))?;
+    ask(policy, path)?;
     // Spelled out as well, because a rule anchored at the home directory never matches `~/x`, and
     // the landing below exists only once the home is opened, so until then the refusal would offer
     // opening it for a file a rule refuses once it is.
     let expanded = workspace.expanded(path);
     if expanded != path {
-        ask(policy, &expanded).map_err(|_| denied_by_rule(path))?;
+        ask(policy, &expanded)?;
     }
-    match workspace.landing(path) {
-        Some(landed) => ask(policy, &landed).map_err(|_| denied_by_rule(path)),
-        None => Ok(()),
+    let landing = workspace.landing(path);
+    if let Some(landed) = &landing {
+        ask(policy, landed)?;
     }
+    // A definition's limit is written about workspace-relative names, so it is judged on the name
+    // given in that spelling (`/work/docs/a.md` is `docs/a.md`) and on the file the name lands on
+    // (`docs/link` is wherever the link goes). Both have to be inside: a link outside the limit
+    // that points inside it is outside.
+    if purpose == Purpose::Effect {
+        let given = workspace.spelled_in_workspace(path);
+        let mut judged: Vec<&str> = given
+            .as_deref()
+            .into_iter()
+            .chain(landing.as_deref())
+            .collect();
+        if judged.is_empty() {
+            judged.push(path);
+        }
+        for name in judged {
+            policy
+                .refuse_write_outside_limits(name)
+                .map_err(|_| outside_write_limit(shown))?;
+        }
+    }
+    Ok(())
 }
 
 /// Word a workspace failure about `named` for the planner, recording it first when it is a path
@@ -4224,6 +4258,17 @@ fn denied_by_rule(shown: &str) -> String {
         "refused: a deny rule in the user's settings covers {shown}, so nothing here can \
          reach it. Do not retry, and do not look for another way to the same file: work \
          without it, or say in your reply what you needed it for."
+    )
+}
+
+/// What the planner is told when the definition it runs under limits the files it may write
+/// (DELEGATE-28). Says the limit is the reason, as [`denied_by_rule`] does, since a planner told
+/// only "refused" tries the same call again.
+fn outside_write_limit(shown: &str) -> String {
+    format!(
+        "refused: the definition you run under limits the files you may write, and {shown} is \
+         outside them. Do not retry, and do not look for another way to write it: write only \
+         what is inside the limit, or say in your reply what is left to be written."
     )
 }
 

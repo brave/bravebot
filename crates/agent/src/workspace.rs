@@ -1744,6 +1744,24 @@ impl Workspace {
         (!Path::new(&landed).components().eq(typed)).then_some(landed)
     }
 
+    /// `named` spelled relative to the workspace root, without asking the file system: `./docs/a.md`
+    /// and `<root>/docs/a.md` are `docs/a.md`, and a link is not followed.
+    ///
+    /// `None` for an absolute name that is not under the root as written, which has no
+    /// workspace-relative spelling; [`Workspace::landing`] is the name it reaches.
+    pub(crate) fn spelled_in_workspace(&self, named: &str) -> Option<String> {
+        let expanded = self.expanded(named);
+        let path = Path::new(&expanded);
+        if path.is_absolute() && !path.starts_with(&self.root) {
+            return None;
+        }
+        let plain: PathBuf = path
+            .components()
+            .filter(|component| !matches!(component, Component::CurDir))
+            .collect();
+        Some(self.relative_display(&plain))
+    }
+
     /// Whether a `deny` rule covers reading `named`, under that name or the one it lands on
     /// (PERM-7), asked without refusing anything.
     ///
