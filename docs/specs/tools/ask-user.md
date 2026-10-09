@@ -47,6 +47,9 @@ saw.
 `verified-by: bravebot_core::ask::a_series_key_says_how_many_questions_are_in_it`
 `verified-by: bravebot_core::ask::shaping_a_series_never_drops_a_question`
 `verified-by: bravebot_core::policy::a_refused_series_yields_no_answer_at_all`
+`verified-by: bravebot_agent::tools::more_than_four_questions_are_refused_rather_than_trimmed`
+`verified-by: bravebot_agent::tools::exactly_four_questions_are_asked_whole`
+`verified-by: bravebot_agent::tools::the_gate_runs_once_for_a_call_however_many_questions_it_holds`
 
 <a id="ASK-3"></a>
 ### ASK-3: asking stops once the planner's context has met something untrusted

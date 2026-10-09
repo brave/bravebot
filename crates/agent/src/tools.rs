@@ -12404,6 +12404,52 @@ mod tests {
             );
         }
 
+        /// The limit is four and four is inside it: a bound that refused the fourth question
+        /// would pass the test above and leave a series of the size the clause allows unaskable.
+        #[test]
+        fn exactly_four_questions_are_asked_whole() {
+            let mut confirmer = Watching::default();
+            let four: Vec<Value> = (0..4)
+                .map(|i| json!({"header": format!("T{i}"), "question": format!("Q{i}?")}))
+                .collect();
+            call(&mut confirmer, json!({"questions": four}));
+            let shown = confirmer.seen.first().expect("the user was asked");
+            let questions: Vec<&str> = shown.prompts.iter().map(|p| p.question.as_str()).collect();
+            assert_eq!(questions, ["Q0?", "Q1?", "Q2?", "Q3?"]);
+        }
+
+        /// One call is one decision. A gate run per question would decide, question by question,
+        /// whether that one is put to the person, and the gate's record would show it as several
+        /// decisions where the call made one.
+        #[test]
+        fn the_gate_runs_once_for_a_call_however_many_questions_it_holds() {
+            let gated = |arguments: Value| {
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut confirmer = Watching::default();
+                ask_user(&mut policy, &mut confirmer, &arguments);
+                sink.events()
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            bravebot_core::event::Event::ActionField { tool, field, .. }
+                                if tool == "ask_user" && field == "questions"
+                        )
+                    })
+                    .count()
+            };
+
+            assert_eq!(gated(one_question()), 1);
+            assert_eq!(gated(three_questions()), 1);
+        }
+
         #[test]
         fn an_empty_list_of_questions_is_an_error() {
             let mut confirmer = Watching::default();
@@ -13400,6 +13446,23 @@ mod tests {
             armed: &mut usize,
             arguments: Value,
         ) -> (Produced, String) {
+            armed_after(
+                bravebot_core::label::Integrity::Trusted,
+                workspace,
+                arming,
+                armed,
+                arguments,
+            )
+        }
+
+        /// The same, from a context that has already met `context`.
+        fn armed_after(
+            context: bravebot_core::label::Integrity,
+            workspace: &Workspace,
+            arming: crate::watch::Arming,
+            armed: &mut usize,
+            arguments: Value,
+        ) -> (Produced, String) {
             let mut sink = RecordingSink::new();
             let mut routing = Routing::new();
             routing.insert_trusted("task", "tell me when a file changes");
@@ -13409,7 +13472,8 @@ mod tests {
                 CapabilitySet::from_iter([Capability::FileRead]),
                 &mut sink,
             )
-            .expect("policy");
+            .expect("policy")
+            .resuming(context);
             let produced = watch_file(
                 &mut policy,
                 workspace,
@@ -13575,7 +13639,11 @@ mod tests {
         #[test]
         fn a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be() {
             let scratch = Scratch::new("escaping");
-            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let inside = scratch.path.join("workspace");
+            std::fs::create_dir_all(&inside).unwrap();
+            // The file exists, so a refusal cannot be a missing file mistaken for the gate.
+            std::fs::write(scratch.path.join("outside.txt"), "hello\n").unwrap();
+            let workspace = Workspace::new(&inside).expect("workspace");
 
             let mut count = 0;
             let (produced, told) = armed(
@@ -13587,6 +13655,30 @@ mod tests {
 
             assert!(told.starts_with("refused:"), "{told}");
             assert_eq!(produced.watch, None);
+            assert_eq!(count, 0, "a watch the gate refused was counted as armed");
+        }
+
+        /// A read of a file is refused once the context has met untrusted content, because what
+        /// the planner proposes is then untrusted too. A watch on a file that exists, inside the
+        /// workspace, is refused for that reason and no other.
+        #[test]
+        fn a_watch_is_refused_once_the_context_has_met_something_untrusted() {
+            let scratch = Scratch::new("armed-untrusted");
+            std::fs::write(scratch.path.join("a.txt"), "hello\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut count = 0;
+            let (produced, told) = armed_after(
+                bravebot_core::label::Integrity::Untrusted,
+                &workspace,
+                Arming::Allowed { free: 8 },
+                &mut count,
+                json!({"path": "a.txt"}),
+            );
+
+            assert!(told.starts_with("refused:"), "{told}");
+            assert_eq!(produced.watch, None);
+            assert_eq!(count, 0, "a watch the gate refused was counted as armed");
         }
 
         /// One field, a path, so the whole of what a person would have to approve is which file

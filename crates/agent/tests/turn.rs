@@ -5570,11 +5570,55 @@ fn an_edit_is_reviewed_as_a_diff() {
     );
 }
 
-/// When a review does happen, the request carries the diff material: the file as it is and
-/// the file as it would become.
+/// When a review does happen, the request carries the diff material: the file as it is, the
+/// file as it would become, and the comparison of the two. A reviewer shown the replacement
+/// passage alone, or a diff of the wrong pair, would approve something other than the write.
 #[test]
 fn a_reviewed_edit_carries_both_sides_of_the_diff() {
     let scratch = Scratch::new("edit-review-shape");
+    std::fs::write(scratch.path.join("a.txt"), "keep\nold\ntail\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"old","new_text":"new\nmore"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust("a.txt");
+
+    let task = Task::new("edit a.txt").with_permissions(rules(&[], &["Edit(a.txt)"], &[]));
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    assert_eq!(confirmer.seen.len(), 1, "the edit was reviewed once");
+    let seen = &confirmer.seen[0];
+    assert_eq!(seen.path, "a.txt");
+    assert_eq!(seen.contents, "keep\nnew\nmore\ntail\n");
+    assert_eq!(seen.existing.as_deref(), Some("keep\nold\ntail\n"));
+    assert_eq!((seen.diff.added(), seen.diff.removed()), (2, 1));
+    assert!(!seen.untrusted);
+}
+
+/// With the file trusted and no rule asking, an edit is applied without a question.
+#[test]
+fn a_trusted_edit_no_rule_asks_about_is_applied_without_a_review() {
+    let scratch = Scratch::new("edit-review-silent");
     std::fs::write(scratch.path.join("a.txt"), "keep\nold\ntail\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
@@ -5590,8 +5634,6 @@ fn a_reviewed_edit_carries_both_sides_of_the_diff() {
     let mut sink = RecordingSink::new();
     let mut confirmer = RecordingConfirmer::approving();
 
-    // The file is readable as trusted, but a fetch taints the context, so the resulting data
-    // is untrusted and the write must be reviewed.
     let mut trust = bravebot_core::trust::TrustStore::new("/work");
     trust.trust(".");
 
@@ -5607,7 +5649,6 @@ fn a_reviewed_edit_carries_both_sides_of_the_diff() {
     )
     .expect("turn runs");
 
-    // Trusted throughout, so no review. Asserted so the silent path stays covered.
     assert!(confirmer.seen.is_empty());
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
@@ -6000,7 +6041,12 @@ fn an_approved_edit_is_recorded_as_endorsed() {
 #[test]
 fn an_edit_cannot_escape_the_workspace() {
     let scratch = Scratch::new("edit-escape");
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let inside = scratch.path.join("workspace");
+    std::fs::create_dir_all(&inside).unwrap();
+    // The target exists and contains the passage, so only the workspace boundary can refuse it.
+    let outside = scratch.path.join("escaped.txt");
+    std::fs::write(&outside, "a\n").unwrap();
+    let workspace = Workspace::new(&inside).expect("workspace");
 
     let (endpoint, _received) = serve_sequence(vec![
         tool_request_2(
@@ -6014,14 +6060,19 @@ fn an_edit_cannot_escape_the_workspace() {
     let mut sink = RecordingSink::new();
     let mut confirmer = RecordingConfirmer::approving();
 
+    // The workspace is trusted, so the untrusted-file refusal cannot be what stops the edit.
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+
     let task = Task::new("edit outside");
-    turn::run(
+    turn::run_with_trust(
         &config,
         &egress,
         &workspace,
         &task,
         &mut confirmer,
         &mut sink,
+        trust,
     )
     .expect("turn runs");
 
@@ -6029,7 +6080,7 @@ fn an_edit_cannot_escape_the_workspace() {
         confirmer.seen.is_empty(),
         "an escaping path reached the approval prompt"
     );
-    assert!(!scratch.path.parent().unwrap().join("escaped.txt").exists());
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "a\n");
 }
 
 /// The notice has to reach the model, not just exist in the workspace layer: a capped
