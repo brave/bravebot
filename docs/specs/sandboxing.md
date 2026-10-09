@@ -963,6 +963,7 @@ open the home.
 `verified-by: bravebot_agent::confine::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
 `verified-by: bravebot_agent::confine::a_windows_session_inside_a_credential_location_is_refused`
 `verified-by: bravebot_agent::confine::a_windows_session_is_compared_to_the_credential_locations_without_regard_to_case`
+`verified-by: bravebot_agent::confine::a_name_that_is_not_text_is_not_taken_for_its_lossy_lookalike`
 `verified-by: bravebot_agent::confine::a_windows_session_beside_the_credential_locations_is_not_refused`
 `verified-by: bravebot_agent::confine::a_windows_session_with_one_root_on_the_home_directory_is_refused_whatever_the_others_are`
 `verified-by: bravebot_sandbox::base::the_credential_locations_are_the_rows_the_run_base_refuses`

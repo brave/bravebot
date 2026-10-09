@@ -1207,15 +1207,17 @@ fn canonical(path: &Path) -> PathBuf {
 
 /// Whether one of `a` and `b` is the other or lies inside it, comparing components without regard
 /// to case, as a Windows file system does.
+///
+/// A component is folded as text only when both sides are text; otherwise the bytes are compared,
+/// folding ASCII, so two names that differ only in what a lossy rendering replaces stay different.
 fn overlaps(a: &Path, b: &Path) -> bool {
-    let names = |path: &Path| -> Vec<String> {
-        path.components()
-            .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
-            .collect()
+    let same_name = |left: &OsStr, right: &OsStr| match (left.to_str(), right.to_str()) {
+        (Some(left), Some(right)) => left.to_lowercase() == right.to_lowercase(),
+        _ => left.eq_ignore_ascii_case(right),
     };
-    let (a, b) = (names(a), names(b));
-    let shorter = a.len().min(b.len());
-    a[..shorter] == b[..shorter]
+    a.components()
+        .zip(b.components())
+        .all(|(left, right)| same_name(left.as_os_str(), right.as_os_str()))
 }
 
 /// The system temporary directory with its links followed, which is how a backend matches it.
@@ -1389,6 +1391,44 @@ mod tests {
     fn a_windows_session_is_compared_to_the_credential_locations_without_regard_to_case() {
         refused_naming(&confinement(&["/home/person/.AWS"]), ".aws");
         refused_naming(&confinement(&["/HOME/Person"]), ".bravebot");
+    }
+
+    /// The regression it rejects: comparing the components as lossy text, which makes a name with a
+    /// byte that is not UTF-8 equal to the name its replacement-character rendering spells.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_is_not_text_is_not_taken_for_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = Path::new(OsStr::from_bytes(b"/home/person/tool-\xff"));
+        let lookalike = Path::new("/home/person/tool-\u{FFFD}");
+        assert!(!overlaps(invalid, lookalike) && !overlaps(lookalike, invalid));
+        assert!(overlaps(invalid, invalid));
+        assert!(overlaps(
+            invalid,
+            Path::new(OsStr::from_bytes(b"/HOME/Person/TOOL-\xff/inside"))
+        ));
+
+        let home = PathBuf::from(OsStr::from_bytes(b"/home/per\xffson"));
+        let confined = |root: PathBuf| {
+            Confinement::new(
+                Prelude::Windows,
+                PathBuf::from("/tmp"),
+                Some(&home),
+                vec![root],
+                Some(Path::new("/var/scratch")),
+            )
+        };
+        assert!(
+            confined(home.join(".ssh"))
+                .root_reaching_credentials()
+                .is_some()
+        );
+        assert!(
+            confined(PathBuf::from("/home/per\u{FFFD}son/.ssh"))
+                .root_reaching_credentials()
+                .is_none()
+        );
     }
 
     #[test]
