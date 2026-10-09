@@ -22137,8 +22137,18 @@ fn an_attachment_is_sent_beside_the_prompt_that_came_with_it() {
         .as_array()
         .expect("the prompt carries parts");
     assert_eq!(parts[0]["text"], "what is this");
-    assert_eq!(parts[1]["type"], "image_url");
-    let url = parts[1]["image_url"]["url"].as_str().expect("a url");
+    // The path, then the bytes, in that order (DROP-11): a planner given a picture and no path
+    // cannot name the file it was shown. The prompt the person typed stays first.
+    assert_eq!(parts[1]["type"], "text");
+    assert!(
+        parts[1]["text"]
+            .as_str()
+            .is_some_and(|said| said.contains("shot.png")),
+        "the part before the bytes does not name the file: {}",
+        parts[1]
+    );
+    assert_eq!(parts[2]["type"], "image_url");
+    let url = parts[2]["image_url"]["url"].as_str().expect("a url");
     assert!(url.starts_with("data:image/png;base64,"), "{url}");
     // iVBORw0KGgo is the base64 of a PNG's signature, so this is the file and not a placeholder.
     assert!(url.contains("iVBORw0KGgo"), "{url}");
