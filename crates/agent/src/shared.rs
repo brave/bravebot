@@ -134,6 +134,29 @@ impl<T: Subscription + Send + ?Sized> Spends for Lent<'_, T> {
     }
 }
 
+/// A wallet that counts each credential it hands out against a session's spend limit (TURN-8).
+///
+/// Wrapped round the wallet a turn opens, which is the one its delegates are lent, so a delegate's
+/// spends reach the same count as the turn's own.
+pub struct Counted<'a> {
+    wallet: &'a dyn Spends,
+    limit: crate::spend_limit::SpendLimit,
+}
+
+impl<'a> Counted<'a> {
+    pub fn new(wallet: &'a dyn Spends, limit: crate::spend_limit::SpendLimit) -> Self {
+        Self { wallet, limit }
+    }
+}
+
+impl Spends for Counted<'_> {
+    fn spend_one(&self) -> Result<SubscriptionCredential, String> {
+        let credential = self.wallet.spend_one()?;
+        self.limit.add_credit();
+        Ok(credential)
+    }
+}
+
 /// One run's handle on the wallet.
 ///
 /// A handle rather than a copy, for the reason a credential exists at all: it is single-use, so

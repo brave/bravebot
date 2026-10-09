@@ -22,7 +22,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
-| `/limit` | `[tokens \| off]` | Show the session's spend limit, set it in tokens, or remove it |
+| `/limit` | `[tokens \| credits \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
@@ -198,19 +198,23 @@ advisor's tokens and is counted in the turn's.
 Typed while a turn runs with nothing waiting, it is taken at once and the next turn is the first
 to use it.
 
-## `/limit [tokens | off]`
+## `/limit [tokens | credits | off]`
 
-Sets the most tokens this session may spend. `/limit 500k` or `/limit 2m` sets it, with `k` for
-thousands and `m` for millions, `/limit off` removes it, and `/limit` alone says what it is and what
+Sets the most tokens, or Leo Premium credits, this session may spend. `/limit 500k` or `/limit 2m`
+sets it in tokens, with `k` for thousands and `m` for millions, `/limit 200 credits` sets it in
+credits, `/limit off` removes it, and `/limit` alone says what it is and what
 has been spent. The `limit` key in [the settings file](../customize/configuration.md#limit) starts a
 session under one.
 
-When the session has spent as many tokens as the limit, the next request is not sent. You are asked
+When the session has spent as many tokens or credits as the limit, the next request is not sent. You are asked
 whether to stop, to go on without a limit, or to go on under a new one: choose the last by answering
-in your own words with a figure above what is spent, such as `2m`. Nothing else answers for you, so
+in your own words with a figure in the same unit above what is spent, such as `2m` or `300`. Nothing else answers for you, so
 the question appears in every permission mode, including the one that asks about nothing. A
-`/loop` or `/goal` run ends there. The figure is the usage the model service reports, in tokens. It
-is not money, and a service that reports no usage is never stopped by it. The round that reaches the
+`/loop` or `/goal` run ends there. Tokens are the usage the model service reports, so a limit in
+tokens is not money, and a service that reports no usage is never stopped by it. Credits are the
+credentials this session presented, one per premium request, delegates included. A session with no
+subscription spends none and is never stopped by a limit in credits, and `/compact`, `/aside` and
+goal checks are not counted. `/clear` starts the count again, and a resumed session starts at zero. The round that reaches the
 limit has already been paid for, so the total can end a little above it.
 
 Typed while a turn runs it is taken at once, and the running turn's next request is held to it.

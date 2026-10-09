@@ -285,12 +285,14 @@ what says whether the work wanted splitting.
 <a id="TURN-8"></a>
 ### TURN-8: a session that has spent its limit asks before the next request
 
-A session may carry a limit, a number of tokens, from the `limit` setting or from `/limit`. Before a
-turn sends a request, the driver compares the tokens the session has spent with it: what earlier
-turns were charged, plus what this turn's completed requests reported ([TURN-5](#TURN-5)). Once the
-spent total is at or over the limit, the request is not sent and the person is asked one question
+A session may carry a limit, a number of tokens or a number of Leo Premium credits, from the `limit`
+setting or from `/limit`. Before a turn sends a request, the driver compares what the session has
+spent, in the unit the limit counts, with it. Tokens are what earlier turns were charged, plus what
+this turn's completed requests reported ([TURN-5](#TURN-5)). Credits are the credentials the session
+has presented, one per premium request ([PREM-5](premium-credentials.md#PREM-5)), those of a delegate
+it started included. Once the spent total is at or over the limit, the request is not sent and the person is asked one question
 with three answers: stop, go on without a limit, or go on under a new limit, typed in their own
-words. A new limit has to be above what is spent. A figure that is not asks again, up to three
+words. A new limit has to be in the unit the limit counts and above what is spent. A figure that is not asks again, up to three
 times in all, and then the turn stops.
 
 **Stopping is the default.** A stop, a declined question, an answer that is none of the three, and
@@ -303,10 +305,12 @@ question the planner asks, and every permission mode passes it on, bypassing inc
 asks about nothing still stops here, unless the person set no limit. A new limit or going on without
 one is the session's from then on, including for a turn already running when `/limit` is typed.
 
-**The figure is a count and the stop depends on no content.** It is the sum of the usage the
+**The figure is a count and the stop depends on no content.** Tokens are the sum of the usage the
 backends reported ([BACKEND-31](backends.md#BACKEND-31), [BACKEND-40](backends.md#BACKEND-40)). A
 request that reported nothing adds nothing, so a backend that reports no usage is never stopped by
-this. The question is built from that count, the limit and fixed words, and reads no reply or tool
+a limit in tokens. Credits are counted as each credential is handed out, whichever request spends
+it, so a session that spends none, with no subscription imported, is never stopped by a limit in
+credits, and tokens spent do not reach one. The question is built from that count, the limit and fixed words, and reads no reply or tool
 result.
 
 **Asked each time.** The question carries a key of its own on every ask, because an interface may
@@ -321,7 +325,9 @@ starts. A one-shot run, a manifest run and the desktop window set none, for the 
 
 **Known costs.** The check comes before a request, so a limit is passed by the round that reached it
 and by whatever a delegate in flight spends before it is collected. A limit counted in tokens says
-nothing about money: it is not a per-model price and not a count of Leo Premium credentials.
+nothing about money, and is not a per-model price. A limit counted in credits leaves out the
+credentials spent by `/compact`, `/aside`, a goal check and a manifest run, which present them
+outside the turn; it is not kept when a session is resumed, and `/clear` starts it again from zero.
 
 `verified-by: bravebot_agent::turn::a_turn_under_its_limit_is_not_asked_about`
 `verified-by: bravebot_agent::turn::a_turn_that_reaches_its_limit_asks_before_the_next_request_and_stops_on_a_stop`
@@ -333,6 +339,11 @@ nothing about money: it is not a per-model price and not a count of Leo Premium 
 `verified-by: bravebot_agent::turn::going_on_without_a_limit_clears_it`
 `verified-by: bravebot_agent::turn::a_question_nobody_answers_stops_the_turn`
 `verified-by: bravebot_agent::turn::no_permission_mode_answers_the_limit_question`
+`verified-by: bravebot_agent::turn::a_limit_in_credits_asks_once_that_many_credentials_are_spent`
+`verified-by: bravebot_agent::turn::tokens_spent_do_not_reach_a_limit_in_credits`
+`verified-by: bravebot_agent::turn::credits_spent_do_not_reach_a_limit_in_tokens`
+`verified-by: bravebot_agent::turn::a_figure_in_the_other_unit_is_not_a_limit`
+`verified-by: bravebot_agent::turn::a_credential_a_delegate_spends_is_counted`
 `verified-by: bravebot_agent::turn::two_questions_about_the_same_figures_are_different_questions`
 `verified-by: bravebot_agent::turn::a_session_with_no_limit_is_never_asked`
 `verified-by: bravebot_tui::app::a_turn_shares_the_sessions_limit_and_carries_what_was_spent`

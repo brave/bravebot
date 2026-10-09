@@ -2532,6 +2532,7 @@ impl Session {
         // new conversation has never reached.
         self.turn_start = TurnStart::default();
         self.tokens = 0;
+        self.spend_limit.forget_credits();
         self.spend.clear();
         self.timing.clear();
         // Goes with the spend rather than staying like the chosen model: it describes the prompt the

@@ -388,7 +388,7 @@ pub fn commands() -> [Command; 42] {
         },
         Command {
             name: LIMIT_COMMAND,
-            argument: "[tokens | off]",
+            argument: "[tokens | credits | off]",
             description: t!(command_limit),
             mid_turn: MidTurn::Runs,
         },
@@ -5843,28 +5843,55 @@ fn set_advisor(session: &mut Session, config: &Config, word: &str) {
     }
 }
 
+/// What the session has spent, counted in `unit`.
+fn spent_in(session: &Session, unit: bravebot_config::limit::Unit) -> u64 {
+    match unit {
+        bravebot_config::limit::Unit::Tokens => session.spent_tokens(),
+        bravebot_config::limit::Unit::Credits => session.spend_limit().credits(),
+    }
+}
+
 /// Say what the session's spend limit is, set it from a figure, or remove it.
 ///
-/// The figure is read as a count and never sent anywhere. A limit already below what the session
-/// has spent is accepted, and the note says the next request will ask about it.
+/// The figure is read as a count, of tokens unless it says credits, and never sent anywhere. A
+/// limit already below what the session has spent is accepted, and the note says the next request
+/// will ask about it.
 fn set_limit(session: &mut Session, figure: &str) {
     let figure = figure.trim();
-    let spent = session.spent_tokens();
     if figure.is_empty() {
-        let note = match session.spend_limit().tokens() {
-            Some(limit) => t!(session_limit_in_force, limit = limit, spent = spent),
+        let note = match session.spend_limit().limit() {
+            Some(limit) => t!(
+                session_limit_in_force,
+                limit = limit.figure,
+                unit = bravebot_agent::spend_limit::noun(limit.unit),
+                spent = spent_in(session, limit.unit)
+            ),
             None => t!(session_limit_none).to_string(),
         };
         session.note(note);
     } else if figure == LIMIT_OFF {
         session.spend_limit().set(None);
         session.note(t!(session_limit_cleared));
-    } else if let Some(limit) = bravebot_config::limit::parse_tokens(figure) {
+    } else if let Some(limit) =
+        bravebot_config::limit::parse(figure, bravebot_config::limit::Unit::Tokens)
+    {
         session.spend_limit().set(Some(limit));
-        session.note(if limit > spent {
-            t!(session_limit_set, limit = limit, spent = spent)
+        let spent = spent_in(session, limit.unit);
+        let unit = bravebot_agent::spend_limit::noun(limit.unit);
+        session.note(if limit.figure > spent {
+            t!(
+                session_limit_set,
+                limit = limit.figure,
+                unit = unit,
+                spent = spent
+            )
         } else {
-            t!(session_limit_set_below_spent, limit = limit, spent = spent)
+            t!(
+                session_limit_set_below_spent,
+                limit = limit.figure,
+                unit = unit,
+                spent = spent
+            )
         });
     } else {
         session.note(t!(session_limit_unknown, figure = figure));
@@ -9237,6 +9264,7 @@ fn fold_outcome(
 mod tests {
     use super::*;
     use crate::state::Status;
+    use bravebot_config::limit::Limit;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -15771,17 +15799,21 @@ mod tests {
         assert_eq!(
             with_session_limit(Task::new("p"), &session)
                 .spend_limit
-                .tokens(),
+                .limit(),
             None
         );
 
         for (line, expected) in [
-            ("/limit 500k", Some(500_000)),
-            ("/limit 2m", Some(2_000_000)),
-            ("/limit 1500", Some(1_500)),
-            ("/limit lots", Some(1_500)),
-            ("/limit 0", Some(1_500)),
-            ("/limit", Some(1_500)),
+            ("/limit 500k", Some(Limit::tokens(500_000))),
+            ("/limit 2m", Some(Limit::tokens(2_000_000))),
+            ("/limit 1500", Some(Limit::tokens(1_500))),
+            ("/limit lots", Some(Limit::tokens(1_500))),
+            ("/limit 0", Some(Limit::tokens(1_500))),
+            ("/limit", Some(Limit::tokens(1_500))),
+            ("/limit 40 credits", Some(Limit::credits(40))),
+            ("/limit 5k tokens", Some(Limit::tokens(5_000))),
+            ("/limit 0 credits", Some(Limit::tokens(5_000))),
+            ("/limit 5 dollars", Some(Limit::tokens(5_000))),
             ("/limit off", None),
         ] {
             assert_eq!(
@@ -15792,11 +15824,47 @@ mod tests {
             assert_eq!(
                 with_session_limit(Task::new("p"), &session)
                     .spend_limit
-                    .tokens(),
+                    .limit(),
                 expected,
                 "{line}"
             );
         }
+    }
+
+    /// A limit in credits is reported against the credentials spent, not the tokens, and `/clear`
+    /// starts the count again.
+    #[test]
+    fn a_limit_in_credits_reports_the_credentials_spent() {
+        struct Wallet;
+        impl bravebot_agent::shared::Spends for Wallet {
+            fn spend_one(&self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
+                Ok(bravebot_aichat::SubscriptionCredential {
+                    cookie_name: "creds".to_string(),
+                    cookie_value: "value".to_string(),
+                })
+            }
+        }
+        let mut session = Session::new("none");
+        session.tokens = 9_000;
+        let counted = bravebot_agent::shared::Counted::new(&Wallet, session.spend_limit().clone());
+        for _ in 0..3 {
+            bravebot_agent::shared::Spends::spend_one(&counted).expect("a credential");
+        }
+
+        dispatch_command(&mut session, commanded("/limit 5 credits"));
+        assert_eq!(
+            last_note(&session),
+            "the session limit is 5 credits, and 3 are spent"
+        );
+        dispatch_command(&mut session, commanded("/limit 2 credits"));
+        assert!(
+            last_note(&session).contains("3 are already spent"),
+            "{}",
+            last_note(&session)
+        );
+
+        session.clear();
+        assert_eq!(session.spend_limit().credits(), 0);
     }
 
     /// The turn holds the session's own handle, so a limit typed while it runs reaches its next
@@ -15805,15 +15873,15 @@ mod tests {
     #[test]
     fn a_turn_shares_the_sessions_limit_and_carries_what_was_spent() {
         let mut session = Session::new("none");
-        session.spend_limit().set(Some(700));
+        session.spend_limit().set(Some(Limit::tokens(700)));
         session.tokens = 300;
         let task = with_session_limit(Task::new("p"), &session);
         assert_eq!(task.spent_before, 300);
 
-        session.spend_limit().set(Some(900));
-        assert_eq!(task.spend_limit.tokens(), Some(900));
+        session.spend_limit().set(Some(Limit::tokens(900)));
+        assert_eq!(task.spend_limit.limit(), Some(Limit::tokens(900)));
         task.spend_limit.set(None);
-        assert_eq!(session.spend_limit().tokens(), None);
+        assert_eq!(session.spend_limit().limit(), None);
     }
 
     /// The `limit` setting is where a session starts, and a session without one starts unbounded.
@@ -15821,11 +15889,11 @@ mod tests {
     fn a_session_starts_under_the_limit_the_settings_name() {
         let mut session = Session::new("none");
         session.adopt_limit(&bravebot_config::Settings::parse(r#"{"limit": "250k"}"#));
-        assert_eq!(session.spend_limit().tokens(), Some(250_000));
+        assert_eq!(session.spend_limit().limit(), Some(Limit::tokens(250_000)));
 
         let mut unbounded = Session::new("none");
         unbounded.adopt_limit(&bravebot_config::Settings::parse("{}"));
-        assert_eq!(unbounded.spend_limit().tokens(), None);
+        assert_eq!(unbounded.spend_limit().limit(), None);
     }
 
     /// Typed while a turn runs, `/limit` answers at once, as the limit is a figure the turn reads at
@@ -15837,7 +15905,7 @@ mod tests {
             type_while_working(&mut session, "/limit 800k"),
             Action::Redraw
         );
-        assert_eq!(session.spend_limit().tokens(), Some(800_000));
+        assert_eq!(session.spend_limit().limit(), Some(Limit::tokens(800_000)));
         assert!(session.queued.is_empty(), "/limit waited behind the turn");
     }
 
@@ -15854,7 +15922,7 @@ mod tests {
                 Action::Submit(line.to_string()),
                 "{line}"
             );
-            assert_eq!(session.spend_limit().tokens(), None);
+            assert_eq!(session.spend_limit().limit(), None);
         }
     }
 

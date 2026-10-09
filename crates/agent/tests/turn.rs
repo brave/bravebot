@@ -46563,6 +46563,7 @@ mod spend_limit {
     use super::*;
     use bravebot_agent::confirm::*;
     use bravebot_agent::spend_limit::SpendLimit;
+    use bravebot_config::limit::Limit;
     use bravebot_core::ask::{Answer, Asking};
 
     /// Answers the limit question from a list, one reply per ask, and keeps what it was asked.
@@ -46735,7 +46736,7 @@ mod spend_limit {
     /// A limit above what the turn spends changes nothing: nobody is asked, and the turn finishes.
     #[test]
     fn a_turn_under_its_limit_is_not_asked_about() {
-        let limit = SpendLimit::new(Some(10_000));
+        let limit = SpendLimit::new(Some(Limit::tokens(10_000)));
         let ran = run("limit-under", &limit, 0, vec![], None);
         assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
         assert!(ran.asked.is_empty());
@@ -46747,7 +46748,7 @@ mod spend_limit {
     /// reply that went over would still send the second request.
     #[test]
     fn a_turn_that_reaches_its_limit_asks_before_the_next_request_and_stops_on_a_stop() {
-        let limit = SpendLimit::new(Some(500));
+        let limit = SpendLimit::new(Some(Limit::tokens(500)));
         let ran = run("limit-stop", &limit, 0, vec![stop()], None);
         assert!(stopped(&ran.ended), "{:?}", ran.ended.err());
         assert_eq!(ran.requests, 1, "a request went out past the limit");
@@ -46760,7 +46761,11 @@ mod spend_limit {
             "{}",
             prompt.question
         );
-        assert_eq!(limit.tokens(), Some(500), "a stop moved the limit");
+        assert_eq!(
+            limit.limit(),
+            Some(Limit::tokens(500)),
+            "a stop moved the limit"
+        );
         assert!(
             ran.notices
                 .iter()
@@ -46774,7 +46779,7 @@ mod spend_limit {
     /// the turn, and ask nothing when it had spent nothing.
     #[test]
     fn what_the_session_spent_before_the_turn_counts_towards_the_limit() {
-        let limit = SpendLimit::new(Some(1_300));
+        let limit = SpendLimit::new(Some(Limit::tokens(1_300)));
         let fresh = run("limit-before-0", &limit, 0, vec![], None);
         assert!(fresh.ended.is_ok());
         assert!(fresh.asked.is_empty());
@@ -46791,7 +46796,7 @@ mod spend_limit {
     /// A session already past its limit is asked before the first request of a turn, not after it.
     #[test]
     fn a_session_already_past_its_limit_is_asked_before_the_first_request() {
-        let limit = SpendLimit::new(Some(500));
+        let limit = SpendLimit::new(Some(Limit::tokens(500)));
         let ran = run("limit-first", &limit, 2_000, vec![stop()], None);
         assert!(stopped(&ran.ended));
         assert_eq!(ran.requests, 0, "a request went out past the limit");
@@ -46801,11 +46806,11 @@ mod spend_limit {
     /// A figure above what was spent becomes the session's limit and the turn goes on under it.
     #[test]
     fn a_new_limit_typed_at_the_question_lets_the_turn_go_on_under_it() {
-        let limit = SpendLimit::new(Some(500));
+        let limit = SpendLimit::new(Some(Limit::tokens(500)));
         let ran = run("limit-raise", &limit, 0, vec![typed("5k")], None);
         assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
         assert_eq!(ran.requests, 2);
-        assert_eq!(limit.tokens(), Some(5_000));
+        assert_eq!(limit.limit(), Some(Limit::tokens(5_000)));
         assert_eq!(ran.asked.len(), 1);
         assert!(
             ran.trail
@@ -46820,7 +46825,7 @@ mod spend_limit {
     /// limit: the person is asked again, with the figure named, and a usable one is taken.
     #[test]
     fn a_figure_that_is_not_above_what_was_spent_is_asked_about_again() {
-        let limit = SpendLimit::new(Some(500));
+        let limit = SpendLimit::new(Some(Limit::tokens(500)));
         let ran = run(
             "limit-reject",
             &limit,
@@ -46845,13 +46850,13 @@ mod spend_limit {
                 .question
                 .contains("lots is not a limit")
         );
-        assert_eq!(limit.tokens(), Some(2_000_000));
+        assert_eq!(limit.limit(), Some(Limit::tokens(2_000_000)));
     }
 
     /// Figures that keep being unusable end the turn rather than asking for ever.
     #[test]
     fn unusable_figures_three_times_in_a_row_stop_the_turn() {
-        let limit = SpendLimit::new(Some(500));
+        let limit = SpendLimit::new(Some(Limit::tokens(500)));
         let ran = run(
             "limit-reject-forever",
             &limit,
@@ -46861,16 +46866,16 @@ mod spend_limit {
         );
         assert!(stopped(&ran.ended));
         assert_eq!(ran.asked.len(), 3);
-        assert_eq!(limit.tokens(), Some(500));
+        assert_eq!(limit.limit(), Some(Limit::tokens(500)));
     }
 
     /// Going on without a limit clears it for the session, not only for this request.
     #[test]
     fn going_on_without_a_limit_clears_it() {
-        let limit = SpendLimit::new(Some(500));
+        let limit = SpendLimit::new(Some(Limit::tokens(500)));
         let ran = run("limit-lift", &limit, 0, vec![without_a_limit()], None);
         assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
-        assert_eq!(limit.tokens(), None);
+        assert_eq!(limit.limit(), None);
         assert_eq!(ran.requests, 2);
         assert!(
             ran.trail
@@ -46888,11 +46893,11 @@ mod spend_limit {
             ("limit-declined", vec![vec![Answer::Declined]]),
             ("limit-both-rows", vec![vec![Answer::Chosen(vec![0, 1])]]),
         ] {
-            let limit = SpendLimit::new(Some(500));
+            let limit = SpendLimit::new(Some(Limit::tokens(500)));
             let ran = run(name, &limit, 0, replies, None);
             assert!(stopped(&ran.ended), "{name}");
             assert_eq!(ran.requests, 1, "{name}");
-            assert_eq!(limit.tokens(), Some(500), "{name}");
+            assert_eq!(limit.limit(), Some(Limit::tokens(500)), "{name}");
             assert!(
                 ran.trail
                     .iter()
@@ -46913,7 +46918,7 @@ mod spend_limit {
             bravebot_agent::PermissionMode::Plan,
             bravebot_agent::PermissionMode::Bypass,
         ] {
-            let limit = SpendLimit::new(Some(500));
+            let limit = SpendLimit::new(Some(Limit::tokens(500)));
             let ran = run("limit-mode", &limit, 0, vec![stop()], Some(mode));
             assert_eq!(ran.asked.len(), 1, "{mode:?} did not reach the person");
             assert!(stopped(&ran.ended), "{mode:?}");
@@ -46924,10 +46929,154 @@ mod spend_limit {
     /// question's key, and drawing nothing the second time would answer for the person.
     #[test]
     fn two_questions_about_the_same_figures_are_different_questions() {
-        let limit = SpendLimit::new(Some(500));
+        let limit = SpendLimit::new(Some(Limit::tokens(500)));
         let ran = run("limit-keys", &limit, 0, vec![typed("100"), stop()], None);
         assert_eq!(ran.asked.len(), 2);
         assert_ne!(ran.asked[0].prompts[0].key, ran.asked[1].prompts[0].key);
+    }
+
+    /// Credentials spent through a wallet that counts for `limit`, as an earlier turn's would have.
+    fn spend_credits(limit: &SpendLimit, count: usize) -> OneWallet {
+        let wallet = OneWallet::default();
+        let counted = bravebot_agent::shared::Counted::new(&wallet, limit.clone());
+        for _ in 0..count {
+            bravebot_agent::shared::Spends::spend_one(&counted).expect("a credential");
+        }
+        wallet
+    }
+
+    /// A limit in credits asks once that many have been spent, before the next request goes out.
+    #[test]
+    fn a_limit_in_credits_asks_once_that_many_credentials_are_spent() {
+        let limit = SpendLimit::new(Some(Limit::credits(3)));
+        let _wallet = spend_credits(&limit, 2);
+        let under = run("credits-under", &limit, 0, vec![], None);
+        assert!(under.ended.is_ok(), "{:?}", under.ended.err());
+        assert!(under.asked.is_empty());
+
+        let _more = spend_credits(&limit, 1);
+        let ran = run("credits-reached", &limit, 0, vec![stop()], None);
+        assert!(stopped(&ran.ended), "{:?}", ran.ended.err());
+        assert_eq!(ran.requests, 0, "a request went out past the limit");
+        let question = &ran.asked[0].prompts[0].question;
+        assert!(
+            question.contains("3 credits, which reaches its limit of 3"),
+            "{question}"
+        );
+        assert!(!question.contains("tokens, which"), "{question}");
+        assert!(
+            ran.notices
+                .iter()
+                .any(|said| said.contains("3 credits spent against a limit of 3")),
+            "{:?}",
+            ran.notices
+        );
+    }
+
+    /// Tokens are not credits: a turn that spends a great many of one does not reach a limit in the
+    /// other, and a session with no subscription, which spends no credentials, is never stopped by
+    /// a limit in credits.
+    #[test]
+    fn tokens_spent_do_not_reach_a_limit_in_credits() {
+        let limit = SpendLimit::new(Some(Limit::credits(1)));
+        let ran = run("credits-not-tokens", &limit, 1_000_000, vec![], None);
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(ran.asked.is_empty());
+        assert_eq!(ran.requests, 2);
+    }
+
+    /// A limit in tokens is not reached by credentials spent.
+    #[test]
+    fn credits_spent_do_not_reach_a_limit_in_tokens() {
+        let limit = SpendLimit::new(Some(Limit::tokens(10_000)));
+        let _wallet = spend_credits(&limit, 50);
+        let ran = run("tokens-not-credits", &limit, 0, vec![], None);
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(ran.asked.is_empty());
+    }
+
+    /// The question is asked in credits, so a figure in tokens is not a limit however large, and a
+    /// figure in credits above what was spent is.
+    #[test]
+    fn a_figure_in_the_other_unit_is_not_a_limit() {
+        let limit = SpendLimit::new(Some(Limit::credits(3)));
+        let _wallet = spend_credits(&limit, 3);
+        let ran = run(
+            "credits-other-unit",
+            &limit,
+            0,
+            vec![typed("5m tokens"), typed("10 credits")],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert_eq!(ran.asked.len(), 2);
+        assert!(
+            ran.asked[1].prompts[0]
+                .question
+                .contains("5m tokens is not a limit"),
+            "{}",
+            ran.asked[1].prompts[0].question
+        );
+        assert_eq!(limit.limit(), Some(Limit::credits(10)));
+        assert!(
+            ran.trail
+                .iter()
+                .any(|line| line.contains("new limit of 10 credits")),
+            "{:?}",
+            ran.trail
+        );
+    }
+
+    /// A credential a delegate spends is counted: the turn lends its counted wallet, so the delegate's
+    /// request reaches the same count as the turn's own.
+    #[test]
+    fn a_credential_a_delegate_spends_is_counted() {
+        let scratch = Scratch::new("credits-delegate");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve_by_marker(vec![(
+            "REPORT-BACK",
+            vec![reply_with("the delegate answered")],
+        )]);
+        let config = premium_config_for(&endpoint);
+        let limit = SpendLimit::new(Some(Limit::credits(10)));
+        let wallet = OneWallet::default();
+        let counted = bravebot_agent::shared::Counted::new(&wallet, limit.clone());
+        bravebot_agent::shared::Spends::spend_one(&counted).expect("the turn spends first");
+        assert_eq!(limit.credits(), 1);
+
+        let mut sink = RecordingSink::new();
+        let ended = bravebot_agent::delegate::run(
+            &seeded_reader("REPORT-BACK"),
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            None,
+            None,
+            None,
+            None,
+            bravebot_agent::PermissionMode::Ask,
+            false,
+            &bravebot_config::Attribution::default(),
+            None,
+            None,
+            bravebot_agent::exec::Deadlines::BUILT_IN,
+            false,
+            bravebot_sandbox::SandboxMode::default(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            Some(&counted),
+            None,
+        );
+        assert!(ended.delegated.is_ok(), "the delegate never answered");
+        assert_eq!(wallet.handed.lock().expect("the wallet").len(), 2);
+        assert_eq!(
+            limit.credits(),
+            2,
+            "the delegate's credential was not counted"
+        );
     }
 
     /// With no limit set, nothing is asked however much is spent.
