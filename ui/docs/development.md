@@ -356,7 +356,7 @@ keys privacy grants and keychain items on the bundle id, so it does not change b
 A Windows bundle carries `build/icon.ico` and a version resource naming Brave as the company and
 "Brave Bot" as the product, which is what its properties dialog and Task Manager show; without one
 they both say Electron, because the resource would be the one Electron's own build left behind.
-The icon is the About mascot in Brave orange on a macOS tile, drawn in `build/icon.svg`; after
+The icon is the flat robot avatar in Brave orange on a macOS tile, drawn in `build/icon.svg`; after
 changing the drawing, remake all three sets of icons from it:
 
 ```bash

@@ -47,11 +47,3 @@ export function completionNod(elapsed: number): number {
   if (at <= 0 || at >= 1) return 0
   return Math.sin(Math.PI * at) ** 2 * 0.22
 }
-
-export function crownMotion(kind: 'none' | 'bobble' | 'antenna' | 'tuft') {
-  switch (kind) {
-    case 'bobble': return { stiffness: 105, damping: 10, response: 0.20, limit: 0.32 }
-    case 'antenna': return { stiffness: 180, damping: 18, response: 0.09, limit: 0.18 }
-    default: return { stiffness: 220, damping: 26, response: 0.02, limit: 0.05 }
-  }
-}

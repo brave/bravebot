@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
-import { BotAvatar } from './BotAvatar'
+import { useState } from 'react'
 import { Modal } from './Modal'
 import { Button, Collapse, Icon, Link } from '../nala'
 
@@ -14,25 +13,7 @@ const project = 'https://github.com/brave/bravebot'
 export function About({ info, onClose }: { info: AboutInfo; onClose: () => void }): React.JSX.Element {
   // The pinned agent stamps its build as "version (commit)"; info.version is the bridge version.
   const agentVersion = info.build.split(' ')[0]
-  const [winking, setWinking] = useState(false)
-  const winkTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [hovered, setHovered] = useState(false)
-  const [focused, setFocused] = useState(false)
   const [copyStatus, setCopyStatus] = useState('')
-
-  useEffect(() => () => {
-    if (winkTimer.current !== null) clearTimeout(winkTimer.current)
-  }, [])
-
-  function wink() {
-    // Let an active wink finish even if the mascot is clicked repeatedly.
-    if (winkTimer.current !== null) return
-    setWinking(true)
-    winkTimer.current = setTimeout(() => {
-      setWinking(false)
-      winkTimer.current = null
-    }, 320)
-  }
 
   async function copyBuildInfo() {
     try {
@@ -45,22 +26,12 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
 
   return <Modal title="About Brave Bot" size="sm" onClose={onClose} className="about">
     <div className="about-hero">
-      <div className="about-stage">
-        <button className="about-mascot" aria-label="Make Brave Bot wink"
-          onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
-          onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-          onClick={wink}>
-          <span className="about-figure">
-            <BotAvatar seed="brave-bot-mascot" size={144} doing="waiting" expression={winking ? 'wink' : hovered || focused ? 'curious' : 'neutral'} />
-          </span>
-        </button>
-      </div>
       <h2>Brave Bot</h2>
       <span className="about-version">Version {agentVersion}</span>
     </div>
     <nav className="about-links" aria-label="Project resources">
-      <Link href={project} target="_blank" rel="noreferrer">GitHub <Icon name="launch" className="link-out" /></Link>
-      <Link href={`${project}/releases`} target="_blank" rel="noreferrer">Release notes <Icon name="launch" className="link-out" /></Link>
+      <Link href={project} target="_blank" rel="noreferrer">GitHub<Icon name="launch" slot="icon-after" /></Link>
+      <Link href={`${project}/releases`} target="_blank" rel="noreferrer">Release notes<Icon name="launch" slot="icon-after" /></Link>
     </nav>
     <Collapse className="about-details" title="Build & storage details" isOpen={undefined} data-test="about-details">
       <dl>

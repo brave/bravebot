@@ -180,7 +180,7 @@
 }
 .status-dot.warning { --leo-icon-color: var(--leo-color-systemfeedback-warning-icon); }
 .status-dot.error { --leo-icon-color: var(--leo-color-systemfeedback-error-icon); }
-.bot-face { display: block; border-radius: 50%; overflow: hidden; background: var(--hover-wash); }
+.bot-face { display: block; }
 
 .session-text,
 .bot-said { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -330,8 +330,8 @@
 .bot-archive-rows { max-height: 40vh; overflow-y: auto; }
 
 /* An archived bot is drawn as a bot row, with a still face: an archive can grow to forty rows
-   nobody is looking at, and a WebGL context apiece would cost the bots in use theirs. The
-   actions menu is laid over the right edge, and shows the way a conversation's does. */
+   nobody is looking at, so none of them is animated. The actions menu is laid over the right
+   edge, and shows the way a conversation's does. */
 .bot-archived-body { cursor: default; }
 /* Centred by flex rather than a transform: a transformed ancestor makes the menu's fixed popup
    position against this row, and the archive's scrolling list then clips it. */
