@@ -13,12 +13,13 @@ documented-by: docs/website/docs/reference/tools.md
 ## Scope
 
 Finding lines in the workspace that match a pattern. `pattern`, `directory`, `include`, `offset`,
-`case_sensitive` and `context` are routing: the first three name where to look and what to look for,
+`case_sensitive`, `context` and `output` are routing: the first three name where to look and what to look for,
 the offset names which page of the matches to return, the flag decides which of the lines there
-match, and the context is a count of how many neighbouring lines to show with each. `directory` may
+match, and the context is a count of how many neighbouring lines to show with each, and the output names whether
+to return the lines, only the files they are in, or a count ([SEARCH-12](#SEARCH-12)). `directory` may
 name one file instead of a directory ([SEARCH-11](#SEARCH-11)).
 The only content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is
-the matching lines, or a reference.
+the matching lines, the files or counts, or a reference.
 
 ## Clauses
 
@@ -364,3 +365,36 @@ walk from above would skip its directory ([SEARCH-7](#SEARCH-7)), as a directory
 `verified-by: bravebot_agent::workspace::a_search_of_a_link_to_a_denied_file_reads_nothing`
 `verified-by: bravebot_agent::workspace::a_search_cannot_name_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_search_may_name_one_file_as_its_target_through_the_tool`
+
+<a id="SEARCH-12"></a>
+### SEARCH-12: a search may return the files that match, or a count, instead of the lines
+
+`output` is `lines` (what a search returns without it), `files` or `count`. `files` lists each file
+holding a match once, and no line. `count` gives how many lines match in each such file and the
+total. The value is a name from that closed set and nothing else, so one off the list is refused
+rather than read as `lines`.
+
+Both come from the same walk and match loop as the lines, so the result keeps the label
+[SEARCH-2](#SEARCH-2) gives it: the paths and counts are computed from file contents by the
+workspace and carried, never branched on by the driver, and they stay in the body and are
+quarantined with it.
+
+The match cap, the offset ([SEARCH-8](#SEARCH-8)) and `context` ([SEARCH-10](#SEARCH-10)) do not
+apply, since no line is returned: a `count` totals every match the walk read, so it needs no offset
+probe to learn how many there are. The file cap and the time cap of [SEARCH-3](#SEARCH-3) do. A
+walk that stopped at either says the files and counts are a lower bound, whether or not the planner
+may read the result. The listing has a cap of its own, and one that cut it short makes the search
+incomplete; the total of a `count` is whole past it.
+
+**Why.** A survey asks which files mention something, or how many places do. With only lines the
+planner pays context for text it does not need and still reaches the match cap before it can say
+how many there were. A partial list reads as a complete one, which is why the lower bound is said
+and not left to be inferred.
+
+`verified-by: bravebot_agent::workspace::a_files_result_lists_each_matching_file_once`
+`verified-by: bravebot_agent::workspace::a_count_result_totals_every_match_beyond_the_match_cap`
+`verified-by: bravebot_agent::workspace::a_capped_walks_summary_says_it_is_partial`
+`verified-by: bravebot_agent::workspace::a_summary_past_the_listing_cap_keeps_the_whole_total`
+`verified-by: bravebot_agent::turn::a_search_asks_for_files_or_a_count_through_the_tool`
+`verified-by: bravebot_agent::turn::a_search_output_off_the_list_is_refused`
+`verified-by: bravebot_agent::turn::a_quarantined_capped_files_result_still_says_it_is_incomplete`

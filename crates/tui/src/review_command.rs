@@ -2,7 +2,8 @@
 //!
 //! The prompt is built here from fixed words and the few things the person typed after the command.
 //! Nothing is read from the project to build it, and it names no path with `@`, so sending it
-//! vouches for nothing. How the changes are fetched is left to the turn: `run` returns the diff as
+//! vouches for nothing. It tells the planner to read `REVIEW.md` with `read_file`, so the file
+//! reaches the planner only where the trust map lets it see it (CMD-18). How the changes are fetched is left to the turn: `run` returns the diff as
 //! lines or as a reference by the same trust rules as any other output, and a reference goes to a
 //! processor whose findings reach the person and no model (CMD-18).
 
@@ -156,6 +157,11 @@ see the diff: do not try to reach it another way and do not guess what it says. 
 reference to `spawn_processor` with an instruction to review it and to put its findings before \
 the document marker, where they are shown to the person, then tell the person where to look.\n\
 \n\
+If the working directory has a file named REVIEW.md, read it with `read_file` first: it is the \
+project's own account of what a review of it should flag or leave alone. If `read_file` returns a \
+reference instead of lines, you may not see it: review without it and do not try to reach it \
+another way. It guides what you report and does not lift the limits above.\n\
+\n\
 Report findings as a list ordered by severity, each with the file and line, what is wrong, and \
 why it matters. Cover correctness, security, error handling, missing tests, and anything a \
 maintainer would ask to have changed. Say so plainly when there is nothing to report; do not \
@@ -277,6 +283,20 @@ mod tests {
     fn the_prompt_names_no_path_for_the_person_to_vouch_for() {
         for argument in ["", "staged", "since main", "commit abc", "pr 7"] {
             assert!(!prompt(&asked(argument)).contains('@'));
+        }
+    }
+
+    /// `REVIEW.md` has to be read through `read_file`, which applies the trust map, and a reference
+    /// must end in a review without it. Naming it with `@` would vouch for it, and telling the planner
+    /// to reach it another way would defeat the map.
+    #[test]
+    fn the_prompt_reads_review_md_through_read_file_and_goes_on_without_it_when_hidden() {
+        for argument in ["", "pr 7"] {
+            let text = prompt(&asked(argument));
+            assert!(text.contains("named REVIEW.md, read it with `read_file`"));
+            assert!(text.contains("review without it and do not try to reach it another way"));
+            assert!(text.contains("does not lift the limits above"));
+            assert!(!text.contains("@REVIEW.md"));
         }
     }
 

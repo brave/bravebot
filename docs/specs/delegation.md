@@ -984,6 +984,62 @@ a service to send the conversation to.
 `verified-by: bravebot_core::delegate::a_definition_may_name_an_effort_and_the_spec_carries_it`
 `verified-by: bravebot_agent::turn::a_delegate_asks_for_the_effort_its_definition_named`
 
+<a id="DELEGATE-28"></a>
+### DELEGATE-28: a definition may limit the files its delegate writes
+
+`writes:` is optional and holds path patterns, as a list or a comma-separated line, written as the
+`Edit(...)` rules in settings are ([PERM-3](permissions.md#PERM-3)). A delegate under a definition
+naming some is refused a write to any file the patterns do not cover, before a person is asked, so a
+docs agent cannot edit source whatever it is told to do. The refusal says the definition's limit is
+the reason, because a planner told only that a write was refused tries the same call again.
+
+The limit only narrows. It is checked beside the deny rules and never in place of them: a file
+inside it that a deny rule covers is still refused, and a file it covers is still put to the person
+as any write is. A path is judged under the name it was given and under the file it reaches through
+a link or another spelling ([PERM-7](permissions.md#PERM-7)), and a path with a `..` segment is
+outside every limit though it matches a pattern as written.
+
+A later definition of the same name never lifts a limit ([DELEGATE-20](#DELEGATE-20)): the
+delegate is held to every list any source wrote, and the one who wrote the later file is told which
+files its delegate may write. A delegate that starts a delegate of its own passes its limit down, so
+a limited worker cannot write through a worker with none.
+
+A line with no pattern limits its delegate to writing no file, as an empty `tools:` line leaves it
+no tool, and falling back to every file is the one outcome the author did not write. A pattern that
+cannot be read is reported, naming the file and the pattern, and covers nothing; the patterns beside
+it are kept. A pattern needing the home directory or the directory of a settings file (`~/`, a
+leading `/`) cannot be read, since a definition has neither to resolve it against. A name with no
+slash matches in any directory, as it does in a rule ([PERM-4](permissions.md#PERM-4)).
+
+A file written by a tool call and one written by a redirection (`> file`) are held to the limit
+alike. A program the delegate runs is not, since what it opens is its own business, so a definition
+that must keep source out of reach leaves `run` out of its `tools:` line. A turn the person
+addresses to a definition with `/agent` is their own and is not held to the line
+([ADDRESS-7](addressing-a-definition.md#ADDRESS-7) narrows it by the tools the definition names). A delegate's
+memory notes are files like any other: a limit that does not name `.bravebot/memory/**` refuses
+them.
+
+Like the tools beside it, the line is configuration a vouched-for source wrote
+([DELEGATE-20](#DELEGATE-20)), not content, and it grants nothing: a delegate holds what its kind
+holds ([DELEGATE-4](#DELEGATE-4)), and a limit takes some of it away.
+
+`verified-by: bravebot_core::permissions::an_edit_limit_contains_its_patterns_and_no_climbing_out`
+`verified-by: bravebot_core::permissions::an_empty_edit_limit_contains_no_path`
+`verified-by: bravebot_core::permissions::an_edit_limit_reports_the_patterns_it_cannot_read`
+`verified-by: bravebot_core::permissions::an_edit_limit_follows_the_hosts_case_folding`
+`verified-by: bravebot_core::delegate::a_later_definition_cannot_take_a_write_limit_away`
+`verified-by: bravebot_core::policy::a_delegate_may_write_only_inside_its_definitions_writes`
+`verified-by: bravebot_core::policy::a_writes_line_cannot_allow_what_a_deny_rule_refuses`
+`verified-by: bravebot_core::policy::an_unreadable_writes_pattern_leaves_no_write_path`
+`verified-by: bravebot_core::policy::a_delegate_started_by_a_limited_one_is_limited_too`
+`verified-by: bravebot_agent::agents::a_definition_reads_the_writes_it_names`
+`verified-by: bravebot_agent::agents::a_writes_pattern_that_cannot_be_read_is_reported_and_the_definition_still_loads`
+`verified-by: bravebot_agent::agents::a_project_cannot_hand_back_a_write_limit_a_persons_own_definition_set`
+`verified-by: bravebot_agent::turn::a_delegate_cannot_write_outside_the_files_its_definition_names`
+`verified-by: bravebot_agent::turn::a_delegate_cannot_write_through_a_link_out_of_the_files_its_definition_names`
+`verified-by: bravebot_agent::turn::a_delegate_cannot_write_through_a_link_outside_its_files_to_one_inside`
+`verified-by: bravebot_agent::turn::a_limited_delegates_redirection_is_held_to_its_definitions_files`
+
 ## Known costs
 
 - **A definition is trusted exactly as far as a configuration file somebody pasted is.** That is

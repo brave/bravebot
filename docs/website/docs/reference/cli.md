@@ -91,6 +91,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
 | `--tools <a,b,c>` | offer the agent only the named tools; a tool a setting removed stays removed, and no MCP server's tools are offered ([below](#--tools-abc-and---no-shell)) |
 | `--no-shell` | offer no tool that runs a program or reads what one printed: `run`, `read_output` and `job_output` ([below](#--tools-abc-and---no-shell)) |
+| `--locked` | as `--safe`, and read no project or local settings file; refuse `--dangerously-skip-permissions` and make the bypass mode unreachable ([below](#--locked)) |
 | `--safe` | load none of your hooks, skills, definitions, MCP server requests or `AGENTS.md`, and say so once; sign-in, model and permissions still apply |
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
@@ -99,8 +100,8 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 
 `-p` may lead, as it does for other agents: `bravebot -p "task"`.
 
-Seven flags are taken out of the line before anything dispatches on it, so each may go anywhere and
-each combines with every way of starting, one another included: `--incognito`, `--safe`,
+Eight flags are taken out of the line before anything dispatches on it, so each may go anywhere and
+each combines with every way of starting, one another included: `--incognito`, `--safe`, `--locked`,
 `--dangerously-skip-permissions`, `--settings`, `--vet`, `--tools` and `--no-shell`. `--agent` is taken out there too, and
 combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
 `--fork` or `--mode manifest`, a task carrying on a session included.
@@ -115,6 +116,15 @@ reads none of your hooks, skills, delegate definitions, `mcp.request` entries or
 whether they are under `~/.bravebot` or in the project, and says once what it skipped. The built-in
 skills and delegate kinds, `--append-system-prompt` and `--settings` are unaffected, and so are
 sign-in, the model, permission rules and trust. `--bg` refuses it.
+
+### `--locked`
+
+For a run on a shared machine, or one whose checkout you do not trust. It does what `--safe` does,
+and reads settings from only your own file under `~/.bravebot`, the managed file and the one
+`--settings` names: the checkout's `.bravebot/settings.json` and `settings.local.json` are not read.
+It refuses `--dangerously-skip-permissions`, and the bypass mode cannot be reached from the keyboard
+either. A permission question nobody can answer is declined, as it is in any unattended run. `--bg`
+refuses it.
 
 ### `--tools <a,b,c>` and `--no-shell`
 
