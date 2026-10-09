@@ -250,6 +250,13 @@ pub struct RunRequest {
     /// unconfined, nor the other way. `None` is the one thing a front end may describe as not
     /// sandboxed.
     pub confined: Option<Confined>,
+    /// Where an answer that remembers the reach the planner asked for would be written, where one
+    /// may be.
+    ///
+    /// `Some` exactly where the prompt may offer `m` and `k`: a session that keeps a record of
+    /// reach at all, with a session to key a session-long answer to. The path rather than a flag,
+    /// for the reason [`RunRequest::record`] carries one.
+    pub reach_record: Option<std::path::PathBuf>,
 }
 
 /// What a confined `run` is held to, in the words a prompt needs.
@@ -459,6 +466,7 @@ impl RunRequest {
             // to name: this constructor is for shell mode, where the bytes are the user's own.
             stdin: None,
             confined: None,
+            reach_record: None,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -570,6 +578,58 @@ impl RunRequest {
             }
         }
         names
+    }
+
+    /// The credential scopes the planner asked for, each once, in the menu's order. A toolchain
+    /// list is not among them: a reach is remembered for a scope of the closed table only.
+    pub fn requested_credential_scopes(&self) -> Vec<bravebot_sandbox::scope::Scope> {
+        let mut scopes = Vec::new();
+        for (_, request) in self
+            .confined
+            .iter()
+            .flat_map(|confined| &confined.requested)
+        {
+            if let bravebot_sandbox::scope::Requested::Scope(scope) = request
+                && !scopes.contains(scope)
+            {
+                scopes.push(*scope);
+            }
+        }
+        scopes
+    }
+
+    /// The toolchain lists the planner asked for, each once, which the remembering answers leave out.
+    pub fn requested_toolchains(&self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        for (_, request) in self
+            .confined
+            .iter()
+            .flat_map(|confined| &confined.requested)
+        {
+            if matches!(request, bravebot_sandbox::scope::Requested::Toolchain(_))
+                && !names.contains(&request.name())
+            {
+                names.push(request.name());
+            }
+        }
+        names
+    }
+
+    /// The programs, each with its operation word, that `m` and `k` would remember the requested
+    /// credential scopes for. Empty where neither is offered.
+    ///
+    /// Computed from the plan and the closed table the way the acting layer computes what it writes,
+    /// so the drawing cannot name a program the record would not hold.
+    pub fn kept_reach_shapes(&self) -> Vec<String> {
+        if self.reach_record.is_none() {
+            return Vec::new();
+        }
+        crate::reach::kept_for(&self.plan.steps(), &self.requested_credential_scopes())
+    }
+
+    /// Whether the prompt may offer to remember the requested reach.
+    pub fn offers_to_keep_reach(&self) -> bool {
+        !self.kept_reach_shapes().is_empty()
     }
 
     /// Whether the prompt may offer to record this answer past the session.
@@ -1041,6 +1101,15 @@ pub struct RunDecision {
     ///
     /// [RUN-20]: ../../../docs/specs/tools/run.md
     pub record_family: bool,
+    /// Whether the person asked for the credential scopes the planner requested for this line to be
+    /// remembered for the stages they were added to, and for how long ([SANDBOX-27]).
+    ///
+    /// Its own field: it neither stops the asking nor vouches for anything, so none of the other
+    /// three can stand for it. Never set together with them by a front end in this tree, and an
+    /// acting layer that sees both honours each one on its own terms.
+    ///
+    /// [SANDBOX-27]: ../../../docs/specs/sandboxing.md
+    pub remember_reach: Option<crate::reach::Lasting>,
 }
 
 impl RunDecision {
@@ -1051,6 +1120,7 @@ impl RunDecision {
             remember: false,
             record: false,
             record_family: false,
+            remember_reach: None,
         }
     }
 
@@ -1061,6 +1131,7 @@ impl RunDecision {
             remember: true,
             record: false,
             record_family: false,
+            remember_reach: None,
         }
     }
 
@@ -1075,6 +1146,7 @@ impl RunDecision {
             remember: false,
             record: true,
             record_family: false,
+            remember_reach: None,
         }
     }
 
@@ -1086,6 +1158,24 @@ impl RunDecision {
             remember: false,
             record: false,
             record_family: true,
+            remember_reach: None,
+        }
+    }
+
+    /// Run it, and remember the credential scopes the planner requested for the stages they were
+    /// added to, so the next plan for those programs carries them as a row the person reads.
+    ///
+    /// Vouches for nothing and stops no asking: what the line prints keeps the label it would have
+    /// had, and a line that requests a scope is asked about every time ([SANDBOX-26]).
+    ///
+    /// [SANDBOX-26]: ../../../docs/specs/sandboxing.md
+    pub fn approve_and_keep_reach(lasting: crate::reach::Lasting) -> Self {
+        Self {
+            decision: Decision::Approve,
+            remember: false,
+            record: false,
+            record_family: false,
+            remember_reach: Some(lasting),
         }
     }
 
@@ -1096,6 +1186,7 @@ impl RunDecision {
             remember: false,
             record: false,
             record_family: false,
+            remember_reach: None,
         }
     }
 
@@ -2268,6 +2359,7 @@ mod tests {
             pattern: None,
             stdin: None,
             confined: None,
+            reach_record: None,
         };
         let offered = request(
             a_listed_line(),

@@ -64,6 +64,24 @@ pub enum Lifetime {
     Always,
 }
 
+/// How long a person asked a grant to apply, before the session it belongs to is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lasting {
+    /// The session that asked, and a `--resume` of it.
+    ThisSession,
+    /// Every session in the checkout, until a person removes it.
+    EverySession,
+}
+
+impl Lasting {
+    fn of(self, session: &str) -> Lifetime {
+        match self {
+            Self::ThisSession => Lifetime::Session(session.to_string()),
+            Self::EverySession => Lifetime::Always,
+        }
+    }
+}
+
 /// The checkout a grant was typed in: where it is, and which directory was there.
 ///
 /// The identity is what tells the checkout apart from another one made at the same path, as it
@@ -128,7 +146,20 @@ pub fn operation_of(args: &[String]) -> Option<String> {
         .cloned()
 }
 
+/// A step shape as a person reads it: the program's file name, then the operation word.
+fn shape_name(binary: &Path, operation: Option<&str>) -> String {
+    let name = binary
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| binary.display().to_string());
+    match operation {
+        Some(operation) => format!("{name} {operation}"),
+        None => name,
+    }
+}
+
 /// The parts of a stage a grant is keyed on.
+#[derive(Clone)]
 struct Key<'a> {
     binary: PathBuf,
     args: &'a [String],
@@ -193,15 +224,7 @@ impl Grant {
 
     /// The program and operation, as the grant is listed.
     pub fn command(&self) -> String {
-        let name = self
-            .binary
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.binary.display().to_string());
-        match &self.operation {
-            Some(operation) => format!("{name} {operation}"),
-            None => name,
-        }
+        shape_name(&self.binary, self.operation.as_deref())
     }
 
     /// Whether `other` is the same grant, whatever day it was allowed.
@@ -444,6 +467,115 @@ impl Store {
     }
 }
 
+/// The grants that give `reached` to each stage in `keys`, one for each distinct shape.
+///
+/// `None` where a grant has to be bound to a checkout and `here` cannot say which directory that is.
+fn grants_for(
+    keys: Vec<Key<'_>>,
+    reached: &Reached,
+    write: bool,
+    today: &str,
+    lifetime: Lifetime,
+    here: Option<Workspace>,
+) -> Option<Vec<Grant>> {
+    let mut made: Vec<Grant> = Vec::new();
+    for key in keys {
+        let operation = operation_of(key.args);
+        let workspace = match Grant::is_global(&key.binary, operation.as_deref(), reached) {
+            true => None,
+            false => Some(here.clone()?),
+        };
+        let grant = Grant {
+            binary: key.binary,
+            operation,
+            reached: reached.clone(),
+            write,
+            allowed: today.to_string(),
+            lifetime: lifetime.clone(),
+            workspace,
+        };
+        if !made.iter().any(|held| held.same_as(&grant)) {
+            made.push(grant);
+        }
+    }
+    Some(made)
+}
+
+/// The stages a reach the planner asked for was added to, as keys a grant can hold.
+///
+/// A stage with an assignment in front of it was given nothing, so it is left out. `None` where no
+/// stage is left, or one starts with an option and so has no operation to key on: the answer would
+/// otherwise remember the reach for a shape wider than the one the person read.
+fn requested_keys<'a>(steps: &[&'a Step]) -> Option<Vec<Key<'a>>> {
+    let keys: Vec<Key> = steps
+        .iter()
+        .map(|step| key_of(step))
+        .filter(|key| !key.assigned)
+        .collect();
+    let keyable = keys
+        .iter()
+        .all(|key| key.args.is_empty() || operation_of(key.args).is_some());
+    (!keys.is_empty() && keyable).then_some(keys)
+}
+
+/// The shapes `keep_requested` would remember `scopes` for, as the prompt names them. Empty where
+/// the answer is not offered.
+pub fn kept_for(steps: &[&Step], scopes: &[Scope]) -> Vec<String> {
+    if scopes.is_empty() {
+        return Vec::new();
+    }
+    let Some(keys) = requested_keys(steps) else {
+        return Vec::new();
+    };
+    let mut shapes: Vec<String> = Vec::new();
+    for key in keys {
+        let shape = shape_name(&key.binary, operation_of(key.args).as_deref());
+        if !shapes.contains(&shape) {
+            shapes.push(shape);
+        }
+    }
+    shapes
+}
+
+/// Remember the credential scopes the planner asked a line for, for the stages it was added to, as
+/// a person's answer at the prompt that showed them. Whether the record was written.
+///
+/// The inputs are the compiled steps, the closed table and the answer, as they are for `/reach`.
+/// Nothing a program printed is one, and the scopes are the menu's words the prompt named.
+pub fn keep_requested(
+    store: &Store,
+    steps: &[&Step],
+    scopes: &[Scope],
+    lasting: Lasting,
+    session: &str,
+    directory: &Path,
+    today: &str,
+) -> bool {
+    let Some(keys) = requested_keys(steps) else {
+        return false;
+    };
+    let mut written = false;
+    for scope in scopes {
+        let Some(made) = grants_for(
+            keys.clone(),
+            &Reached::Scope(*scope),
+            false,
+            today,
+            lasting.of(session),
+            Workspace::of(directory),
+        ) else {
+            return false;
+        };
+        for grant in &made {
+            if !store.allow(grant) {
+                return false;
+            }
+            written = true;
+        }
+    }
+    written
+}
+
 /// Where `/reach` runs: the session it was typed in and the places it resolves names against.
 pub struct Typed<'a> {
     /// The state directory the record is kept in.
@@ -583,33 +715,20 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
     {
         return t!(reach_refused_option).to_string();
     }
-    let here = Workspace::of(typed.directory);
-    let mut made: Vec<Grant> = Vec::new();
-    for key in keys {
-        let operation = operation_of(key.args);
-        let workspace = match Grant::is_global(&key.binary, operation.as_deref(), &reached) {
-            true => None,
-            false => match &here {
-                Some(here) => Some(here.clone()),
-                None => return t!(reach_refused_workspace).to_string(),
-            },
-        };
-        let grant = Grant {
-            binary: key.binary,
-            operation,
-            reached: reached.clone(),
-            write,
-            allowed: typed.today.to_string(),
-            lifetime: match always {
-                true => Lifetime::Always,
-                false => Lifetime::Session(typed.session.to_string()),
-            },
-            workspace,
-        };
-        if !made.iter().any(|held| held.same_as(&grant)) {
-            made.push(grant);
-        }
-    }
+    let lifetime = match always {
+        true => Lasting::EverySession,
+        false => Lasting::ThisSession,
+    };
+    let Some(made) = grants_for(
+        keys,
+        &reached,
+        write,
+        typed.today,
+        lifetime.of(typed.session),
+        Workspace::of(typed.directory),
+    ) else {
+        return t!(reach_refused_workspace).to_string();
+    };
     let mut sentences = Vec::new();
     for grant in &made {
         if !store.allow(grant) {
@@ -1273,5 +1392,79 @@ mod tests {
 
         assert_eq!(place.held_in("s", &place.first), []);
         assert_eq!(place.held_in("s", &place.second).len(), 1);
+    }
+
+    /// A stage the scope was not added to (an assignment in front of it) is not remembered, and
+    /// one that starts with an option hides its operation, so the answer is not offered for the
+    /// line. The regressions it rejects: a grant for a stage the plan showed no scope on, and a
+    /// grant for the bare program that would cover every operation of it.
+    #[test]
+    fn a_kept_request_leaves_out_an_assigned_stage_and_refuses_an_option_first_stage() {
+        let mut assigned = step("git", "/usr/bin/git", &["push"]);
+        assigned.environment = vec![("GIT_SSH_COMMAND".to_string(), "ssh".to_string())];
+        let view = step("gh", "/usr/bin/gh", &["pr", "view"]);
+        let remote = [Scope::named("remote").expect("a scope")];
+
+        assert_eq!(kept_for(&[&assigned, &view], &remote), ["gh pr"]);
+        assert_eq!(kept_for(&[&assigned], &remote), Vec::<String>::new());
+        assert_eq!(
+            kept_for(
+                &[&step("git", "/usr/bin/git", &["-C", "dir", "push"])],
+                &remote
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(kept_for(&[&view], &[]), Vec::<String>::new());
+
+        let place = Place::new("kept-refusals");
+        let store = Store::new(&place.home);
+        let option_first = step("sh", "/bin/sh", &["-c", "true"]);
+        assert!(!keep_requested(
+            &store,
+            &[&option_first],
+            &remote,
+            Lasting::EverySession,
+            "s",
+            &place.first,
+            "2026-10-07"
+        ));
+        assert_eq!(place.held_in("s", &place.first), []);
+    }
+
+    /// A scope of a program the table gives it to is remembered for every checkout, and any other
+    /// program's is bound to the checkout it was answered in, for the session or for good as
+    /// asked. The regressions it rejects: a checkout-bound grant for `gh`, which would ask again
+    /// in the next project, and an unbound grant for a program whose files a checkout decides.
+    #[test]
+    fn a_kept_request_binds_to_a_checkout_unless_the_table_gives_the_program_the_scope() {
+        let place = Place::new("kept-binding");
+        let store = Store::new(&place.home);
+        let remote = [Scope::named("remote").expect("a scope")];
+        let view = step("gh", "/usr/bin/gh", &["pr", "view"]);
+        let make = step("make", "/usr/bin/make", &["check"]);
+
+        assert!(keep_requested(
+            &store,
+            &[&view, &make],
+            &remote,
+            Lasting::ThisSession,
+            "s",
+            &place.first,
+            "2026-10-07"
+        ));
+
+        let first = place.held_in("s", &place.first);
+        assert_eq!(first.len(), 2, "{first:?}");
+        assert!(first.iter().all(|grant| !grant.write));
+        assert!(
+            first
+                .iter()
+                .all(|grant| grant.lifetime == Lifetime::Session("s".to_string()))
+        );
+        let second = place.held_in("s", &place.second);
+        assert_eq!(second.len(), 1, "{second:?}");
+        assert_eq!(second[0].binary, PathBuf::from("/usr/bin/gh"));
+        assert_eq!(second[0].workspace, None);
+        assert_eq!(place.held_in("other", &place.first).len(), 0);
     }
 }

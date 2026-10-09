@@ -1367,7 +1367,21 @@ run-write-not-remembered =
 run-stdin-not-remembered =
     une ligne alimentée par une référence est soumise à chaque fois, celle-ci ne peut donc pas être retenue
 run-scopes-not-remembered =
-    une ligne pour laquelle le planificateur a demandé une portée d'identifiants ou une chaîne d'outils est soumise à chaque fois, celle-ci ne peut donc pas être retenue
+    une ligne pour laquelle le planificateur a demandé une portée d'identifiants ou une chaîne d'outils est soumise à chaque fois, la ligne elle-même ne peut donc pas être retenue
+run-keep-reach-explained =
+    m : retenir aussi l'accès demandé pour ces commandes, afin que le prochain plan pour elles le porte
+run-keep-reach-scopes = l'accès retenu est { $scopes }, en lecture seule
+run-keep-reach-still-asked =
+    la ligne reste soumise à chaque fois, avec cet accès affiché, et rien de ce qu'elle affiche n'est approuvé
+run-keep-reach-lifetimes =
+    m vaut pour cette session. k vaut jusqu'à son retrait, dans cette copie de travail, ou dans toute copie pour un programme auquel l'accès appartient, comme git pour remote.
+run-keep-reach-toolchains =
+    { $toolchains } n'est pas retenu : une liste de chaînes d'outils est redemandée à chaque fois
+run-keep-reach-where = c'est écrit ici :
+run-keep-reach-undo =
+    /reach liste ce qui est retenu, et /reach remove <numéro> en oublie un
+run-keep-reach = retenir l'accès
+run-keep-reach-always = le retenir pour toute session
 run-remember-explained =
     r : ne plus rien demander pour cette ligne exacte, dans ce répertoire, à partir de maintenant
 run-remember-where = elle est écrite ici, et supprimer la ligne est le chemin du retour :
