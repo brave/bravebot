@@ -473,7 +473,7 @@ the notes do, so the last of them is still held apart from whatever is said next
 
 Where `NO_COLOR` is set to anything but the empty string, every role is drawn in the terminal's own
 ink and this program adds none of its own: the background it would paint, the shades it mixes, the
-named slots it asks for, and the gradient across the wordmark. The terminal is not asked about its
+named slots it asks for, the gradient across the wordmark, and the pixel face drawn beside it. The terminal is not asked about its
 background either, since nothing is drawn in a shade picked for one. A theme somebody chose stays
 recorded and paints again once the variable is unset.
 
@@ -500,6 +500,7 @@ than cleared, which is what makes the variable a switch rather than an edit.
 `verified-by: bravebot_tui::theme::text_over_a_fill_that_is_not_painted_takes_no_ink`
 `verified-by: bravebot_tui::theme::a_row_the_cursor_is_on_is_marked_where_no_colour_is_drawn`
 `verified-by: bravebot_tui::logo::the_wordmark_takes_no_colour_where_none_was_asked_for`
+`verified-by: bravebot_tui::logo::the_face_takes_no_colour_where_none_was_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
 
 
