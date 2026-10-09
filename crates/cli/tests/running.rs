@@ -5919,10 +5919,15 @@ fn a_run_refuses_a_definition_only_an_untrusted_checkout_holds_and_says_it_count
 
 /// A project holding `notes.md`, and a gateway whose model asks to read it and then says it is done.
 ///
-/// The words in the file reach the second request when the run trusts the file, and a reference to
-/// them takes their place when it does not.
+/// The model reads the notes only for a prompt asking it to, so a run with another prompt is a
+/// plain exchange that a later run can carry on from. The words in the file reach the second
+/// request when the run trusts the file, and a reference to them takes their place when it does
+/// not.
 fn a_project_whose_notes_the_model_reads(name: &str) -> (Gateway, Scratch, PathBuf) {
     let gateway = a_gateway(r#"["tools"]"#, |body| {
+        if !body.contains("read the notes") {
+            return answered("hello")(body);
+        }
         let frame = match body.contains(r#""role":"tool""#) {
             true => serde_json::json!({"model":"reasons-only","choices":[{
                 "index":0,"delta":{"role":"assistant","content":"all done"},
@@ -5990,6 +5995,62 @@ fn a_run_given_the_workspace_flag_reads_a_project_file_as_trusted_and_writes_no_
     assert!(
         !scratch.path.join(".bravebot").join("trusted").exists(),
         "the flag kept an answer for later runs"
+    );
+}
+
+/// TRUST-26. A run carrying on an earlier session keeps the map that session recorded and adds the
+/// working directory to it, so the flag trusts a file the earlier session left untrusted. The
+/// continuation without the flag is the control: it reads the file quarantined. Each continues a
+/// session of its own, since a session that already holds the read would answer from it.
+#[test]
+fn a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted() {
+    let (gateway, scratch, cwd) =
+        a_project_whose_notes_the_model_reads("cli-running-trust-flag-continued");
+    let earlier = || {
+        let run = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--json", "-p", "hello"],
+        );
+        let (stdout, stderr) = said(&run);
+        assert!(run.status.success(), "{stderr}");
+        session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"))
+    };
+    let (for_the_control, for_the_flag) = (earlier(), earlier());
+    assert_ne!(for_the_control, for_the_flag);
+    let _ = requests(&gateway);
+
+    let without = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--resume", &for_the_control, "-p", "read the notes"],
+    );
+    let (_, stderr) = said(&without);
+    assert!(without.status.success(), "{stderr}");
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "the continued run trusted a file nothing vouched for"
+    );
+
+    let with = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--trust-workspace",
+            "--resume",
+            &for_the_flag,
+            "-p",
+            "read the notes",
+        ],
+    );
+    let (_, stderr) = said(&with);
+    assert!(with.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the flag did not trust the working directory of the continued run"
     );
 }
 

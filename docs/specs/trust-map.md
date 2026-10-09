@@ -1248,6 +1248,7 @@ an answer in their place: it is the answer, given before the run and for the one
 `verified-by: bravebot_cli::main::a_flagged_run_writes_no_record_and_says_nothing`
 `verified-by: bravebot_cli::main::the_workspace_flag_is_read_from_the_command_line_and_may_repeat`
 `verified-by: bravebot_cli::running::a_run_given_the_workspace_flag_reads_a_project_file_as_trusted_and_writes_no_record`
+`verified-by: bravebot_cli::running::a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted`
 `verified-by: bravebot_cli::running::a_run_without_the_workspace_flag_reads_a_project_file_quarantined`
 
 ## What a killed session leaves
