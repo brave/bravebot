@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/tools.rs
   - crates/core/src/policy.rs
   - crates/core/src/url.rs
+  - crates/net/src/address.rs
   - crates/net/src/lib.rs
 guards:
   - symbol: Policy::before_fetch_rules
@@ -242,3 +243,51 @@ a converter in the driver would be the driver reading a page.
 `verified-by: bravebot_agent::turn::a_fetch_asks_for_markdown_ahead_of_html`
 `verified-by: bravebot_agent::turn::a_redirected_fetch_still_asks_for_markdown_ahead_of_html`
 `verified-by: bravebot_agent::turn::a_markdown_body_is_labelled_exactly_as_an_html_body_is`
+
+<a id="FETCH-8"></a>
+### FETCH-8: a name that resolves to a non-public address is not fetched
+
+A person approves a host as written, and a name resolves to whatever its server says. While a
+fetch is in flight, each hop's host is looked up once and the answer is classified before anything
+is sent. If any address in it is loopback, private, link-local (the cloud metadata address among
+them), unique-local, carrier-grade NAT, unspecified, multicast or reserved, the hop is not sent and
+the fetch fails. IPv4 addresses inside IPv6 ones (`::ffff:a.b.c.d`, `64:ff9b::/96`) are classified as
+the IPv4 address. The connection is made to the addresses classified and no second lookup is made,
+so an answer that differs the next time cannot be connected to.
+
+The failure names the URL that was asked for, as every failure does ([FETCH-6](#FETCH-6)). The
+address stays inside `bravebot-net`, in the result, the log and the trail alike.
+
+A host written as an address is not a name, and a person approving it approved that address. It is
+fetched, and `localhost` is a name. The check is the fetch's, as [FETCH-4](#FETCH-4)'s is: it does not
+apply to the configured model endpoint or to anything else that is not a `fetch_url` call, so a
+model on loopback is reached.
+
+**Why.** [FETCH-4](#FETCH-4) holds the chain to the host a person was shown, and a host is a string.
+Without this, `docs.example.com` can be made to answer with `169.254.169.254` and reach a service
+that hands credentials to whoever opens the socket, with a prompt that said nothing was wrong. The
+refusal covers every address in the answer rather than the one that would be connected to: the
+public half of a mixed answer is trusted only as far as the server that wrote the other half.
+
+**Known cost.** Behind a proxy the proxy resolves the target, and the lookup this program makes is
+for the proxy itself, so a proxied fetch is not classified here. The proxy is the one that
+connects, and what it is allowed to reach is its own configuration's.
+
+`verified-by: bravebot_net::address::every_class_the_issue_names_is_not_public`
+`verified-by: bravebot_net::address::a_public_address_is_public`
+`verified-by: bravebot_net::address::an_ipv4_address_in_ipv6_clothes_is_classified_as_the_ipv4_address`
+`verified-by: bravebot_net::address::a_host_written_as_an_address_is_not_a_name`
+`verified-by: bravebot_net::lib::a_name_resolving_to_a_non_public_address_is_refused_before_any_request_is_sent`
+`verified-by: bravebot_net::lib::a_refused_address_is_never_connected_to`
+`verified-by: bravebot_net::lib::one_non_public_address_among_public_ones_refuses_the_name`
+`verified-by: bravebot_net::lib::a_redirect_hop_resolving_to_a_non_public_address_is_refused_and_names_the_url_asked_for`
+`verified-by: bravebot_net::lib::the_connection_is_made_to_the_address_that_was_classified`
+`verified-by: bravebot_net::lib::an_approved_host_that_is_itself_an_address_is_fetched`
+`verified-by: bravebot_net::lib::a_request_that_is_not_a_fetch_may_still_resolve_to_this_machine`
+`verified-by: bravebot_net::lib::a_proxied_fetch_is_not_sent_through_the_guarded_lookup`
+`verified-by: bravebot_net::lib::a_refused_address_is_a_failure_that_says_nothing_of_the_address_and_is_not_retried`
+`verified-by: bravebot_net::egress::a_fetched_name_that_resolves_to_this_machine_is_refused_without_a_connection`
+`verified-by: bravebot_net::egress::the_same_name_is_reached_when_no_fetch_is_in_flight`
+`verified-by: bravebot_net::egress::an_approved_address_literal_on_this_machine_is_fetched`
+`verified-by: bravebot_core::policy::a_fetch_is_in_flight_from_its_approval_until_it_finishes`
+`verified-by: bravebot_agent::turn::a_fetch_to_a_name_that_resolves_to_this_machine_fails_without_reaching_it`

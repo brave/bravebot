@@ -545,6 +545,12 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
             body.contains("data:image/png;base64,iVA="),
             "the dropped picture did not reach the planner: {body}"
         );
+        // DROP-11: both calls name the file beside its bytes, so the planner can write a step
+        // about the path it was shown rather than about a marker standing for nothing.
+        assert!(
+            body.contains("Dropped file: shot.png"),
+            "the dropped file's path did not reach the planner: {body}"
+        );
     }
 }
 
@@ -1331,6 +1337,14 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -1485,6 +1499,14 @@ impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(

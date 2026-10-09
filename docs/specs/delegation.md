@@ -439,8 +439,9 @@ Nothing else about a delegate's policy survives it.
 <a id="DELEGATE-12"></a>
 ### DELEGATE-12: a delegate puts no question of its own to a person
 
-It is offered no way to ask one and no task list to write to, and a call to either anyway is
-answered the way any other unknown name is. Its task came from a planner rather than from the
+It is offered no way to ask one, no way to ask for reach to a path
+([SANDBOX-28](sandboxing.md#SANDBOX-28)) and no task list to write to, and a call to any of them
+anyway is answered the way any other unknown name is. Its task came from a planner rather than from the
 person, so a question about it asks somebody to arbitrate something they never set up, and the
 list on the screen belongs to the turn they are actually watching.
 

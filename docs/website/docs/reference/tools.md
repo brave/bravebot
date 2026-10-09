@@ -29,9 +29,11 @@ that is merely carried.
 | [`spawn_agent`](#spawn_agent) | `kind` | `task`, `each` | not the call, but its writes and runs do |
 | [`load_skill`](#load_skill) | `name` | none | no |
 | [`ask_user`](#ask_user) | the questions | none | it *is* the question |
+| [`request_path`](#request_path) | `path`, `write` | none | **yes, unless you bypass permissions** |
 | [`todo_write`](#todo_write) | none | `todos` | no |
 
-Three more are offered only where they mean something.
+Four more are offered only where they mean something.
+[`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
 [`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
 [`/loop`](commands.md#loop-interval-prompt), and one on a line you typed in a session that can send
 it again. Not to a tick of a loop you gave an interval for, not to a delegate, and not where nothing
@@ -144,6 +146,14 @@ process it and write it back without ever being told what it is called. The dire
 walk stopped at are entries too, and each reference says which of the two it stands for: there is
 nothing behind a directory to read, and the way to what is inside it is another listing with a
 greater depth.
+
+A walk does not enter a fixed list of directories, at any depth, and its result does not say that it
+left them out: version control (`.git`, `.hg`, `.svn`), build output and caches (`target`, `dist`,
+`build`, `coverage`, `__pycache__` and similar), dependencies (`node_modules`, `vendor`,
+`third_party`, `site-packages`, virtual environments and similar) and linked worktrees (`.worktrees`,
+`.claude/worktrees`). A project with a `vendor` or `build` directory therefore lists as though it had
+none. The tool description gives the planner the full list, and naming one of them as `directory`
+lists it.
 
 The glob is literal and the matcher does not backtrack. A truncated listing says it was truncated.
 
@@ -667,6 +677,15 @@ A hop that keeps the approved host but drops TLS is a separate question, decided
 leaves the process: an `https` chain is not followed into cleartext. See
 [Security](../security/security.md).
 
+**A name that resolves to a non-public address is not fetched.** Approving `docs.example.com` approves
+a name, and a name resolves to whatever its server says. Each hop's host is looked up once, and if any
+address in the answer is loopback, private, link-local (the cloud metadata address among them),
+unique-local, carrier-grade NAT or otherwise reserved, the fetch fails before anything is sent and the
+connection is made only to the addresses that were checked. A URL whose host is written as an address,
+such as `http://127.0.0.1:8080/`, is what you approved and is fetched; `localhost` is a name. Behind a
+proxy the proxy resolves the target, so the check does not apply there. A model running on loopback is
+unaffected, since this applies to `fetch_url` and nothing else.
+
 **A result names the URL you asked for, never where a redirect went.** A fetch that succeeds names it
 as the origin of what came back; one that fails or is refused names it as the request that did not work,
 with the kind of failure. Past the first hop the address a request is on is a string a server wrote into
@@ -830,6 +849,30 @@ every question is declined rather than answered on your behalf.
 
 This tool is for what the planner cannot find out itself: which of two approaches, whether something
 is in scope, which of two plausible files you meant. Never for a fact about the machine.
+
+## `request_path`
+
+Asks you to let the programs a `run` starts reach one path they otherwise cannot, for the rest of the
+session. A command that fails with `Operation not permitted` on a path outside the directories the
+session was opened on is the usual cause.
+
+| Parameter | |
+|---|---|
+| `path` | one absolute path, or one beginning `~/`; it must exist and may not hold `*` or `?` |
+| `write` | `true` to let programs write it as well as read it; defaults to `false` |
+
+You are shown the path, whether it is to be read or written, and the planner's reason, and you
+answer yes or no. A yes lasts for this session, is not saved, and does **not** mark the directory
+trusted, as [`/add-dir`](commands.md) does. `/reach paths` lists what you have allowed and
+`/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
+the answer is yes without a question.
+
+The same paths are refused as an `allowWrite` entry would be, whatever you would answer, and you are
+not asked: `~`, `/`, a drive root, your home directory and any directory above it, `~/.ssh`,
+`~/.bravebot`, the credential locations and any directory that holds one, such as `~/.config`. A path your `denyRead` or `denyWrite` entries cover is
+refused as well. Nothing is accepted under the sandbox mode `off`, in a workspace you have not
+trusted, in a run with nobody to ask, or in the desktop app, which has no question for it yet. No
+settings file can allow one in advance.
 
 ## `todo_write`
 

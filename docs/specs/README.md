@@ -15,7 +15,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 |---|---|---|---|
 | [labels.md](labels.md) | `LABEL` | 10 | the lattice, taint, who may read what, and how a first label is assigned |
 | [routing.md](routing.md) | `ROUTE` | 8 | where an effect may land and what may decide it |
-| [trust-map.md](trust-map.md) | `TRUST` | 24 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
+| [trust-map.md](trust-map.md) | `TRUST` | 25 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
 | [permissions.md](permissions.md) | `PERM` | 18 | rules written in advance about what to ask about and what to refuse |
 | [processors.md](processors.md) | `PROC` | 12 | the one component that reads untrusted content, and what it may do with it |
 | [vetting.md](vetting.md) | `CHECK` | 15 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
@@ -29,22 +29,22 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [references.md](references.md) | `REFER` | 6 | directories outside the working one that a person declared in their settings, what declaring one grants, and what the planner is told (repository entries and `@alias` proposed, not built) |
 | [naming-files.md](naming-files.md) | `NAME` | 9 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
 | [pasting.md](pasting.md) | `PASTE` | 10 | what Ctrl-V puts into a turn, text or picture, and on what footing |
-| [dropping.md](dropping.md) | `DROP` | 10 | what dragging a file onto a window puts into a turn, and on what footing |
+| [dropping.md](dropping.md) | `DROP` | 11 | what dragging a file onto a window puts into a turn, and on what footing |
 | [shell-mode.md](shell-mode.md) | `SHELL` | 5 | the `!` prompt: a line the user typed, and why the planner can never reach it |
 | [shell-integration.md](shell-integration.md) | `SHELLINT` | 5 | `bravebot shell-init`: a hook that gives `@bravebot` the commands run in a terminal, as quarantined input |
 | [skills.md](skills.md) | `SKILL` | 14 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 13 | which instruction files are looked for, where, in what order, and where what they say ends up |
-| [cli.md](cli.md) | `CLI` | 27 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth` |
+| [cli.md](cli.md) | `CLI` | 28 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth` |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
-| [terminal-input.md](terminal-input.md) | `INPUT` | 40 | what the user types into: the box, the keys, and where a terminal's own limits show through |
+| [terminal-input.md](terminal-input.md) | `INPUT` | 41 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 19 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/recap` asks for, and how a prompt file is expanded |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 27 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
 | [session-view.md](session-view.md) | `RPCVIEW` | 7 | the opt-in shared Rust view for fresh local bridge sessions, and the stdio TypeScript client that applies it |
 | [watching.md](watching.md) | `WATCH` | 23 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
-| [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
+| [scroller.md](scroller.md) | `SCROLL` | 10 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
-| [sandboxing.md](sandboxing.md) | `SANDBOX` | 27 | operating-system confinement for processes running code we did not write |
+| [sandboxing.md](sandboxing.md) | `SANDBOX` | 28 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 9 | tools that come from outside this repository, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 15 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [browser.md](browser.md) | `BROWSER` | 16 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
@@ -52,7 +52,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [network-egress.md](network-egress.md) | `NET` | 10 | every request that leaves this process, and what comes back |
 | [backends.md](backends.md) | `BACKEND` | 53 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 11 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama serves, and what of it may be copied here |
-| [compaction.md](compaction.md) | `COMPACT` | 16 | shortening a long conversation into a summary of itself, in the request only |
+| [compaction.md](compaction.md) | `COMPACT` | 17 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 15 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 19 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
@@ -90,12 +90,13 @@ the routing-versus-content split they share.
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 4 | `read_output` |
 | [tools/vet-content.md](tools/vet-content.md) | `VET` | 4 | `vet_content` |
-| [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 7 | `fetch_url` |
+| [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 8 | `fetch_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 3 | `load_skill` |
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 2 | `todo_write` |
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |
 | [tools/watch-file.md](tools/watch-file.md) | `ARM` | 6 | `watch_file` |
 | [tools/ask-user.md](tools/ask-user.md) | `ASK` | 8 | `ask_user` |
+| [tools/request-path.md](tools/request-path.md) | `PATHREQ` | 6 | `request_path` |
 | [tools/advisor.md](tools/advisor.md) | `ADVISOR` | 9 | `advisor` |
 
 Topics with no spec yet are ordinary code. Adding one is how a topic becomes review-required.

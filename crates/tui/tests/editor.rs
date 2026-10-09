@@ -155,20 +155,25 @@ fn visual_is_the_one_that_runs() {
 /// Every scratch file this makes, sorted, so two listings can be compared.
 ///
 /// The name is generated inside the module under test, so a caller cannot know it in advance and
-/// watches the directory instead.
+/// watches the directory instead. Only this process's files count: the name carries the pid, and
+/// the temporary directory is shared with every other test process running at the same time,
+/// whose edits the editor lock here cannot hold off.
 fn scratch_files() -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
         return Vec::new();
     };
+    let pid = std::process::id();
+    let prefixes = [
+        format!("bravebot-prompt-{pid}-"),
+        format!("bravebot-transcript-{pid}-"),
+    ];
     let mut found: Vec<PathBuf> = entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.starts_with("bravebot-prompt-") || name.starts_with("bravebot-transcript-")
-                })
+                .is_some_and(|name| prefixes.iter().any(|prefix| name.starts_with(prefix)))
         })
         .collect();
     found.sort();

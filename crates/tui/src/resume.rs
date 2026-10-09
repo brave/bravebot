@@ -103,7 +103,7 @@ impl Picker {
             let Some(project) = &self.reads_from else {
                 return;
             };
-            self.corpus = Some(Corpus::read(project));
+            self.corpus = Some(Corpus::read(project, |_| true));
         }
         let Some(corpus) = &self.corpus else {
             return;

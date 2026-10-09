@@ -27,6 +27,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 LEDGER = "docs/peer-advisories-vetted"
+RELEASE_BLOCKING = "release-blocking"
 REPO = "brave/bravebot"
 MAX = 8
 MAX_POSTS = 100
@@ -541,6 +542,7 @@ def clean(text, root):
 def labels_for(fields):
     kinds = fields["kind"]
     labels = [kinds] if isinstance(kinds, str) else list(kinds)
+    labels.append(RELEASE_BLOCKING)
     if fields["security"]:
         labels += ["security", "needs-security-review", f"severity/{fields['severity']}"]
     area = str(fields.get("area") or "").strip().removeprefix("area/")

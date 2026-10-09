@@ -345,6 +345,12 @@ pub struct ChatRequest {
     /// sent before and every service keeps its own default.
     #[serde(rename = "reasoning_effort", skip_serializing_if = "Option::is_none")]
     pub effort: Option<Effort>,
+    /// The JSON Schema the reply must match, in the shape this protocol gives structured output.
+    ///
+    /// Absent unless the person running the task supplied a schema, so every other request goes out
+    /// as it did before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
     /// Whether a later request sends this conversation again, which is what makes a breakpoint on
     /// the end of it worth the write it costs.
     ///
@@ -352,6 +358,33 @@ pub struct ChatRequest {
     /// travelling in one.
     #[serde(skip)]
     pub conversation_is_sent_again: bool,
+}
+
+/// The `response_format` field asking for a reply that matches a schema.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponseFormat {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    json_schema: NamedSchema,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NamedSchema {
+    name: &'static str,
+    schema: serde_json::Value,
+}
+
+impl ResponseFormat {
+    /// A reply that is one JSON value matching `schema`.
+    pub fn json_schema(schema: serde_json::Value) -> Self {
+        Self {
+            kind: "json_schema",
+            json_schema: NamedSchema {
+                name: "reply",
+                schema,
+            },
+        }
+    }
 }
 
 /// Options that only apply to a streamed request.
@@ -371,6 +404,7 @@ impl ChatRequest {
             stream_options: None,
             tools: None,
             effort: None,
+            response_format: None,
             conversation_is_sent_again: true,
         }
     }
@@ -407,6 +441,12 @@ impl ChatRequest {
     /// Ask for a particular amount of thinking, or leave the service to its own default.
     pub fn with_effort(mut self, effort: Option<Effort>) -> Self {
         self.effort = effort;
+        self
+    }
+
+    /// Ask for a reply that matches a JSON Schema, or leave the reply free.
+    pub fn with_response_format(mut self, format: Option<ResponseFormat>) -> Self {
+        self.response_format = format;
         self
     }
 
@@ -1094,6 +1134,24 @@ mod tests {
         let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hello")]);
         let json = serde_json::to_value(&request).unwrap();
         assert!(json.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn a_request_nobody_gave_a_schema_mentions_no_response_format() {
+        let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hello")]);
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json.get("response_format").is_none());
+    }
+
+    #[test]
+    fn a_schema_is_sent_as_the_response_format_this_protocol_names() {
+        let schema = serde_json::json!({"type": "object", "required": ["verdict"]});
+        let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hello")])
+            .with_response_format(Some(ResponseFormat::json_schema(schema.clone())));
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["response_format"]["type"], "json_schema");
+        assert_eq!(json["response_format"]["json_schema"]["name"], "reply");
+        assert_eq!(json["response_format"]["json_schema"]["schema"], schema);
     }
 
     #[test]

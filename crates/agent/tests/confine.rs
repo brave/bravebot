@@ -689,3 +689,117 @@ fn a_denial_that_cannot_be_applied_stops_the_stage() {
         "{refused:?}"
     );
 }
+
+fn hosts(allowed: Option<&[&str]>, denied: &[&str]) -> bravebot_config::sandbox_network::Hosts {
+    use bravebot_config::sandbox_network::{HostEntry, Hosts};
+    let entry = |name: &&str| HostEntry {
+        entry: name.to_string(),
+        by: None,
+    };
+    Hosts {
+        allowed: allowed.map(|names| names.iter().map(entry).collect()),
+        denied: denied.iter().map(entry).collect(),
+        on_unlisted: None,
+    }
+}
+
+/// What a confined `printenv HTTPS_PROXY` printed.
+fn proxy_variable(places: &Places, line: &str, confinement: Option<&Confinement>) -> String {
+    places.run(line, confinement).stdout.trim().to_string()
+}
+
+/// What `CONNECT host:443` through the proxy at `address` was answered with, as a first line.
+fn connect_through(address: &str, host: &str) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let mut stream = std::net::TcpStream::connect(address).expect("the proxy listens");
+    write!(
+        stream,
+        "CONNECT {host}:443 HTTP/1.1\r\nHost: {host}:443\r\n\r\n"
+    )
+    .expect("a request");
+    let mut first = String::new();
+    BufReader::new(stream)
+        .read_line(&mut first)
+        .expect("an answer");
+    first.trim().to_string()
+}
+
+/// The regression it rejects: a host list that is read and never applied, so a stage with egress
+/// keeps the open network, or one whose variables name a port that decides with another list. The
+/// port the stage is told refuses the unlisted name and the listed one is not refused by it.
+#[test]
+fn a_stage_with_a_host_list_is_pointed_at_the_proxy_that_applies_it() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("hosts-proxy");
+    let list = hosts(Some(&["mine.example"]), &[]);
+    let listed = places.confinement().with_hosts(Some(&list));
+
+    let told = proxy_variable(&places, "printenv HTTPS_PROXY", Some(&listed));
+    let address = told.strip_prefix("http://").expect("a proxy url");
+    assert!(address.starts_with("127.0.0.1:"), "{told}");
+    assert!(connect_through(address, "evil.example").contains("403"));
+    assert!(!connect_through(address, "mine.example").contains("403"));
+}
+
+/// The regression it rejects: the proxy variables applied before the stage's own assignment, so a
+/// model-written `HTTPS_PROXY=` points the stage at a proxy of its choosing.
+#[test]
+fn an_assignment_in_the_line_cannot_point_a_stage_elsewhere() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("hosts-assignment");
+    let list = hosts(Some(&["mine.example"]), &[]);
+    let listed = places.confinement().with_hosts(Some(&list));
+
+    let plain = proxy_variable(&places, "printenv HTTPS_PROXY", Some(&listed));
+    let assigned = proxy_variable(
+        &places,
+        "HTTPS_PROXY=http://elsewhere.example:3128 printenv HTTPS_PROXY",
+        Some(&listed),
+    );
+    assert!(plain.starts_with("http://127.0.0.1:"), "{plain}");
+    assert_eq!(assigned, plain);
+}
+
+/// The regressions it rejects: a proxy started for a session that set no list, and one started for
+/// a list whose only key is a denial, which takes reach away and gives none. Each stage is
+/// compared with the unconfined control, so a proxy variable the machine already has is not read
+/// as ours.
+#[test]
+fn no_allowed_list_means_no_proxy() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("hosts-absent");
+    let control = proxy_variable(&places, "printenv HTTPS_PROXY", None);
+    for list in [None, Some(hosts(None, &["bad.example"]))] {
+        let confinement = places.confinement().with_hosts(list.as_ref());
+        assert_eq!(
+            proxy_variable(&places, "printenv HTTPS_PROXY", Some(&confinement)),
+            control
+        );
+    }
+}
+
+/// The regression it rejects: a proxy handed to a stage that has no egress, which gives the stage
+/// a route the closed setting took away. It needs a platform that enforces the closed setting.
+#[test]
+fn a_stage_with_no_egress_is_given_no_proxy() {
+    if !can_close_the_network() {
+        return;
+    }
+    let places = Places::new("hosts-closed");
+    let control = proxy_variable(&places, "printenv HTTPS_PROXY", None);
+    let list = hosts(Some(&["mine.example"]), &[]);
+    let closed = places
+        .confinement()
+        .with_network(Network::Closed)
+        .with_hosts(Some(&list));
+    assert_eq!(
+        proxy_variable(&places, "printenv HTTPS_PROXY", Some(&closed)),
+        control
+    );
+}

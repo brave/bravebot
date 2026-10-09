@@ -2432,3 +2432,18 @@ a line put away on purpose ([INPUT-17](#INPUT-17)).
 `verified-by: bravebot_tui::history::sending_drops_the_draft`
 `verified-by: bravebot_tui::history::the_draft_is_not_a_stored_entry`
 `verified-by: bravebot_tui::history::the_draft_has_no_position_in_the_list_of_sent_prompts`
+
+<a id="INPUT-41"></a>
+### INPUT-41: a change in the terminal's size is drawn without waiting for another event
+
+While the box is idle, a change in the terminal's size draws a frame at the new size. The frame is
+the one a terminal of that size would have drawn from the start, so the hint row and the status row
+sit on the new bottom row, fitted to the new width. A burst of size changes from dragging a window
+edge is coalesced into frames like any other burst of input, not drawn once per event.
+
+**Why.** Without a frame on a size change, the idle loop draws nothing until a key arrives, so the
+screen keeps the old size's layout, and the bottom row suffers most. Every other loop draws on each
+pass, so only the idle loop needs this event.
+
+`verified-by: bravebot_tui::app::a_resize_while_the_box_is_idle_asks_for_a_frame`
+`verified-by: bravebot_tui::render::a_frame_drawn_after_a_resize_is_the_frame_of_a_terminal_that_size_from_the_start`

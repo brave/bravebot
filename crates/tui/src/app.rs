@@ -1055,6 +1055,7 @@ fn status_report(
     let reach = bravebot_agent::home::directory()
         .map(|home| bravebot_agent::reach::listed(&home, stored.id(), workspace.root()))
         .unwrap_or_default();
+    let requested_paths = bravebot_agent::reach::requested_paths_listed(&workspace.path_reach());
     crate::status::report(&crate::status::Facts {
         session_name: stored.title(),
         session_id: stored.id(),
@@ -1096,6 +1097,7 @@ fn status_report(
                 path: store.path(),
             }),
         reach: &reach,
+        requested_paths: &requested_paths,
         kept_trust: kept
             .as_ref()
             .map(|(when, path, root)| crate::status::KeptTrust {
@@ -1385,6 +1387,10 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
 
         KeyCode::Char('?') => {
             session.toggle_scroller_help();
+            Action::Redraw
+        }
+        KeyCode::Char('x') => {
+            session.toggle_expanded(render::as_last_drawn);
             Action::Redraw
         }
         KeyCode::Char('v')
@@ -3663,6 +3669,9 @@ fn rewind(
     };
     stored.retain_rewind_coverage(&point.coverage);
     let gaps = point.coverage.gaps();
+    // Read off the point before anything is removed. The display prompts of the rewound turns go
+    // with them (SESSION-19), so after the removal there is nothing left to put back.
+    let undone = point.prompt;
     let snapshot = point.snapshot;
     let refused = bravebot_agent::rewind::restore(
         workspace,
@@ -3693,6 +3702,10 @@ fn rewind(
     session.transcript.truncate(snapshot.transcript_len);
     session.rewind_history();
     stored.truncate_audit(session.turns + 1);
+    // The prompt that was undone goes back into the box, so the next thing the person does is
+    // edit it and send it again rather than retype it. After the history removal, which is what
+    // takes the prompt off the display, and from the point rather than from the display.
+    session.return_prompt(&undone);
 
     if snapshot.turns == 0
         && !snapshot.was_wrote
@@ -3755,6 +3768,30 @@ fn rewind(
             .collect::<Vec<_>>()
             .join(", ");
         session.note(t!(session_rewind_uncovered, causes = causes));
+    }
+}
+
+/// What the idle loop does with one event it has read.
+fn idle_action(session: &mut Session, taken: TermEvent) -> Action {
+    match taken {
+        // Presses only. Asking for disambiguated keys asks for releases as well, and a
+        // release handled as a press types every character twice.
+        TermEvent::Key(key) if key.kind == KeyEventKind::Release => Action::None,
+        TermEvent::Key(key) => handle_key(session, key),
+        TermEvent::Mouse(mouse) => handle_mouse(session, mouse),
+        TermEvent::Paste(text) => handle_paste(session, &text),
+        // Coming back from copying something is the moment a picture appears on the
+        // clipboard, and the cheapest moment to notice: once per switch away and back,
+        // rather than a clipboard tool spawned on a timer for the whole life of the
+        // session.
+        TermEvent::FocusGained => {
+            session.image_on_clipboard = crate::clipboard::holds_an_image();
+            Action::Redraw
+        }
+        // Nothing else draws while the box is idle, so a frame laid out for the old size
+        // would stay until the next key (INPUT-41).
+        TermEvent::Resize(..) => Action::Redraw,
+        _ => Action::None,
     }
 }
 
@@ -4134,25 +4171,7 @@ fn event_loop(
                         }
                         let taken = input::read()?;
                         took_input(&mut session, &taken);
-                        match taken {
-                            // Presses only. Asking for disambiguated keys asks for releases as well, and a
-                            // release handled as a press types every character twice.
-                            TermEvent::Key(key) if key.kind == KeyEventKind::Release => {
-                                Action::None
-                            }
-                            TermEvent::Key(key) => handle_key(&mut session, key),
-                            TermEvent::Mouse(mouse) => handle_mouse(&mut session, mouse),
-                            TermEvent::Paste(text) => handle_paste(&mut session, &text),
-                            // Coming back from copying something is the moment a picture appears on the
-                            // clipboard, and the cheapest moment to notice: once per switch away and back,
-                            // rather than a clipboard tool spawned on a timer for the whole life of the
-                            // session.
-                            TermEvent::FocusGained => {
-                                session.image_on_clipboard = crate::clipboard::holds_an_image();
-                                Action::Redraw
-                            }
-                            _ => Action::None,
-                        }
+                        idle_action(&mut session, taken)
                     }
                 },
             },
@@ -4420,7 +4439,9 @@ fn event_loop(
             Action::Reach(argument) => {
                 let home = bravebot_agent::home::directory();
                 let profile = bravebot_agent::home::profile();
+                let paths = bravebot_agent::reach::requested_paths_command(&workspace, &argument);
                 session.note(match home.as_deref() {
+                    _ if paths.is_some() => paths.unwrap_or_default(),
                     Some(home) => bravebot_agent::reach::command(
                         &bravebot_agent::reach::Typed {
                             home,
@@ -5585,6 +5606,32 @@ pub fn adopt_listing_for_model(config: &mut Config, model: &str) -> bool {
     config.adopt_window(advertised_window(&models, Some(model)));
     config.adopt_inputs(model, advertised_inputs(&models, Some(model)));
     reads_effort(&models, model)
+}
+
+/// Whether a reply matching a schema can be asked of `model`, as far as its listing says.
+///
+/// True for a model no listing describes and for a row that states no parameters, which is every
+/// Brave roster row and every settings-file model: neither is the roster saying the field would be
+/// ignored, and refusing a run on the strength of silence would decide against the person. False
+/// only where a row states its parameters and names neither of the two a gateway uses for it.
+pub fn reads_structured_output(config: &Config, model: &str) -> bool {
+    list_models(config, Some(model))
+        .map(|models| lists_structured_output(&models, model))
+        .unwrap_or(true)
+}
+
+/// Whether the roster lets `chosen` be asked for a schema. Split from the fetch so the matching is
+/// testable without a server.
+fn lists_structured_output(models: &[bravebot_aichat::models::Model], chosen: &str) -> bool {
+    models
+        .iter()
+        .find(|model| model.key == chosen)
+        .and_then(|model| model.advertised.parameters.as_ref())
+        .is_none_or(|parameters| {
+            parameters
+                .iter()
+                .any(|it| it == "structured_outputs" || it == "response_format")
+        })
 }
 
 /// Whether the roster says the model a request names reads an effort level: the pick where there is
@@ -7591,6 +7638,11 @@ fn manifest_animated(
                         bravebot_agent::confirm::Decision::Reject,
                     ));
                 }
+                crate::remote_confirm::ToMain::Path(_) => {
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Path(
+                        bravebot_agent::confirm::Decision::Reject,
+                    ));
+                }
                 // What is left announces rather than asks, so nothing waits on it. The manifest is the
                 // task list, so no list changes; there is no planner to delegate or to be interjected
                 // at; and a run's steps report through `Started` and `Finished` above.
@@ -8376,6 +8428,13 @@ fn run_turn_animated(
                     }
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Move(answer.decision()));
                 }
+                crate::remote_confirm::ToMain::Path(request) => {
+                    let answer = crate::confirm::ask_path(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Path(answer.decision()));
+                }
                 crate::remote_confirm::ToMain::Ask(asking) => {
                     // A planner that loops back over the same decision should not make the user
                     // restate it. The note is what keeps that from being invisible: an answer given
@@ -8704,6 +8763,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         ToMain::ToolList(_) => Reply::ToolList(Decision::Reject),
         ToMain::McpCall(_) => Reply::McpCall(CallDecision::reject()),
         ToMain::Move(_) => Reply::Move(Decision::Reject),
+        ToMain::Path(_) => Reply::Path(Decision::Reject),
         ToMain::Ask(_) => Reply::Ask(Vec::new()),
         ToMain::PromptRecorded(_)
         | ToMain::RequestBuilt(_)
@@ -10064,6 +10124,29 @@ mod tests {
         assert!(config.budget_is_guessed());
     }
 
+    #[test]
+    fn a_schema_is_refused_only_where_the_roster_states_parameters_without_it() {
+        let row = |key: &str, parameters: Option<&[&str]>| bravebot_aichat::models::Model {
+            key: key.to_string(),
+            advertised: bravebot_aichat::models::Advertised {
+                parameters: parameters.map(|them| them.iter().map(|it| it.to_string()).collect()),
+                ..Default::default()
+            },
+            ..bravebot_aichat::models::Model::automatic()
+        };
+        let models = [
+            row("silent", None),
+            row("capable", Some(&["tools", "structured_outputs"])),
+            row("also-capable", Some(&["response_format"])),
+            row("incapable", Some(&["tools", "reasoning"])),
+        ];
+        assert!(lists_structured_output(&models, "silent"));
+        assert!(lists_structured_output(&models, "capable"));
+        assert!(lists_structured_output(&models, "also-capable"));
+        assert!(!lists_structured_output(&models, "incapable"));
+        assert!(lists_structured_output(&models, "a-model-nothing-lists"));
+    }
+
     /// A reply arrives as hundreds of messages and a draw rebuilds the whole transcript, so a
     /// frame per message put the drawing behind the talking. Everything queued is taken before
     /// the caller draws again, which is what keeps one frame's worth of reply to one frame.
@@ -10561,6 +10644,7 @@ mod tests {
                 rows: 100,
                 prompts: Vec::new(),
                 matches: Vec::new(),
+                expandable: Vec::new(),
             });
 
             handle_key_while_working(&mut session, ctrl('u'));
@@ -11036,6 +11120,7 @@ mod tests {
                 rows: 100,
                 prompts: vec![0, 30, 60],
                 matches: Vec::new(),
+                expandable: Vec::new(),
             });
             session
         }
@@ -11587,6 +11672,7 @@ mod tests {
                 rows: 300,
                 prompts: Vec::new(),
                 matches: Vec::new(),
+                expandable: Vec::new(),
             });
             session.open_scroller();
             type_keys(&mut session, "1000b");
@@ -11610,6 +11696,7 @@ mod tests {
                 rows: 100,
                 prompts: vec![10, 40, 70],
                 matches: Vec::new(),
+                expandable: Vec::new(),
             });
             session.open_scroller();
 
@@ -11641,6 +11728,7 @@ mod tests {
                 rows: 100,
                 prompts: Vec::new(),
                 matches: vec![20, 50, 80],
+                expandable: Vec::new(),
             });
             session.open_scroller();
             session.scroller_to_first_row();
@@ -12003,6 +12091,37 @@ mod tests {
                 session.scroll, 0,
                 "the press that put the list away also moved"
             );
+        }
+
+        /// SCROLL-10: `x` expands the call the view is on, sends nothing, and a second press
+        /// collapses it.
+        #[test]
+        fn x_expands_the_call_the_view_is_on_and_a_second_press_collapses_it() {
+            use bravebot_agent::report::{Activity, Landing, Returned};
+            let mut session = Session::new("kernel-enforced");
+            session.finish_activity(Activity::running("Run", "make").done("ok"));
+            session.landed(Landing::Context);
+            let lines: Vec<String> = (0..30).map(|n| format!("out {n}")).collect();
+            session.returned(Returned {
+                lines: lines[..5].to_vec(),
+                total: 30,
+                from_the_end: false,
+                whole: lines,
+            });
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 10;
+            session.laid = render::as_last_drawn(&session);
+            let collapsed = render::as_text(&session);
+            assert!(!collapsed.contains("out 29"), "{collapsed}");
+
+            let pressed = handle_key(&mut session, key(KeyCode::Char('x')));
+            assert_eq!(pressed, Action::Redraw);
+            assert!(render::as_text(&session).contains("out 29"));
+
+            session.laid = render::as_last_drawn(&session);
+            handle_key(&mut session, key(KeyCode::Char('x')));
+            assert_eq!(render::as_text(&session), collapsed);
         }
 
         #[test]
@@ -13269,6 +13388,31 @@ mod tests {
                 "{taken:?} left the offer standing"
             );
         }
+    }
+
+    /// Nothing else draws while the box is idle, so a resize that maps to no action leaves the
+    /// frame the old size laid out, hint row and status row included, until a key is pressed.
+    /// Events that change nothing on screen stay quiet, so the answer is not "redraw on anything".
+    #[test]
+    fn a_resize_while_the_box_is_idle_asks_for_a_frame() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            idle_action(&mut session, TermEvent::Resize(70, 20)),
+            Action::Redraw
+        );
+        assert_eq!(
+            idle_action(&mut session, TermEvent::FocusLost),
+            Action::None
+        );
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+        assert_eq!(
+            idle_action(&mut session, TermEvent::Key(release)),
+            Action::None
+        );
     }
 
     /// The offer answers the press just made, so anything else withdraws it. Otherwise a press now
@@ -21543,6 +21687,8 @@ mod tests {
                 "~/work write always -- make",
             ),
             ("/reach remove 2", "remove 2"),
+            ("/reach paths", "paths"),
+            ("/reach paths remove 1", "paths remove 1"),
         ] {
             type_line(&mut session, line);
             assert_eq!(
@@ -25275,6 +25421,65 @@ mod tests {
             "the rewind put back the name the session had before it was renamed"
         );
         assert_eq!(after.turns, 1, "the turn left the record with the rewind");
+    }
+
+    /// SESSION-19: the prompt a rewind undid comes back into the box. It has to be read off the
+    /// point, since the rewind removes the rewound turns' display prompts, and from the earliest
+    /// of the turns gone back past, which is the request the session now stands before.
+    #[test]
+    fn undoing_a_turn_puts_its_prompt_back_in_the_box() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-rewind-prompt");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut trust = TrustStore::new(&root);
+        let mut programs = TrustedPrograms::new();
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut session = Session::new("none");
+        let mut conversation = Conversation::new();
+
+        // Two turns, with distinct prompts: going back past both must return the earlier one.
+        for prompt in ["rename the parser module", "add a test for the parser"] {
+            let start = conversation.recounted().len();
+            type_line(&mut session, prompt);
+            session.submit().expect("the prompt is sent");
+            let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
+            session.rewind.open(point, prompt.to_string());
+            session.prompt_recorded(conversation.recounted().len());
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant("done"));
+            session.complete("done", vec![], 10);
+            session.record_turn(start, &conversation);
+        }
+        assert_eq!(session.rewind.points().len(), 2);
+        assert!(session.input().is_empty(), "the box did not start empty");
+
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            2,
+        );
+
+        assert_eq!(
+            session.input(),
+            "rename the parser module",
+            "the prompt the session now stands before did not come back"
+        );
+        assert_eq!(
+            session.turns, 0,
+            "the session did not go back past both turns"
+        );
     }
 
     /// The bare word is the list, which is the surface the command exists for: seeing what a

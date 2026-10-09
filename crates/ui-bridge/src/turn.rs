@@ -627,6 +627,12 @@ impl Confirmer for BridgeConfirmer {
         }
     }
 
+    /// Refuses (SANDBOX-28). The desktop app has no card for a request for a path, so the planner
+    /// is told nobody was there to ask, the same as for a run with no one to answer.
+    fn confirm_path(&mut self, _request: &bravebot_agent::confirm::PathRequest) -> Decision {
+        Decision::Reject
+    }
+
     /// Ask whether a remote MCP server moved where its reply pointed (SERVERS-11).
     ///
     /// Nothing was sent there. A yes declares the server at the new address, and every later

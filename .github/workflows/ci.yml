@@ -25,6 +25,9 @@ env:
   # producing a binary anyone installs. Signed, configured release binaries are built
   # and published by Jenkins, not this workflow.
   BRAVEBOT_ALLOW_UNCONFIGURED_BUILD: "1"
+  # Line tables keep a backtrace's files and lines and drop the rest of the debug info, which is
+  # most of what every test binary costs to compile, link and cache. Nothing here runs a debugger.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   # Which of the jobs below this change could affect, from the paths it touches. A job its
@@ -39,6 +42,7 @@ jobs:
       rust: ${{ steps.affected.outputs.rust }}
       ui: ${{ steps.affected.outputs.ui }}
       build: ${{ steps.affected.outputs.build }}
+      installers: ${{ steps.affected.outputs.installers }}
       docs: ${{ steps.affected.outputs.docs }}
       npm: ${{ steps.affected.outputs.npm }}
     steps:
@@ -71,6 +75,11 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only. The repository's caches share a 10 GB allowance, and a pull
+        # request that moves the lockfile saves its own copy of every job's cache, which pushes
+        # main's out and leaves every other pull request building from cold.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -78,11 +87,25 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Test
-        run: cargo test --all --locked
+      # nextest runs the test binaries side by side, where `cargo test` runs them one after another
+      # and waits on each one's slowest test. Each test is a process of its own, so the locks a test
+      # file holds around the environment or a fork have nothing left to share.
+      - name: Install nextest
+        # Pinned to a full commit SHA, like every other step here.
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        with:
+          tool: cargo-nextest@0.9.146
 
-      # The same test again with its output, to put the number of workflows skipped for want of a
-      # tool in the log.
+      # Everything but the usability suite, which the step after next runs once with its output.
+      - name: Test
+        run: cargo nextest run --workspace --locked --no-fail-fast -E 'not binary(usability)'
+
+      # nextest does not run doctests.
+      - name: Doctests
+        run: cargo test --workspace --doc --locked
+
+      # Run once, with its output, to put the number of workflows skipped for want of a tool in the
+      # log. Running it inside the Test step as well used to double its tens of seconds.
       - name: Report the everyday workflows under the sandbox default
         run: cargo test -p bravebot-agent --test usability --locked -- --nocapture
 
@@ -120,15 +143,25 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Test
-        run: cargo test --all --locked
+      # As in the `check` job.
+      - name: Install nextest
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        with:
+          tool: cargo-nextest@0.9.146
 
-      # The same test again with its output, to put the number of workflows skipped for want of a
-      # tool in the log.
+      - name: Test
+        run: cargo nextest run --workspace --locked --no-fail-fast -E 'not binary(usability)'
+
+      - name: Doctests
+        run: cargo test --workspace --doc --locked
+
       - name: Report the everyday workflows under the sandbox default
         run: cargo test -p bravebot-agent --test usability --locked -- --nocapture
 
@@ -175,6 +208,9 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # ring compiles C for whichever target it is built for, so the C half needs a cross compiler
       # even though the Rust half needs none. Nothing is linked: clippy stops before that, which is
@@ -355,6 +391,9 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
         run: cargo build --all --locked
@@ -363,11 +402,14 @@ jobs:
   # manifest, the lockfile, a build script or the Dockerfile. Nothing in the tree is gated on an
   # architecture, and the jobs above lint every platform these build, so for anything else a
   # cross-build proves again what they did. Main and every tag build all six.
+  #
+  # Not after `check`: the installers and the install on each Windows architecture wait on this,
+  # so waiting here put the length of the test suite in front of the longest chain in the run.
   cross-build:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
-    needs: [changes, check]
-    if: ${{ !cancelled() && contains(fromJSON('["success", "skipped"]'), needs.check.result) && needs.changes.outputs.build != 'false' }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.build != 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -469,6 +511,9 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -550,6 +595,9 @@ jobs:
 
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -589,10 +637,27 @@ jobs:
   # and each installed on a runner of its own architecture by the job after this one. Beside each
   # goes an installer of the same bundle under a lower version, for that job to upgrade from, since
   # no release carries an installer yet.
+  #
+  # One job per architecture. The four installers took over sixteen minutes one after another,
+  # most of it compressing, and nothing one architecture builds is read by the other.
+  #
+  # On a pull request, only where the scripts that build, fuse or check an installer changed. A
+  # change to the lockfile or a manifest still runs the cross-builds, which link every target, but
+  # is no longer packaged and installed on Windows before it lands: main and every tag build and
+  # install both, so a dependency that breaks the installed app is found on main instead.
   windows-installers:
-    name: Windows installers
+    name: Windows installer (${{ matrix.arch }})
     runs-on: windows-latest
-    needs: cross-build
+    needs: [changes, cross-build]
+    if: ${{ !cancelled() && needs.cross-build.result == 'success' && needs.changes.outputs.installers != 'false' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            electron: x64
+          - arch: arm64
+            electron: arm64
     defaults:
       run:
         shell: bash
@@ -625,39 +690,26 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: desktop-helpers-*
-          merge-multiple: true
+          name: desktop-helpers-windows-${{ matrix.arch }}
           path: dist
 
-      - name: Build the installers
-        run: make app-release-windows UI_INSTALL="ui/scripts/ci-install.sh $HOME/.cache/bravebot-leo"
+      - name: Build the installer
+        run: make app-release-windows APP_ARCHES=${{ matrix.arch }}:${{ matrix.electron }} UI_INSTALL="ui/scripts/ci-install.sh $HOME/.cache/bravebot-leo"
 
-      - name: Build an older installer of each
+      - name: Build an older installer
         run: |
           npm --prefix ui pkg set version=0.0.1
-          for pair in amd64:x64 arm64:arm64; do
-            node ui/scripts/windows-installer.mjs --bundle="ui/dist/Brave Bot-win32-${pair#*:}" \
-              --arch="${pair%%:*}" --out=dist/previous
-          done
+          node ui/scripts/windows-installer.mjs --bundle="ui/dist/Brave Bot-win32-${{ matrix.electron }}" \
+            --arch=${{ matrix.arch }} --out=dist/previous
           git checkout -- ui/package.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-installer-amd64
+          name: windows-installer-${{ matrix.arch }}
           path: |
-            dist/bravebot-desktop-windows-amd64-setup.exe
-            dist/previous/bravebot-desktop-windows-amd64-setup.exe
-            ui/dist/Brave Bot-win32-x64/
-          if-no-files-found: error
-          retention-days: 1
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: windows-installer-arm64
-          path: |
-            dist/bravebot-desktop-windows-arm64-setup.exe
-            dist/previous/bravebot-desktop-windows-arm64-setup.exe
-            ui/dist/Brave Bot-win32-arm64/
+            dist/bravebot-desktop-windows-${{ matrix.arch }}-setup.exe
+            dist/previous/bravebot-desktop-windows-${{ matrix.arch }}-setup.exe
+            ui/dist/Brave Bot-win32-${{ matrix.electron }}/
           if-no-files-found: error
           retention-days: 1
 

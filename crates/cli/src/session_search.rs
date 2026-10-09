@@ -47,7 +47,20 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
 
     let listed = sessions::list(&project);
     let corpus = if request.query.has_phrase() {
-        Corpus::read(&project)
+        // A session outside the window, or one whose title already holds the phrase, is not read.
+        let now = sessions_now();
+        let wanted: std::collections::HashSet<&str> = listed
+            .iter()
+            .filter(|session| request.query.admits(session.updated, now))
+            .filter(|session| {
+                !session
+                    .title
+                    .to_lowercase()
+                    .contains(request.query.phrase())
+            })
+            .map(|session| session.id.as_str())
+            .collect();
+        Corpus::read(&project, |id| wanted.contains(id))
     } else {
         Corpus::default()
     };

@@ -533,6 +533,31 @@ fn answering(running: Running, reply: Reply) -> std::thread::JoinHandle<bool> {
     })
 }
 
+/// SANDBOX-28: the desktop has no card for a request for a path, so the request is refused and
+/// nothing is put to the window, even when answers that would approve are waiting in the channel.
+#[test]
+fn a_request_for_a_path_is_refused_with_no_card_whatever_the_window_would_say() {
+    let mut h = harness();
+    for reply in [
+        Reply::Server(Decision::Approve),
+        Reply::McpMove(Decision::Approve),
+        Reply::Fetch(Decision::Approve),
+    ] {
+        h.running.answers.send(reply).expect("connected");
+    }
+
+    let request = bravebot_agent::confirm::PathRequest {
+        path: "/data/out".into(),
+        write: true,
+        why: "the build writes its output there".to_string(),
+    };
+    assert_eq!(h.confirmer.confirm_path(&request), Decision::Reject);
+    assert!(
+        h.events.lock().expect("not poisoned").is_empty(),
+        "a question was put to the window"
+    );
+}
+
 /// The MCP questions are put to the window, each under its own event, and with nobody left to
 /// answer every one of them is a no (SERVERS-4, SERVERS-7, SERVERS-8, SERVERS-11).
 #[test]

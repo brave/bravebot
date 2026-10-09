@@ -44,7 +44,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 37] = [
+const FLAGS: [Flag; 39] = [
     flag("plain", None, false),
     flag("bg", None, false),
     flag("resume", Some('r'), false),
@@ -53,6 +53,7 @@ const FLAGS: [Flag; 37] = [
     flag("from-pr", None, true),
     flag("file", None, true),
     flag("add-dir", None, true),
+    flag("trust-workspace", None, false),
     flag("settings", None, true),
     flag("run-network", None, true),
     flag("sandbox-allow-read", None, true),
@@ -74,6 +75,7 @@ const FLAGS: [Flag; 37] = [
     flag("trace", None, false),
     flag("json", None, false),
     flag("json-stream", None, false),
+    flag("output-schema", None, true),
     flag("incognito", None, false),
     flag("safe", None, false),
     flag("locked", None, false),

@@ -1045,6 +1045,21 @@ pub struct MoveRequest {
     pub may_record: bool,
 }
 
+/// The planner asked for a path the programs it starts cannot reach.
+///
+/// `path` is the spelling the planner gave, and the planner's own bytes: it is what the person
+/// reads and what a yes judges, so what is drawn is exactly what is granted. `why` is content the
+/// planner wrote for the person. A yes lasts for the session and marks nothing trusted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathRequest {
+    /// The path as the sandbox will be told it, after the refusals have been applied.
+    pub path: std::path::PathBuf,
+    /// Whether programs may write it as well as read it.
+    pub write: bool,
+    /// The planner's reason.
+    pub why: String,
+}
+
 /// What the person decided about a call to a server's tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallDecision {
@@ -1421,6 +1436,14 @@ pub trait Confirmer {
     /// new destination with the server's arguments and its session id.
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision;
 
+    /// Ask whether programs the planner starts may reach one more path for the rest of the session.
+    /// Implementations must refuse when they cannot ask.
+    ///
+    /// Separate from [`Confirmer::confirm_run`] because a yes is not about a line: it widens what
+    /// every later line can reach, for the session, and nothing else. It marks no directory
+    /// trusted, which is the difference from opening one by name.
+    fn confirm_path(&mut self, request: &PathRequest) -> Decision;
+
     /// Put a series of questions to the person, one answer per question in the order they were
     /// asked.
     ///
@@ -1464,6 +1487,11 @@ pub struct Unattended;
 impl Confirmer for Unattended {
     /// Refuses. Nothing about a test double is a person agreeing to start a process.
     fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses. Nobody is there to approve reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
         Decision::Reject
     }
 
@@ -1593,6 +1621,11 @@ impl Confirmer for ApproveWrites {
         CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1657,6 +1690,11 @@ impl Confirmer for ChoosesFirst {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -1741,6 +1779,11 @@ impl Confirmer for ApproveRuns {
         CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1807,6 +1850,11 @@ impl Confirmer for RemembersRuns {
         CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1871,6 +1919,11 @@ impl Confirmer for ReadsOutput {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -1942,6 +1995,11 @@ impl Confirmer for VetsContent {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2018,6 +2076,11 @@ impl Confirmer for ExposesReads {
         CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2081,6 +2144,11 @@ impl Confirmer for ApproveFetches {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2148,6 +2216,11 @@ impl Confirmer for ApprovePlans {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2236,6 +2309,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         self.timing(|inner| inner.confirm_mcp_call(request))
+    }
+
+    fn confirm_path(&mut self, request: &PathRequest) -> Decision {
+        self.timing(|inner| inner.confirm_path(request))
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -2537,6 +2614,11 @@ mod tests {
         fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
             std::thread::sleep(self.0);
             CallDecision::reject()
+        }
+
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+            Decision::Reject
         }
 
         fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {

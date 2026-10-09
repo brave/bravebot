@@ -2086,6 +2086,11 @@ impl Handle {
         if let Some(directory) = self.directory() {
             let _ = std::fs::remove_file(directory.join(format!("{}.json", self.id)));
             let _ = std::fs::remove_file(directory.join(format!("{}.audit.jsonl", self.id)));
+            let _ = std::fs::remove_file(directory.join(format!(
+                "{}.{}",
+                self.id,
+                crate::search::INDEX_EXTENSION
+            )));
         }
         self.wrote = false;
         self.title = before.to_string();
@@ -2251,7 +2256,8 @@ pub fn is_a_session_name(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// Remove one session from disk: its record and the trail beside it (SESSION-30).
+/// Remove one session from disk: its record, the trail beside it and the index of what it said
+/// (SESSION-30).
 ///
 /// Keyed on the directory and the id alone. The trail goes first, so a failure part way leaves a
 /// record that still opens rather than a trail with nothing to belong to. A link standing where one
@@ -2268,6 +2274,7 @@ pub fn delete(project: &Path, id: &str) -> Result<(), Deletion> {
     }
     for beside in [
         directory.join(format!("{id}.audit.jsonl")),
+        directory.join(format!("{id}.{}", crate::search::INDEX_EXTENSION)),
         directory.join(format!("{id}.tmp")),
     ] {
         match std::fs::remove_file(&beside) {
@@ -4909,6 +4916,24 @@ mod tests {
             !audit_of(&root, &kept).is_empty(),
             "the other session lost its trail"
         );
+    }
+
+    #[test]
+    fn deleting_a_session_takes_what_the_search_index_kept_of_it() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-delete-index");
+        let (gone, kept) = two_sessions_with_trails(&root);
+        crate::search::Corpus::read(&root, |_| true);
+        let directory = project_directory(&root).unwrap();
+        let entry = |id: &str| directory.join(format!("{id}.{}", crate::search::INDEX_EXTENSION));
+        assert!(entry(&gone).exists() && entry(&kept).exists());
+
+        delete(&root, &gone).expect("the session was not deleted");
+
+        assert!(!entry(&gone).exists(), "what the session said outlived it");
+        assert!(entry(&kept).exists());
     }
 
     /// Two projects can hold a session each, and a delete is made in one of them.

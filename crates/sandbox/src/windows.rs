@@ -135,7 +135,7 @@ fn capability_names(policy: &SandboxPolicy) -> Vec<&'static str> {
 ///
 /// Decided before anything is created, so a refusal costs no profile and writes no entry
 /// onto a directory.
-fn refusal_for(policy: &SandboxPolicy) -> Option<SandboxError> {
+pub(crate) fn refusal_for(policy: &SandboxPolicy) -> Option<SandboxError> {
     if !policy.is_meaningful() {
         return Some(SandboxError::PolicyTooPermissive);
     }

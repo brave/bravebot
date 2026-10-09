@@ -606,7 +606,8 @@ The glimpse is drawn plainly, behind a margin with no bar, because the planner r
 the bar of VIEW-3 marks only what it did not. It is released through the same display gate as a
 quarantined preview all the same, and every control character in it is replaced with a visible
 glyph, because a file the planner may read can still contain an escape. Each line is cut to one row
-rather than wrapped, so the glimpse stays the size it says it is.
+rather than wrapped, so the glimpse stays the size it says it is. The glimpse is the default and not
+the limit: the scroller expands it on request (see [scroller.md](scroller.md)).
 
 A result that was quarantined gets no plain glimpse. Its marked block of VIEW-3 is what the person
 sees of it. A sentence the driver wrote about a call, such as a count of matches or a refusal, gets

@@ -72,6 +72,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 |---|---|
 | `--file <path>` | include a workspace file as **trusted** context; repeatable |
 | `--add-dir <path>` | make a directory outside the working one reachable for this run; repeatable ([below](#--add-dir-path)) |
+| `--trust-workspace` | trust the working directory for this run, writing no record ([below](#--trust-workspace)) |
 | `-p`, `--print` | non-interactive; reads piped stdin as quarantined context |
 | `--plain` | a session in lines, taking nothing from the terminal ([below](#--plain)) |
 | `--mode <turn\|manifest>` | how a one-shot is run; `turn` (the default) decides step by step, `manifest` plans the whole run first ([below](#--mode-turnmanifest)) |
@@ -79,6 +80,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--advisor <name>` | a model the planner may put a question to, through the `advisor` tool ([below](#--advisor-name)) |
 | `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
+| `--output-schema <path>` | hold the reply to the JSON Schema in this file, or end on status 6 ([below](#--output-schema-path)) |
 | `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../customize/configuration.md#runnetwork)) |
 | `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
 | `--log-level <error\|info\|debug>` | how much of a failure's shape goes to the [diagnostic log](#--log-level-errorinfodebug) |
@@ -228,6 +230,21 @@ key in `~/.bravebot/settings.json`. Nothing is recorded, so the next run is back
 stops, naming the levels it takes. A level the model in force reads none of is not sent, as it is
 not from any other source.
 
+## `--trust-workspace`
+
+```sh
+bravebot --trust-workspace -p "summarise what src/ does"
+```
+
+Starts the run from what a yes to the startup question writes: the working directory and everything
+beneath it is trusted, so the planner can read project files. Nothing is written to
+`~/.bravebot/trusted`, and directories opened with `--add-dir` stay untrusted. A run carrying on an
+earlier session keeps that session's trust and adds the working directory to it.
+
+It is a flag and nothing else: no settings file, environment variable or file in the directory turns
+it on. A run in a directory about which a session kept an answer (`r`), or inside the git worktree whose
+root it was kept about, opens trusting the directory without the flag and says so on stderr.
+
 ## `--add-dir <path>`
 
 ```sh
@@ -368,6 +385,36 @@ Progress, the message and the audit trail stay on stderr, exactly as they do wit
 
 **It carries a schema number.** Within one number a field may be added and never removed, renamed or
 given a different meaning, so a caller reading the fields it knows keeps working.
+`structured` is the reply as a JSON value when the run was given [`--output-schema`](#--output-schema-path),
+and `null` otherwise.
+
+## `--output-schema <path>`
+
+```sh
+bravebot --json --output-schema ./verdict.json -p "do the tests cover the parser?" | jq '.structured.verdict'
+```
+
+Reads a JSON Schema from the file, sends it to the service with the run's requests as the shape the
+reply must take, and checks the finished reply against it before anything is written. The file is
+yours, trusted as [`--settings`](#--settings-path) is, and the model never sees its path.
+
+A reply that conforms is written as usual, and under `--json` it is also in `structured` as a JSON
+value rather than a string. A reply that does not conform ends the run on status 6 (`BB1006`):
+nothing goes to stdout, `structured` is `null`, and the message on stderr says where the reply broke
+and which constraint, for example `$.verdict` and an enum. The reply is read as one JSON value with
+nothing around it, so a reply wrapped in a code fence does not conform.
+
+The check covers `type`, `enum`, `const`, `properties`, `required`, `additionalProperties` as `true`
+or `false`, `items` as one schema, `minItems`, `maxItems`, `minLength`, `maxLength`, `minimum` and
+`maximum`. `$schema`, `$id`, `title`, `description`, `default` and `examples` are accepted and
+constrain nothing. Any other keyword, `$ref`, `oneOf` and `pattern` included, is refused when the
+file is loaded rather than ignored.
+
+The flag is refused with status 2 before anything is sent when no path follows it, when the file
+cannot be read or is not a usable schema, with `--mode manifest`, and when the model cannot honour a
+schema: Bedrock, or a model whose listing states its supported parameters without `structured_outputs`
+or `response_format`. A model whose listing states none is asked, and the check after the turn is
+what holds the reply there.
 
 ## `--json-stream`
 
@@ -839,6 +886,7 @@ different things to do about a failed run.
 | 3 | `BB1003` | cannot use the configuration, so nothing ran |
 | 4 | `BB1004` | had an effect refused by a gate |
 | 5 | `BB1005` | never reached the backend |
+| 6 | `BB1006` | finished, and its reply is not what `--output-schema` asked for |
 
 Only the transport's own failures are status 5. A non-success answer from the service is the service
 answering, so a refused credential is a configuration problem rather than a connection to retry.

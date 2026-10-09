@@ -435,6 +435,13 @@ replaces the earlier figure rather than leaving it standing. See
 A cut has to free more than it keeps, so a conversation with nothing worth giving up is left long
 rather than summarised once per round.
 
+A skill the planner loaded before the cut is not left to the summary. Its text is sent again after
+the summary, word for word: the newest load of each skill, the first 5,000 tokens of any one skill
+(estimated at four bytes a token) and 25,000 tokens for all of them, newest first. A skill that
+is cut says so and names `load_skill` for the rest. These count as kept when deciding whether a cut
+frees enough. A skill whose result was sent as prose, which is the fallback for a round whose calls
+carried no ids, is summarised like any other message.
+
 Compaction never touches three things: the quarantine, which holds the only copy of what a surviving
 reference names; the reference counter, since a slot name handed out twice would collide; and the
 context's integrity, since nothing here has un-read what the conversation read. The cut never lands
