@@ -3771,6 +3771,30 @@ fn rewind(
     }
 }
 
+/// What the idle loop does with one event it has read.
+fn idle_action(session: &mut Session, taken: TermEvent) -> Action {
+    match taken {
+        // Presses only. Asking for disambiguated keys asks for releases as well, and a
+        // release handled as a press types every character twice.
+        TermEvent::Key(key) if key.kind == KeyEventKind::Release => Action::None,
+        TermEvent::Key(key) => handle_key(session, key),
+        TermEvent::Mouse(mouse) => handle_mouse(session, mouse),
+        TermEvent::Paste(text) => handle_paste(session, &text),
+        // Coming back from copying something is the moment a picture appears on the
+        // clipboard, and the cheapest moment to notice: once per switch away and back,
+        // rather than a clipboard tool spawned on a timer for the whole life of the
+        // session.
+        TermEvent::FocusGained => {
+            session.image_on_clipboard = crate::clipboard::holds_an_image();
+            Action::Redraw
+        }
+        // Nothing else draws while the box is idle, so a frame laid out for the old size
+        // would stay until the next key (INPUT-41).
+        TermEvent::Resize(..) => Action::Redraw,
+        _ => Action::None,
+    }
+}
+
 /// Returns the session left behind, where there is one to pick up again.
 #[allow(clippy::too_many_arguments)]
 fn event_loop(
@@ -4147,25 +4171,7 @@ fn event_loop(
                         }
                         let taken = input::read()?;
                         took_input(&mut session, &taken);
-                        match taken {
-                            // Presses only. Asking for disambiguated keys asks for releases as well, and a
-                            // release handled as a press types every character twice.
-                            TermEvent::Key(key) if key.kind == KeyEventKind::Release => {
-                                Action::None
-                            }
-                            TermEvent::Key(key) => handle_key(&mut session, key),
-                            TermEvent::Mouse(mouse) => handle_mouse(&mut session, mouse),
-                            TermEvent::Paste(text) => handle_paste(&mut session, &text),
-                            // Coming back from copying something is the moment a picture appears on the
-                            // clipboard, and the cheapest moment to notice: once per switch away and back,
-                            // rather than a clipboard tool spawned on a timer for the whole life of the
-                            // session.
-                            TermEvent::FocusGained => {
-                                session.image_on_clipboard = crate::clipboard::holds_an_image();
-                                Action::Redraw
-                            }
-                            _ => Action::None,
-                        }
+                        idle_action(&mut session, taken)
                     }
                 },
             },
@@ -13382,6 +13388,31 @@ mod tests {
                 "{taken:?} left the offer standing"
             );
         }
+    }
+
+    /// Nothing else draws while the box is idle, so a resize that maps to no action leaves the
+    /// frame the old size laid out, hint row and status row included, until a key is pressed.
+    /// Events that change nothing on screen stay quiet, so the answer is not "redraw on anything".
+    #[test]
+    fn a_resize_while_the_box_is_idle_asks_for_a_frame() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            idle_action(&mut session, TermEvent::Resize(70, 20)),
+            Action::Redraw
+        );
+        assert_eq!(
+            idle_action(&mut session, TermEvent::FocusLost),
+            Action::None
+        );
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+        assert_eq!(
+            idle_action(&mut session, TermEvent::Key(release)),
+            Action::None
+        );
     }
 
     /// The offer answers the press just made, so anything else withdraws it. Otherwise a press now
