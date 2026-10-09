@@ -10155,6 +10155,11 @@ fn a_result_the_planner_read_is_glimpsed_under_its_call() {
         glimpse.total, 8,
         "the glimpse does not count the file's own lines: {glimpse:?}"
     );
+    let all: Vec<String> = (1..=8).map(|n| format!("note {n}")).collect();
+    assert_eq!(
+        glimpse.whole, all,
+        "the lines kept for expansion are not the whole of what the planner read"
+    );
 }
 
 /// VIEW-24: what the driver said about a call, a refusal or the change token after a read, is not

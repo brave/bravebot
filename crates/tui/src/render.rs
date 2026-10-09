@@ -22,7 +22,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::keybindings::Keybindings;
 use crate::logo;
 use crate::markdown;
-use crate::state::{Bound, Delegate, Laid, Output, Session, Speaker, Status, Watched};
+use crate::state::{Bound, Delegate, Entry, Laid, Output, Session, Speaker, Status, Watched};
 use crate::table;
 use crate::theme;
 use crate::wrap;
@@ -280,7 +280,9 @@ fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
             let latest = delegate.latest();
             for entry in &latest {
                 if let Some(activity) = &entry.activity {
-                    for line in activity_lines(activity, entry.landing, width.saturating_sub(2)) {
+                    for line in
+                        activity_lines(activity, entry.landing, false, width.saturating_sub(2))
+                    {
                         lines.push(indented(line));
                     }
                 }
@@ -364,6 +366,7 @@ fn call_rows(marker: Span<'static>, call: String, style: Style, why: &str) -> Ve
 fn activity_lines(
     activity: &Activity,
     landing: Option<Landing>,
+    expanded: bool,
     width: usize,
 ) -> Vec<Line<'static>> {
     let head = if activity.is_running() {
@@ -419,7 +422,12 @@ fn activity_lines(
         )));
     }
 
-    lines.extend(diff_lines(&activity.changes, activity.untrusted, width));
+    lines.extend(diff_lines(
+        &activity.changes,
+        activity.untrusted,
+        expanded,
+        width,
+    ));
     lines
 }
 
@@ -502,11 +510,15 @@ pub(crate) fn quarantined_rows(
 /// Behind a plain margin rather than the bar, because the planner read exactly this, and through
 /// [`marked_rows`] all the same, because a file the planner may read can still hold an escape.
 /// One row a line, cut rather than wrapped, so a glimpse stays the size it says it is.
-fn returned_lines(returned: &Returned, width: usize) -> Vec<Line<'static>> {
+fn returned_lines(returned: &Returned, expanded: bool, width: usize) -> Vec<Line<'static>> {
+    let drawn = if expanded {
+        &returned.whole
+    } else {
+        &returned.lines
+    };
     let margin = Span::raw("    ");
     let room = width.saturating_sub(margin.width()).max(1);
-    let mut rows: Vec<Line<'static>> = returned
-        .lines
+    let mut rows: Vec<Line<'static>> = drawn
         .iter()
         .flat_map(|line| {
             // Measured as drawn: an escape is no column wide until it is made visible.
@@ -524,7 +536,7 @@ fn returned_lines(returned: &Returned, width: usize) -> Vec<Line<'static>> {
         .collect();
 
     // Said rather than silently dropped, and at the end the glimpse was taken from the other side of.
-    let left_out = returned.total.saturating_sub(returned.lines.len());
+    let left_out = returned.total.saturating_sub(drawn.len());
     if left_out > 0 {
         let count = if returned.from_the_end {
             t!(transcript_earlier_lines, count = left_out)
@@ -542,7 +554,13 @@ fn returned_lines(returned: &Returned, width: usize) -> Vec<Line<'static>> {
 }
 
 /// The hunks of a write, trimmed to what fits without burying the rest of the transcript.
-fn diff_lines(changes: &[Change], untrusted: bool, width: usize) -> Vec<Line<'static>> {
+fn diff_lines(
+    changes: &[Change],
+    untrusted: bool,
+    expanded: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let cap = if expanded { usize::MAX } else { MAX_DIFF_LINES };
     // The same margin the transcript draws down everything the model was not allowed to read. A
     // body that came out of a quarantined file is that, and the person reading the hunks should
     // not have to work out which kind of change they are looking at.
@@ -556,7 +574,7 @@ fn diff_lines(changes: &[Change], untrusted: bool, width: usize) -> Vec<Line<'st
     };
     let mut lines: Vec<Line> = changes
         .iter()
-        .take(MAX_DIFF_LINES)
+        .take(cap)
         .flat_map(|change| {
             // Neutralised and broken to the width by [`marked_rows`]: a hunk of a file an attacker
             // wrote is the same bytes as a quarantine preview, and here they sit beside a margin
@@ -580,14 +598,11 @@ fn diff_lines(changes: &[Change], untrusted: bool, width: usize) -> Vec<Line<'st
     // Said rather than silently dropped: a change that stops without saying so reads as the
     // whole change, which is how a reviewer misses half of it. Worded for both kinds of write,
     // since a new file's lines were never a diff of anything.
-    if changes.len() > MAX_DIFF_LINES {
+    if changes.len() > cap {
         lines.extend(marked_rows(
             &margin,
             &[Span::styled(
-                t!(
-                    transcript_more_lines,
-                    count = changes.len() - MAX_DIFF_LINES
-                ),
+                t!(transcript_more_lines, count = changes.len() - cap),
                 dim(),
             )],
             width,
@@ -1553,7 +1568,7 @@ fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
 ///
 /// The way out is last and is never the row that did not fit: a list that scrolled its own exit
 /// off the screen would be a mode nobody could leave.
-fn scroller_keys() -> [(&'static str, &'static str); 13] {
+fn scroller_keys() -> [(&'static str, &'static str); 14] {
     [
         // vi's two pairs of line chords take rows of their own: the key column of the first row
         // is full, and a parenthesis on its meaning would not hold them either.
@@ -1571,6 +1586,7 @@ fn scroller_keys() -> [(&'static str, &'static str); 13] {
         // and these two are neither, so a list that folded them in would be naming keys it had
         // not told anybody about.
         ("enter / backspace", t!(scroller_key_search_run)),
+        ("x", t!(scroller_key_expand)),
         ("v", t!(scroller_key_editor)),
         ("?", t!(scroller_key_this_list)),
         ("any key", t!(scroller_key_close_list)),
@@ -1947,19 +1963,38 @@ pub(crate) fn opening_screen(session: &Session) -> bool {
             .all(|entry| entry.speaker == Speaker::System)
 }
 
+/// The lines of a transcript, the line each prompt begins at, and the first line, last line and
+/// index of each call with more to show than it draws.
+type Transcript = (Vec<Line<'static>>, Vec<usize>, Vec<(usize, usize, usize)>);
+
+/// Whether a call has lines past its glimpse, or changes past the twelve it draws, that the
+/// expand key would reveal.
+fn has_more_to_show(entry: &Entry) -> bool {
+    entry
+        .returned
+        .as_ref()
+        .is_some_and(|returned| returned.whole.len() > returned.lines.len())
+        || entry
+            .activity
+            .as_ref()
+            .is_some_and(|activity| activity.changes.len() > MAX_DIFF_LINES)
+}
+
 /// The transcript, and the index of the line each prompt the person typed begins at.
 ///
 /// Two answers from one pass, because working the second out afterwards would mean deciding which
 /// drawn lines were prompts by looking at them, and the thing that knows is the pass that drew
 /// them.
-fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, Vec<usize>) {
+fn with_prompts(session: &Session, width: u16, height: u16) -> Transcript {
     if let Some(view) = session
         .scroller()
         .and_then(|scroller| scroller.request.as_deref())
     {
-        return request_lines(view);
+        let (lines, prompts) = request_lines(view);
+        return (lines, prompts, Vec::new());
     }
     let mut prompts: Vec<usize> = Vec::new();
+    let mut calls: Vec<(usize, usize, usize)> = Vec::new();
     let mut lines: Vec<Line> = Vec::new();
 
     // Nothing has been said yet, so the screen opens on the mark, laid out against the height
@@ -1983,6 +2018,7 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
     }
 
     for (index, entry) in viewed.iter().enumerate() {
+        let began = lines.len();
         match entry.speaker {
             // The user's own words, echoed the way they were typed.
             Speaker::User => {
@@ -2065,9 +2101,12 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
             }
             // What the turn did, kept in the scrollback next to what it said about it.
             Speaker::Tool => match &entry.activity {
-                Some(activity) => {
-                    lines.extend(activity_lines(activity, entry.landing, width as usize))
-                }
+                Some(activity) => lines.extend(activity_lines(
+                    activity,
+                    entry.landing,
+                    entry.expanded && session.scrolling(),
+                    width as usize,
+                )),
                 // A call read back out of a stored session, which records that it happened and
                 // not what came of it. Drawn without the coloured marker a live call earns,
                 // since green would claim an outcome the record does not have.
@@ -2083,7 +2122,14 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
         }
 
         if let Some(returned) = &entry.returned {
-            lines.extend(returned_lines(returned, width as usize));
+            lines.extend(returned_lines(
+                returned,
+                entry.expanded && session.scrolling(),
+                width as usize,
+            ));
+        }
+        if has_more_to_show(entry) {
+            calls.push((began, lines.len(), index));
         }
 
         // What the model was not allowed to read, for the person who is.
@@ -2191,7 +2237,7 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
         }
     }
 
-    (lines, prompts)
+    (lines, prompts, calls)
 }
 
 /// Drawn over every character a search matched.
@@ -2295,7 +2341,7 @@ pub(crate) fn rows_of(line: &Line<'_>, width: u16) -> u16 {
 /// line, and at rest nothing asks the question: the wheel moves by rows and never has to know
 /// which row is which.
 fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, Laid) {
-    let (mut lines, prompts) = with_prompts(session, width, height);
+    let (mut lines, prompts, calls) = with_prompts(session, width, height);
     let held = highlight(&mut lines, session.needle());
 
     let mut laid = Laid {
@@ -2310,7 +2356,9 @@ fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, L
     let mut prompts = prompts.into_iter().peekable();
     let mut held = held.into_iter().peekable();
     let mut at = 0u16;
+    let mut starts: Vec<u16> = Vec::with_capacity(lines.len() + 1);
     for (index, line) in lines.iter().enumerate() {
+        starts.push(at);
         if prompts.peek() == Some(&index) {
             laid.prompts.push(at);
             prompts.next();
@@ -2321,6 +2369,11 @@ fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, L
         }
         at = at.saturating_add(rows_of(line, width));
     }
+    starts.push(at);
+    laid.expandable = calls
+        .into_iter()
+        .map(|(first, last, index)| (starts[first], starts[last].saturating_sub(1), index))
+        .collect();
     laid.rows = at;
     (lines, laid)
 }
@@ -6072,6 +6125,7 @@ mod tests {
                 "/ then n/N",
                 "5j, 3}, 2n",
                 "enter / backspace",
+                "x",
                 "v",
                 "?",
                 "any key",
@@ -6719,7 +6773,7 @@ mod tests {
             let changes: Vec<Change> = (0..MAX_DIFF_LINES + 5)
                 .map(|n| Change::Added(format!("line {n}")))
                 .collect();
-            let lines = diff_lines(&changes, false, 80);
+            let lines = diff_lines(&changes, false, false, 80);
 
             assert_eq!(lines.len(), MAX_DIFF_LINES + 1);
             let last = lines.last().expect("a line").to_string();
@@ -6729,13 +6783,13 @@ mod tests {
         /// A short diff is shown whole, with nothing appended to suggest otherwise.
         #[test]
         fn a_short_diff_is_shown_whole_with_no_note() {
-            let lines = diff_lines(&[Change::Added("only line".into())], false, 80);
+            let lines = diff_lines(&[Change::Added("only line".into())], false, false, 80);
             assert_eq!(lines.len(), 1);
         }
 
         /// Everything drawn for one call, as one string to look for things in.
         fn drawn_for(activity: &Activity) -> String {
-            activity_lines(activity, None, 80)
+            activity_lines(activity, None, false, 80)
                 .iter()
                 .map(|line| line.to_string())
                 .collect::<Vec<_>>()
@@ -6751,7 +6805,7 @@ mod tests {
             let running = Activity::running("Search", "MAX_STEPS")
                 .saying_why("find where the bound is set\nand then some");
             for activity in [running.clone(), running.done("4 matches")] {
-                let rows = activity_lines(&activity, None, 80);
+                let rows = activity_lines(&activity, None, false, 80);
                 assert!(
                     rows[0].to_string().ends_with("find where the bound is set"),
                     "the reason is not the headline: {}",
@@ -6768,7 +6822,7 @@ mod tests {
             let done = Activity::running("Read", "tests/test_scripts.py")
                 .saying_why("See how profile.json keys are tested")
                 .done("180 lines");
-            let rows: Vec<String> = activity_lines(&done, None, 80)
+            let rows: Vec<String> = activity_lines(&done, None, false, 80)
                 .iter()
                 .map(|row| row.to_string())
                 .collect();
@@ -6786,8 +6840,9 @@ mod tests {
         /// trailing the call.
         #[test]
         fn a_call_with_no_reason_draws_nothing_beside_it() {
-            let head =
-                activity_lines(&Activity::running("Search", "MAX_STEPS"), None, 80)[0].to_string();
+            let head = activity_lines(&Activity::running("Search", "MAX_STEPS"), None, false, 80)
+                [0]
+            .to_string();
             assert!(head.ends_with("Search(MAX_STEPS)"), "{head:?}");
         }
 
@@ -6885,6 +6940,7 @@ mod tests {
 
         fn glimpse(lines: &[&str], total: usize, from_the_end: bool) -> Returned {
             Returned {
+                whole: lines.iter().map(|line| line.to_string()).collect(),
                 lines: lines.iter().map(|line| line.to_string()).collect(),
                 total,
                 from_the_end,
@@ -6931,7 +6987,7 @@ mod tests {
         /// opposite of what is true.
         #[test]
         fn what_the_planner_read_is_not_drawn_as_quarantined() {
-            let rows = drawn_rows(&returned_lines(&glimpse(&["plain"], 3, false), 80));
+            let rows = drawn_rows(&returned_lines(&glimpse(&["plain"], 3, false), false, 80));
             assert_eq!(rows.len(), 2, "a line, and what was left out: {rows:#?}");
             for row in &rows {
                 assert!(
@@ -6947,6 +7003,7 @@ mod tests {
         fn a_glimpse_from_the_end_says_what_came_before_it() {
             let rows = drawn_rows(&returned_lines(
                 &glimpse(&["step 8", "step 9"], 9, true),
+                false,
                 80,
             ));
             assert!(
@@ -6962,7 +7019,7 @@ mod tests {
         #[test]
         fn a_glimpse_line_is_cut_to_one_row() {
             let long = "x".repeat(200);
-            let rows = drawn_rows(&returned_lines(&glimpse(&[&long], 1, false), 40));
+            let rows = drawn_rows(&returned_lines(&glimpse(&[&long], 1, false), false, 40));
             assert_eq!(rows.len(), 1, "a long line took more than a row: {rows:#?}");
             assert!(
                 wrap::display_width(&rows[0]) <= 40,
@@ -6981,7 +7038,7 @@ mod tests {
         #[test]
         fn a_line_of_escapes_is_cut_to_one_row_all_the_same() {
             let escapes = "\u{1b}".repeat(200);
-            let rows = drawn_rows(&returned_lines(&glimpse(&[&escapes], 1, false), 40));
+            let rows = drawn_rows(&returned_lines(&glimpse(&[&escapes], 1, false), false, 40));
             assert_eq!(
                 rows.len(),
                 1,
@@ -6994,12 +7051,172 @@ mod tests {
             );
         }
 
+        /// SCROLL-10: an expanded result draws every line the agent kept, each behind the plain
+        /// margin, and the collapsed form is still the five-line glimpse.
+        #[test]
+        fn an_expanded_result_shows_every_line_it_kept() {
+            let lines: Vec<String> = (0..40).map(|n| format!("line {n}")).collect();
+            let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+            let mut returned = glimpse(&refs[..5], 40, false);
+            returned.whole = lines.clone();
+
+            let rows = drawn_rows(&returned_lines(&returned, true, 80));
+            assert_eq!(rows.len(), 40, "{rows:#?}");
+            for (row, line) in rows.iter().zip(&lines) {
+                assert_eq!(row, &format!("    {line}"));
+            }
+            let rows = drawn_rows(&returned_lines(&returned, false, 80));
+            assert_eq!(rows.len(), 6, "five lines and what was left out: {rows:#?}");
+        }
+
+        /// SCROLL-10: lines the agent did not keep are still counted, on the side they were cut from.
+        #[test]
+        fn an_expanded_result_says_how_many_lines_the_bound_cut() {
+            let mut returned = glimpse(&["a"], 50, false);
+            returned.whole = (0..10).map(|n| format!("l{n}")).collect();
+
+            let rows = drawn_rows(&returned_lines(&returned, true, 80));
+            assert_eq!(rows.len(), 11, "{rows:#?}");
+            assert!(rows[10].contains("40 more lines"), "{rows:#?}");
+        }
+
+        /// SCROLL-10: an escape in a late line is drawn inert, as it is in the glimpse.
+        #[test]
+        fn a_late_line_of_an_expanded_result_cannot_draw_its_own_escapes() {
+            let mut returned = glimpse(&["early"], 8, false);
+            returned.whole = (0..7)
+                .map(|n| format!("l{n}"))
+                .chain(["\u{1b}[2Jcleared\u{7}".to_string()])
+                .collect();
+
+            let rows = drawn_rows(&returned_lines(&returned, true, 80));
+            assert_eq!(rows.len(), 8);
+            assert!(
+                !rows.iter().any(|row| row.chars().any(|c| c.is_control())),
+                "a control character reached the screen: {rows:?}"
+            );
+        }
+
+        /// SCROLL-10: an expanded write shows every change and no longer says any were left out.
+        #[test]
+        fn an_expanded_write_shows_past_twelve_lines() {
+            let changes: Vec<Change> = (0..MAX_DIFF_LINES + 5)
+                .map(|n| Change::Added(format!("line {n}")))
+                .collect();
+
+            let lines = diff_lines(&changes, false, true, 80);
+            assert_eq!(lines.len(), MAX_DIFF_LINES + 5);
+            assert!(!lines.last().expect("a line").to_string().contains("more"));
+        }
+
+        /// SCROLL-10: the key expands the call the view is on, and the same key collapses it back to
+        /// the five-line form.
+        #[test]
+        fn the_expand_key_toggles_the_call_the_view_is_on() {
+            let mut session = working();
+            session.finish_activity(Activity::running("Run", "make").done("ok"));
+            session.landed(Landing::Context);
+            let lines: Vec<String> = (0..40).map(|n| format!("line {n}")).collect();
+            session.returned(Returned {
+                lines: lines[..5].to_vec(),
+                total: 40,
+                from_the_end: false,
+                whole: lines.clone(),
+            });
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 10;
+            session.laid = as_last_drawn(&session);
+            let collapsed = as_text(&session);
+
+            session.toggle_expanded(as_last_drawn);
+            let expanded = as_text(&session);
+            assert!(expanded.contains("line 39"), "{expanded}");
+            assert!(!expanded.contains("more lines"), "{expanded}");
+
+            session.laid = as_last_drawn(&session);
+            session.toggle_expanded(as_last_drawn);
+            assert_eq!(as_text(&session), collapsed);
+        }
+
+        /// SCROLL-10: expansion belongs to the scroller, so the transcript at rest is drawn with
+        /// the glimpse again once it closes.
+        #[test]
+        fn a_transcript_at_rest_is_drawn_collapsed_after_the_scroller_closes() {
+            let mut session = working();
+            session.finish_activity(Activity::running("Run", "make").done("ok"));
+            session.landed(Landing::Context);
+            let lines: Vec<String> = (0..40).map(|n| format!("line {n}")).collect();
+            session.returned(Returned {
+                lines: lines[..5].to_vec(),
+                total: 40,
+                from_the_end: false,
+                whole: lines,
+            });
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 10;
+            session.laid = as_last_drawn(&session);
+            session.toggle_expanded(as_last_drawn);
+            assert!(as_text(&session).contains("line 39"));
+
+            session.close_scroller();
+            assert!(!as_text(&session).contains("line 39"));
+        }
+
+        /// SCROLL-10: the key acts on a call on the screen, never on one scrolled out of sight.
+        #[test]
+        fn the_expand_key_leaves_a_call_below_the_screen_alone() {
+            let mut session = working();
+            for n in 0..30 {
+                session.finish_activity(Activity::running("Read", format!("f{n}")).done("1 line"));
+                session.landed(Landing::Context);
+                session.returned(glimpse(&["x"], 1, false));
+            }
+            session.finish_activity(Activity::running("Run", "make").done("ok"));
+            session.landed(Landing::Context);
+            let lines: Vec<String> = (0..40).map(|n| format!("line {n}")).collect();
+            session.returned(Returned {
+                lines: lines[..5].to_vec(),
+                total: 40,
+                from_the_end: false,
+                whole: lines,
+            });
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 10;
+            session.laid = as_last_drawn(&session);
+            session.scroller_to_first_row();
+            let before = as_text(&session);
+
+            session.toggle_expanded(as_last_drawn);
+            assert_eq!(as_text(&session), before);
+        }
+
+        /// SCROLL-10: a call with nothing past its glimpse is not toggled, and the view stays put.
+        #[test]
+        fn the_expand_key_does_nothing_where_a_call_has_no_more() {
+            let mut session = working();
+            session.finish_activity(Activity::running("Read", "a").done("2 lines"));
+            session.landed(Landing::Context);
+            session.returned(glimpse(&["x", "y"], 2, false));
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 10;
+            session.laid = as_last_drawn(&session);
+            let before = as_text(&session);
+
+            session.toggle_expanded(as_last_drawn);
+            assert_eq!(as_text(&session), before);
+        }
+
         /// VIEW-24: a file the planner may read can still hold an escape, and a glimpse of it is
         /// drawn by this module and not by the file.
         #[test]
         fn a_glimpse_cannot_draw_its_own_escapes() {
             let rows = drawn_rows(&returned_lines(
                 &glimpse(&["\u{1b}[2Jcleared\u{7}"], 1, false),
+                false,
                 80,
             ));
             let row = &rows[0];

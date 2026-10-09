@@ -615,6 +615,12 @@ fn preview_for<S: Sink>(
 /// more because the person is the only one who will ever read it.
 const GLIMPSE_LINES: usize = 5;
 
+/// How many lines of a result the planner read are kept for the key that expands its glimpse.
+///
+/// Held in memory for a person who may never press it, so it is bounded; the expanded view says
+/// how many lines this cut.
+const EXPANDED_LINES: usize = 500;
+
 /// How many lines of a command's output are kept for the view a person can open over it.
 ///
 /// Far enough back to cover what somebody opens a run to ask about, and bounded because a program
@@ -5127,18 +5133,27 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     // own sentence about a call is already its note.
                                     if output.content {
                                         let from_the_end = output.printed_by.is_some();
-                                        let (lines, total) = released_lines(
+                                        // One release for the kept lines, of which the glimpse is
+                                        // the first or last few.
+                                        let (whole, total) = released_lines(
                                             &mut policy,
                                             &output.tool,
                                             output.glimpsed.as_ref().unwrap_or(&output.text),
-                                            GLIMPSE_LINES,
+                                            EXPANDED_LINES,
                                             PREVIEW_WIDTH,
                                             from_the_end,
                                         );
+                                        let shown = GLIMPSE_LINES.min(whole.len());
+                                        let lines = if from_the_end {
+                                            whole[whole.len() - shown..].to_vec()
+                                        } else {
+                                            whole[..shown].to_vec()
+                                        };
                                         reporter.returned(crate::report::Returned {
                                             lines,
                                             total,
                                             from_the_end,
+                                            whole,
                                         });
                                     }
                                     format!(

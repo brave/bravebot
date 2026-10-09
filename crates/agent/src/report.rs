@@ -483,6 +483,9 @@ pub struct Returned {
     pub total: usize,
     /// The last lines rather than the first, because how a command went is at the end of it.
     pub from_the_end: bool,
+    /// The same lines as far as the agent kept them, for a key that expands the glimpse. Never
+    /// shorter than `lines`, and shorter than `total` where the cap on what is kept cut it.
+    pub whole: Vec<String>,
 }
 
 /// The command a result came from, and how it ended.
