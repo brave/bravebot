@@ -255,7 +255,7 @@ cannot sign it afterwards the way it signs the installer. electron-builder signs
 build when given a certificate there, and setting that up is
 [#770](https://github.com/brave/bravebot/issues/770).
 
-**What CI checks.** CI's `Windows installers` job builds both installers with
+**What CI checks.** CI's `Windows installer` jobs build one installer each, per architecture, with
 `make app-release-windows` from the cross-built helpers, and `Install on Windows` installs each on a
 hosted runner of its own architecture, `windows-latest` and `windows-11-arm`, with
 `ui/scripts/check-windows-install.mjs`. The install is silent, its Apps list entry is the per-user
