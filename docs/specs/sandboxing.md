@@ -179,6 +179,7 @@ confined program is told to do.
 `verified-by: bravebot_sandbox::windows::a_backslash_before_a_quotation_mark_does_not_escape_the_escape`
 `verified-by: bravebot_sandbox::macos::a_backslash_in_a_path_cannot_cancel_the_escape_of_the_quote_after_it`
 `verified-by: bravebot_sandbox::windows::an_empty_argument_is_still_an_argument`
+`verified-by: bravebot_sandbox::windows::an_argument_that_needs_no_quoting_is_written_as_it_is`
 
 <a id="SANDBOX-5"></a>
 ### SANDBOX-5: capabilities report what the kernel actually enforces, and never more
