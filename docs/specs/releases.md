@@ -14,6 +14,7 @@ governs:
   - ui/package.json
   - ui/package-lock.json
   - contrib/check-versions.py
+  - contrib/release-preflight.py
 documented-by: docs/website/docs/quickstart.md
 ---
 
@@ -67,7 +68,9 @@ nothing anywhere saying so.
 
 Choosing a version rewrites every file that states it, commits exactly those files under a
 message naming the version, and stops. It pushes nothing and tags nothing. Where any of those
-files is already modified, it refuses rather than committing work it did not write.
+files is already modified, it refuses rather than committing work it did not write. Before it
+changes anything it warns, and asks whether to go on, about open `release-blocking` issues,
+untranslated messages, and a peer advisory check not recorded in the last seven days.
 
 **Why.** The files that state a version are only correct together, so a bump left uncommitted is
 one a lockfile can be dropped from, which is the disagreement [RELEASE-1](#RELEASE-1) exists to

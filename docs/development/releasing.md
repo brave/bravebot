@@ -20,6 +20,18 @@ make github-release
 # later: make publish-npm TAG=v<version>
 ```
 
+Before it changes anything, `bump-version` warns and asks whether to go on when any of these hold:
+
+- open issues carry the `release-blocking` label, which it lists with their links;
+- a translation is missing messages, counted per locale from `contrib/untranslated-messages.txt`;
+- the last commit to `docs/peer-advisories-vetted` is more than seven days old, which is when the
+  peer-advisories skill last recorded a check.
+
+The checks are in `contrib/release-preflight.py` and use no model. Answering `n`, or running without a
+terminal, stops the bump, and `make bump-version BUMP=bugfix YES=1` goes on without asking. The
+commit date is only a lower bound on when the advisory check last ran, because a run that finds
+nothing new commits nothing. [#1901](https://github.com/brave/bravebot/issues/1901) records the date of every run.
+
 `bump-version` rewrites the version in `Cargo.toml`, `Cargo.lock`, `package.json`,
 `package-lock.json`, `ui/package.json`, and `ui/package-lock.json`, commits exactly those six as
 `Bump version to <version>`, and stops there: nothing is pushed and nothing is tagged. It refuses
