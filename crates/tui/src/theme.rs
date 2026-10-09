@@ -26,8 +26,14 @@ pub type Rgb = (u8, u8, u8);
 /// A literal because the sixteen named colours have nothing near it.
 pub const BRAND: Rgb = (255, 86, 1);
 
-/// The deeper orange the wordmark fades into by the end of its branded half.
+/// The deeper orange the wordmark passes through halfway along its gradient.
 pub const BRAND_DEEP: Rgb = (255, 64, 0);
+
+/// The red-orange the wordmark's gradient ends in.
+pub const BRAND_RED: Rgb = (255, 31, 1);
+
+/// The three colours the wordmark and the face beside it are drawn through under `brave`.
+pub const BRAND_STOPS: [Rgb; 3] = [BRAND, BRAND_DEEP, BRAND_RED];
 
 /// Brand primary on a dark background: the line being typed, the echo of it, and the chrome
 /// that belongs to the person at the keyboard.
@@ -182,6 +188,38 @@ fn drawn_from(chosen: Palette, no_color: bool) -> Palette {
     match no_color {
         true => plain_palette(),
         false => chosen,
+    }
+}
+
+/// The three colours the wordmark and the face beside it are drawn through, given the theme in
+/// force.
+///
+/// Brave's oranges under `brave`. Under any other theme, the theme's note ink, the shade halfway
+/// to its fail ink, and the fail ink. In most built-in schemes those are its orange and its red,
+/// so the gradient runs the way the oranges do.
+pub fn mark() -> [Rgb; 3] {
+    let guard = current()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    mark_of(&guard.0, &guard.1)
+}
+
+/// [`mark`] for a named theme and its palette.
+///
+/// A theme whose note or fail ink is a terminal slot or `none` rather than a shade keeps the
+/// oranges, since there is no shade to mix a gradient from.
+fn mark_of(name: &str, palette: &Palette) -> [Rgb; 3] {
+    match (name, palette.note, palette.fail) {
+        (BRAVE, ..) => BRAND_STOPS,
+        (_, Color::Rgb(r, g, b), Color::Rgb(fr, fg, fb)) => {
+            let half = |from: u8, to: u8| ((u16::from(from) + u16::from(to)) / 2) as u8;
+            [
+                (r, g, b),
+                (half(r, fr), half(g, fg), half(b, fb)),
+                (fr, fg, fb),
+            ]
+        }
+        _ => BRAND_STOPS,
     }
 }
 
@@ -1317,6 +1355,46 @@ mod tests {
         assert!(matches!(ok(), Color::Rgb(..)));
         assert_ne!(ok(), Color::Green);
         apply_brave();
+    }
+
+    /// The wordmark is drawn through Brave's oranges under `brave`, and under a named theme from
+    /// that theme's note ink to its fail ink with the shade halfway between them in the middle.
+    #[test]
+    fn the_mark_takes_the_oranges_under_brave_and_the_schemes_inks_under_a_named_theme() {
+        let _held = exclusive();
+        apply_brave();
+        assert_eq!(mark(), BRAND_STOPS);
+
+        let nord = find("nord").expect("nord is built in");
+        apply(&nord);
+        let drawn = mark();
+        apply_brave();
+        assert_eq!(rgb(drawn[0]), nord.palette.note);
+        assert_eq!(rgb(drawn[2]), nord.palette.fail);
+        let (Color::Rgb(nr, ng, nb), Color::Rgb(fr, fg, fb)) =
+            (nord.palette.note, nord.palette.fail)
+        else {
+            panic!("nord's inks are shades");
+        };
+        let half = |a: u8, b: u8| ((u16::from(a) + u16::from(b)) / 2) as u8;
+        assert_eq!(drawn[1], (half(nr, fr), half(ng, fg), half(nb, fb)));
+    }
+
+    /// A theme whose note or fail ink is a terminal slot or `none` has no shade to mix from, so the
+    /// wordmark keeps the oranges rather than mixing a gradient from a placeholder.
+    #[test]
+    fn a_theme_without_shades_for_the_mark_keeps_the_oranges() {
+        let shades = parse_user_theme("shades", r##"{"note": "#102030", "fail": "#405060"}"##)
+            .expect("parses");
+        assert_eq!(
+            mark_of(&shades.name, &shades.palette),
+            [(0x10, 0x20, 0x30), (0x28, 0x38, 0x48), (0x40, 0x50, 0x60)]
+        );
+        let unset =
+            parse_user_theme("unset", r##"{"note": "#102030", "fail": "none"}"##).expect("parses");
+        assert_eq!(mark_of(&unset.name, &unset.palette), BRAND_STOPS);
+        let inherited = parse_user_theme("inherited", r##"{"note": "#102030"}"##).expect("parses");
+        assert_eq!(mark_of(&inherited.name, &inherited.palette), BRAND_STOPS);
     }
 
     /// A file named for the alias would otherwise load and then be unreachable, since that name

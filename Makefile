@@ -374,9 +374,9 @@ check-affected-containers:
 		{ [ -z "$$targets" ] || $(MAKE) --no-print-directory -k $$targets; }
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-release-preflight-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-release-preflight-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -398,6 +398,9 @@ check-peer-features-selftest:
 
 check-pr-fix-selftest:
 	python3 agents/skills/pr-fix/selftest.py
+
+check-release-preflight-selftest:
+	python3 contrib/release-preflight.py --selftest
 
 # CI and local runs share the same desktop checks. Linux uses a virtual display;
 # macOS uses the logged-in desktop session.
@@ -848,6 +851,7 @@ bump-version:
 		echo "error: BUMP must be one of: bugfix, minor, major"; \
 		exit 1; \
 	fi
+	@python3 contrib/release-preflight.py $(if $(YES),--yes)
 	@set -eu; \
 	current="$(VERSION)"; \
 	if [ -z "$$current" ]; then \

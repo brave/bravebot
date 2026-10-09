@@ -2729,6 +2729,60 @@ fn a_gateway_asking_to_run(command: &'static str) -> Gateway {
     })
 }
 
+/// SANDBOX-24: a person's `sandbox.network.allowedHosts` reaches the programs `run` starts as a
+/// proxy variable, and a run with no list reaches none.
+///
+/// A property of the process: the entry points settle the list once and `Tools` reads it back
+/// through `sandbox_network::settled()`, which is `None` in every test that does not start from an
+/// entry point. The tests in `crates/agent` hand the list to `with_hosts` themselves, so a link
+/// that dropped it would leave them passing while no stage was pointed at a proxy. The program is
+/// `printenv` writing a file, so the effect is on disk and not words the model was handed; the run
+/// with no list is the control that the variable is not there to be found anyway.
+#[cfg(unix)]
+#[test]
+fn an_allowed_hosts_list_points_the_programs_a_run_starts_at_the_proxy() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return;
+    }
+    let run_in = |name: &str, hosts: Option<&str>| {
+        let gateway = a_gateway_asking_to_run("printenv HTTPS_PROXY > proxy.txt");
+        let mut settings: serde_json::Value =
+            serde_json::from_str(&settings_for(&gateway)).expect("settings for a gateway");
+        if let Some(hosts) = hosts {
+            settings["sandbox"] = serde_json::json!({"network": {"allowedHosts": [hosts]}});
+        }
+        let scratch = Scratch::new(name).with_settings(&settings.to_string());
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &environment,
+            &["--dangerously-skip-permissions", "-p", "print the proxy"],
+        );
+        let _ = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        std::fs::read_to_string(project.join("proxy.txt")).unwrap_or_default()
+    };
+
+    let control = run_in("cli-running-hosts-control", None);
+    assert_eq!(
+        control.trim(),
+        "",
+        "the control already had a proxy, so the list below says nothing: {control}"
+    );
+    let listed = run_in("cli-running-hosts-listed", Some("example.com"));
+    assert!(
+        listed.trim().starts_with("http://127.0.0.1:"),
+        "the list did not reach the stage as a loopback proxy: {listed:?}"
+    );
+}
+
 /// SANDBOX: `--sandbox-deny-write` and a settings file's `sandbox.filesystem.denyWrite` reach the
 /// programs `run` starts, and a run with neither reaches none.
 ///
@@ -5914,6 +5968,185 @@ fn a_run_refuses_a_definition_only_an_untrusted_checkout_holds_and_says_it_count
             .recv_timeout(Duration::from_millis(200))
             .is_err(),
         "a name matching nothing sent a request"
+    );
+}
+
+/// A project holding `notes.md`, and a gateway whose model asks to read it and then says it is done.
+///
+/// The model reads the notes only for a prompt asking it to, so a run with another prompt is a
+/// plain exchange that a later run can carry on from. The words in the file reach the second
+/// request when the run trusts the file, and a reference to them takes their place when it does
+/// not.
+fn a_project_whose_notes_the_model_reads(name: &str) -> (Gateway, Scratch, PathBuf) {
+    let gateway = a_gateway(r#"["tools"]"#, |body| {
+        if !body.contains("read the notes") {
+            return answered("hello")(body);
+        }
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"read_file",
+                        "arguments":serde_json::json!({"path": "notes.md"}).to_string()}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    });
+    let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+    std::fs::write(cwd.join("notes.md"), "THE-WORDS-IN-THE-PROJECT-NOTES").expect("write notes");
+    (gateway, scratch, cwd)
+}
+
+/// Whether the planner was handed the words of the file: a request carrying a tool result that
+/// holds them. A quarantined file's words go to the classifier a processor runs and not to the
+/// planner, so a request without a tool result is not the planner's.
+///
+/// Fails where no request carried a tool result at all, since the planner then never saw what the
+/// read returned either way and the answer would be a no.
+fn the_planner_saw_the_notes(gateway: &Gateway) -> bool {
+    let mut sent = Vec::new();
+    while let Ok(request) = gateway.asked.recv_timeout(Duration::from_secs(2)) {
+        sent.push(request);
+    }
+    assert!(
+        sent.iter()
+            .any(|request| request.contains(r#""role":"tool""#)),
+        "the read's result never reached the planner: {sent:?}"
+    );
+    sent.iter().any(|request| {
+        request.contains(r#""role":"tool""#) && request.contains("THE-WORDS-IN-THE-PROJECT-NOTES")
+    })
+}
+
+/// TRUST-26. The flag trusts the working directory, so a file in it reaches the planner as its own
+/// words, and it keeps no answer for later runs.
+#[test]
+fn a_run_given_the_workspace_flag_reads_a_project_file_as_trusted_and_writes_no_record() {
+    let (gateway, scratch, cwd) = a_project_whose_notes_the_model_reads("cli-running-trust-flag");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--trust-workspace", "-p", "read the notes"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the trusted file did not reach the planner"
+    );
+    assert!(
+        !scratch.path.join(".bravebot").join("trusted").exists(),
+        "the flag kept an answer for later runs"
+    );
+}
+
+/// TRUST-26. A run carrying on an earlier session keeps the map that session recorded and adds the
+/// working directory to it, so the flag trusts a file the earlier session left untrusted. The
+/// continuation without the flag is the control: it reads the file quarantined. Each continues a
+/// session of its own, since a session that already holds the read would answer from it.
+#[test]
+fn a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted() {
+    let (gateway, scratch, cwd) =
+        a_project_whose_notes_the_model_reads("cli-running-trust-flag-continued");
+    let earlier = || {
+        let run = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--json", "-p", "hello"],
+        );
+        let (stdout, stderr) = said(&run);
+        assert!(run.status.success(), "{stderr}");
+        session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"))
+    };
+    let (for_the_control, for_the_flag) = (earlier(), earlier());
+    assert_ne!(for_the_control, for_the_flag);
+    let _ = requests(&gateway);
+
+    let without = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--resume", &for_the_control, "-p", "read the notes"],
+    );
+    let (_, stderr) = said(&without);
+    assert!(without.status.success(), "{stderr}");
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "the continued run trusted a file nothing vouched for"
+    );
+
+    let with = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--trust-workspace",
+            "--resume",
+            &for_the_flag,
+            "-p",
+            "read the notes",
+        ],
+    );
+    let (_, stderr) = said(&with);
+    assert!(with.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the flag did not trust the working directory of the continued run"
+    );
+}
+
+/// TRUST-26, the control: the same run without the flag is the quarantine the issue describes.
+#[test]
+fn a_run_without_the_workspace_flag_reads_a_project_file_quarantined() {
+    let (gateway, scratch, cwd) =
+        a_project_whose_notes_the_model_reads("cli-running-trust-flag-absent");
+
+    let output = bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "read the notes"]);
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "an untrusted file reached the planner as its own words"
+    );
+}
+
+/// TRUST-23. An answer a person kept about the directory trusts a run there as the flag would, and
+/// the run says so on stderr.
+#[test]
+fn a_one_shot_run_in_a_directory_with_a_kept_answer_reads_a_project_file_as_trusted() {
+    let (gateway, scratch, cwd) = a_project_whose_notes_the_model_reads("cli-running-trust-kept");
+    let Some(identity) = bravebot_agent::trusted::Identity::of(&cwd) else {
+        // A filesystem that cannot say when a directory was made keeps no answer to read.
+        return;
+    };
+    let store = bravebot_agent::trusted::Store::new(&scratch.path.join(".bravebot"), &cwd);
+    assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+    let output = bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "read the notes"]);
+
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the kept answer did not trust the file"
+    );
+    assert!(
+        stderr.contains("you said to remember it") && stderr.contains("/forget-trust"),
+        "the run did not say it was trusting a kept answer: {stderr}"
     );
 }
 
@@ -9322,7 +9555,7 @@ fn a_shell_init_with_no_script_to_print_is_refused_with_the_argument_status() {
     }
 }
 
-/// CLI-28. The npm launcher's word is what makes a copy an npm install, and the install script's
+/// CLI-29. The npm launcher's word is what makes a copy an npm install, and the install script's
 /// recorded path is what makes one a script install. The regression this rejects is the two being
 /// interchangeable: an npm copy sent the curl line gains a second binary and updates the one that
 /// is not running, and a script copy sent the npm line is told to install a package manager's copy
@@ -9364,7 +9597,7 @@ fn update_says_the_command_for_the_way_this_copy_was_installed() {
     );
 }
 
-/// CLI-28. A build from source is the common case for anybody working on this, and there is no
+/// CLI-29. A build from source is the common case for anybody working on this, and there is no
 /// command for it. The regression this rejects is naming one anyway, which would have somebody
 /// curl a release over a binary this program did not install, and failing the run over a machine
 /// where nothing is wrong.
@@ -9385,7 +9618,7 @@ fn update_says_there_is_no_command_for_a_build_from_source() {
     );
 }
 
-/// CLI-28. A word after it is refused rather than ignored, with the argument status, so a person
+/// CLI-29. A word after it is refused rather than ignored, with the argument status, so a person
 /// who typed `bravebot update now` is told rather than shown a command as though they had asked
 /// for the plain one.
 #[test]
@@ -10188,4 +10421,246 @@ fn a_run_tells_the_planner_about_the_references_only_the_person_declared() {
             "a checkout's settings declared a reference: {asked}"
         );
     }
+}
+
+/// The reply a streamed frame carries, with the quotes and backslashes of a JSON reply escaped so
+/// it survives being written into a string.
+fn escaped(text: &str) -> String {
+    let quoted = serde_json::to_string(text).expect("a string encodes");
+    quoted[1..quoted.len() - 1].to_string()
+}
+
+const A_VERDICT_SCHEMA: &str = r#"{
+    "type": "object",
+    "properties": {"verdict": {"enum": ["pass", "fail"]}},
+    "required": ["verdict"],
+    "additionalProperties": false
+}"#;
+
+/// CLI-28: the schema is sent with the request, and a reply that matches it ends the run as any
+/// other does, with the value in `structured` beside the reply.
+#[test]
+fn a_reply_matching_the_output_schema_is_returned_as_a_value() {
+    let reply = r#"{"verdict": "pass"}"#;
+    let gateway = a_gateway(r#"["tools", "structured_outputs"]"#, move |_| {
+        streamed(&escaped(reply))
+    });
+    let scratch =
+        Scratch::new("cli-running-output-schema-match").with_settings(&settings_for(&gateway));
+    std::fs::write(scratch.path.join("verdict.json"), A_VERDICT_SCHEMA).expect("write the schema");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "--output-schema",
+            "verdict.json",
+            "--json",
+            "-p",
+            "judge it",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(result["structured"], serde_json::json!({"verdict": "pass"}));
+    assert_eq!(result["reply"], reply);
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    let asked: serde_json::Value = serde_json::from_str(&asked).expect("a JSON body");
+    assert_eq!(
+        asked["response_format"]["json_schema"]["schema"]["required"],
+        serde_json::json!(["verdict"]),
+        "the schema was not sent: {asked}"
+    );
+
+    // Without the flag for an object, stdout carries the reply as it came.
+    let plain = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--output-schema", "verdict.json", "-p", "judge it"],
+    );
+    let (stdout, stderr) = said(&plain);
+    assert_eq!(plain.status.code(), Some(0), "{stderr}");
+    assert_eq!(stdout.trim(), reply);
+}
+
+/// CLI-28, CLI-6: a reply that does not match ends on a status of its own. With `--json` the object
+/// says where and still holds the reply, and `structured` is null.
+#[test]
+fn a_reply_off_the_output_schema_ends_on_its_own_status() {
+    let gateway = a_gateway(r#"["tools", "structured_outputs"]"#, |_| {
+        streamed(&escaped(r#"{"verdict": "maybe"}"#))
+    });
+    let scratch =
+        Scratch::new("cli-running-output-schema-mismatch").with_settings(&settings_for(&gateway));
+    std::fs::write(scratch.path.join("verdict.json"), A_VERDICT_SCHEMA).expect("write the schema");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "--output-schema",
+            "verdict.json",
+            "--json",
+            "-p",
+            "judge it",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(6), "{stderr}");
+    assert!(stderr.contains("BB1006"), "{stderr}");
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["status"], 6);
+    assert_eq!(result["reason"], "schema");
+    assert_eq!(result["identifier"], "BB1006");
+    assert_eq!(result["structured"], serde_json::Value::Null);
+    assert_eq!(result["reply"], r#"{"verdict": "maybe"}"#);
+    assert!(
+        result["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("$.verdict")),
+        "{stdout}"
+    );
+}
+
+/// CLI-28, CLI-5: without `--json` a reply off the schema leaves stdout empty, so a pipe cannot
+/// take prose for the shape it asked for, and a matching reply is written as it came.
+#[test]
+fn a_reply_off_the_output_schema_writes_nothing_to_stdout() {
+    let gateway = a_gateway(r#"["tools", "structured_outputs"]"#, |_| {
+        streamed("I think it passes.")
+    });
+    let scratch =
+        Scratch::new("cli-running-output-schema-prose").with_settings(&settings_for(&gateway));
+    std::fs::write(scratch.path.join("verdict.json"), A_VERDICT_SCHEMA).expect("write the schema");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--output-schema", "verdict.json", "-p", "judge it"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(6), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("BB1006"), "{stderr}");
+}
+
+/// CLI-28: a run given no schema says `structured` is null, and its reply is not read as JSON.
+#[test]
+fn a_run_given_no_output_schema_has_a_null_structured_field() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch =
+        Scratch::new("cli-running-output-schema-absent").with_settings(&settings_for(&gateway));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(result["structured"], serde_json::Value::Null);
+}
+
+/// CLI-28: a model served through an AWS account is refused before a request is sent, whatever the
+/// roster says, because the Bedrock request has no field to carry the schema.
+#[test]
+fn an_output_schema_is_refused_for_a_model_served_through_bedrock() {
+    let gateway = a_gateway(r#"["tools", "structured_outputs"]"#, |_| {
+        streamed("all done")
+    });
+    let scratch = Scratch::new("cli-running-output-schema-bedrock").with_settings(&format!(
+        r#"{{
+            "provider": {{
+                "amazon-bedrock": {{"options": {{"region": "us-west-2"}}}},
+                "openrouter": {{
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{}/api/v1"}}
+                }}
+            }},
+            "model": "opus"
+        }}"#,
+        gateway.port
+    ));
+    std::fs::write(scratch.path.join("verdict.json"), A_VERDICT_SCHEMA).expect("write the schema");
+
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.extend([
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        &environment,
+        &["--output-schema", "verdict.json", "-p", "judge it"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("--output-schema"), "{stderr}");
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a request was sent by a run that was refused"
+    );
+}
+
+/// CLI-28: a model whose roster row names its parameters and not structured output is refused
+/// before a chat request is sent, and so is a schema outside what is checked.
+#[test]
+fn an_output_schema_that_cannot_be_honoured_is_refused_before_the_run() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning"]"#);
+    let scratch =
+        Scratch::new("cli-running-output-schema-refused").with_settings(&settings_for(&gateway));
+    std::fs::write(scratch.path.join("verdict.json"), A_VERDICT_SCHEMA).expect("write the schema");
+    std::fs::write(scratch.path.join("ref.json"), r##"{"$ref": "#/defs/x"}"##)
+        .expect("write the schema");
+
+    let unserved = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--output-schema", "verdict.json", "-p", "judge it"],
+    );
+    let (_, stderr) = said(&unserved);
+    assert_eq!(unserved.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("--output-schema"), "{stderr}");
+
+    for (arguments, wanted) in [
+        (vec!["--output-schema", "ref.json", "-p", "x"], "$ref"),
+        (
+            vec!["--output-schema", "missing.json", "-p", "x"],
+            "missing.json",
+        ),
+        (vec!["--output-schema", "", "-p", "x"], "--output-schema"),
+        (vec!["--output-schema"], "--output-schema"),
+        (
+            vec!["--output-schema", "verdict.json", "--mode", "manifest", "x"],
+            "manifest",
+        ),
+    ] {
+        let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, &arguments);
+        let (_, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stderr.contains(wanted), "{arguments:?}: {stderr}");
+    }
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a chat request was sent by a run that was refused"
+    );
 }

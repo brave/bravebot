@@ -52,6 +52,21 @@ than once. It vouches for nothing: files read there are quarantined like any oth
 nobody is watching cannot be asked to trust a tree. See
 [`--add-dir`](../reference/cli.md#--add-dir-path).
 
+## Reading the project's own files
+
+A run starts with nothing trusted, so the planner reads project files only through a processor or a
+file named with `--file`. `--trust-workspace` trusts the working directory and everything under it
+for this run, as answering yes to the startup question does, and nothing else: directories from
+`--add-dir` stay untrusted and no record is written.
+
+```sh
+bravebot --trust-workspace -p "summarise what src/ does"
+```
+
+A run in a directory where a session once kept the answer (`r` at the startup question), or inside
+the git worktree whose root it was kept about, opens trusting the directory without the flag, and says so on stderr with how to take it back. The flag is read from
+the command line only, so a settings file or a checkout cannot turn it on.
+
 ## Piped input is untrusted and private, always
 
 Piped bytes are quarantined, and the planner is given a reference rather than the bytes. Nothing
@@ -260,6 +275,7 @@ explanation on stdout.
 | 3 | `BB1003` | cannot use the configuration, so nothing ran |
 | 4 | `BB1004` | had an effect refused by a gate |
 | 5 | `BB1005` | never reached the backend |
+| 6 | `BB1006` | finished, and its reply is not what `--output-schema` asked for |
 
 A status is never renumbered and never given a second meaning, so a script can branch on one: "the
 endpoint was not there, try again", "the configuration is wrong, fail the build" and "a gate refused
@@ -279,12 +295,14 @@ the wrong thing to search for.
 |---|---|
 | `--file <path>` | include a workspace file as trusted context; repeatable |
 | `--add-dir <path>` | make another directory reachable, trusting nothing in it; repeatable |
+| `--trust-workspace` | trust the working directory for this run, as answering yes to the startup question does |
 | `-p`, `--print` | non-interactive; reads piped stdin as quarantined context |
 | `--trace` | print the audit trail to stderr |
 | `--model <name>` | the model this run asks for |
 | `--advisor <name>` | a model the planner may put a question to |
 | `--json` | one result object on stdout, in the reply's place |
 | `--json-stream` | one event per line on stdout as the run goes, then the result object |
+| `--output-schema <path>` | hold the reply to a JSON Schema; a reply off it ends on status 6, one that conforms is also `structured` under `--json` |
 | `--settings <path>` | read a settings file above the ones found, for this run |
 | `--mode manifest` | plan the whole run first, then walk the plan |
 

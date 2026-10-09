@@ -1,4 +1,4 @@
-//! `bravebot update`: the command that updates this copy (CLI-28).
+//! `bravebot update`: the command that updates this copy (CLI-29).
 //!
 //! It says what to run and runs nothing. Replacing the running binary is a line somebody reads
 //! before they paste it, and a command that did it would be this program choosing to overwrite

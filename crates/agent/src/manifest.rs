@@ -865,7 +865,7 @@ fn plan<S: Sink, R: Reporter>(
             }
             Message::user_parts(
                 std::iter::once(Part::Text { text: opening })
-                    .chain(dropped.iter().map(crate::attached::Carried::part))
+                    .chain(dropped.iter().flat_map(crate::attached::Carried::parts))
                     .chain(task.images.iter().map(crate::turn::PastedImage::part))
                     .collect(),
             )

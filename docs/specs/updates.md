@@ -64,7 +64,7 @@ not from the environment.
 value arrives from. Offering the wrong one of the two is its own harm and not a smaller one: the
 npm command against a script install puts a second copy on the machine and updates neither.
 
-The same two literals answer `bravebot update` ([CLI-28](cli.md#CLI-28)), which is why they and
+The same two literals answer `bravebot update` ([CLI-29](cli.md#CLI-29)), which is why they and
 the installation they are chosen by sit in the configuration surface rather than beside the
 startup line: a presentation crate may not reach another one
 ([LAYER-1](layering.md#LAYER-1)), and two copies of the pair would be two commands to keep in step.

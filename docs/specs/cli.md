@@ -9,6 +9,7 @@ governs:
   - crates/cli/src/continued.rs
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
+  - crates/agent/src/output_schema.rs
   - crates/cli/src/plain.rs
   - crates/cli/src/update.rs
   - crates/config/src/keys.rs
@@ -55,6 +56,13 @@ would say which effects may happen unwatched, and one line in a file in the home
 do what the flag is named and warned about for. A record of command lines somebody asked to be
 remembered past a session ([tools/run.md](tools/run.md)) is not read here either, and for this same
 reason.
+
+A trust answer is not an allow rule, though both are kept in the home directory. It approves no
+effect: it says which files are the person's own, so the planner may read them, and it covers one
+directory the person answered about. A run therefore opens trusting its working directory when the
+person typed `--trust-workspace` or kept an answer that settles a session there
+([TRUST-23](trust-map.md#TRUST-23), [TRUST-26](trust-map.md#TRUST-26)), and says so for the kept
+answer. Writing stays refused without the flag above.
 
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
@@ -129,6 +137,7 @@ exiting successfully with an explanation on stdout, and each of them has a statu
 | 3 | `BB1003` | cannot use the configuration, so nothing ran |
 | 4 | `BB1004` | had an effect refused by a gate |
 | 5 | `BB1005` | never reached the backend |
+| 6 | `BB1006` | finished, and its reply is not what `--output-schema` (CLI-28) asked for |
 
 A status is never renumbered and never given a second meaning. A failure kind nothing here names
 is 1, and one worth telling apart takes the next number.
@@ -164,6 +173,7 @@ over one set of failures is one of them going out of date.
 `verified-by: bravebot_cli::exit::a_failure_is_identified_and_a_success_is_not`
 `verified-by: bravebot_cli::exit::a_failure_says_its_identifier_in_front_of_the_message`
 `verified-by: bravebot_cli::exit::a_manifest_run_is_classified_by_what_stopped_it`
+`verified-by: bravebot_cli::running::a_reply_off_the_output_schema_ends_on_its_own_status`
 `verified-by: bravebot_agent::backend::a_request_that_never_left_is_told_apart_from_one_that_was_answered`
 `verified-by: bravebot_cli::main::a_turn_something_was_refused_in_does_not_succeed`
 
@@ -476,8 +486,9 @@ against one.
 `--add-dir <path>` opens a directory outside the working one for the length of the run, and may be
 given more than once. An absolute path that exists, is a directory, and is not already inside the
 working one is opened; anything else is refused by name and the run stops before the turn. The
-run's trust map stays empty, so a file read there is read on the same footing as the project's own
-files: nothing vouched for it. A write there is refused as any other write in an unattended run is,
+run's trust map holds nothing for it, so a file read there is read on the same footing as the
+project's own files without an answer about them: nothing vouched for it. `--trust-workspace` covers
+the working directory alone. A write there is refused as any other write in an unattended run is,
 and the flag in CLI-1 lifts that exactly as it does elsewhere.
 
 **Why.** A headless task pointed at one checkout often needs to read another, and an absolute path
@@ -487,9 +498,9 @@ cannot be done at all.
 Vouching is a separate grant, and it is the one an unattended run cannot make. The interactive
 command of the same name records that a person vouched for the directory, which it can do because a
 person typed it in a session whose map already holds their answer about the directory they are
-working in. A run nobody is watching holds no such answer, its own working directory included, so a
-rule trusting the tree named on the command line would leave it more trusted than the tree the run
-works in. Reaching a directory is what the work needs; trusting what is in it is not.
+working in. A run nobody is watching holds no such answer unless the person gave one for its working
+directory (`--trust-workspace`, or a kept answer), so a rule trusting the tree named on the command
+line would leave it more trusted than the tree the run works in. Reaching a directory is what the work needs; trusting what is in it is not.
 
 Stopping rather than carrying on, because the two audiences differ: a session says the path was not
 opened and leaves the person to retype it, and a script that carried on would fail somewhere further
@@ -523,7 +534,9 @@ The object takes the reply's place on stdout and nothing else goes there. Progre
 the trail stay on stderr, exactly as they are without the flag.
 
 It carries a schema number. Within one number a field may be added, and never removed, renamed or
-given a different meaning, so a caller reading the fields it knows keeps working.
+given a different meaning, so a caller reading the fields it knows keeps working. `structured`
+(CLI-28) is such a field: the reply as a JSON value when the run was given `--output-schema`, and
+`null` otherwise.
 
 **Why.** The prose reply is written for a person, and a program can recover almost nothing from it:
 which files changed, what the turn cost, which tools ran and why an effect was refused are either
@@ -1406,7 +1419,64 @@ the managed floor, not a partial read of it.
 `verified-by: bravebot_config::locked::a_locked_process_makes_the_bypass_mode_unreachable_whatever_the_layers_said`
 
 <a id="CLI-28"></a>
-### CLI-28: `update` says the command that updates this copy, and runs nothing
+### CLI-28: `--output-schema` holds a one-shot run's reply to a JSON Schema the caller supplied
+
+`--output-schema <path>` is valid with a one-shot run and names a file holding a JSON Schema. The
+file is the person's, trusted as `--settings` is, and the planner never holds its path. The schema is
+sent with every request the run's own turn makes to the backend as its `response_format`
+(`json_schema`, named `reply`), since the request that produces the final reply cannot be told apart
+beforehand. When the turn finishes, the reply is read as one JSON value, with nothing around it, and
+held to the schema before anything is written.
+
+A reply that conforms is written as it always is (CLI-5), and with `--json` the same value is also in
+the result object's `structured` field (CLI-12), as JSON and not as a string. A reply that does not
+conform ends the run on status 6, `BB1006` (CLI-6): stdout carries nothing, `structured` is `null`,
+and the message names where the reply broke and which constraint, as a position the schema's own
+`properties` and an array index give. It never contains a key or value the reply wrote.
+
+The check covers `type`, `enum`, `const`, `properties`, `required`, `additionalProperties` as a
+boolean, `items` as one schema, `minItems`, `maxItems`, `minLength`, `maxLength`, `minimum` and
+`maximum`. A schema using any other keyword, or a covered one with a value it cannot take, is refused
+when it is loaded, with the status for an argument (CLI-6), because a constraint the run did not hold
+the reply to is the failure the flag exists to remove. `$schema`, `$id`, `title`, `description`,
+`default` and `examples` constrain nothing and are accepted.
+
+The flag is refused, with the status for an argument and before anything is sent, when no path
+follows it, when the file cannot be read or is not a usable schema, with `--mode manifest` (a reply per
+step and none for the run), and when the backend or model cannot honour a schema: Bedrock, and a
+roster row that states its supported parameters without `structured_outputs` or `response_format`. A
+row that states none is not refused, and the check after the turn is what holds there.
+
+**Why.** A script that consumes a reply as data is parsing English with a regular expression. Asking
+the service for the shape lowers how often the reply is wrong, and checking it is what makes a wrong
+one a status a caller can branch on rather than a parse error three steps later.
+
+The check is made on the finished text the driver already holds, and its answer reaches only an exit
+status and one field, so a reply written by an untrusted page cannot choose anything by being
+shaped one way or another. Its message is built from the schema's positions for the same reason.
+
+A subset checked in full beats a larger one checked partly. No JSON Schema crate is a dependency, and
+a regular-expression `pattern` would need one the dependency policy bans.
+
+`verified-by: bravebot_agent::output_schema::a_reply_that_matches_comes_back_as_one_line`
+`verified-by: bravebot_agent::output_schema::prose_is_not_a_value`
+`verified-by: bravebot_agent::output_schema::each_constraint_names_where_it_was_broken`
+`verified-by: bravebot_agent::output_schema::a_mismatch_never_carries_what_the_reply_spelt`
+`verified-by: bravebot_agent::output_schema::a_keyword_outside_the_subset_is_refused_wherever_it_stands`
+`verified-by: bravebot_agent::output_schema::a_delete_character_in_a_string_is_escaped_on_the_way_out`
+`verified-by: bravebot_agent::turn::an_output_schema_is_requested_with_the_planners_request`
+`verified-by: bravebot_agent::turn::without_an_output_schema_no_response_format_is_requested`
+`verified-by: bravebot_aichat::protocol::a_schema_is_sent_as_the_response_format_this_protocol_names`
+`verified-by: bravebot_tui::app::a_schema_is_refused_only_where_the_roster_states_parameters_without_it`
+`verified-by: bravebot_cli::main::an_output_schema_flag_naming_no_file_is_refused`
+`verified-by: bravebot_cli::json::a_structured_reply_is_a_value_and_not_a_string`
+`verified-by: bravebot_cli::running::a_reply_matching_the_output_schema_is_returned_as_a_value`
+`verified-by: bravebot_cli::running::a_reply_off_the_output_schema_writes_nothing_to_stdout`
+`verified-by: bravebot_cli::running::a_run_given_no_output_schema_has_a_null_structured_field`
+`verified-by: bravebot_cli::running::an_output_schema_that_cannot_be_honoured_is_refused_before_the_run`
+
+<a id="CLI-29"></a>
+### CLI-29: `update` says the command that updates this copy, and runs nothing
 
 `bravebot update` prints the command for the way this copy was installed: the npm package's line
 for one the npm launcher started, and the install script's own line for the binary that script

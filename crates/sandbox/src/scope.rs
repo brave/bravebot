@@ -12,7 +12,10 @@
 //! assignment in front of it, gets no scope: what would run with the credential is not what the
 //! plan says would run.
 
-use crate::base::{STATE_DIRECTORY, under};
+use crate::base::{
+    CREDENTIAL_DIRECTORIES, LINUX_CREDENTIAL_DIRECTORIES, MACOS_CREDENTIAL_DIRECTORIES,
+    STATE_DIRECTORY, under,
+};
 use crate::policy::SandboxPolicy;
 use crate::toolchain::Toolchain;
 use std::path::{Component, Path, PathBuf};
@@ -113,7 +116,9 @@ impl Scope {
     ///
     /// No row names a private key or `~/.ssh` as a directory: a push signs through the agent, and
     /// what ssh reads beside it is the configuration, the hosts it has verified, and the public
-    /// half of a key, which is how it names an identity to the agent. The one row written is
+    /// half of a key, which is how it names an identity to the agent. The public half is the one
+    /// at each default name and the one at each `IdentityFile` the person's `~/.ssh/config`
+    /// names, as [`named_public_keys`] judges them. The one row written is
     /// `known_hosts`, as a file, since a host ssh cannot record is a push that fails and an account
     /// without one gets one created rather than a directory nobody asked for. A tool's directory
     /// is read and never written, since what a write there leaves is a command the person's own
@@ -124,6 +129,9 @@ impl Scope {
                 let mut policy = policy;
                 for row in REMOTE {
                     policy = policy.allow_read(under(home, row));
+                }
+                for public_key in named_public_keys(home) {
+                    policy = policy.allow_read(public_key);
                 }
                 policy.allow_write_file(under(home, KNOWN_HOSTS))
             }
@@ -345,6 +353,143 @@ fn rows(scope: Scope) -> &'static [&'static str] {
         Scope::Kubernetes => &[".kube"],
         Scope::Docker => &[".docker"],
     }
+}
+
+/// The most `~/.ssh/config` bytes read for its `IdentityFile` lines.
+const SSH_CONFIG_LIMIT: u64 = 1 << 20;
+
+/// The most public keys the configuration may add to the remote scope.
+const NAMED_PUBLIC_KEYS_LIMIT: usize = 32;
+
+/// The public key files the person's own `~/.ssh/config` names with an `IdentityFile` line, as
+/// the sandbox will be told them.
+///
+/// ssh reads the `.pub` file beside an identity to choose which key the agent offers, so a key
+/// named in the configuration needs the same read as one at a default name. A line naming `<name>`
+/// adds `<name>.pub`, and one already ending in `.pub` adds that file. A name is absolute or
+/// begins `~/` or `%d/`; one with any other `%` or a `$` adds nothing, since ssh would read it
+/// from somewhere this cannot know, and neither does a line that is not valid UTF-8. A file is
+/// added only where it is a regular file, the file a
+/// link leads to is named `*.pub`, and that file is not in a credential location other than
+/// `~/.ssh`. No private key name is added, whatever the line says. Only the user's own file is
+/// read, and a repository's `core.sshCommand`, an `Include` and a `Match` are not followed. A file
+/// that cannot be read adds nothing, and the configuration is read to a fixed length and for a
+/// fixed count of keys.
+fn named_public_keys(home: &Path) -> Vec<PathBuf> {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(under(home, ".ssh/config")) else {
+        return Vec::new();
+    };
+    let mut configuration = Vec::new();
+    if file
+        .take(SSH_CONFIG_LIMIT)
+        .read_to_end(&mut configuration)
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let mut keys: Vec<PathBuf> = Vec::new();
+    for line in configuration.split(|byte| *byte == b'\n') {
+        // A lossy decode would name a different file than ssh opens.
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let Some(named) = identity_file(line) else {
+            continue;
+        };
+        let Some(path) = judged_public_key(&named, home) else {
+            continue;
+        };
+        if already_read(Scope::Remote, &path, home) || keys.contains(&path) {
+            continue;
+        }
+        keys.push(path);
+        if keys.len() == NAMED_PUBLIC_KEYS_LIMIT {
+            break;
+        }
+    }
+    keys
+}
+
+/// The path an `IdentityFile` line names, as a public key file's name, or `None` for any other
+/// line or one that does not spell an absolute path.
+fn identity_file(line: &str) -> Option<PathBuf> {
+    let line = line.trim_start();
+    let keyword = line.get(.."IdentityFile".len())?;
+    if !keyword.eq_ignore_ascii_case("IdentityFile") {
+        return None;
+    }
+    let rest = &line["IdentityFile".len()..];
+    // ssh takes `Keyword value` and `Keyword=value`, and a separator is required.
+    let rest = match rest.chars().next()? {
+        '=' => &rest[1..],
+        separator if separator.is_whitespace() => rest.trim_start().trim_start_matches('='),
+        _ => return None,
+    };
+    let rest = rest.trim_start();
+    let value = match rest.strip_prefix('"') {
+        Some(quoted) => quoted.split('"').next()?,
+        None => rest.split_whitespace().next()?,
+    };
+    if value.contains('$') || value.contains('\\') {
+        return None;
+    }
+    let (home, beneath) = match value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("%d/"))
+    {
+        Some(beneath) => (true, beneath),
+        None => (false, value),
+    };
+    if beneath.contains('%') {
+        return None;
+    }
+    public_name(if home {
+        Path::new("~").join(beneath)
+    } else {
+        PathBuf::from(beneath)
+    })
+}
+
+/// `path` with `.pub` on the end of its name, unless the name already ends in it.
+fn public_name(path: PathBuf) -> Option<PathBuf> {
+    if path.to_str()?.ends_with(".pub") {
+        return Some(path);
+    }
+    let mut name = path.into_os_string();
+    name.push(".pub");
+    Some(PathBuf::from(name))
+}
+
+/// A public key file a configuration named, as the sandbox will be told it, or `None` where it is
+/// refused.
+fn judged_public_key(named: &Path, home: &Path) -> Option<PathBuf> {
+    let spelled = match named.strip_prefix("~") {
+        Ok(beneath) => home.join(beneath),
+        Err(_) => named.to_path_buf(),
+    };
+    if !spelled.is_absolute()
+        || spelled
+            .components()
+            .any(|part| part == Component::ParentDir)
+    {
+        return None;
+    }
+    // Where the name is a link, what it leads to is what ssh opens, and that is judged.
+    let resolved = std::fs::canonicalize(&spelled).ok()?;
+    let real_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    let a_public_key = resolved.extension().is_some_and(|ending| ending == "pub")
+        && std::fs::metadata(&resolved).is_ok_and(|held| held.is_file());
+    let in_another_credential_location = [home, real_home.as_path()].iter().any(|home| {
+        CREDENTIAL_DIRECTORIES
+            .iter()
+            .chain(MACOS_CREDENTIAL_DIRECTORIES)
+            .chain(LINUX_CREDENTIAL_DIRECTORIES)
+            .filter(|row| **row != ".ssh")
+            .any(|row| resolved.starts_with(under(home, row)))
+    });
+    (a_public_key && !in_another_credential_location).then_some(resolved)
 }
 
 /// The hosts ssh has verified, the one row of the remote scope that is also written.
@@ -994,6 +1139,221 @@ mod tests {
         ] {
             assert!(!reaches(&remote, path), "the remote scope reaches {path}");
         }
+    }
+
+    /// A home on disk with `~/.ssh/config` holding `configuration`, and the files under it that
+    /// `files` names (each with a body that is not read).
+    #[cfg(unix)]
+    fn a_home_with(name: &str, configuration: &str, files: &[&str]) -> PathBuf {
+        let home = scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        for file in files {
+            let path = home.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "a key").unwrap();
+        }
+        std::fs::write(home.join(".ssh/config"), configuration).unwrap();
+        std::fs::canonicalize(home).unwrap()
+    }
+
+    /// What the remote scope reads for `home` beyond its fixed rows.
+    #[cfg(unix)]
+    fn read_for_the_configuration(home: &Path) -> Vec<PathBuf> {
+        let fixed: Vec<PathBuf> = REMOTE.iter().map(|row| under(home, row)).collect();
+        Scope::Remote
+            .grant(SandboxPolicy::strict(), home)
+            .readable
+            .into_iter()
+            .filter(|row| !fixed.contains(row))
+            .collect()
+    }
+
+    /// `IdentityFile ~/.ssh/work` makes ssh read `work.pub` to choose the key the agent offers. A
+    /// push by a key at a name ssh was told, with `IdentitiesOnly yes`, fails without that read.
+    /// The keyword is case-insensitive, the value may follow `=`, and `%d` is the home.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_file_in_the_ssh_configuration_adds_its_public_key() {
+        let home = a_home_with(
+            "identity-files-named",
+            "Host github.com\n  User git\n  IdentityFile ~/.ssh/work\n  identityfile=~/.ssh/other.pub\n\
+             IdentityFile \"%d/.ssh/quoted\"\nIdentitiesOnly yes\n",
+            &[
+                ".ssh/work",
+                ".ssh/work.pub",
+                ".ssh/other.pub",
+                ".ssh/quoted",
+                ".ssh/quoted.pub",
+            ],
+        );
+        let mut read = read_for_the_configuration(&home);
+        read.sort();
+        assert_eq!(
+            read,
+            [
+                home.join(".ssh/other.pub"),
+                home.join(".ssh/quoted.pub"),
+                home.join(".ssh/work.pub"),
+            ]
+        );
+        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home);
+        for private in [".ssh/work", ".ssh/quoted", ".ssh"] {
+            assert!(
+                !granted_paths(&policy).contains(&home.join(private)),
+                "the remote scope reads {private}"
+            );
+        }
+        assert!(
+            policy
+                .writable
+                .iter()
+                .all(|row| row.path == home.join(".ssh/known_hosts"))
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A line adds a public key and nothing else: not a name with no `.pub` file, not a private
+    /// key behind a `.pub` link, not a file in another credential location, not a directory, and
+    /// not a path whose spelling ssh resolves somewhere this cannot know.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_file_that_is_not_a_public_key_adds_nothing() {
+        use std::os::unix::fs::symlink;
+        let home = a_home_with(
+            "identity-files-refused",
+            "IdentityFile ~/.ssh/missing\n\
+             IdentityFile ~/.ssh/leak.pub\n\
+             IdentityFile ~/.ssh/aws.pub\n\
+             IdentityFile ~/.ssh/state.pub\n\
+             IdentityFile ~/.ssh/a-directory.pub\n\
+             IdentityFile ~/.ssh/../.aws/creds.pub\n\
+             IdentityFile ~/.aws/creds\n\
+             IdentityFile ~/.bravebot/gateway\n\
+             IdentityFile relative.pub\n\
+             IdentityFile ~/.ssh/%h.pub\n\
+             IdentityFile $HOME/.ssh/home.pub\n\
+             IdentityFileOther ~/.ssh/other.pub\n\
+             IdentityFile\n\
+             # IdentityFile ~/.ssh/commented.pub\n",
+            &[
+                ".ssh/id_leaked",
+                ".aws/creds.pub",
+                ".bravebot/gateway.pub",
+                ".ssh/home.pub",
+                ".ssh/other.pub",
+                ".ssh/commented.pub",
+                "relative.pub",
+            ],
+        );
+        symlink(home.join(".ssh/id_leaked"), home.join(".ssh/leak.pub")).unwrap();
+        symlink(home.join(".aws/creds.pub"), home.join(".ssh/aws.pub")).unwrap();
+        symlink(
+            home.join(".bravebot/gateway.pub"),
+            home.join(".ssh/state.pub"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.join(".ssh/a-directory.pub")).unwrap();
+        assert_eq!(read_for_the_configuration(&home), Vec::<PathBuf>::new());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A link is judged by where it leads: the row is the file ssh opens, and a link out of
+    /// `~/.ssh` to a public key somewhere else is that file and nothing around it.
+    #[test]
+    #[cfg(unix)]
+    fn a_named_public_key_behind_a_link_is_read_where_it_leads() {
+        use std::os::unix::fs::symlink;
+        let home = a_home_with(
+            "identity-files-linked",
+            "IdentityFile ~/.ssh/linked\n",
+            &["keys/real.pub", "keys/beside-it"],
+        );
+        symlink(home.join("keys/real.pub"), home.join(".ssh/linked.pub")).unwrap();
+        assert_eq!(
+            read_for_the_configuration(&home),
+            [home.join("keys/real.pub")]
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A line holding bytes that are not UTF-8 is skipped whole. A lossy decode would spell its
+    /// name with U+FFFD and grant the file of that spelling, which ssh never opens. The lines
+    /// either side of it are still read.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_file_line_that_is_not_text_adds_nothing_and_its_lossy_lookalike_is_not_read() {
+        let home = a_home_with(
+            "identity-files-not-text",
+            "",
+            &[
+                ".ssh/before.pub",
+                ".ssh/tool-\u{FFFD}.pub",
+                ".ssh/after.pub",
+            ],
+        );
+        std::fs::write(
+            home.join(".ssh/config"),
+            b"IdentityFile ~/.ssh/before\nIdentityFile ~/.ssh/tool-\xff\nIdentityFile ~/.ssh/after\n",
+        )
+        .unwrap();
+        let mut read = read_for_the_configuration(&home);
+        read.sort();
+        assert_eq!(
+            read,
+            [home.join(".ssh/after.pub"), home.join(".ssh/before.pub")]
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// On a file system that holds a name that is not UTF-8, the file the line spells exists
+    /// beside its lossy lookalike, and neither is granted.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_identity_file_whose_name_is_not_text_adds_neither_it_nor_its_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = a_home_with(
+            "identity-files-not-text-on-disk",
+            "",
+            &[".ssh/tool-\u{FFFD}.pub"],
+        );
+        let spelled = home
+            .join(".ssh")
+            .join(std::ffi::OsStr::from_bytes(b"tool-\xff.pub"));
+        std::fs::write(&spelled, "a key").unwrap();
+        std::fs::write(home.join(".ssh/config"), b"IdentityFile ~/.ssh/tool-\xff\n").unwrap();
+        assert_eq!(read_for_the_configuration(&home), Vec::<PathBuf>::new());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// The configuration is the person's, read to a fixed length and for a fixed count of keys,
+    /// and a home without one reads only the fixed rows. Neither the aws, kubernetes nor docker
+    /// scope reads it.
+    #[test]
+    #[cfg(unix)]
+    fn the_ssh_configuration_adds_a_bounded_number_of_keys_to_the_remote_scope_alone() {
+        let names: Vec<String> = (0..40)
+            .map(|number| format!(".ssh/key-{number}.pub"))
+            .collect();
+        let files: Vec<&str> = names.iter().map(String::as_str).collect();
+        let configuration: String = (0..40)
+            .map(|number| format!("IdentityFile ~/.ssh/key-{number}.pub\n"))
+            .collect();
+        let home = a_home_with("identity-files-counted", &configuration, &files);
+        assert_eq!(
+            read_for_the_configuration(&home).len(),
+            NAMED_PUBLIC_KEYS_LIMIT
+        );
+        for scope in [Scope::Aws, Scope::Kubernetes, Scope::Docker] {
+            let policy = scope.grant(SandboxPolicy::strict(), &home);
+            assert!(!reaches(
+                &policy,
+                home.join(".ssh/key-0.pub").to_str().unwrap()
+            ));
+        }
+        std::fs::remove_file(home.join(".ssh/config")).unwrap();
+        assert_eq!(read_for_the_configuration(&home), Vec::<PathBuf>::new());
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     /// A scope is added to the base and to whatever list the stage brings, so what those granted

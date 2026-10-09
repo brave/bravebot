@@ -12,6 +12,7 @@
 use crate::base::STATE_DIRECTORY;
 use crate::policy::{SandboxPolicy, names_a_filesystem_root};
 use std::fs;
+use std::io;
 use std::path::{Component, Path, PathBuf};
 
 /// The most directory entries one glob looks at, so a pattern over a whole disk ends.
@@ -171,6 +172,28 @@ impl Rules {
         Self::default()
     }
 
+    /// Rules made of paths already judged by [`judged_request`]: the ones a person approved in a
+    /// session for reading, and those for writing, which are read as well. Nothing is read from a
+    /// file, so a person's own lists cannot put an entry here.
+    pub fn granted(read: &[PathBuf], write: &[PathBuf]) -> Self {
+        let item = |list, path: &PathBuf| Item {
+            list,
+            entry: Entry {
+                path: path.to_string_lossy().into_owned(),
+                by: None,
+                pinned: false,
+            },
+            state: State::InForce(vec![path.clone()]),
+        };
+        Self {
+            items: read
+                .iter()
+                .map(|path| item(List::AllowRead, path))
+                .chain(write.iter().map(|path| item(List::AllowWrite, path)))
+                .collect(),
+        }
+    }
+
     /// Every entry, in list order and then in the order written.
     pub fn items(&self) -> &[Item] {
         &self.items
@@ -245,16 +268,14 @@ impl Rules {
         }
         let deny_read = self.paths(List::DenyRead);
         let deny_write = self.paths(List::DenyWrite);
-        policy.readable.retain(|row| {
-            !deny_read
-                .iter()
-                .any(|denied| row.starts_with(denied) || row == denied)
-        });
+        policy
+            .readable
+            .retain(|row| !deny_read.iter().any(|denied| under(row, denied)));
         policy.writable.retain(|row| {
             !deny_read
                 .iter()
                 .chain(deny_write.iter())
-                .any(|denied| row.path.starts_with(denied))
+                .any(|denied| under(&row.path, denied))
         });
 
         let built_in: Vec<PathBuf> = policy.unreadable.clone();
@@ -270,12 +291,12 @@ impl Rules {
             let above = self
                 .paths(List::AllowWrite)
                 .into_iter()
-                .any(|row| refused.starts_with(row) && refused != row);
+                .any(|row| under(&refused, row) && !same_path(&refused, row));
             let lifted = self
                 .paths(List::AllowRead)
                 .into_iter()
                 .chain(self.paths(List::AllowWrite))
-                .any(|row| row.starts_with(&refused));
+                .any(|row| under(row, &refused));
             if above && !lifted {
                 policy = policy.deny_write(refused);
             }
@@ -284,7 +305,7 @@ impl Rules {
             let granted_above = policy
                 .readable
                 .iter()
-                .any(|row| path.starts_with(row) && path != row);
+                .any(|row| under(path, row) && !same_path(path, row));
             if granted_above {
                 policy = policy.deny_read(path);
             }
@@ -293,7 +314,7 @@ impl Rules {
             let granted_above = policy
                 .writable
                 .iter()
-                .any(|row| path.starts_with(&row.path) && path != row.path);
+                .any(|row| under(path, &row.path) && !same_path(path, &row.path));
             if granted_above {
                 policy = policy.deny_write(path);
             }
@@ -344,6 +365,93 @@ pub fn resolve(lists: &Lists, home: Option<&Path>, base: &Path) -> Rules {
                 item
             })
             .collect(),
+    }
+}
+
+/// Why no request for a path can be granted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestRefusal {
+    /// The session names no home directory, so no path can be judged against it.
+    NoHome,
+    /// The path is not absolute and does not begin `~/`.
+    NotAbsolute,
+    /// The path holds a wildcard. A request names one path.
+    Wildcard,
+    /// Nothing is at the path, so a grant would read as a grant of whatever is made there later.
+    Missing,
+    /// The path is at or inside a credential location the base refuses.
+    CredentialLocation,
+    /// A refusal an `allowWrite` entry meets as well.
+    Rule(Reason),
+    /// The person's own `denyRead` or `denyWrite` covers the path.
+    Denied,
+}
+
+/// The path a request names as the sandbox will be told it, or why it cannot be granted.
+///
+/// The refusals of an `allowWrite` entry apply to a request for reading as well as for writing: no
+/// filesystem root, home directory or directory above it, no `~/.ssh` or state directory, no
+/// climbing, and a link is judged where it leads. A request is also refused at or inside any
+/// credential location the base refuses, which a row would otherwise lift, and where the person's
+/// own deny lists cover it. The path must exist and must not hold a wildcard.
+pub fn judged_request(
+    named: &Path,
+    write: bool,
+    home: Option<&Path>,
+    person: &Rules,
+) -> Result<PathBuf, RequestRefusal> {
+    let home = resolved(home.ok_or(RequestRefusal::NoHome)?);
+    if named.to_string_lossy().contains(['*', '?']) {
+        return Err(RequestRefusal::Wildcard);
+    }
+    let mut parts = named.components();
+    let spelled = match parts.next() {
+        Some(Component::Normal(first)) if first == "~" => home.join(parts.as_path()),
+        _ => named.to_path_buf(),
+    };
+    if !spelled.is_absolute() {
+        return Err(RequestRefusal::NotAbsolute);
+    }
+    if spelled
+        .components()
+        .any(|part| part == Component::ParentDir)
+    {
+        return Err(RequestRefusal::Rule(Reason::Climbs));
+    }
+    let path = resolved(&spelled);
+    if let Some(reason) = refused_for_adding_reach(&path, Some(&home)) {
+        return Err(RequestRefusal::Rule(reason));
+    }
+    if confines_nothing(&path, Some(&home)) {
+        return Err(RequestRefusal::Rule(Reason::ConfinesNothing));
+    }
+    let holds_credentials =
+        |location: &Path| path.starts_with(location) || location.starts_with(&path);
+    if crate::base::CREDENTIAL_DIRECTORIES
+        .iter()
+        .chain(crate::base::MACOS_CREDENTIAL_DIRECTORIES)
+        .chain(crate::base::LINUX_CREDENTIAL_DIRECTORIES)
+        .any(|row| holds_credentials(&home.join(row)))
+        || holds_credentials(Path::new(crate::base::MACOS_SYSTEM_KEYCHAINS))
+    {
+        return Err(RequestRefusal::CredentialLocation);
+    }
+    if !path.exists() {
+        return Err(RequestRefusal::Missing);
+    }
+    let denied = person.in_force().any(|item| {
+        let covers = match item.list {
+            List::DenyRead => true,
+            List::DenyWrite => write,
+            List::AllowRead | List::AllowWrite => false,
+        };
+        covers
+            && matches!(&item.state, State::InForce(paths)
+                if paths.iter().any(|denied| path.starts_with(denied)))
+    });
+    match denied {
+        true => Err(RequestRefusal::Denied),
+        false => Ok(path),
     }
 }
 
@@ -440,28 +548,15 @@ fn one(
     };
     let mut kept = Vec::new();
     for path in named {
-        if matches!(list, List::AllowRead | List::AllowWrite) {
-            let refusal = home.and_then(|home| {
-                if path.starts_with(home.join(".ssh")) {
-                    Some(Reason::PrivateKey)
-                } else if path.starts_with(home.join(STATE_DIRECTORY))
-                    || path.starts_with(resolved(&home.join(STATE_DIRECTORY)))
-                {
-                    Some(Reason::StateDirectory)
-                } else {
-                    None
-                }
-            });
-            if let Some(refusal) = refusal {
-                if wildcard {
-                    continue;
-                }
-                return Err(refusal);
-            }
-        }
-        if list == List::AllowWrite
-            && (names_a_filesystem_root(&path) || home.is_some_and(|home| home.starts_with(&path)))
+        if matches!(list, List::AllowRead | List::AllowWrite)
+            && let Some(refusal) = refused_for_adding_reach(&path, home)
         {
+            if wildcard {
+                continue;
+            }
+            return Err(refusal);
+        }
+        if list == List::AllowWrite && confines_nothing(&path, home) {
             return Err(Reason::ConfinesNothing);
         }
         kept.push(path);
@@ -471,16 +566,45 @@ fn one(
     Ok(kept)
 }
 
+/// The refusal that applies to a resolved path in a list that adds reach: `~/.ssh` and the state
+/// directory, or anything inside either.
+fn refused_for_adding_reach(path: &Path, home: Option<&Path>) -> Option<Reason> {
+    home.and_then(|home| {
+        if path.starts_with(home.join(".ssh")) {
+            Some(Reason::PrivateKey)
+        } else if path.starts_with(home.join(STATE_DIRECTORY))
+            || path.starts_with(resolved(&home.join(STATE_DIRECTORY)))
+        {
+            Some(Reason::StateDirectory)
+        } else {
+            None
+        }
+    })
+}
+
+/// Whether a write row at a resolved path would be a write row over a filesystem root, the home
+/// directory or a directory above it.
+fn confines_nothing(path: &Path, home: Option<&Path>) -> bool {
+    names_a_filesystem_root(path) || home.is_some_and(|home| home.starts_with(path))
+}
+
 /// `path` with the part of it that is on disk resolved through its links, which is where a program
-/// opening it would end up.
+/// opening it would end up, and in the ordinary spelling of a Windows drive path
+/// ([`without_verbatim_prefix`]).
 pub fn resolved(path: &Path) -> PathBuf {
+    resolved_through(path, |here| fs::canonicalize(here))
+}
+
+/// [`resolved`] with the call that asks the file system a parameter, so what Windows returns for a
+/// path can be given on any host.
+fn resolved_through(path: &Path, canonicalize: impl Fn(&Path) -> io::Result<PathBuf>) -> PathBuf {
     let mut missing: Vec<&std::ffi::OsStr> = Vec::new();
     let mut here = path;
     loop {
-        if let Ok(found) = fs::canonicalize(here) {
+        if let Ok(found) = canonicalize(here) {
             let mut out = found;
             out.extend(missing.iter().rev());
-            return out;
+            return without_verbatim_prefix(out);
         }
         match (here.parent(), here.file_name()) {
             (Some(parent), Some(name)) => {
@@ -490,6 +614,47 @@ pub fn resolved(path: &Path) -> PathBuf {
             _ => return path.to_path_buf(),
         }
     }
+}
+
+/// The longest path, in characters, the ordinary spelling of a Windows path can name.
+const MAX_PATH: usize = 260;
+
+/// `path` without the `\\?\` that Windows puts in front of a resolved drive path.
+///
+/// The prefix means "do not interpret this", and the call that writes a grant onto a path is
+/// documented for the ordinary spelling. Left on, a row would also differ in text from the same
+/// directory named by the person or found on `PATH`, and a refusal and a grant for one directory
+/// would not be found to meet. A network path keeps its prefix, since without it the path names
+/// something else, and so does a path too long for the ordinary spelling, which only the prefixed
+/// one can name. A path that is not text is returned as it is, since a lossy rendering of it would
+/// name another path once the prefix is taken off.
+pub fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let stripped = path
+        .to_str()
+        .and_then(|text| text.strip_prefix(r"\\?\"))
+        .filter(|rest| {
+            let bytes = rest.as_bytes();
+            bytes.len() >= 3
+                && rest.len() < MAX_PATH
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && bytes[2] == b'\\'
+        })
+        .map(PathBuf::from);
+    stripped.unwrap_or(path)
+}
+
+/// Whether `path` is at or beneath `ancestor`, whichever spelling each is in.
+///
+/// A row a stage brings for itself can hold the `\\?\` form and a person's entry does not, and
+/// the two name one directory.
+fn under(path: &Path, ancestor: &Path) -> bool {
+    without_verbatim_prefix(path.to_path_buf())
+        .starts_with(without_verbatim_prefix(ancestor.to_path_buf()))
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    without_verbatim_prefix(left.to_path_buf()) == without_verbatim_prefix(right.to_path_buf())
 }
 
 /// Every path a pattern names.
@@ -1024,5 +1189,395 @@ mod tests {
                 .unwritable
                 .contains(&PathBuf::from("/h/.config/gcloud"))
         );
+    }
+
+    /// A request is judged as an `allowWrite` entry is, for reading as well as writing, and a path
+    /// that is fine is returned as the sandbox will be told it.
+    #[test]
+    fn a_request_is_refused_where_an_allow_write_entry_is() {
+        let home = fresh("request-refused-home");
+        let rules = Rules::none();
+        let ask = |named: &str, write| judged_request(Path::new(named), write, Some(&home), &rules);
+        let home_text = home.to_str().unwrap().to_string();
+        for write in [false, true] {
+            assert_eq!(
+                ask("/", write),
+                Err(RequestRefusal::Rule(Reason::ConfinesNothing))
+            );
+            assert_eq!(
+                ask("~", write),
+                Err(RequestRefusal::Rule(Reason::ConfinesNothing))
+            );
+            assert_eq!(
+                ask(&home_text, write),
+                Err(RequestRefusal::Rule(Reason::ConfinesNothing))
+            );
+            let above = home.parent().unwrap().to_str().unwrap().to_string();
+            assert_eq!(
+                ask(&above, write),
+                Err(RequestRefusal::Rule(Reason::ConfinesNothing))
+            );
+            assert_eq!(
+                ask("~/.ssh", write),
+                Err(RequestRefusal::Rule(Reason::PrivateKey))
+            );
+            assert_eq!(
+                ask("~/.bravebot", write),
+                Err(RequestRefusal::Rule(Reason::StateDirectory))
+            );
+            assert_eq!(ask("~/*", write), Err(RequestRefusal::Wildcard));
+            assert_eq!(ask("~/a?", write), Err(RequestRefusal::Wildcard));
+            assert_eq!(ask("relative/dir", write), Err(RequestRefusal::NotAbsolute));
+            assert_eq!(
+                ask("~/a/../b", write),
+                Err(RequestRefusal::Rule(Reason::Climbs))
+            );
+            assert_eq!(ask("~/nothing-here", write), Err(RequestRefusal::Missing));
+        }
+        assert_eq!(
+            judged_request(Path::new("~/x"), true, None, &rules),
+            Err(RequestRefusal::NoHome)
+        );
+    }
+
+    /// Every credential location the base refuses is refused as a request, at the directory and
+    /// beneath it, since a row at either would lift the refusal.
+    #[test]
+    fn a_request_at_inside_or_above_a_credential_location_is_refused() {
+        let home = fresh("request-credential-home");
+        let rules = Rules::none();
+        for row in crate::base::CREDENTIAL_DIRECTORIES
+            .iter()
+            .chain(crate::base::MACOS_CREDENTIAL_DIRECTORIES)
+            .chain(crate::base::LINUX_CREDENTIAL_DIRECTORIES)
+        {
+            let inside = home.join(row).join("inner");
+            fs::create_dir_all(&inside).unwrap();
+            let above = home.join(row).parent().map(Path::to_path_buf);
+            let above = above.filter(|above| *above != home);
+            for named in [Some(home.join(row)), Some(inside), above]
+                .into_iter()
+                .flatten()
+            {
+                for write in [false, true] {
+                    assert!(
+                        matches!(
+                            judged_request(&named, write, Some(&home), &rules),
+                            Err(RequestRefusal::CredentialLocation | RequestRefusal::Rule(_))
+                        ),
+                        "{} was granted",
+                        named.display()
+                    );
+                }
+            }
+        }
+    }
+
+    /// A directory that exists, spelled absolute or from `~`, and a link into a credential
+    /// location, which is judged where it leads.
+    #[test]
+    fn a_request_for_an_existing_path_is_kept_and_a_link_is_judged_where_it_leads() {
+        let home = fresh("request-kept-home");
+        let wanted = home.join("projects").join("other");
+        fs::create_dir_all(&wanted).unwrap();
+        let rules = Rules::none();
+        let real = resolved(&wanted);
+        assert_eq!(
+            judged_request(&wanted, false, Some(&home), &rules),
+            Ok(real.clone())
+        );
+        assert_eq!(
+            judged_request(Path::new("~/projects/other"), true, Some(&home), &rules),
+            Ok(real)
+        );
+        #[cfg(unix)]
+        {
+            let aws = home.join(".aws");
+            fs::create_dir_all(&aws).unwrap();
+            let link = home.join("projects").join("innocent");
+            std::os::unix::fs::symlink(&aws, &link).unwrap();
+            assert_eq!(
+                judged_request(&link, true, Some(&home), &rules),
+                Err(RequestRefusal::CredentialLocation)
+            );
+        }
+    }
+
+    /// A path whose name is not UTF-8 is judged as that path, and its lossy lookalike, which
+    /// names a different file, is not what is granted.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_request_for_a_name_that_is_not_utf8_is_kept_as_those_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = fresh("request-bytes-home");
+        let odd = home.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+        fs::create_dir_all(&odd).unwrap();
+        let lookalike = home.join("caf\u{fffd}");
+        let rules = Rules::none();
+        assert_eq!(
+            judged_request(&odd, true, Some(&home), &rules),
+            Ok(resolved(&odd))
+        );
+        assert_eq!(
+            judged_request(&lookalike, true, Some(&home), &rules),
+            Err(RequestRefusal::Missing)
+        );
+    }
+
+    /// The person's own refusals cover a request: reads by `denyRead`, writes by either list, and
+    /// a `denyWrite` leaves a request for reading alone.
+    #[test]
+    fn a_request_under_a_denial_of_the_person_is_refused() {
+        let home = fresh("request-denied-home");
+        let base = fresh("request-denied-base");
+        let secret = home.join("secret");
+        fs::create_dir_all(secret.join("inner")).unwrap();
+        let frozen = home.join("frozen");
+        fs::create_dir_all(&frozen).unwrap();
+        let lists = Lists {
+            deny_read: vec![entry(secret.to_str().unwrap())],
+            deny_write: vec![entry(frozen.to_str().unwrap())],
+            ..Lists::default()
+        };
+        let person = resolve(&lists, Some(&home), &base);
+        let ask = |named: &Path, write| judged_request(named, write, Some(&home), &person);
+        assert_eq!(
+            ask(&secret.join("inner"), false),
+            Err(RequestRefusal::Denied)
+        );
+        assert_eq!(ask(&secret, true), Err(RequestRefusal::Denied));
+        assert_eq!(ask(&frozen, true), Err(RequestRefusal::Denied));
+        assert_eq!(ask(&frozen, false), Ok(resolved(&frozen)));
+    }
+
+    /// An approved path is a read row, and a write one is a write row that is read as well; the
+    /// person's own denial still takes it away.
+    #[test]
+    fn granted_rules_add_rows_and_a_denial_of_the_person_still_wins() {
+        let granted = Rules::granted(&[PathBuf::from("/g/read")], &[PathBuf::from("/g/write")]);
+        let policy = granted.apply(SandboxPolicy::strict().allow_read("/usr"));
+        assert!(policy.readable.contains(&PathBuf::from("/g/read")));
+        assert!(policy.readable.contains(&PathBuf::from("/g/write")));
+        assert!(
+            policy
+                .writable
+                .iter()
+                .any(|row| row.path == Path::new("/g/write"))
+        );
+        assert!(
+            !policy
+                .writable
+                .iter()
+                .any(|row| row.path == Path::new("/g/read"))
+        );
+        let home = fresh("request-win-home");
+        let base = fresh("request-win-base");
+        let person = resolve(&only(List::DenyWrite, "/g/write"), Some(&home), &base);
+        let policy = person.apply(policy);
+        assert!(
+            !policy
+                .writable
+                .iter()
+                .any(|row| row.path == Path::new("/g/write"))
+        );
+    }
+
+    /// The `\\?\` form `canonicalize` gives on Windows names a drive path no row can be compared
+    /// with, so it is dropped there; a UNC path keeps it, since without it the path names
+    /// something else.
+    #[test]
+    fn a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does() {
+        let long_verbatim = format!(r"\\?\C:\{}", "a".repeat(MAX_PATH));
+        for (given, expected) in [
+            (r"\\?\C:\Users\a", r"C:\Users\a"),
+            (r"\\?\d:\", r"d:\"),
+            (r"\\?\UNC\server\share\a", r"\\?\UNC\server\share\a"),
+            (r"\\?\C:", r"\\?\C:"),
+            (&long_verbatim, &long_verbatim),
+            (r"C:\Users\a", r"C:\Users\a"),
+            ("/home/a", "/home/a"),
+        ] {
+            assert_eq!(
+                without_verbatim_prefix(PathBuf::from(given)),
+                PathBuf::from(expected),
+                "{given}"
+            );
+        }
+    }
+
+    /// A name that is not text has no ordinary spelling to be given: reading it lossily and taking
+    /// the prefix off would name the path that spells its replacement character, which is another
+    /// file.
+    #[cfg(unix)]
+    #[test]
+    fn a_verbatim_path_that_is_not_text_is_not_taken_for_its_lossy_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = PathBuf::from(OsStr::from_bytes(b"\\\\?\\C:\\work\\tool-\xff"));
+        let lookalike = PathBuf::from("\\\\?\\C:\\work\\tool-\u{FFFD}");
+
+        assert_eq!(without_verbatim_prefix(invalid.clone()), invalid);
+        assert_eq!(
+            without_verbatim_prefix(lookalike),
+            PathBuf::from("C:\\work\\tool-\u{FFFD}")
+        );
+        assert!(!under(&invalid, Path::new("C:\\work\\tool-\u{FFFD}")));
+    }
+
+    /// An entry is resolved in the spelling a grant is written in, so a stage's session row and a
+    /// person's `denyRead` of a file inside it can be found to meet. The file system is given
+    /// what Windows returns, a `\\?\` path, since no other host returns one.
+    #[test]
+    fn an_entry_the_file_system_resolves_to_a_verbatim_path_is_kept_in_the_ordinary_spelling() {
+        let verbatim = |path: &Path| match path == Path::new("secret.env") {
+            true => Ok(PathBuf::from(r"\\?\C:\work\secret.env")),
+            false => Err(io::Error::from(io::ErrorKind::NotFound)),
+        };
+        assert_eq!(
+            resolved_through(Path::new("secret.env"), verbatim),
+            PathBuf::from(r"C:\work\secret.env")
+        );
+
+        let beneath = |path: &Path| match path == Path::new("work") {
+            true => Ok(PathBuf::from(r"\\?\C:\work")),
+            false => Err(io::Error::from(io::ErrorKind::NotFound)),
+        };
+        assert_eq!(
+            resolved_through(&Path::new("work").join("not-made-yet"), beneath),
+            PathBuf::from(r"C:\work").join("not-made-yet"),
+            "the part that is not on disk follows the part that is"
+        );
+
+        let network = |_: &Path| Ok(PathBuf::from(r"\\?\UNC\server\share\secret.env"));
+        assert_eq!(
+            resolved_through(Path::new("secret.env"), network),
+            PathBuf::from(r"\\?\UNC\server\share\secret.env"),
+            "a network path means something else without its prefix"
+        );
+    }
+
+    fn denial(list: List, path: &str) -> Rules {
+        Rules {
+            items: vec![Item {
+                list,
+                entry: entry(path),
+                state: State::InForce(vec![PathBuf::from(path)]),
+            }],
+        }
+    }
+
+    /// The `/` keeps each of these two components on every host, as it is on Windows, where it
+    /// separates them as `\` does; a path with only `\` is one component to a Unix host.
+    const GRANT: &str = r"C:\work";
+    const GRANT_VERBATIM: &str = r"\\?\C:\work";
+    const SECRET: &str = r"C:\work/secret.env";
+    const SECRET_VERBATIM: &str = r"\\?\C:\work/secret.env";
+
+    /// A refusal inside a grant is added however the grant and the refusal are each spelled. Left
+    /// out, nothing in the policy holds the path back, and a backend that refuses a policy
+    /// carrying a refusal it cannot apply (Windows) has none to refuse, so the stage starts and
+    /// the program reads and writes the file.
+    #[test]
+    fn a_denial_inside_a_grant_is_added_whichever_way_each_is_spelled() {
+        for (grant, denied) in [
+            (GRANT, SECRET),
+            (GRANT, SECRET_VERBATIM),
+            (GRANT_VERBATIM, SECRET),
+            (GRANT_VERBATIM, SECRET_VERBATIM),
+        ] {
+            let policy = SandboxPolicy::strict().allow_read(grant).allow_write(grant);
+            let held = denial(List::DenyRead, denied).apply(policy.clone());
+            assert_eq!(held.unreadable, [PathBuf::from(denied)], "{grant} {denied}");
+            let held = denial(List::DenyWrite, denied).apply(policy);
+            assert_eq!(held.unwritable, [PathBuf::from(denied)], "{grant} {denied}");
+        }
+    }
+
+    /// The Windows backend cannot subtract from a grant, so it starts no stage whose policy holds a
+    /// refusal. A refusal left out of the policy by a difference in spelling leaves it nothing to
+    /// refuse, and the stage starts with the path readable and writable.
+    #[test]
+    fn a_stage_with_a_denial_inside_its_grant_is_refused_by_the_windows_backend() {
+        use crate::windows::refusal_for;
+
+        for (grant, denied) in [
+            (GRANT, SECRET),
+            (GRANT, SECRET_VERBATIM),
+            (GRANT_VERBATIM, SECRET),
+            (GRANT_VERBATIM, SECRET_VERBATIM),
+        ] {
+            let policy = SandboxPolicy::strict()
+                .allow_subprocesses()
+                .allow_read(grant)
+                .allow_write(grant);
+            assert!(refusal_for(&policy).is_none(), "{grant}");
+            for list in [List::DenyRead, List::DenyWrite] {
+                let held = denial(list, denied).apply(policy.clone());
+                assert!(refusal_for(&held).is_some(), "{grant} {denied}");
+            }
+        }
+    }
+
+    /// The spelling is only compared, so a refusal in another directory is still not inside the
+    /// grant: it holds back nothing and is not added.
+    #[test]
+    fn a_denial_outside_every_grant_is_not_added_in_either_spelling() {
+        for grant in [GRANT, GRANT_VERBATIM] {
+            for denied in [r"C:\elsewhere/secret.env", r"\\?\C:\elsewhere/secret.env"] {
+                let policy = SandboxPolicy::strict().allow_read(grant).allow_write(grant);
+                let held = denial(List::DenyRead, denied).apply(policy.clone());
+                assert!(held.unreadable.is_empty(), "{grant} {denied}");
+                assert_eq!(held.readable, [PathBuf::from(grant)], "{grant} {denied}");
+                let held = denial(List::DenyWrite, denied).apply(policy);
+                assert!(held.unwritable.is_empty(), "{grant} {denied}");
+                assert_eq!(held.writable.len(), 1, "{grant} {denied}");
+            }
+        }
+    }
+
+    /// A row the stage brought for itself at or under a refusal is dropped whichever way the two
+    /// are spelled, so a scope's row in the form `canonicalize` returns does not outlast the
+    /// person's refusal of the same directory.
+    #[test]
+    fn a_row_at_or_under_a_refusal_is_dropped_whichever_way_each_is_spelled() {
+        for (row, denied) in [
+            (GRANT, GRANT_VERBATIM),
+            (GRANT_VERBATIM, GRANT),
+            (SECRET_VERBATIM, GRANT),
+            (SECRET, GRANT_VERBATIM),
+        ] {
+            let policy = SandboxPolicy::strict().allow_read(row).allow_write(row);
+            let held = denial(List::DenyRead, denied).apply(policy);
+            assert!(held.readable.is_empty(), "{row} {denied}");
+            assert!(held.writable.is_empty(), "{row} {denied}");
+        }
+    }
+
+    /// The case the report describes, on the file system it happens on: the session row is the
+    /// ordinary spelling and the entry resolves through `canonicalize`.
+    #[cfg(windows)]
+    #[test]
+    fn a_denial_of_a_file_in_the_session_directory_is_added_on_windows() {
+        let session = fresh("rules-windows-session");
+        fs::write(session.join("secret.env"), b"").unwrap();
+        let grant = without_verbatim_prefix(fs::canonicalize(&session).unwrap());
+        let lists = Lists {
+            deny_read: vec![entry("secret.env")],
+            deny_write: vec![entry("secret.env")],
+            ..Lists::default()
+        };
+        let rules = resolve(&lists, None, &session);
+        assert!(rules.unapplied_denial().is_none());
+
+        let policy = rules.apply(
+            SandboxPolicy::strict()
+                .allow_read(&grant)
+                .allow_write(&grant),
+        );
+
+        let secret = grant.join("secret.env");
+        assert_eq!(policy.unreadable, std::slice::from_ref(&secret));
+        assert_eq!(policy.unwritable, std::slice::from_ref(&secret));
     }
 }

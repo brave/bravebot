@@ -7,7 +7,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 188
+      - crates/agent/src/tools.rs: 203
   - symbol: Produced::refused_with_a_note
     sites:
       - crates/agent/src/tools.rs: 8
@@ -50,6 +50,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`watch_file`](watch-file.md) | `path` | none | confirmation that the watch exists |
 | [`advisor`](advisor.md) | none | `question` | the advisor's reply |
 | [`ask_user`](ask-user.md) | `questions` | none | what the user answered |
+| [`request_path`](request-path.md) | `path`, `write` | none | what the person answered |
 
 Every tool also takes `why`, which is content on every one of them and is left out of the table for
 that reason. [TOOL-5](#TOOL-5) is where that is settled.

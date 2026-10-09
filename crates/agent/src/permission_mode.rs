@@ -414,6 +414,19 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Approved where nothing is asked, which is the one mode that answers a run unasked, and put to
+    /// the inner confirmer in every other, plan mode and accepting edits included.
+    ///
+    /// Accepting edits does not accept this: what that mode grants is writes to this tree, and a
+    /// yes here widens what every later command can reach. The request was judged before it got
+    /// here, so the refusals a row meets have been applied to a bypassed run as to any other.
+    fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+        match self.mode.answers_a_run_unasked() {
+            true => Decision::Approve,
+            false => self.inner.confirm_path(request),
+        }
+    }
+
     /// Refused where every check is being bypassed, the one prompt that mode answers no, and asked
     /// in every other. SERVERS-13.
     ///
@@ -525,6 +538,11 @@ mod tests {
         ) -> crate::confirm::CallDecision {
             Unattended.confirm_mcp_call(request)
         }
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
             Unattended.confirm_move(request)
         }
@@ -782,6 +800,11 @@ mod tests {
         ) -> crate::confirm::CallDecision {
             Unattended.confirm_mcp_call(request)
         }
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+
         fn confirm_move(&mut self, _request: &crate::confirm::MoveRequest) -> Decision {
             self.0 += 1;
             Decision::Approve
@@ -1171,6 +1194,11 @@ mod tests {
         ) -> crate::confirm::CallDecision {
             Unattended.confirm_mcp_call(request)
         }
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
             Unattended.confirm_move(request)
         }

@@ -543,8 +543,19 @@ conversation. Their display prompts, outcomes, and task lists are removed with t
 reopening after rewind must not restore them, and a new turn that reuses a removed turn number
 inherits none of its metadata.
 
+The prompt the session now stands before goes back into the composer, so it can be edited and sent
+again rather than retyped. It is the prompt of the earliest turn gone back past, read off the
+rewind point rather than off the display, since the display prompts of those turns are removed with
+them. It arrives as a prompt and not as a shell-mode command, and it arrives only into an empty
+composer: a line typed since the turn was sent is what the person is looking at, and the returning
+prompt written over it would cost them that line.
+
 `verified-by: bravebot_tui::sessions::reopened_history_stays_rewound_after_another_save_and_new_turn`
 `verified-by: bravebot_tui::app::rewinding_reopened_history_removes_outcomes_plans_and_audit_before_reuse`
+`verified-by: bravebot_tui::app::undoing_a_turn_puts_its_prompt_back_in_the_box`
+`verified-by: bravebot_tui::state::a_returned_prompt_lands_in_the_box_as_a_prompt`
+`verified-by: bravebot_tui::state::a_returned_prompt_does_not_overwrite_a_line_being_typed`
+`verified-by: bravebot_tui::state::a_returned_prompt_is_refused_while_a_turn_is_running`
 
 A complete rewind that goes back past the session's first turn removes its record rather than
 leaving one with nothing in it. A rewind with incomplete coverage, failed restorations or changed file decisions saves its state even there, and a name the user gave the session before that turn stays with
@@ -1010,9 +1021,9 @@ go stale independently: one build ships both surfaces, and every build ships the
 ### SESSION-30: a stored session can be deleted, and nothing else goes with it
 
 The desktop app can delete a session from disk with `session.delete`, which takes the `directory`
-and `id` that `session.list` gave. It removes the record and the trail beside it, and nothing else:
-not another session in the same project, not a session in another project, and not anything a bot
-keeps in its memory. Deleting is keyed on those two strings alone. Nothing read out of a record
+and `id` that `session.list` gave. It removes the record, the trail beside it and the index of what the session said
+([SESSION-33](#SESSION-33)), and nothing else: not another session in the same project, not a
+session in another project, and not anything a bot keeps in its memory. Deleting is keyed on those two strings alone. Nothing read out of a record
 decides whether or what to delete.
 
 The id has to be shaped like a session's name, letters, digits, `-` and `_` in one path segment,
@@ -1043,6 +1054,7 @@ deleted an open session would have the next save write the record back.
 
 `verified-by: bravebot_session::sessions::deleting_a_session_removes_its_record_and_trail_and_only_those`
 `verified-by: bravebot_session::sessions::deleting_in_one_project_leaves_another_projects_session_alone`
+`verified-by: bravebot_session::sessions::deleting_a_session_takes_what_the_search_index_kept_of_it`
 `verified-by: bravebot_session::sessions::a_manifest_run_can_be_deleted`
 `verified-by: bravebot_session::sessions::deleting_refuses_a_name_that_could_leave_the_directory_and_one_that_names_nothing`
 `verified-by: bravebot_session::sessions::deleting_does_not_follow_a_link_out_of_the_state_directory`
@@ -1187,6 +1199,16 @@ row. Control characters and the characters that reorder or hide text are removed
 they are from every line before it is compared. Enter resumes the session as it does for any row.
 The records are read the first time a character is typed, not when the picker opens.
 
+What a record says is kept in an index entry beside it, `<id>.search`, built from the lines above the
+first time the session is searched, so a session saved before the entry existed is found too. An
+entry holds only those lines, so it holds nothing a search does not cover. It is current when the
+record's size and modification time are the ones it was built from, and a current entry answers the
+search without the record being opened or parsed. Any other entry is rebuilt from the record, and so
+is one written by a build whose rules for the lines differed. An entry whose record is gone is
+removed. Nothing is kept where nothing may be written, as in an incognito session, and then the
+record is read as it was. A search with a `since:` word, or whose phrase a session's title already
+holds, does not look at the words of a session that settles it without them.
+
 `since:<n>h`, `since:<n>d` and `since:<n>w` are fixed words the driver parses, not text the model or
 a record can supply. They keep the sessions last written within that many hours, days or weeks, and
 the rest of what was typed is the text to find. Until the word is complete it is typed text.
@@ -1216,6 +1238,12 @@ same reason: the driver may carry text it did not write but does not decide from
 `verified-by: bravebot_session::search::a_malformed_since_word_is_refused_rather_than_ignored`
 `verified-by: bravebot_session::search::a_plain_query_keeps_a_since_word_as_text`
 `verified-by: bravebot_session::search::the_corpus_reads_a_projects_records_and_nothing_else_in_its_directory`
+`verified-by: bravebot_session::search::a_session_saved_before_the_index_is_found_and_indexed`
+`verified-by: bravebot_session::search::a_current_entry_answers_without_the_record_being_read`
+`verified-by: bravebot_session::search::a_record_written_since_is_read_again`
+`verified-by: bravebot_session::search::an_entry_built_by_another_rule_is_not_trusted`
+`verified-by: bravebot_session::search::a_session_nobody_asked_for_is_neither_read_nor_indexed`
+`verified-by: bravebot_session::search::the_index_holds_only_what_a_search_covers_and_goes_with_its_record`
 `verified-by: bravebot_tui::resume::typing_words_said_in_a_session_finds_it_and_enter_resumes_it`
 `verified-by: bravebot_tui::resume::a_session_whose_words_do_not_hold_the_phrase_is_left_out`
 `verified-by: bravebot_tui::resume::a_since_word_keeps_only_the_sessions_written_within_it`

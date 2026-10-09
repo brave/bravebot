@@ -45,12 +45,9 @@ const SHADOW: char = '░';
 /// between the halves, and the seam falls after it so "bot" begins on its own first stroke.
 const SEAM: usize = 35;
 
-/// The two oranges the branded half fades between, left to right, as the Brave mark does.
-///
-/// Taken from [`crate::theme`] rather than written again here, because the same orange opens the
-/// mark and draws every note the session makes in its own voice: two literals of it are how the
-/// two would come to disagree.
-const GRADIENT: (Rgb, Rgb) = (theme::BRAND, theme::BRAND_DEEP);
+/// The rows that carry the letterform. The rows below them are shadow alone, so the gradient is
+/// spread over these and reaches its last colour on the bottom of the letters.
+const LETTER_ROWS: usize = 4;
 
 /// The left margin, wider than the transcript's lead so the mark sits clear of the edge.
 const INDENT: &str = "   ";
@@ -82,13 +79,19 @@ fn face_fits(width: u16) -> bool {
     width as usize >= INDENT.len() + avatar::WIDTH + FACE_GAP.len() + mark_width()
 }
 
-/// The face drawn to the left of the mark, one list of spans per row, or nothing where there is no
-/// room for it or no colour was asked for.
-fn face_rows(seed: &str, look: avatar::Look, width: u16, plain: bool) -> Vec<Vec<Span<'static>>> {
+/// The face drawn to the left of the mark in the mark's colours, one list of spans per row, or
+/// nothing where there is no room for it or no colour was asked for.
+fn face_rows(
+    seed: &str,
+    look: avatar::Look,
+    stops: &[Rgb; 3],
+    width: u16,
+    plain: bool,
+) -> Vec<Vec<Span<'static>>> {
     if plain || !face_fits(width) {
         return Vec::new();
     }
-    avatar::rows(seed, look)
+    avatar::rows(seed, look, stops)
 }
 
 /// Rows the block occupies, so the padding can be measured against what is left.
@@ -107,24 +110,36 @@ fn top_padding(width: u16, available: u16) -> u16 {
     (available.saturating_sub(height(fits(width))) / 3).min(MAX_TOP)
 }
 
-/// The brand's colour at one column of the branded half.
+/// The colour at one cell of the branded half, on a gradient through `stops`, which are
+/// [`theme::mark`]'s.
 ///
-/// Mixed in whole channel steps rather than by ratio, since the gradient spans thirty five columns
-/// and twenty two points of green: floating point buys no shade the terminal could show.
+/// The position is measured along the diagonal from the top-left corner to the bottom-right, with
+/// rows and columns each counting for half of it. The block is far wider than it is tall, so a row
+/// moves the colour as far as eleven columns do and the bands run nearly level, sloping down to
+/// the left. Both other corners land on the middle stop.
+///
+/// Mixed in whole channel steps rather than by ratio, since the gradient spans at most a few dozen
+/// points of a channel between stops: floating point buys no shade the terminal could show.
 ///
 /// The mark is the largest thing on the screen and the most obviously painted, and its gradient is
-/// written from two literals rather than taken from the palette, so it is where a request for no
-/// colour would go unheeded first. Whether any was wanted is taken as an argument rather than read
-/// here, so the rule can be checked without putting a process-wide switch in force under every
-/// other test in this binary.
-fn brand_at(column: usize, plain: bool) -> Color {
+/// mixed here rather than taken from the palette, so it is where a request for no colour would go
+/// unheeded first. Whether any was wanted is taken as an argument rather than read here, so the
+/// rule can be checked without putting a process-wide switch in force under every other test in
+/// this binary.
+fn brand_at(stops: &[Rgb; 3], row: usize, column: usize, plain: bool) -> Color {
     if plain {
         return Color::Reset;
     }
-    let (start, end) = GRADIENT;
-    let span = (SEAM - 1) as i32;
-    let at = column.min(SEAM - 1) as i32;
-    let mix = |from: u8, to: u8| (from as i32 + (to as i32 - from as i32) * at / span) as u8;
+    let across = (SEAM - 1) as i32;
+    let down = (LETTER_ROWS - 1) as i32;
+    let half = across * down;
+    let at = row.min(LETTER_ROWS - 1) as i32 * across + column.min(SEAM - 1) as i32 * down;
+    let (start, end, at) = if at <= half {
+        (stops[0], stops[1], at)
+    } else {
+        (stops[1], stops[2], at - half)
+    };
+    let mix = |from: u8, to: u8| (from as i32 + (to as i32 - from as i32) * at / half) as u8;
 
     Color::Rgb(
         mix(start.0, end.0),
@@ -133,24 +148,24 @@ fn brand_at(column: usize, plain: bool) -> Color {
     )
 }
 
-/// The ink a character takes, given the column it sits in.
+/// The ink a character takes, given the row and column it sits in.
 ///
 /// Past the seam the letterform is left unstyled rather than given a colour of its own, so it
 /// takes whatever the terminal is set to and stays legible on a light theme and a dark one alike.
 /// The shadow keeps out of the gradient: it is depth rather than part of the mark's colour.
-fn ink(column: usize, character: char) -> Style {
+fn ink(stops: &[Rgb; 3], row: usize, column: usize, character: char) -> Style {
     if character == SHADOW {
         Style::default().fg(theme::muted())
     } else if column < SEAM {
-        Style::default().fg(brand_at(column, theme::no_color()))
+        Style::default().fg(brand_at(stops, row, column, theme::no_color()))
     } else {
         Style::default()
     }
 }
 
-/// One row of the mark, with the shadow inked apart from the letterform and "brave" apart
+/// Row `index` of the mark, with the shadow inked apart from the letterform and "brave" apart
 /// from "bot", after the row of the face when there is one.
-fn mark_row(row: &str, face: &[Span<'static>]) -> Line<'static> {
+fn mark_row(stops: &[Rgb; 3], index: usize, row: &str, face: &[Span<'static>]) -> Line<'static> {
     let mut spans = vec![Span::raw(INDENT)];
     if !face.is_empty() {
         spans.extend(face.iter().cloned());
@@ -162,7 +177,7 @@ fn mark_row(row: &str, face: &[Span<'static>]) -> Line<'static> {
     // Batched by the ink itself rather than by which half the column is in, so the columns the
     // gradient rounds to the same shade stay one span instead of one span each.
     for (column, character) in row.chars().enumerate() {
-        let next = ink(column, character);
+        let next = ink(stops, index, column, character);
         if let Some(had) = current.filter(|had| *had != next) {
             spans.push(Span::styled(std::mem::take(&mut run), had));
         }
@@ -239,17 +254,22 @@ pub fn lines_with_network(
     }
 
     if fits(width) {
+        let stops = theme::mark();
         let face = face_rows(
             avatar::startup_seed(),
             avatar::look_now(),
+            &stops,
             width,
             theme::no_color(),
         );
-        lines.extend(
-            LOGO.iter()
-                .enumerate()
-                .map(|(index, row)| mark_row(row, face.get(index).map_or(&[][..], Vec::as_slice))),
-        );
+        lines.extend(LOGO.iter().enumerate().map(|(index, row)| {
+            mark_row(
+                &stops,
+                index,
+                row,
+                face.get(index).map_or(&[][..], Vec::as_slice),
+            )
+        }));
         lines.push(Line::raw(""));
     }
 
@@ -300,6 +320,7 @@ pub fn invitation() -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::BRAND_STOPS as STOPS;
 
     /// Wide enough for the mark, which most of these are not about.
     const WIDE: u16 = 90;
@@ -464,8 +485,8 @@ mod tests {
     }
 
     /// The ink each column of a row is drawn in, the margin aside.
-    fn inks(row: &str) -> Vec<Option<Color>> {
-        mark_row(row, &[])
+    fn inks(index: usize) -> Vec<Option<Color>> {
+        mark_row(&STOPS, index, LOGO[index], &[])
             .spans
             .iter()
             .skip(1)
@@ -478,8 +499,12 @@ mod tests {
     #[test]
     fn the_shadow_is_not_drawn_in_the_letterforms_ink() {
         let _held = theme::exclusive();
-        let inks = inks(LOGO[2]);
-        assert_eq!(inks[0], Some(brand_at(0, false)), "no letterform: {inks:?}");
+        let inks = inks(2);
+        assert_eq!(
+            inks[0],
+            Some(brand_at(&STOPS, 2, 0, false)),
+            "no letterform: {inks:?}"
+        );
         assert!(inks.contains(&Some(theme::muted())), "no shadow: {inks:?}");
     }
 
@@ -487,8 +512,12 @@ mod tests {
     #[test]
     fn the_orange_stops_at_the_end_of_brave() {
         let _held = theme::exclusive();
-        let inks = inks(LOGO[1]);
-        assert_eq!(inks[0], Some(brand_at(0, false)), "brave lost its ink");
+        let inks = inks(1);
+        assert_eq!(
+            inks[0],
+            Some(brand_at(&STOPS, 1, 0, false)),
+            "brave lost its ink"
+        );
         let muted = theme::muted();
         assert!(
             inks[SEAM..]
@@ -500,47 +529,98 @@ mod tests {
     }
 
     /// The mark is the largest painted thing a session opens with, and its gradient is mixed from
-    /// two literals rather than taken from the palette, so it is where a request for no colour
-    /// goes unheeded first.
+    /// literals rather than taken from the palette, so it is where a request for no colour goes
+    /// unheeded first.
     #[test]
     fn the_wordmark_takes_no_colour_where_none_was_asked_for() {
-        assert_eq!(brand_at(0, true), Color::Reset);
-        assert_eq!(brand_at(SEAM / 2, true), Color::Reset);
-        assert_eq!(brand_at(SEAM - 1, true), Color::Reset);
+        for row in 0..LOGO.len() {
+            for column in [0, SEAM / 2, SEAM - 1] {
+                assert_eq!(
+                    brand_at(&STOPS, row, column, true),
+                    Color::Reset,
+                    "({row}, {column})"
+                );
+            }
+        }
     }
 
-    /// The gradient is the point: it has to actually travel between the two oranges rather than
-    /// round to one of them across the whole word.
-    #[test]
-    fn the_gradient_runs_from_one_orange_to_the_other() {
-        let (start, end) = GRADIENT;
-        assert_eq!(brand_at(0, false), Color::Rgb(start.0, start.1, start.2));
-        assert_eq!(brand_at(SEAM - 1, false), Color::Rgb(end.0, end.1, end.2));
+    fn rgb((r, g, b): Rgb) -> Color {
+        Color::Rgb(r, g, b)
+    }
 
-        let shades: Vec<Color> = (0..SEAM).map(|column| brand_at(column, false)).collect();
+    /// The gradient runs corner to corner: the first orange at the top left, the last at the
+    /// bottom right of the letters, and the middle one at the other two corners. A gradient running
+    /// only across or only down puts the last orange on one of those two corners.
+    #[test]
+    fn the_gradient_runs_diagonally_through_the_three_oranges() {
+        let bottom = LETTER_ROWS - 1;
+        let right = SEAM - 1;
+        assert_eq!(brand_at(&STOPS, 0, 0, false), rgb(STOPS[0]));
+        assert_eq!(brand_at(&STOPS, 0, right, false), rgb(STOPS[1]));
+        assert_eq!(brand_at(&STOPS, bottom, 0, false), rgb(STOPS[1]));
+        assert_eq!(brand_at(&STOPS, bottom, right, false), rgb(STOPS[2]));
+
+        let shades: Vec<Color> = (0..SEAM)
+            .map(|column| brand_at(&STOPS, 0, column, false))
+            .collect();
         let steps = shades.windows(2).filter(|pair| pair[0] != pair[1]).count();
         assert!(steps > 4, "the fade is too coarse to read as one: {steps}");
     }
 
-    /// A shade is never skipped backwards: a gradient that reversed anywhere would read as a
-    /// banding fault rather than as a fade.
+    /// The bands slope rather than lie level or stand upright: one row down moves the colour
+    /// further than several columns across, and the columns move it too.
     #[test]
-    fn the_gradient_only_ever_travels_one_way() {
-        let green = |column: usize| match brand_at(column, false) {
+    fn a_row_moves_the_gradient_further_than_several_columns() {
+        let green = |row: usize, column: usize| match brand_at(&STOPS, row, column, false) {
             Color::Rgb(_, green, _) => green,
             other => panic!("not a mixed colour: {other:?}"),
         };
-        assert!(
-            (1..SEAM).all(|column| green(column) <= green(column - 1)),
-            "the fade doubles back"
-        );
+        let across = green(0, 0) - green(0, 5);
+        let down = green(0, 0) - green(1, 0);
+        assert!(across > 0, "the columns share one shade");
+        assert!(down > across, "the gradient runs across rather than down");
+    }
+
+    /// A shade is never skipped backwards, along a row or down a column: a gradient that reversed
+    /// anywhere would read as a banding fault rather than as a fade.
+    #[test]
+    fn the_gradient_only_ever_travels_one_way() {
+        let green = |row: usize, column: usize| match brand_at(&STOPS, row, column, false) {
+            Color::Rgb(_, green, _) => green,
+            other => panic!("not a mixed colour: {other:?}"),
+        };
+        for row in 0..LOGO.len() {
+            for column in 0..SEAM {
+                if column > 0 {
+                    assert!(
+                        green(row, column) <= green(row, column - 1),
+                        "({row}, {column})"
+                    );
+                }
+                if row > 0 {
+                    assert!(
+                        green(row, column) <= green(row - 1, column),
+                        "({row}, {column})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The gradient ends on the bottom of the letters, which is only true while the rows past
+    /// [`LETTER_ROWS`] are shadow alone and the row above them is not.
+    #[test]
+    fn the_letterform_ends_where_the_gradient_does() {
+        let letterform = |row: &str| row.chars().any(|c| c != ' ' && c != SHADOW);
+        assert!(letterform(LOGO[LETTER_ROWS - 1]));
+        assert!(!LOGO[LETTER_ROWS..].iter().any(|row| letterform(row)));
     }
 
     /// Past the seam the letterform takes the terminal's own ink, so the mark reads on a light
     /// theme as well as a dark one.
     #[test]
     fn bot_is_left_in_the_terminals_own_ink() {
-        let inks = inks(LOGO[1]);
+        let inks = inks(1);
         assert!(
             inks[SEAM..].contains(&None),
             "bot was given a colour: {inks:?}"
@@ -561,10 +641,10 @@ mod tests {
     /// The face sits to the left of the mark on every row of it.
     #[test]
     fn the_face_is_drawn_to_the_left_of_the_mark() {
-        let face = face_rows("v2:example-0", avatar::Look::default(), WIDE, false);
+        let face = face_rows("v2:example-0", avatar::Look::default(), &STOPS, WIDE, false);
         assert_eq!(face.len(), LOGO.len());
-        for (row, face) in LOGO.iter().zip(&face) {
-            let line = mark_row(row, face).to_string();
+        for (index, (row, face)) in LOGO.iter().zip(&face).enumerate() {
+            let line = mark_row(&STOPS, index, row, face).to_string();
             let drawn: String = face.iter().map(|span| span.content.as_ref()).collect();
             assert_eq!(line, format!("{INDENT}{drawn}{FACE_GAP}{row}"));
         }
@@ -575,7 +655,16 @@ mod tests {
     fn a_pane_too_narrow_for_the_face_keeps_the_mark_alone() {
         let width = (INDENT.len() + mark_width()) as u16;
         assert!(fits(width) && !face_fits(width));
-        assert!(face_rows("v2:example-0", avatar::Look::default(), width, false).is_empty());
+        assert!(
+            face_rows(
+                "v2:example-0",
+                avatar::Look::default(),
+                &STOPS,
+                width,
+                false
+            )
+            .is_empty()
+        );
         assert!(face_fits(width + (avatar::WIDTH + FACE_GAP.len()) as u16));
     }
 
@@ -622,9 +711,41 @@ mod tests {
         }
     }
 
+    /// The opening screen draws the mark and the face in the theme in force: under a named theme
+    /// "brave" opens in that theme's note ink and the face changes with it, and putting `brave`
+    /// back brings the oranges back.
+    #[test]
+    fn the_opening_screen_draws_the_mark_in_the_theme_in_force() {
+        let _held = theme::exclusive();
+        let first_row = |screen: &[Line<'static>]| {
+            screen
+                .iter()
+                .find(|line| line.to_string().ends_with(LOGO[0]))
+                .expect("the mark was drawn")
+                .clone()
+        };
+        let face_inks = |line: &Line<'static>| -> Vec<Option<Color>> {
+            line.spans[1..=avatar::WIDTH]
+                .iter()
+                .flat_map(|span| [span.style.fg, span.style.bg])
+                .collect()
+        };
+        let letter = avatar::WIDTH + 2;
+
+        let nord = theme::find("nord").expect("nord is built in");
+        theme::apply(&nord);
+        let themed = first_row(&opening_lines(WIDE));
+        theme::apply_brave();
+        let branded = first_row(&opening_lines(WIDE));
+
+        assert_eq!(themed.spans[letter].style.fg, Some(nord.palette.note));
+        assert_eq!(branded.spans[letter].style.fg, Some(rgb(STOPS[0])));
+        assert_ne!(face_inks(&themed), face_inks(&branded));
+    }
+
     /// A request for no colour gets no painted face.
     #[test]
     fn the_face_takes_no_colour_where_none_was_asked_for() {
-        assert!(face_rows("v2:example-0", avatar::Look::default(), WIDE, true).is_empty());
+        assert!(face_rows("v2:example-0", avatar::Look::default(), &STOPS, WIDE, true).is_empty());
     }
 }

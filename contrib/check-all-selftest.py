@@ -71,7 +71,7 @@ class CheckTargets(unittest.TestCase):
             for gate in sorted(gates)
         ) + '\ncheck-ui-build check-extension check-all-selftest check-reviewdog-selftest'
           ' check-rebase-selftest'
-          ' check-affected-selftest check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest:\n\t@true\n')
+          ' check-affected-selftest check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-release-preflight-selftest:\n\t@true\n')
         for target, expected in (("check-all-local", local), ("check-all", gates)):
             for failing in ("", *sorted(expected)):
                 with self.subTest(target=target, failing=failing):
@@ -88,7 +88,8 @@ class CheckTargets(unittest.TestCase):
                     "python3 contrib/affected-checks.py --selftest",
                     "python3 agents/skills/peer-advisories/selftest.py",
                     "python3 agents/skills/peer-features/selftest.py",
-                    "python3 agents/skills/pr-fix/selftest.py"]
+                    "python3 agents/skills/pr-fix/selftest.py",
+                    "python3 contrib/release-preflight.py --selftest"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("-k", "check-scripts", FAIL_COMMAND=failing)

@@ -20,6 +20,7 @@ governs:
   - crates/config/src/sandbox_network.rs
   - crates/agent/src/confine.rs
   - crates/agent/src/reach.rs
+  - crates/sandbox/src/rules.rs
   - crates/tui/src/status.rs
 documented-by: docs/website/docs/security/security.md
 ---
@@ -433,7 +434,8 @@ and `~/Library/Safari`; on Linux also `~/.local/share/keyrings`, `~/.password-st
 `~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/chromium` and `~/.mozilla`. Three
 kinds of file in `~/.ssh` hold no secret and are read: `config`, `known_hosts` and the default
 public keys (`id_rsa.pub`, `id_dsa.pub`, `id_ecdsa.pub`, `id_ecdsa_sk.pub`, `id_ed25519.pub`,
-`id_ed25519_sk.pub`). On macOS the file `~/Library/Keychains/login.keychain-db` is also read, with
+`id_ed25519_sk.pub`). A public key at another name is read by a stage that carries the remote
+scope when `config` names it ([SANDBOX-16](#SANDBOX-16)). On macOS the file `~/Library/Keychains/login.keychain-db` is also read, with
 the directory around it and every other file in it still refused, because `gh` and git's
 `osxkeychain` helper keep their tokens in that keychain and open its database file themselves.
 Opening a keychain also makes the Security framework write its framework database, which is the
@@ -659,9 +661,23 @@ git accepts of `--upload-pack`, `--receive-pack`, `--exec`, `--template`, `--con
 or `ssh+git`, before a `--` or after one; where a `gh` argv holds `--`; and where `kubectl` is
 given `--kubeconfig` or `docker` is given `--config`. A stage reaches its own scope and no other.
 No scope names a private key or `~/.ssh` as a directory. The remote scope reads `~/.ssh/config`,
-`~/.ssh/known_hosts`, the public key at each name ssh looks for by default, `~/.gitconfig`,
-`~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`, and writes
-`~/.ssh/known_hosts` alone, as a file. A tool's directory is read and never written.
+`~/.ssh/known_hosts`, the public key at each name ssh looks for by default, the public key file
+each `IdentityFile` line of `~/.ssh/config` names, `~/.gitconfig`, `~/.git-credentials`,
+`~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`, and writes `~/.ssh/known_hosts` alone,
+as a file. A tool's directory is read and never written.
+
+A line `IdentityFile <name>` in the user's own `~/.ssh/config` adds the file `<name>.pub`, and one
+whose name already ends in `.pub` adds that file. The keyword is matched without regard to case
+and its value may follow `=`. A name is absolute or begins `~/` or `%d/`. A name holding another `%`
+token or a `$`, or a relative one, adds nothing, and neither does a line that is not valid UTF-8,
+which is skipped whole and never rewritten into a name it did not spell. A file is added only where it exists as a regular
+file, where the file a link leads to is named `*.pub`, and where that file is not in a credential
+location other than `~/.ssh` ([SANDBOX-12](#SANDBOX-12)), and the row is the file a link leads to.
+The `.pub` name is the only thing added, so a line that names a private key adds the public file
+beside it and never the key. `Include`, `Match` and a repository's `core.sshCommand` are not
+followed, `~/.ssh/config` is read up to 1 MiB, and at most 32 files are added. A file that cannot
+be read adds nothing. Only the remote scope reads the configuration. A key that `-i` names in a
+`core.sshCommand` is read only if the configuration also lists it as an `IdentityFile`.
 
 Where a variable moves what a tool reads, the stage also reads the place the variable names, as that
 place and read only: for `gh`, `GH_CONFIG_DIR` if the environment the stage starts with sets it, else
@@ -710,7 +726,12 @@ shown in the prompt because a credential scope is what the prompt says it is, an
 is not one anybody approved. Only the environment the stage starts with counts: an assignment
 written in front of the line removes the scope, so a model-written `GH_CONFIG_DIR=` moves nothing.
 A file is judged where it is rather than where its directory is: what is granted is the one file the
-person named, and `~/.ssh` is where a key would be. `~/.bravebot` is refused the same way, since a
+person named, and `~/.ssh` is where a key would be. ssh reads the `.pub` file of an identity to choose
+the key the agent offers, so a key the person's configuration pins by name needs the same read as one
+at a default name; with `IdentitiesOnly yes` and no such read, ssh offers nothing and the host answers
+`Permission denied (publickey)`. The configuration is the person's own file, which a stage in
+standard mode cannot write, and a line in it can add only a file named `*.pub`, so reading it adds no
+private key. A repository's `core.sshCommand` is not read because it decides what runs. `~/.bravebot` is refused the same way, since a
 variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](#SANDBOX-12)).
 
 `verified-by: bravebot_sandbox::scope::an_operation_that_talks_to_a_remote_carries_the_remote_scope`
@@ -747,6 +768,13 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_agent::confine::a_requested_scope_reads_the_configuration_its_variable_moves`
 `verified-by: bravebot_agent::confine::the_prompt_names_a_location_the_environment_moved_for_a_requested_scope`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_what_ssh_reads_and_never_a_private_key`
+`verified-by: bravebot_sandbox::scope::an_identity_file_in_the_ssh_configuration_adds_its_public_key`
+`verified-by: bravebot_sandbox::scope::an_identity_file_that_is_not_a_public_key_adds_nothing`
+`verified-by: bravebot_sandbox::scope::a_named_public_key_behind_a_link_is_read_where_it_leads`
+`verified-by: bravebot_sandbox::scope::an_identity_file_line_that_is_not_text_adds_nothing_and_its_lossy_lookalike_is_not_read`
+`verified-by: bravebot_sandbox::scope::an_identity_file_whose_name_is_not_text_adds_neither_it_nor_its_lookalike`
+`verified-by: bravebot_sandbox::scope::the_ssh_configuration_adds_a_bounded_number_of_keys_to_the_remote_scope_alone`
+`verified-by: bravebot_sandbox::macos::a_remote_stage_reads_a_public_key_its_configuration_names_and_never_the_private_one`
 `verified-by: bravebot_agent::confine::the_prompt_the_line_and_the_policy_agree_on_which_credential_a_stage_lifts`
 
 <a id="SANDBOX-17"></a>
@@ -867,7 +895,7 @@ open the home.
 `verified-by: bravebot_agent::confine::an_assignment_in_front_of_a_push_removes_its_scope`
 `verified-by: bravebot_agent::confine::a_program_at_the_top_of_the_home_is_granted_as_a_file_and_not_as_the_home`
 `verified-by: bravebot_agent::confine::the_path_outside_the_home_is_read_and_the_homes_own_bin_brings_no_parent`
-`verified-by: bravebot_agent::confine::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
+`verified-by: bravebot_sandbox::rules::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
 `verified-by: bravebot_sandbox::windows::what_every_container_reads_is_the_machines_own_directories`
 `verified-by: bravebot_sandbox::windows::nothing_else_is_taken_to_be_readable_by_every_container`
 `verified-by: bravebot_sandbox::windows::a_write_grant_under_a_system_directory_still_needs_its_entry`
@@ -898,12 +926,22 @@ directories the programs could read and write, that beyond those they reached on
 toolchain list or credential scope added for the steps that named one, the toolchain lists the plan
 brought by name and the credential scopes it brought by name, or `none`, and whether the network
 was open or closed and, if closed, the reasons that kept it for the steps that had one
-([SANDBOX-20](#SANDBOX-20)). Under the mode `strict`, where the session has a profile directory, the description and this
-sentence also name the menu a `run` call may ask from ([SANDBOX-26](#SANDBOX-26)); in every other
-mode they name none, since none is accepted. The sentence is the same words for exit 1 and exit 2.
+([SANDBOX-20](#SANDBOX-20)). Under the modes `strict` and `standard`, where the session has a profile directory, the description
+and this sentence also name the menu a `run` call may ask from ([SANDBOX-26](#SANDBOX-26)); under
+`off` they name none, since none is accepted. The sentence is the same words for exit 1 and exit 2.
 A result whose steps all
 exited zero carries no such sentence. The sentence is composed from the same two decisions the policy is
 ([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
+
+The sentence ends with fixed text, in every mode that produces it, saying that a credential
+location such as `~/.ssh`, `~/.aws` or `~/.kube` cannot be added with `/add-dir` or `--add-dir`,
+and that where the mode accepts a request, a credential scope is how a line reaches one. It then
+says that any other path a command needs is asked for with the `request_path` tool
+([SANDBOX-28](#SANDBOX-28)), the person is asked, and a yes lasts for the session. A planner
+that meets a refusal on such a location otherwise has no other account of it, and asks the person
+for an `/add-dir` that does nothing. The text is the same for every failure and for exit 1 and
+exit 2. The menu sentence ends the same way, and the `run` description's
+confinement statement names the tool.
 
 **Why.** A refused step reports `exited 1` and its standard error is quarantined, so the planner
 cannot see that the sandbox refused it. Without this sentence it cannot tell a sandbox refusal from
@@ -923,16 +961,21 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::confine::a_step_with_no_list_and_no_scope_says_none_for_both`
 `verified-by: bravebot_agent::confine::the_profile_line_is_the_same_whatever_paths_the_step_was_given`
 `verified-by: bravebot_agent::confine::the_profile_line_agrees_with_the_policy_on_the_lists_and_the_scope`
+`verified-by: bravebot_agent::confine::the_profile_line_ends_with_the_fixed_sentence_about_credential_locations`
+`verified-by: bravebot_agent::turn::a_failed_run_says_a_credential_location_cannot_be_added_whatever_the_mode_and_exit`
+`verified-by: bravebot_agent::turn::a_run_that_worked_or_was_not_confined_does_not_say_a_credential_location_cannot_be_added`
 `verified-by: bravebot_agent::tools::the_confinement_statement_is_appended_to_run_on_a_confining_turn_only`
 `verified-by: bravebot_agent::turn::a_failed_run_on_a_confining_turn_says_what_it_ran_under`
+`verified-by: bravebot_agent::confine::a_path_the_person_let_programs_reach_is_held_and_their_own_deny_still_applies`
 `verified-by: bravebot_agent::turn::a_run_that_succeeded_on_a_confining_turn_carries_no_profile_line`
 `verified-by: bravebot_agent::turn::a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_failure`
 `verified-by: bravebot_agent::turn::a_failed_job_on_a_confining_turn_says_what_it_ran_under`
 `verified-by: bravebot_agent::tools::the_statement_follows_the_sandbox_mode`
 `verified-by: bravebot_agent::confine::a_strict_stage_does_not_read_the_machine`
-`verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_only_where_a_request_is_accepted`
-`verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_only_in_strict`
+`verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_where_a_request_is_accepted`
+`verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_in_strict_and_standard`
 `verified-by: bravebot_agent::turn::the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu`
+`verified-by: bravebot_agent::turn::the_failure_sentence_names_the_menu_under_standard`
 
 <a id="SANDBOX-20"></a>
 ### SANDBOX-20: a session may close the network, and a stage keeps it only for a reason it carries
@@ -1182,7 +1225,8 @@ in the stage's profile, the plan the person endorses names it with the day it wa
 failure line ([SANDBOX-19](#SANDBOX-19)) names a remembered scope as it names any other.
 
 The inputs to a grant are a person's typed words, the compiled step, the closed table and the
-process environment, and nothing else. In particular:
+process environment, and nothing else, except that the remote scope also reads the `IdentityFile`
+lines of the person's `~/.ssh/config` ([SANDBOX-16](#SANDBOX-16)). In particular:
 
 - A directory is judged as `--add-dir` judges one, when it is allowed and again when it is used:
   absolute, no `..`, existing, not the home or above it, not `~/.ssh` or `~/.bravebot` or inside either, and a link by
@@ -1318,11 +1362,19 @@ An empty one pins a list that refuses every host, and filters a session that set
 a person said. A managed value that is not a list of strings, or an `onUnlisted` that is neither
 word, pins nothing and `doctor` names it.
 
+A stage with egress under a set list is started with those variables, and a stage with no egress
+is not, because it reaches nothing. A stage's list is the person's allowed set and the defaults its
+own reasons bring, the remote scope's hosts and its toolchain's registries, so two stages can hold
+different lists. One proxy is started for each distinct list the first time a stage needs it, and
+is kept for the rest of the process. A denied entry that is not a rule fails the stage, since
+dropping it would let the host through, and so does a proxy that cannot be started: a stage is
+never started without the filter its list asks for.
+
 Half built. The list, its defaults, the proxy, the settings that carry the list through the
-layers and the managed pin are written and tested, and nothing starts a proxy for a session. Unbuilt:
-policy rows that allow only the proxy's port, the environment injection in
-`confine.rs`, the prompt for an unlisted host, the trace record and the `/status` line, and refusing
-the stage with the SANDBOX-19 sentence naming the setting.
+layers, the managed pin and the environment injection are written and tested. Unbuilt: policy rows
+that allow only the proxy's port, so a program that ignores the variables still connects directly,
+the prompt for an unlisted host, the trace record and the `/status` line, and refusing the stage
+with the SANDBOX-19 sentence naming the setting.
 
 `verified-by: bravebot_sandbox::hosts::an_exact_entry_covers_that_name_and_no_other`
 `verified-by: bravebot_sandbox::hosts::a_wildcard_covers_names_below_the_domain_and_not_the_domain`
@@ -1340,6 +1392,15 @@ the stage with the SANDBOX-19 sentence naming the setting.
 `verified-by: bravebot_sandbox::proxy::every_decision_is_recorded_with_the_host_and_the_rule_that_decided_it`
 `verified-by: bravebot_sandbox::proxy::the_environment_points_every_proxy_variable_at_the_loopback_port`
 `verified-by: bravebot_sandbox::proxy::dropping_the_proxy_stops_it_listening`
+`verified-by: bravebot_agent::host_proxy::a_stage_holds_the_defaults_its_own_reasons_bring_and_no_others`
+`verified-by: bravebot_agent::host_proxy::a_denied_host_is_refused_although_a_default_covers_it`
+`verified-by: bravebot_agent::host_proxy::a_denied_entry_that_is_no_rule_fails_and_an_allowed_one_is_dropped`
+`verified-by: bravebot_agent::host_proxy::a_list_is_served_by_one_proxy_and_another_list_by_another`
+`verified-by: bravebot_agent::confine::only_a_stage_with_egress_is_pointed_at_the_proxy_and_only_under_a_list`
+`verified-by: bravebot_agent::confine::a_stage_with_a_host_list_is_pointed_at_the_proxy_that_applies_it`
+`verified-by: bravebot_agent::confine::an_assignment_in_the_line_cannot_point_a_stage_elsewhere`
+`verified-by: bravebot_agent::confine::no_allowed_list_means_no_proxy`
+`verified-by: bravebot_agent::confine::a_stage_with_no_egress_is_given_no_proxy`
 `verified-by: bravebot_config::settings::no_allowed_hosts_is_no_list_and_an_empty_one_is_a_list`
 `verified-by: bravebot_config::settings::the_home_layer_may_write_every_host_key`
 `verified-by: bravebot_config::settings::a_checkout_may_deny_a_host_and_never_allow_one`
@@ -1380,8 +1441,10 @@ tried names the file in `doctor`. The managed file may pin each list: a pinned `
 added to the person's and cannot be lifted by an entry at or beneath it.
 
 A path is absolute, `~/`-prefixed or relative to the first directory the session was opened on. An
-entry that climbs out of the directory it is read from, holds `..` where it is absolute, or starts
-with `~` in a session that names no home directory is refused. Each path is judged where it leads: the
+entry is resolved to, and compared with a row in, one spelling, so that a Windows drive path with
+the `\\?\` prefix the file system returns is the same path as the one without it. An entry that
+climbs out of the directory it is read from, holds `..` where it is absolute, or starts with `~` in
+a session that names no home directory is refused. Each path is judged where it leads: the
 part of it that is on disk is resolved through its links. `~`, `/`, a drive root and the home directory
 or any directory above it are refused as `allowWrite` rows, since a stage that wrote there would be
 confined to nothing ([SANDBOX-2](#SANDBOX-2)). No list adds reach to `~/.ssh` or anything inside it,
@@ -1418,7 +1481,9 @@ in force with the sentence `doctor` gives; the notice above a conversation count
 not in force and an allowance a project file wrote, as it does a permission rule. It names paths
 where the terminal's `/status` does not, since it is the person's own settings it is showing back
 and `doctor` does the same. The person edits the settings file, and a change applies to the next
-conversation. A command that adds an allowance from a session is not built.
+conversation. A command that adds an allowance from a session is not built; a planner's way to ask
+for reach to one path for the session is `request_path` ([SANDBOX-28](#SANDBOX-28)), which adds no
+entry to a list.
 
 **Why.** The lists are how a person changes what a stage reads and writes without `/add-dir`, the
 only other way to move that reach, which also marks the directory trusted
@@ -1443,6 +1508,13 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_denial_beats_the_stages_own_rows_and_a_narrower_row_of_the_persons_stands`
 `verified-by: bravebot_sandbox::rules::a_denial_with_no_grant_above_it_is_not_added`
 `verified-by: bravebot_sandbox::rules::a_write_row_above_a_credential_location_does_not_write_it`
+`verified-by: bravebot_sandbox::rules::a_denial_inside_a_grant_is_added_whichever_way_each_is_spelled`
+`verified-by: bravebot_sandbox::rules::a_denial_outside_every_grant_is_not_added_in_either_spelling`
+`verified-by: bravebot_sandbox::rules::a_row_at_or_under_a_refusal_is_dropped_whichever_way_each_is_spelled`
+`verified-by: bravebot_sandbox::rules::an_entry_the_file_system_resolves_to_a_verbatim_path_is_kept_in_the_ordinary_spelling`
+`verified-by: bravebot_sandbox::rules::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
+`verified-by: bravebot_sandbox::rules::a_verbatim_path_that_is_not_text_is_not_taken_for_its_lossy_lookalike`
+`verified-by: bravebot_sandbox::rules::a_stage_with_a_denial_inside_its_grant_is_refused_by_the_windows_backend`
 `verified-by: bravebot_sandbox::policy::a_write_row_above_a_write_refusal_is_spread_around_it`
 `verified-by: bravebot_sandbox::linux::a_stage_is_refused_a_write_the_policy_refuses_and_keeps_the_rest`
 `verified-by: bravebot_sandbox::macos::the_profile_orders_every_row_from_the_widest_path_to_the_narrowest`
@@ -1497,9 +1569,12 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
   answers that last past the line are the two that remember the scope as reach ([SANDBOX-27](#SANDBOX-27)).
 - What it prints is not trusted on a vouch's account: a line that asked for a scope has its output
   quarantined as an unvouched line's is ([RUN-4](tools/run.md#RUN-4)).
+- Accepted in `strict` and `standard` ([SANDBOX-22](#SANDBOX-22)). `standard` reads the machine
+  except the credential table ([SANDBOX-12](#SANDBOX-12)), so a scope there lifts the part of that table
+  it names.
 - Refused, with one sentence that does not say which setting withheld it, in a session whose mode is
-  not `strict` ([SANDBOX-22](#SANDBOX-22)), which already reads the machine or has no profile, with
-  no profile directory, and in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)).
+  `off`, which has no profile to add to, with no profile directory, and in a workspace the person
+  has not trusted ([TRUST-7](trust-map.md#TRUST-7)).
   A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
   approves it, as it approves any run.
 - A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
@@ -1531,7 +1606,8 @@ for a different line.
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
 `verified-by: bravebot_agent::turn::a_standing_answer_to_a_request_remembers_nothing`
-`verified-by: bravebot_agent::turn::scopes_are_refused_under_standard_and_under_off`
+`verified-by: bravebot_agent::turn::scopes_are_refused_under_off`
+`verified-by: bravebot_agent::turn::scopes_are_asked_about_and_run_under_standard`
 `verified-by: bravebot_agent::turn::scopes_are_refused_in_a_workspace_the_person_declined_to_trust`
 `verified-by: bravebot_agent::turn::scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given`
 `verified-by: bravebot_agent::turn::a_scope_outside_the_menu_is_an_error`
@@ -1581,6 +1657,73 @@ more than the person read.
 `verified-by: bravebot_tui::confirm::the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them`
 `verified-by: bravebot_tui::confirm::the_keep_keys_wait_for_the_rows_saying_what_they_remember`
 `verified-by: bravebot_tui::confirm::a_prompt_offering_to_keep_a_request_names_what_would_be_kept`
+
+<a id="SANDBOX-28"></a>
+### SANDBOX-28: a planner may ask for reach to one path, and the person is asked every time it is new
+
+`request_path` ([tools/request-path.md](tools/request-path.md)) is how a planner whose stage fails
+for want of a path outside the session's directories asks for it. It takes the `path`, a `write`
+flag (write implies read) and the `why` every tool takes. The person is shown the path as it
+resolves, whether it is to be read or written, and the reason, and answers. A yes lets every program
+a later `run` starts read the path, or read and write it, for the rest of the session. A no, an
+interrupt and a run with nobody to ask grant nothing. The mode that answers every permission
+question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX-26)).
+
+- **The same refusals as an `allowWrite` row** ([SANDBOX-25](#SANDBOX-25)), for a read as for a
+  write: `~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`,
+  `~/.bravebot` and anything inside either, a credential location of the table
+  ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one (`~/.config` holds
+  `~/.config/gcloud`), any path holding a control character, and any path holding `*` or `?`. The path is judged where it leads,
+  through its links. A refused request is not put to the person, and the result says that no answer
+  would change it. A path that does not exist is not asked about either.
+- **The person's own refusals still hold.** A `denyRead` or `denyWrite` entry covering the path
+  refuses the request, and one narrower than a granted path takes its part of the grant back, since
+  the person's rows are applied after the session's.
+- **It is reach and not trust.** Nothing is marked trusted ([TRUST-9](trust-map.md#TRUST-9)) and no
+  file is written; the grant is held by the session and gone with it. Asking again for a path
+  already held is asked like the first request, and a yes only ever widens the grant held: a read
+  answered beside a write held leaves the write. The person may end a grant with
+  `/reach paths remove <number>`.
+- **Not accepted** where the mode is `off`, which has no profile to add to, and in a workspace that
+  is not trusted ([TRUST-7](trust-map.md#TRUST-7)). The result says so and nothing is asked. No
+  settings layer, project file or permission rule grants one in advance, because none names it.
+- **Shown and recorded.** `/status` lists each path held, with its access, and the
+  trace carries one `path_reach` record for each yes, naming the path and the access.
+- **Not delegated.** A delegate is offered no `request_path`, and one it names anyway is answered
+  as an unknown name ([DELEGATE-12](delegation.md#DELEGATE-12)), since a path asked for from inside
+  a sub-task is reach the person never set up.
+- The desktop shows no card for it and refuses, which grants nothing.
+
+**Why.** A stage that cannot write a path the work needs fails with `Operation not permitted`, and
+the planner has no way to say which path it needed. Without a per-path request, the only way to let
+a build write one file is `/add-dir`, which marks the whole directory trusted. A request for one
+path, with the same refusals as the rows a person can write, lets them say yes to that path for a
+single session. What the planner supplies decides nothing: the path is routing and is judged by the
+rules, and the reason is drawn for the person and recorded.
+
+`verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
+`verified-by: bravebot_sandbox::rules::a_request_at_inside_or_above_a_credential_location_is_refused`
+`verified-by: bravebot_sandbox::rules::a_request_for_an_existing_path_is_kept_and_a_link_is_judged_where_it_leads`
+`verified-by: bravebot_sandbox::rules::a_request_for_a_name_that_is_not_utf8_is_kept_as_those_bytes`
+`verified-by: bravebot_sandbox::rules::a_request_under_a_denial_of_the_person_is_refused`
+`verified-by: bravebot_sandbox::rules::granted_rules_add_rows_and_a_denial_of_the_person_still_wins`
+`verified-by: bravebot_agent::confine::a_path_the_person_let_programs_reach_is_held_and_their_own_deny_still_applies`
+`verified-by: bravebot_agent::workspace::path_reach_is_numbered_shared_upgraded_and_ended`
+`verified-by: bravebot_agent::workspace::a_new_workspace_holds_no_path_reach`
+`verified-by: bravebot_agent::reach::reach_paths_lists_ends_and_leaves_other_words_alone`
+`verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
+`verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
+`verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
+`verified-by: bravebot_agent::turn::a_yes_to_a_path_marks_nothing_trusted_and_is_recorded`
+`verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
+`verified-by: bravebot_agent::turn::a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace`
+`verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
+`verified-by: bravebot_agent::turn::the_tool_is_offered_where_runs_are_confined`
+`verified-by: bravebot_tui::confirm::a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do`
+`verified-by: bravebot_tui::confirm::a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
+`verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
+`verified-by: bravebot_cli::plain::a_path_is_asked_in_lines_and_only_a_yes_lets_programs_reach_it`
+`verified-by: bravebot_ui_bridge::refusal::a_request_for_a_path_is_refused_with_no_card_whatever_the_window_would_say`
 
 ## Programs a person asked for
 
@@ -1772,7 +1915,8 @@ A stage reaches its own row and no other: a `docker` stage reaches neither the r
 reached only as the one login file the base reads ([SANDBOX-12](#SANDBOX-12)). The remote scope is `~/.ssh/config` and `~/.ssh/known_hosts` to read with `known_hosts` also
 to write, that write row naming a file rather than a directory so that an account with no
 `known_hosts` gets one rather than a push that fails ([SANDBOX-11](#SANDBOX-11)), the public key at
-each name ssh looks for by default, `~/.gitconfig`, and the stores an https helper reads:
+each name ssh looks for by default and each `IdentityFile` of `~/.ssh/config` names, `~/.gitconfig`,
+and the stores an https helper reads:
 `~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`. The login keychain
 file is read by the base whatever scope a stage carries ([SANDBOX-12](#SANDBOX-12)), and the
 system service that holds it is reached whatever scope a stage carries (the last section's list of
@@ -1782,9 +1926,10 @@ names is a write row for a stage that carries the remote scope and for no other
 nothing, the file is made by ssh, which can do so only into a `~/.ssh` already there, so an account
 without one records no host a confined push meets. A push signs through the agent and needs no
 private key, and the public half is in the scope because that is what ssh reads to name an identity
-to the agent where a configuration file pins one. What that costs is a key kept at a name of a
-person's own: ssh without `IdentitiesOnly` offers every key the agent holds and signs anyway, and a
-host pinned with `IdentitiesOnly` to such a key leaves ssh neither half to name it by. A push does
+to the agent where a configuration file pins one, and a key pinned at a name of the person's own is
+read through the `IdentityFile` line that pins it. A key named only by a repository's
+`core.sshCommand` is not read: ssh without `IdentitiesOnly` offers every key the agent holds and
+signs anyway, and one with it needs the key listed as an `IdentityFile`. A push does
 need `known_hosts`, since a host it cannot verify is a push that fails. Both transports are in one
 scope because which one a remote uses is written in a configuration file, and no file's contents
 decide a scope.

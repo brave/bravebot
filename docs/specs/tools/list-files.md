@@ -60,7 +60,8 @@ The matcher is hand written. `*` and `?` do not cross `/`, `**` does, and a brac
 expanded into the plain patterns it stands for before the walk rather than matched during it.
 An expansion past the cap on how many patterns it may produce in all falls back to matching the
 pattern literally, which finds nothing and is reported as finding nothing. Version-control and
-build directories are skipped.
+build directories are skipped, and the tool description names every skipped directory, since the
+result does not and a skipped `vendor` or `build` would otherwise read as absent.
 
 A pattern with no `/` is matched against the file name alone. One with a `/` is matched against
 the path from the directory the call named and against the path from the workspace root, and a
@@ -87,6 +88,7 @@ call could not have listed.
 `verified-by: bravebot_agent::workspace::the_original_noise_directories_are_still_skipped`
 `verified-by: bravebot_agent::workspace::noise_directories_from_other_ecosystems_are_skipped`
 `verified-by: bravebot_agent::tools::both_glob_arguments_describe_the_matcher_the_same_way`
+`verified-by: bravebot_agent::tools::list_files_names_every_directory_its_walk_skips`
 `verified-by: bravebot_agent::workspace::a_listing_glob_may_be_written_from_the_directory_it_names`
 `verified-by: bravebot_agent::workspace::a_search_include_may_be_written_from_the_directory_it_names`
 

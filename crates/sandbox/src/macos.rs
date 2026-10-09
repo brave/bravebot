@@ -2262,4 +2262,55 @@ int main(void) {
 
         let _ = std::fs::remove_dir_all(&scratch);
     }
+
+    /// A public key the person's `~/.ssh/config` names, in a stage that reads the machine except
+    /// its credential table: the kernel lets ssh read that file and still refuses the private key
+    /// beside it, a public key the configuration does not name, and a file a link in `~/.ssh`
+    /// leads to in another credential directory.
+    #[test]
+    fn a_remote_stage_reads_a_public_key_its_configuration_names_and_never_the_private_one() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-a-named-public-key");
+        let ssh = home.join(".ssh");
+        std::fs::create_dir_all(&ssh).expect("the scratch home is creatable");
+        std::fs::create_dir_all(home.join(".aws")).expect("the scratch home is creatable");
+        std::fs::write(
+            ssh.join("config"),
+            "Host *\n  IdentityFile ~/.ssh/work\n  IdentityFile ~/.ssh/toward-aws.pub\n",
+        )
+        .expect("the scratch home is writable");
+        for file in ["work", "work.pub", "unnamed.pub"] {
+            std::fs::write(ssh.join(file), "a key").expect("the scratch home is writable");
+        }
+        std::fs::write(home.join(".aws/credentials.pub"), "a credential")
+            .expect("the scratch home is writable");
+        std::os::unix::fs::symlink(
+            home.join(".aws/credentials.pub"),
+            ssh.join("toward-aws.pub"),
+        )
+        .expect("the scratch home is writable");
+        let policy = crate::scope::Scope::Remote.grant(
+            crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home)),
+            &home,
+        );
+        let code = |path: PathBuf| {
+            exit_code_under(
+                &policy,
+                a_stage_for(&home),
+                "/bin/cat",
+                &[&path.display().to_string()],
+            )
+        };
+
+        assert_eq!(code(ssh.join("work.pub")), Some(0), "work.pub was not read");
+        for refused in ["work", "unnamed.pub", "toward-aws.pub"] {
+            assert_eq!(
+                code(ssh.join(refused)),
+                Some(READ_FAILED),
+                "{refused} was read"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
 }

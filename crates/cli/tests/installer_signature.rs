@@ -222,6 +222,13 @@ fn scratch_root() -> PathBuf {
     workspace().join("target/test-scratch/sig")
 }
 
+/// The keyring the fixtures are made in, one per process. `release` runs once per process, and a
+/// test runner that gives each test a process of its own would otherwise have every one of them
+/// clearing the same keyring and stopping the same agent while the others were still using it.
+fn keys_home() -> PathBuf {
+    scratch_root().join(format!("keys-{}", std::process::id()))
+}
+
 fn fresh(path: &Path) {
     let _ = std::fs::remove_dir_all(path);
     std::fs::create_dir_all(path).expect("create scratch");
@@ -255,7 +262,7 @@ fn fingerprint_of(tools: &Tools, home: &Path, uid: &str) -> String {
 }
 
 fn checksum(tools: &Tools, bytes: &[u8]) -> Vec<u8> {
-    let path = scratch_root().join("keys/digest-input");
+    let path = keys_home().join("digest-input");
     std::fs::write(&path, bytes).expect("write digest input");
     let sha256sum = tools
         .utilities
@@ -276,7 +283,7 @@ fn checksum(tools: &Tools, bytes: &[u8]) -> Vec<u8> {
 fn release(tools: &Tools) -> &'static Release {
     static RELEASE: OnceLock<Release> = OnceLock::new();
     RELEASE.get_or_init(|| {
-        let home = scratch_root().join("keys");
+        let home = keys_home();
         fresh(&home);
         std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700))
             .expect("narrow the keyring");

@@ -92,6 +92,13 @@ cli-plain-takes-nothing-else =
 # Dit lorsque la question de démarrage n'est pas posée parce qu'une session antérieure ici a reçu
 # l'ordre de retenir la réponse (TRUST-23). Une session en lignes n'a pas de commandes à barre
 # oblique, donc les moyens de se faire reposer la question sont ceux qu'elle peut nommer.
+# Dit sur stderr par une exécution unique qui s'ouvre avec une réponse retenue sur son répertoire de
+# travail ou sur la racine de l'arbre git qui l'entoure, et qui nomme le répertoire concerné.
+cli-trusting-kept =
+    { $directory } approuvé (vous avez demandé de le retenir { $when } ; pour que la question
+    soit reposée, lancez /forget-trust dans bravebot, ou supprimez de { $path } les lignes qui le
+    nomment)
+
 cli-plain-trusting-kept =
     { $directory } approuvé (vous avez demandé de le retenir { $when } ; pour que la question
     soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
@@ -112,6 +119,7 @@ mode-bypass = ⏵⏵ permissions contournées
 cli-options-heading = Options :
 cli-option-file = Inclure un fichier de l'espace de travail comme contexte (répétable)
 cli-option-add-dir = Accéder à un répertoire hors de celui de travail (répétable)
+cli-option-trust-workspace = Approuver le répertoire de travail pour cette exécution, comme le fait un oui à la question du démarrage
 cli-option-settings = Lire ce fichier de réglages pour cette exécution, au-dessus de ceux trouvés sur le disque
 cli-option-run-network =
     Si les programmes lancés par `run` peuvent joindre le réseau. closed le refuse à tous sauf à la
@@ -140,6 +148,7 @@ cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en qu
 cli-option-trace = Afficher le journal d'audit
 cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
 cli-option-json-stream = Afficher un événement par ligne sur stdout pendant l'exécution, puis l'objet de résultat
+cli-option-output-schema = Exiger que la réponse respecte le schéma JSON de ce fichier ; avec --json, la valeur est dans « structured »
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
 cli-option-safe =
     Ne charger ni hooks, ni skills, ni définitions, ni serveurs MCP, ni AGENTS.md. La connexion, le modèle et les permissions s'appliquent toujours
@@ -227,6 +236,24 @@ cli-sandbox-refused-network-file =
     un programme lancé sans bac à sable n'est pas tenu à cela. Modifiez-le là, ou retirez-le.
 cli-mode-needs-a-name = --mode demande l'un de : { $names }
 cli-model-needs-a-name = --model demande le nom d'un modèle
+cli-output-schema-needs-a-path = --output-schema demande le chemin d'un fichier de schéma JSON
+cli-output-schema-not-with-a-manifest = --output-schema est incompatible avec --mode manifest, qui donne une réponse par étape et aucune pour l'exécution
+cli-output-schema-not-served = --output-schema est incompatible avec { $model }, auquel on ne peut pas demander une réponse conforme à un schéma
+cli-output-schema-unreadable = impossible de lire le schéma de sortie { $path } : { $problem }
+cli-output-schema-not-json = le schéma de sortie { $path } n'est pas du JSON
+cli-output-schema-not-an-object = dans le schéma de sortie { $path }, { $at } n'est pas un objet JSON
+cli-output-schema-unsupported = le schéma de sortie { $path } utilise { $keyword } à { $at }, ce qui n'est pas pris en charge
+cli-output-schema-malformed = le schéma de sortie { $path } donne à { $keyword } à { $at } une valeur qu'il ne peut pas prendre
+cli-output-schema-mismatch = la réponse ne respecte pas le schéma de sortie à { $at } : { $problem }
+cli-output-schema-rule-not-json = la réponse n'est pas une valeur JSON unique
+cli-output-schema-rule-type = la valeur est d'un autre type
+cli-output-schema-rule-enum = la valeur n'est pas l'une de celles listées
+cli-output-schema-rule-const = la valeur n'est pas celle qui est permise
+cli-output-schema-rule-required = une propriété obligatoire est absente
+cli-output-schema-rule-extra = une propriété que le schéma ne liste pas est présente
+cli-output-schema-rule-length = la chaîne est plus courte ou plus longue que permis
+cli-output-schema-rule-count = le tableau a moins ou plus d'éléments que permis
+cli-output-schema-rule-range = le nombre est inférieur ou supérieur à ce qui est permis
 cli-advisor-needs-a-name = --advisor exige le nom d'un modèle
 cli-advisor-not-with-a-manifest = --advisor est incompatible avec --mode manifest, qui exécute son plan sans planificateur à interroger
 cli-effort-needs-a-level = --effort demande l'un de : { $levels }
@@ -1911,6 +1938,7 @@ scroller-key-prompts = invite précédente / suivante
 scroller-key-search = rechercher, correspondance suivante/précédente
 scroller-key-count = un nombre d'abord va autant de fois plus loin
 scroller-key-search-run = lancer / supprimer, puis abandonner
+scroller-key-expand = déplier ou replier le résultat d'un appel
 scroller-key-editor = ouvrir la transcription dans $EDITOR
 scroller-key-this-list = cette liste
 scroller-key-close = fermer le défilement   (aussi ctrl-c)

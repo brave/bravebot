@@ -615,6 +615,12 @@ fn preview_for<S: Sink>(
 /// more because the person is the only one who will ever read it.
 const GLIMPSE_LINES: usize = 5;
 
+/// How many lines of a result the planner read are kept for the key that expands its glimpse.
+///
+/// Held in memory for a person who may never press it, so it is bounded; the expanded view says
+/// how many lines this cut.
+const EXPANDED_LINES: usize = 500;
+
 /// How many lines of a command's output are kept for the view a person can open over it.
 ///
 /// Far enough back to cover what somebody opens a run to ask about, and bounded because a program
@@ -806,6 +812,14 @@ pub struct Task {
     /// Supplied per turn for the reason `model` is: where the choice is kept is the caller's
     /// business.
     pub effort: Option<Effort>,
+    /// The schema the person running this task supplied for its reply, sent with each of the
+    /// planner's requests.
+    ///
+    /// The planner's own requests only: a delegate is built with none, and a compaction summary and
+    /// a manifest step are not the reply the person asked a shape of. Held here rather than checked
+    /// here, because whether the finished reply conforms is the caller's question to put once the
+    /// turn has ended.
+    pub output_schema: Option<crate::output_schema::OutputSchema>,
     /// How many tool-calling rounds this turn may make, or `None` for no bound.
     ///
     /// The caller's business, like `model` and `home`, because the right answer depends on who is
@@ -1067,6 +1081,7 @@ impl Task {
             advisor: None,
             model: None,
             effort: None,
+            output_schema: None,
             tick: None,
             // No watches unless a caller says it keeps some, for the reason `rounds` is bounded
             // by default: a default cannot know whether anybody is there to read a fire.
@@ -1252,6 +1267,15 @@ impl Task {
     /// Ask for a particular amount of thinking rather than the service's own default.
     pub fn with_effort(mut self, effort: Option<Effort>) -> Self {
         self.effort = effort;
+        self
+    }
+
+    /// Ask for a reply that matches a schema the person supplied.
+    pub fn with_output_schema(
+        mut self,
+        schema: Option<crate::output_schema::OutputSchema>,
+    ) -> Self {
+        self.output_schema = schema;
         self
     }
 
@@ -3725,17 +3749,24 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 // The kernel decides, from the label alone, whether the bytes go. Quarantined means
                 // the planner gets the reference and nothing else, which is of little use to it for a
                 // picture, but the alternative is handing over bytes the label says it may not have.
-                parts.push(match &presented {
-                    Presentation::Visible(uri) => Part::ImageUrl {
-                        image_url: ImageUrl { url: uri.clone() },
-                    },
-                    Presentation::Quarantined(reference) => Part::Text {
-                        text: format!(
-                            "{path} could not be shown to you.\n\n{}",
-                            reference.describe()
-                        ),
-                    },
-                });
+                //
+                // Shaped by `attached::parts` rather than here, so a dropped file reaches a planner
+                // the same way whether it came with a prompt, a question or a task (DROP-11).
+                parts.extend(
+                    match &presented {
+                        Presentation::Visible(uri) => crate::attached::Carried::Shown {
+                            path: path.clone(),
+                            uri: uri.clone(),
+                        },
+                        Presentation::Quarantined(reference) => {
+                            crate::attached::Carried::Described {
+                                path: path.clone(),
+                                said: reference.describe(),
+                            }
+                        }
+                    }
+                    .parts(),
+                );
             }
 
             // A pasted picture takes no such route. A dropped file is read out of the workspace, so it
@@ -4127,6 +4158,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     let model = turn_model.as_deref().unwrap_or(&config.default_model);
                     let (messages, marks) = conversation.with_system_marked(&system_text);
                     let request = ChatRequest::new(model, messages).with_effort(effort);
+                    let request = match &task.output_schema {
+                        Some(schema) => request.with_response_format(Some(
+                            bravebot_aichat::protocol::ResponseFormat::json_schema(
+                                schema.value().clone(),
+                            ),
+                        )),
+                        None => request,
+                    };
                     let request = if may_call_tools {
                         request.with_tools(offered.clone())
                     } else {
@@ -4811,6 +4850,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // Three shapes, and which one a result takes was decided by the tool that
                         // produced it and the kernel that labelled it, never here.
                         let mut shown_window = false;
+                        // Set where a skill's text was shown, so the result is tagged with it.
+                        let mut skill_shown: Option<String> = None;
                         // Set in each arm below, where the presentation that decides it is in scope.
                         let result_from: Provenance;
                         let body = if let Some(entries) = &output.entries {
@@ -5108,6 +5149,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     // Only a result the planner was shown counts as a window it holds
                                     // (READ-8). A quarantined one put nothing in front of it.
                                     shown_window = true;
+                                    skill_shown = output.skill.clone();
                                     // After the sample rather than in the middle of it, where the
                                     // notice naming what went is: what wrote that notice dropped the
                                     // bytes and does not know the slot they were kept in.
@@ -5127,18 +5169,27 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     // own sentence about a call is already its note.
                                     if output.content {
                                         let from_the_end = output.printed_by.is_some();
-                                        let (lines, total) = released_lines(
+                                        // One release for the kept lines, of which the glimpse is
+                                        // the first or last few.
+                                        let (whole, total) = released_lines(
                                             &mut policy,
                                             &output.tool,
                                             output.glimpsed.as_ref().unwrap_or(&output.text),
-                                            GLIMPSE_LINES,
+                                            EXPANDED_LINES,
                                             PREVIEW_WIDTH,
                                             from_the_end,
                                         );
+                                        let shown = GLIMPSE_LINES.min(whole.len());
+                                        let lines = if from_the_end {
+                                            whole[whole.len() - shown..].to_vec()
+                                        } else {
+                                            whole[..shown].to_vec()
+                                        };
                                         reporter.returned(crate::report::Returned {
                                             lines,
                                             total,
                                             from_the_end,
+                                            whole,
                                         });
                                     }
                                     format!(
@@ -5371,7 +5422,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // The prose one is tagged, so nothing has to recognise it by the words it opens with.
                         match call.id.as_deref().filter(|_| replayed.is_some()) {
                             Some(id) => {
-                                conversation.push_from(Message::tool_result(id, body), result_from);
+                                let result = Message::tool_result(id, body);
+                                match skill_shown {
+                                    Some(name) => {
+                                        conversation.push_skill_result(result, name, result_from)
+                                    }
+                                    None => conversation.push_from(result, result_from),
+                                }
                                 if shown_window && let Some(window) = output.window.take() {
                                     conversation.shown_read(window);
                                 }

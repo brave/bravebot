@@ -439,6 +439,11 @@ impl Confirmer for Answering {
         self.call
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &bravebot_agent::confirm::PathRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
         self.moves.push(request.clone());
         self.moved

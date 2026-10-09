@@ -262,7 +262,7 @@ pub const STATE_DIRECTORY: &str = ".bravebot";
 /// `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.pypirc`) are not here: they are what
 /// `gh`, `git`, `npm`, `cargo` and `pip` read to do what a person asked, and the network is where
 /// they could leave, which is decided by the plan.
-const CREDENTIAL_DIRECTORIES: &[&str] = &[
+pub(crate) const CREDENTIAL_DIRECTORIES: &[&str] = &[
     STATE_DIRECTORY,
     ".ssh",
     ".aws",
@@ -274,7 +274,7 @@ const CREDENTIAL_DIRECTORIES: &[&str] = &[
 ];
 
 /// The same, where only macOS keeps them, under the home directory.
-const MACOS_CREDENTIAL_DIRECTORIES: &[&str] = &[
+pub(crate) const MACOS_CREDENTIAL_DIRECTORIES: &[&str] = &[
     "Library/Keychains",
     "Library/Application Support/BraveSoftware",
     "Library/Application Support/Google/Chrome",
@@ -284,7 +284,7 @@ const MACOS_CREDENTIAL_DIRECTORIES: &[&str] = &[
 ];
 
 /// The same, where only Linux keeps them, under the home directory.
-const LINUX_CREDENTIAL_DIRECTORIES: &[&str] = &[
+pub(crate) const LINUX_CREDENTIAL_DIRECTORIES: &[&str] = &[
     ".local/share/keyrings",
     ".password-store",
     ".config/BraveSoftware",
@@ -294,7 +294,7 @@ const LINUX_CREDENTIAL_DIRECTORIES: &[&str] = &[
 ];
 
 /// The machine-wide keychain directory on macOS.
-const MACOS_SYSTEM_KEYCHAINS: &str = "/Library/Keychains";
+pub(crate) const MACOS_SYSTEM_KEYCHAINS: &str = "/Library/Keychains";
 
 /// The one file in `~/Library/Keychains` that is read, under the home directory.
 ///

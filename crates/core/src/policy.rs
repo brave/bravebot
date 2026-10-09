@@ -514,6 +514,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.sink.emit(Event::GatePassed { gate, detail });
     }
 
+    /// Record that a person let programs reach `path` for the rest of the session (SANDBOX-28).
+    ///
+    /// Only a person's yes reaches here. The path is the one they were shown, and nothing is
+    /// marked trusted by it.
+    pub fn record_path_reach(&mut self, path: &str, write: bool) {
+        let access = if write { "read and write" } else { "read" };
+        self.allow(
+            "path_reach",
+            format!("the user let programs {access} {path} for this session"),
+        );
+    }
+
     /// Check that a capability was granted before it is exercised.
     pub fn before_capability(&mut self, capability: Capability) -> Gated<()> {
         if !self.capabilities.contains(&capability) {
@@ -728,6 +740,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// egress being checked against a host that one call was approved for.
     pub fn fetch_finished(&mut self) {
         self.fetching = None;
+    }
+
+    /// Whether a `fetch_url` call is between [`Policy::before_fetch`] and
+    /// [`Policy::fetch_finished`].
+    ///
+    /// For the egress path to scope the check on what a name resolves to the way
+    /// [`Policy::before_network`] scopes its host confinement: to the fetch, not to the
+    /// connections a person set up themselves.
+    pub fn fetch_in_flight(&self) -> bool {
+        self.fetching.is_some()
     }
 
     /// Confine egress to where a declared server is, until the request reports back.
@@ -10916,6 +10938,23 @@ five
         );
     }
 
+    /// The egress path scopes its check of what a name resolves to by this, so it has to be true
+    /// from the approval to the end of the call and not after.
+    #[test]
+    fn a_fetch_is_in_flight_from_its_approval_until_it_finishes() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        assert!(!policy.fetch_in_flight());
+
+        let url = "https://example.com/start";
+        policy.endorse_fetch(url);
+        policy.before_fetch(url).expect("the fetch was allowed");
+        assert!(policy.fetch_in_flight());
+
+        policy.fetch_finished();
+        assert!(!policy.fetch_in_flight());
+    }
+
     /// A declared server is one destination and a redirect names another, so the hop is refused
     /// whatever the settings say. A `WebFetch` rule is a person naming websites the planner may
     /// reach, which is not consent to send a server's call to a different service. What widens
@@ -16230,7 +16269,7 @@ five
         use crate::delegate::{ADDRESSED, Definition, Definitions, Kind};
 
         /// Every tool name a turn might be offered that the tests below turn on.
-        const OFFERED: [&str; 12] = [
+        const OFFERED: [&str; 13] = [
             "read_file",
             "list_files",
             "write_file",
@@ -16238,6 +16277,7 @@ five
             "run",
             "lsp",
             "ask_user",
+            "request_path",
             "todo_write",
             "schedule_next",
             "fetch_url",
@@ -16271,6 +16311,7 @@ five
                     [
                         "read_file",
                         "ask_user",
+                        "request_path",
                         "apply_checkout",
                         "todo_write",
                         "schedule_next",
@@ -16588,7 +16629,7 @@ five
             }
         }
 
-        /// ADDRESS-8. Each of the six is kept from a delegate for a reason naming the thing this
+        /// ADDRESS-8. Each of the seven is kept from a delegate for a reason naming the thing this
         /// turn is not: nobody watching, no turn to outlive, a depth nobody chose. So the kernel
         /// withholds none of them by name. Whether a later look is offered at all is the
         /// driver's, since only it knows whether anything will ask again.

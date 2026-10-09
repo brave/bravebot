@@ -34,7 +34,7 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 36
+      - crates/agent/src/tools.rs: 37
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
@@ -53,7 +53,7 @@ guards:
       - crates/agent/src/manifest.rs: 10
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
-      - crates/agent/src/tools.rs: 19
+      - crates/agent/src/tools.rs: 20
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
@@ -142,7 +142,7 @@ guards:
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 12
+      - crates/agent/src/tools.rs: 13
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 5
   - symbol: Policy::decode_transport

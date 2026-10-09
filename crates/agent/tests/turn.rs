@@ -2433,6 +2433,14 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
             bravebot_agent::confirm::CallDecision::reject()
         }
 
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(
+            &mut self,
+            _request: &bravebot_agent::confirm::PathRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
         fn confirm_move(
             &mut self,
             _request: &bravebot_agent::confirm::MoveRequest,
@@ -2825,6 +2833,14 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -4665,6 +4681,14 @@ impl bravebot_agent::Confirmer for SaysOnce {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -5778,6 +5802,14 @@ impl bravebot_agent::Confirmer for ChangesTheFileWhenAsked {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -8311,6 +8343,14 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
             bravebot_agent::confirm::CallDecision::reject()
         }
 
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(
+            &mut self,
+            _request: &bravebot_agent::confirm::PathRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
         fn confirm_move(
             &mut self,
             _request: &bravebot_agent::confirm::MoveRequest,
@@ -10114,6 +10154,11 @@ fn a_result_the_planner_read_is_glimpsed_under_its_call() {
     assert_eq!(
         glimpse.total, 8,
         "the glimpse does not count the file's own lines: {glimpse:?}"
+    );
+    let all: Vec<String> = (1..=8).map(|n| format!("note {n}")).collect();
+    assert_eq!(
+        glimpse.whole, all,
+        "the lines kept for expansion are not the whole of what the planner read"
     );
 }
 
@@ -12624,6 +12669,197 @@ fn a_promoted_skill_name_is_recorded_as_the_models_choice() {
     );
 }
 
+/// COMPACT-17. The result is tagged with the name the catalogue gave the skill, so a compaction
+/// can send it again. A call that loaded nothing is tagged with nothing, whatever name it asked for.
+#[test]
+fn a_skill_the_planner_was_shown_is_tagged_and_a_refused_load_is_not() {
+    use bravebot_agent::conversation::Composed;
+
+    let scratch = Scratch::new("skill-tagged");
+    write_project_skill(&scratch.path, "commit-style", "commit-style", "sign them");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"commit-style"}"#),
+        tool_request("load_skill", r#"{"name":"commit-styles"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("commit this"),
+    )
+    .expect("turn runs");
+
+    let tagged: Vec<&Composed> = conversation
+        .messages()
+        .iter()
+        .filter(|stored| stored.message.tool_call_id.is_some())
+        .filter_map(|stored| stored.composed.as_ref())
+        .collect();
+    assert_eq!(
+        tagged,
+        [&Composed::Skill {
+            name: "commit-style".to_string()
+        }],
+        "one load was shown and one was refused"
+    );
+}
+
+/// COMPACT-17, end to end. A skill loaded in a turn is in the request after the conversation is
+/// compacted, in its own words, and the summariser is not what carries it.
+#[test]
+fn a_skill_loaded_in_a_turn_is_sent_again_when_that_conversation_is_compacted() {
+    use bravebot_agent::conversation::Composed;
+
+    let scratch = Scratch::new("skill-kept");
+    write_project_skill(
+        &scratch.path,
+        "commit-style",
+        "commit-style",
+        "always sign your commits",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"commit-style"}"#),
+        reply_with("understood"),
+        reply_with("they were committing"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("commit this"),
+    )
+    .expect("turn runs");
+    for prompt in ["one", "two", "three", "four"] {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        conversation.push(bravebot_aichat::protocol::Message::assistant("ok"));
+    }
+    let _ = received.recv().expect("first request");
+    let _ = received.recv().expect("second request");
+
+    turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+    )
+    .expect("compacting runs")
+    .expect("there is something to summarise");
+
+    let after_the_summary = &conversation.messages()[1];
+    assert_eq!(
+        after_the_summary.composed,
+        Some(Composed::SkillKept {
+            name: "commit-style".to_string()
+        })
+    );
+    assert!(
+        after_the_summary
+            .message
+            .content
+            .text()
+            .contains("always sign your commits"),
+        "{:?}",
+        after_the_summary.message
+    );
+}
+
+/// COMPACT-17. A skill in a project nobody vouched for is never shown to the planner, so nothing
+/// about it is sent again after a compaction. Text the planner was not shown is not put in front of
+/// it by a summary either.
+#[test]
+fn a_skill_from_an_untrusted_project_is_not_sent_again_when_the_conversation_is_compacted() {
+    use bravebot_agent::conversation::Composed;
+
+    let scratch = Scratch::new("skill-untrusted-kept");
+    write_project_skill(
+        &scratch.path,
+        "commit-style",
+        "commit-style",
+        "always sign your commits",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"commit-style"}"#),
+        reply_with("understood"),
+        reply_with("they were committing"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        Task::new("commit this"),
+    )
+    .expect("turn runs");
+    for prompt in ["one", "two", "three", "four"] {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        conversation.push(bravebot_aichat::protocol::Message::assistant("ok"));
+    }
+    let _ = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("always sign your commits"),
+        "the planner was shown the untrusted skill: {second}"
+    );
+
+    turn::compact(
+        &config,
+        &egress,
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        None,
+    )
+    .expect("compacting runs")
+    .expect("there is something to summarise");
+
+    let carried: Vec<&Composed> = conversation
+        .messages()
+        .iter()
+        .filter_map(|stored| stored.composed.as_ref())
+        .filter(|composed| {
+            matches!(
+                composed,
+                Composed::Skill { .. } | Composed::SkillKept { .. }
+            )
+        })
+        .collect();
+    assert!(carried.is_empty(), "{carried:?}");
+    assert!(
+        conversation.messages().iter().all(|stored| !stored
+            .message
+            .content
+            .text()
+            .contains("always sign your commits")),
+        "the untrusted skill's text is in the compacted conversation"
+    );
+}
+
 /// LSP-1: `workspaceSymbol` names no file, so its query is the whole of what the server is asked
 /// to look for, and a field that decides that is routing. Recording it is what separates the
 /// model's choice from the user's, the same way the operation and the path beside it are recorded.
@@ -13332,6 +13568,73 @@ fn without_a_chosen_effort_no_level_is_requested() {
     );
 }
 
+/// A schema the person supplied must reach the service, or the flag asks for a shape and sends
+/// nothing that asks for it.
+#[test]
+fn an_output_schema_is_requested_with_the_planners_request() {
+    let scratch = Scratch::new("output-schema-requested");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve(&reply_with(r#"{"verdict":"pass"}"#));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let schema = bravebot_agent::output_schema::OutputSchema::parse(
+        r#"{"type":"object","required":["verdict"]}"#,
+    )
+    .expect("a schema in the subset");
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("anything").with_output_schema(Some(schema)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let body: serde_json::Value =
+        serde_json::from_str(&received.recv().expect("request body")).expect("a JSON body");
+    assert_eq!(
+        body["response_format"],
+        serde_json::json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": "reply",
+                "schema": {"type": "object", "required": ["verdict"]}
+            }
+        }),
+        "the schema was not requested"
+    );
+}
+
+/// A turn nobody gave a schema sends the request it always sent.
+#[test]
+fn without_an_output_schema_no_response_format_is_requested() {
+    let scratch = Scratch::new("no-output-schema");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("anything"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(
+        !body.contains("response_format"),
+        "a shape was requested by a turn that was given none: {body}"
+    );
+}
+
 /// Choosing nothing is not choosing "", so a turn with no choice falls back to the configured
 /// default rather than sending an empty field the server would reset anyway.
 #[test]
@@ -13537,6 +13840,14 @@ impl bravebot_agent::Confirmer for AnswersWith {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -13941,6 +14252,10 @@ struct AskedAboutRuns {
     answers: std::collections::VecDeque<bravebot_agent::RunDecision>,
     writes: bravebot_agent::WriteDecision,
     seen: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::RunRequest>>>,
+    /// What the person is asked about reach to a path, and what they say. A refusal unless a test
+    /// gave a yes.
+    path_answer: bravebot_agent::confirm::Decision,
+    paths: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::PathRequest>>>,
 }
 
 impl AskedAboutRuns {
@@ -13950,7 +14265,16 @@ impl AskedAboutRuns {
             answers: std::collections::VecDeque::new(),
             writes: bravebot_agent::WriteDecision::reject(),
             seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            path_answer: bravebot_agent::confirm::Decision::Reject,
+            paths: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    /// Also lets programs reach the path a request names, for a test whose subject is what a yes
+    /// does.
+    fn approving_paths(mut self) -> Self {
+        self.path_answer = bravebot_agent::confirm::Decision::Approve;
+        self
     }
 
     /// Answers the runs of one turn in order, for a test where the person says different things to
@@ -14048,6 +14372,14 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_path(
+        &mut self,
+        request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.paths.lock().unwrap().push(request.clone());
+        self.path_answer
     }
 
     fn confirm_move(
@@ -16149,6 +16481,70 @@ fn a_failed_run_on_a_confining_turn_says_what_it_ran_under() {
     assert!(!line.contains("/elsewhere"), "{line}");
 }
 
+const CREDENTIAL_LOCATIONS: &str = "cannot be added with `/add-dir` or `--add-dir`";
+
+/// SANDBOX-19: the line that follows a failed step says a credential location cannot be added, in
+/// `strict` and in `standard`, in the same words for exit 1 and exit 2, since it is built from the
+/// session and the steps and not from what the program did.
+#[test]
+fn a_failed_run_says_a_credential_location_cannot_be_added_whatever_the_mode_and_exit() {
+    if cannot_confine_here() {
+        return;
+    }
+    for (label, mode) in [
+        ("strict", bravebot_sandbox::SandboxMode::Strict),
+        ("standard", bravebot_sandbox::SandboxMode::Standard),
+    ] {
+        let line = |code: u8| {
+            let (_, second) = requests_for_one_run_in(
+                &format!("run-credential-locations-{label}-{code}"),
+                &format!("sh -c 'exit {code}'"),
+                mode,
+            );
+            let said = message_from(&second, "Result of run").to_string();
+            assert!(said.contains(&format!("exited {code}")), "{label}: {said}");
+            said[said
+                .find("Any other path")
+                .expect("the end of the profile line")..]
+                .to_string()
+        };
+        let (one, two) = (line(1), line(2));
+        assert_eq!(one, two, "{label}");
+        assert_eq!(
+            one.matches(CREDENTIAL_LOCATIONS).count(),
+            1,
+            "{label}: {one}"
+        );
+        assert!(one.contains("`~/.ssh`"), "{label}: {one}");
+    }
+}
+
+/// SANDBOX-19: the sentence belongs to the line, so a run that worked and a turn that does not
+/// confine carry none.
+#[test]
+fn a_run_that_worked_or_was_not_confined_does_not_say_a_credential_location_cannot_be_added() {
+    let (_, second, _) = requests_for_one_run(
+        "run-credential-locations-unconfined",
+        "sh -c 'exit 1'",
+        false,
+    );
+    let result = message_from(&second, "Result of run");
+    assert!(result.contains("exited 1"), "{result}");
+    assert!(!result.contains(CREDENTIAL_LOCATIONS), "{result}");
+
+    if cannot_confine_here() {
+        return;
+    }
+    let (_, second) = requests_for_one_run_in(
+        "run-credential-locations-ok",
+        "mkdir made",
+        bravebot_sandbox::SandboxMode::Standard,
+    );
+    let result = message_from(&second, "Result of run");
+    assert!(result.contains("It exited 0."), "{result}");
+    assert!(!result.contains(CREDENTIAL_LOCATIONS), "{result}");
+}
+
 /// One confined run of `command` in a session that keeps its state in `state` and answers to `session`,
 /// with `profile` standing for the person's home. Returns what the person was asked and what the
 /// planner was sent after the run.
@@ -16916,39 +17312,70 @@ fn keeping_a_request_writes_nothing_where_it_was_not_offered_or_was_refused() {
 }
 
 /// SANDBOX-26: the request is refused, and the program does not start, where the mode accepts
-/// none. `standard` already reads the machine and `off` has no profile to add to. The planner is
-/// told, in the same words, that nothing was added; no prompt is raised.
+/// none: `off` has no profile to add to. The planner is told, in the same words, that nothing was
+/// added; no prompt is raised.
 #[test]
-fn scopes_are_refused_under_standard_and_under_off() {
+fn scopes_are_refused_under_off() {
     if cannot_confine_here() {
         return;
     }
-    for mode in [
-        bravebot_sandbox::SandboxMode::Standard,
-        bravebot_sandbox::SandboxMode::Off,
-    ] {
-        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
-        let seen = confirmer.seen.clone();
-        let result = scoped_run(
-            &format!("scopes-refused-{mode}"),
-            serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["aws"] }),
-            mode,
-            bravebot_agent::PermissionMode::default(),
-            trusting_the_workspace(),
-            no_programs,
-            &mut confirmer,
-        );
-        assert!(
-            message_from(&result.second, "Result of run").contains("does not accept a request"),
-            "{mode}: {}",
-            result.second
-        );
-        assert!(!result.ran, "{mode}: the line ran");
-        assert!(
-            seen.lock().unwrap().is_empty(),
-            "{mode}: a prompt was raised"
-        );
+    let mode = bravebot_sandbox::SandboxMode::Off;
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+    let result = scoped_run(
+        "scopes-refused-off",
+        serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["aws"] }),
+        mode,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut confirmer,
+    );
+    assert!(
+        message_from(&result.second, "Result of run").contains("does not accept a request"),
+        "{mode}: {}",
+        result.second
+    );
+    assert!(!result.ran, "{mode}: the line ran");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "{mode}: a prompt was raised"
+    );
+}
+
+/// SANDBOX-26: `standard` accepts the request as `strict` does. The person is asked about the line
+/// with the names shown, and the line runs once they approve. The control is the same call under
+/// `off`, which is refused, so the run below is the mode's doing and not the harness's.
+#[test]
+fn scopes_are_asked_about_and_run_under_standard() {
+    if cannot_confine_here() {
+        return;
     }
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = asked.seen.clone();
+    let result = scoped_run(
+        "scopes-standard",
+        serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["remote", "aws"] }),
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut asked,
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "the request was not asked about");
+    assert_eq!(seen[0].requested_scopes(), ["remote", "aws"]);
+    assert!(seen[0].asks_for_scopes());
+    assert!(
+        result.ran,
+        "the approved line did not run: {}",
+        result.second
+    );
+    assert!(
+        !message_from(&result.second, "Result of run").contains("does not accept a request"),
+        "{}",
+        result.second
+    );
 }
 
 /// SANDBOX-26, TRUST-7: the request is refused in a workspace the person declined to trust, where
@@ -17113,6 +17540,30 @@ fn the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu() {
     assert_eq!(one, two);
     for name in ["remote", "aws", "kubernetes", "docker", "cargo", "gradle"] {
         assert!(one.contains(name), "{name} missing from {one}");
+    }
+}
+
+/// SANDBOX-19: the same sentence follows a failure under `standard`, which names the menu too.
+#[test]
+fn the_failure_sentence_names_the_menu_under_standard() {
+    if cannot_confine_here() {
+        return;
+    }
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let result = scoped_run(
+        "scopes-failure-sentence-standard",
+        serde_json::json!({ "command": "sh -c 'exit 1'" }),
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut confirmer,
+    );
+    let said = message_from(&result.second, "Result of run").to_string();
+    assert!(said.contains("exited 1"), "{said}");
+    let sentence = &said[said.find("Confinement:").expect("a confinement sentence")..];
+    for name in ["remote", "aws", "kubernetes", "docker", "cargo", "gradle"] {
+        assert!(sentence.contains(name), "{name} missing from {sentence}");
     }
 }
 
@@ -17442,6 +17893,14 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -21051,6 +21510,14 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -21524,6 +21991,14 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -22137,8 +22612,18 @@ fn an_attachment_is_sent_beside_the_prompt_that_came_with_it() {
         .as_array()
         .expect("the prompt carries parts");
     assert_eq!(parts[0]["text"], "what is this");
-    assert_eq!(parts[1]["type"], "image_url");
-    let url = parts[1]["image_url"]["url"].as_str().expect("a url");
+    // The path, then the bytes, in that order (DROP-11): a planner given a picture and no path
+    // cannot name the file it was shown. The prompt the person typed stays first.
+    assert_eq!(parts[1]["type"], "text");
+    assert!(
+        parts[1]["text"]
+            .as_str()
+            .is_some_and(|said| said.contains("shot.png")),
+        "the part before the bytes does not name the file: {}",
+        parts[1]
+    );
+    assert_eq!(parts[2]["type"], "image_url");
+    let url = parts[2]["image_url"]["url"].as_str().expect("a url");
     assert!(url.starts_with("data:image/png;base64,"), "{url}");
     // iVBORw0KGgo is the base64 of a PNG's signature, so this is the file and not a placeholder.
     assert!(url.contains("iVBORw0KGgo"), "{url}");
@@ -22184,6 +22669,53 @@ fn attaching_a_file_vouches_for_it_the_way_naming_one_does() {
     assert!(
         body.contains("iVBORw0KGgo"),
         "attaching did not vouch for the file: {body}"
+    );
+}
+
+/// DROP-11: the path travels with the bytes. A turn's prompt holds the marker `[Image #1]`, and
+/// without the path the request says a picture arrived and never which file it was, so a planner
+/// asked to look at the dropped file cannot name it to a tool or say which one it saw.
+///
+/// Asserted on the order inside the message, because a path that lands after the bytes belongs to
+/// whatever part comes next: on a line that dropped two files it would name the wrong one.
+#[test]
+fn a_dropped_picture_reaches_the_model_with_its_path() {
+    let scratch = Scratch::new("dropped-path");
+    std::fs::write(
+        scratch.path.join("shot.png"),
+        [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("a picture"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let task = Task::new("what is in [Image #1]").with_attachment("shot.png", "image/png");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("a request was sent");
+    let named = body
+        .find("Dropped file: shot.png")
+        .unwrap_or_else(|| panic!("the dropped file's path did not go with it: {body}"));
+    let bytes = body
+        .find("iVBORw0KGgo")
+        .unwrap_or_else(|| panic!("the bytes did not go: {body}"));
+    assert!(
+        named < bytes,
+        "the path did not come before the bytes it names: {body}"
     );
 }
 
@@ -23642,6 +24174,12 @@ fn a_picture_dropped_onto_a_question_reaches_the_model_with_it() {
     assert!(
         body.contains("data:image/png;base64,iVA="),
         "the picture did not go with the question: {body}"
+    );
+    // DROP-11: a question carries the path as a turn does, so the marker is answered by a named
+    // file rather than by counting parts.
+    assert!(
+        body.contains("Dropped file: shot.png"),
+        "the dropped file's path did not go with the question: {body}"
     );
 }
 
@@ -31754,6 +32292,53 @@ fn a_failed_fetch_names_the_url_that_was_asked_for_and_not_where_a_redirect_went
     );
 }
 
+/// The host a person approves is a name, and a name resolves to whatever its server says. One that
+/// resolves to this machine is refused as the fetch fails, before any request, and the planner is
+/// told which fetch failed and nothing of the address.
+#[test]
+fn a_fetch_to_a_name_that_resolves_to_this_machine_fails_without_reaching_it() {
+    let scratch = Scratch::new("fetch-resolves-locally");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, requests) = serve_pages(vec![page("SENTINEL-LOCAL-BYTES")]);
+    let url = format!("{}/docs", site.replace("127.0.0.1", "localhost"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{url}"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the docs page"),
+        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(&format!("error: fetching {url} failed")),
+        "the planner was not told which fetch failed: {second}"
+    );
+    assert!(
+        !second.contains("127.0.0.1") && !second.contains("SENTINEL-LOCAL-BYTES"),
+        "an address or a body reached the planner's context: {second}"
+    );
+    assert!(
+        requests
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "a request reached the server the name resolved to"
+    );
+}
+
 /// A redirect off the approved host is refused, and the refusal is reported to the planner the
 /// same way a failure is. The host it names was taken out of the server's `Location` header, so
 /// saying it would be the same leak through the gate that stops the request.
@@ -32518,6 +33103,14 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -39132,6 +39725,14 @@ impl bravebot_agent::confirm::Confirmer for RemembersWrites {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -40201,6 +40802,14 @@ impl bravebot_agent::confirm::Confirmer for RemembersExposures {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -45718,6 +46327,11 @@ mod spend_limit {
         fn confirm_mcp_call(&mut self, _: &McpCallRequest) -> CallDecision {
             CallDecision::reject()
         }
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(&mut self, _request: &bravebot_agent::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+
         fn confirm_move(&mut self, _: &MoveRequest) -> Decision {
             Decision::Reject
         }
@@ -46174,5 +46788,487 @@ fn a_quarantined_capped_files_result_still_says_it_is_incomplete() {
     assert!(
         second.contains("incomplete"),
         "a capped files result made no claim to a planner that may not read it: {second}"
+    );
+}
+
+// SANDBOX-28: asking the person for reach to a path a program cannot otherwise touch.
+
+/// What a turn that made `calls` in order left behind.
+struct PathTurn {
+    /// The planner's requests after the first, each holding the result of the call before it.
+    results: Vec<String>,
+    /// The first request, which carries the tool list.
+    first: String,
+    workspace: Workspace,
+    trust: bravebot_core::trust::TrustStore,
+    events: Vec<Event>,
+}
+
+/// Places a request for a path is made against: a session, a home that holds the places a request
+/// is refused at, and a directory beside both that a program cannot write unless it was asked for.
+struct PathPlaces {
+    home: PathBuf,
+    beside: PathBuf,
+}
+
+impl PathPlaces {
+    fn new(name: &str) -> Self {
+        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("path-{name}"));
+        let _ = std::fs::remove_dir_all(&top);
+        let home = top.join("home");
+        let beside = top.join("beside");
+        for place in [".ssh", ".bravebot", ".aws", "project"] {
+            std::fs::create_dir_all(home.join(place)).expect("home directory");
+        }
+        std::fs::create_dir_all(&beside).expect("beside directory");
+        Self {
+            home: home.canonicalize().expect("canonical home"),
+            beside: beside.canonicalize().expect("canonical beside"),
+        }
+    }
+
+    fn lands(&self) -> PathBuf {
+        self.beside.join("ran.txt")
+    }
+
+    fn writing_line(&self) -> String {
+        format!("sh -c 'echo x > {}'", self.lands().display())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn path_turn<C: bravebot_agent::Confirmer + Send>(
+    name: &str,
+    places: &PathPlaces,
+    calls: &[(&str, serde_json::Value)],
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: Option<bravebot_core::permissions::Permissions>,
+    confirmer: &mut C,
+) -> PathTurn {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies: Vec<String> = calls
+        .iter()
+        .map(|(tool, arguments)| tool_request_with_usage(tool, &arguments.to_string(), 1, 1))
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut task = Task::new("reach it")
+        .with_profile(Some(places.home.clone()))
+        .with_permission_mode(permission)
+        .with_confined_runs(true)
+        .with_sandbox_mode(mode);
+    if let Some(permissions) = permissions {
+        task = task.with_permissions(permissions);
+    }
+    let mut sink = RecordingSink::new();
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    outcome.outcome.as_ref().expect("the turn runs");
+    let first = received.recv().expect("first request");
+    let results = (0..calls.len())
+        .map(|_| received.recv().expect("a later request"))
+        .collect();
+    PathTurn {
+        results,
+        first,
+        workspace,
+        trust: outcome.decisions.trust,
+        events: sink.events().to_vec(),
+    }
+}
+
+/// What the tool said, without the line that names it.
+fn path_result(body: &str) -> &str {
+    let said = message_from(body, "Result of request_path");
+    said.split_once("\\n\\n").map_or(said, |(_, result)| result)
+}
+
+fn asking_for(path: &std::path::Path, write: bool) -> (&'static str, serde_json::Value) {
+    (
+        "request_path",
+        serde_json::json!({
+            "path": path.display().to_string(),
+            "write": write,
+            "why": "the build writes its output there",
+        }),
+    )
+}
+
+fn running(line: &str) -> (&'static str, serde_json::Value) {
+    ("run", serde_json::json!({ "command": line }))
+}
+
+/// SANDBOX-28: a yes lets a program write the path for the rest of the session. The control is the
+/// same line with no request, which cannot write it; a request for reading alone is the second
+/// control, since reach that was widened past what was asked would let this line write.
+#[test]
+fn a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("write");
+    let turn_with = |name: &str, calls: &[(&str, serde_json::Value)]| {
+        let _ = std::fs::remove_file(places.lands());
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let paths = asked.paths.clone();
+        let turn = path_turn(
+            name,
+            &places,
+            calls,
+            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_agent::PermissionMode::default(),
+            trusting_the_workspace(),
+            None,
+            &mut asked,
+        );
+        let asked = paths.lock().unwrap().clone();
+        (turn, asked, places.lands().exists())
+    };
+
+    let (_, asked, landed) = turn_with("path-write-control", &[running(&places.writing_line())]);
+    assert!(asked.is_empty());
+    assert!(!landed, "the line wrote beside the session with no request");
+
+    let (turn, asked, landed) = turn_with(
+        "path-write-read-only",
+        &[
+            asking_for(&places.beside, false),
+            running(&places.writing_line()),
+        ],
+    );
+    assert_eq!(asked.len(), 1);
+    assert!(!asked[0].write);
+    assert!(
+        path_result(&turn.results[0]).starts_with("approved"),
+        "{}",
+        turn.results[0]
+    );
+    assert!(!landed, "a request to read let the line write");
+
+    let (turn, asked, landed) = turn_with(
+        "path-write-yes",
+        &[
+            asking_for(&places.beside, true),
+            running(&places.writing_line()),
+        ],
+    );
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].path, places.beside);
+    assert!(asked[0].write);
+    assert_eq!(asked[0].why, "the build writes its output there");
+    assert!(landed, "the line did not write after a yes");
+    let held = turn.workspace.path_reach();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].path, places.beside);
+    assert!(held[0].write);
+}
+
+/// SANDBOX-28, TRUST-9: a yes is reach and not trust. The trust map comes back as it went in, and
+/// the trail records the reach under the gate that names it.
+#[test]
+fn a_yes_to_a_path_marks_nothing_trusted_and_is_recorded() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("trail");
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let turn = path_turn(
+        "path-trail",
+        &places,
+        &[asking_for(&places.beside, true)],
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut asked,
+    );
+    assert_eq!(
+        turn.workspace.path_reach().len(),
+        1,
+        "the control: a grant was made"
+    );
+    let before = trusting_the_workspace();
+    assert_eq!(
+        turn.trust.rules().collect::<Vec<_>>(),
+        before.rules().collect::<Vec<_>>()
+    );
+    assert!(!turn.trust.is_trusted(&places.beside.display().to_string()));
+    let at = gate_in(&turn.events, "path_reach");
+    assert!(at.contains("write"), "{at}");
+    assert!(at.contains(&places.beside.display().to_string()), "{at}");
+}
+
+fn gate_in(events: &[Event], gate: &str) -> String {
+    events
+        .iter()
+        .find_map(|event| match event {
+            Event::GatePassed {
+                gate: passed,
+                detail,
+            } if *passed == gate => Some(detail.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no {gate} gate in the trail: {events:?}"))
+}
+
+/// SANDBOX-28: a path an `allowWrite` row is refused at is refused here, and the person is not
+/// asked. `/` and the home directory are too broad, `~/.ssh`, `~/.aws` and `~/.bravebot` hold what
+/// a program must not read, a pattern names more than one path, and a path that is not there
+/// cannot be reached. The control is a path beside the session, which is asked about.
+#[test]
+fn a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("refused");
+    let home = places.home.display().to_string();
+    let refused = [
+        "/".to_string(),
+        "~".to_string(),
+        home.clone(),
+        "~/.ssh".to_string(),
+        format!("{home}/.aws"),
+        "~/.bravebot".to_string(),
+        format!("{home}/.."),
+        format!("{}/*", places.beside.display()),
+        "relative/dir".to_string(),
+        format!("{}/nothing-here", places.beside.display()),
+        format!("{home}/.config"),
+    ];
+    #[cfg(unix)]
+    let refused = {
+        let mut refused = refused.to_vec();
+        let odd = places.beside.join("odd\u{7}name");
+        std::fs::create_dir_all(&odd).expect("a directory with a control character in its name");
+        refused.push(odd.display().to_string());
+        refused
+    };
+    for (at, named) in refused.iter().enumerate() {
+        for write in [false, true] {
+            let mut asked =
+                AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+            let paths = asked.paths.clone();
+            let turn = path_turn(
+                &format!("path-refused-{at}-{write}"),
+                &places,
+                &[asking_for(std::path::Path::new(named), write)],
+                bravebot_sandbox::SandboxMode::Standard,
+                bravebot_agent::PermissionMode::default(),
+                trusting_the_workspace(),
+                None,
+                &mut asked,
+            );
+            let said = path_result(&turn.results[0]);
+            assert!(
+                said.starts_with("refused") || said.starts_with("error"),
+                "{named} (write {write}): {said}"
+            );
+            assert!(
+                paths.lock().unwrap().is_empty(),
+                "{named}: the person was asked"
+            );
+            assert!(
+                turn.workspace.path_reach().is_empty(),
+                "{named}: reach was held"
+            );
+        }
+    }
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let paths = asked.paths.clone();
+    let control = path_turn(
+        "path-refused-control",
+        &places,
+        &[asking_for(&places.beside, false)],
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut asked,
+    );
+    assert_eq!(paths.lock().unwrap().len(), 1, "the control was not asked");
+    assert_eq!(control.workspace.path_reach().len(), 1);
+}
+
+/// SANDBOX-28, TRUST-7: no request is accepted under `off`, which has no profile to add to, or in a
+/// workspace the person declined to trust. The person is not asked and the planner is told in the
+/// same words as for any other refusal to accept one.
+#[test]
+fn a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("modes");
+    for (label, mode, trust) in [
+        (
+            "off",
+            bravebot_sandbox::SandboxMode::Off,
+            trusting_the_workspace(),
+        ),
+        (
+            "untrusted",
+            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_core::trust::TrustStore::new("/work"),
+        ),
+    ] {
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let paths = asked.paths.clone();
+        let turn = path_turn(
+            &format!("path-{label}"),
+            &places,
+            &[asking_for(&places.beside, true)],
+            mode,
+            bravebot_agent::PermissionMode::default(),
+            trust,
+            None,
+            &mut asked,
+        );
+        assert!(
+            path_result(&turn.results[0]).contains("does not accept a request for a path"),
+            "{label}: {}",
+            turn.results[0]
+        );
+        assert!(paths.lock().unwrap().is_empty(), "{label}: asked");
+        assert!(turn.workspace.path_reach().is_empty(), "{label}: held");
+    }
+}
+
+/// SANDBOX-28: a no, and a run with nobody to ask, grant nothing. Bypass is the one way through
+/// without a person, as for a scope. A rule an allow list or a project file could write to say yes
+/// to `request_path` does not answer for the person.
+#[test]
+fn a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("answers");
+    let call = [asking_for(&places.beside, true)];
+
+    let mut declined = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let paths = declined.paths.clone();
+    let mut asking = bravebot_agent::Confining::new(
+        &mut declined,
+        bravebot_agent::PermissionMode::default(),
+        false,
+    );
+    let turn = path_turn(
+        "path-declined",
+        &places,
+        &call,
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut asking,
+    );
+    assert_eq!(paths.lock().unwrap().len(), 1, "a no needs a question");
+    assert!(
+        path_result(&turn.results[0]).starts_with("refused"),
+        "{}",
+        turn.results[0]
+    );
+    assert!(turn.workspace.path_reach().is_empty());
+
+    let turn = path_turn(
+        "path-unattended",
+        &places,
+        &call,
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut bravebot_agent::confirm::Unattended,
+    );
+    assert!(
+        turn.workspace.path_reach().is_empty(),
+        "an unattended run was granted reach"
+    );
+
+    let mut unattended = bravebot_agent::confirm::Unattended;
+    let mut bypass = bravebot_agent::Confining::new(
+        &mut unattended,
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+    );
+    let turn = path_turn(
+        "path-bypass",
+        &places,
+        &call,
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypass,
+    );
+    assert_eq!(
+        turn.workspace.path_reach().len(),
+        1,
+        "the mode that asks nothing did not approve it"
+    );
+
+    let mut declined = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let paths = declined.paths.clone();
+    let turn = path_turn(
+        "path-allow-rule",
+        &places,
+        &call,
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        Some(rules(&[], &[], &["Edit(**)", "Bash(*)", "Read(**)"])),
+        &mut declined,
+    );
+    assert_eq!(
+        paths.lock().unwrap().len(),
+        1,
+        "an allow rule answered for the person"
+    );
+    assert!(turn.workspace.path_reach().is_empty());
+}
+
+/// SANDBOX-28: the tool is on the list a confining turn offers.
+#[test]
+fn the_tool_is_offered_where_runs_are_confined() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("offered");
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let turn = path_turn(
+        "path-offered",
+        &places,
+        &[running("uname")],
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        None,
+        &mut asked,
+    );
+    assert!(
+        turn.first.contains(r#""name":"request_path""#),
+        "{}",
+        turn.first
     );
 }

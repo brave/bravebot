@@ -84,6 +84,12 @@ cli-plain-takes-nothing-else =
 # the answer (TRUST-23). A session in lines has no slash commands, so the ways to be asked again are
 # the ones it can name: the command in the interface that draws, or the lines in the file. The
 # lines rather than the file, since a directory whose path is spelled alike shares the file.
+# Said on stderr by a one-shot run that opens with a kept answer about its working directory
+# or the root of the git worktree around it, naming the directory the answer was about.
+cli-trusting-kept =
+    trusting { $directory } (you said to remember it { $when }; to be asked again, run
+    /forget-trust in bravebot, or delete the lines naming it from { $path })
+
 cli-plain-trusting-kept =
     trusting { $directory } (you said to remember it { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming it from { $path })
@@ -109,6 +115,7 @@ mode-bypass = ⏵⏵ bypass permissions on
 cli-options-heading = Options:
 cli-option-file = Include a workspace file as context (repeatable)
 cli-option-add-dir = Reach into a directory outside the working one (repeatable)
+cli-option-trust-workspace = Trust the working directory for this run, as answering yes to the startup question does
 cli-option-settings = Read this settings file for this run, above the ones found on disk
 cli-option-run-network =
     Whether programs `run` starts may reach the network. closed denies it to every one except a package
@@ -139,6 +146,7 @@ cli-option-print = Non-interactive. Reads piped stdin as quarantined context
 cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-json-stream = Print one event per line on stdout as the run goes, then the result object
+cli-option-output-schema = Require the reply to match the JSON Schema in this file; with --json the value is in "structured"
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
 cli-option-safe =
     Load none of your own hooks, skills, definitions, MCP servers or AGENTS.md. Sign-in, model and permissions still apply
@@ -247,6 +255,24 @@ cli-model-needs-a-name = --model requires the name of a model
 cli-advisor-needs-a-name = --advisor requires the name of a model
 cli-advisor-not-with-a-manifest = --advisor cannot be used with --mode manifest, which runs its plan without a planner to ask
 cli-effort-needs-a-level = --effort requires one of { $levels }
+cli-output-schema-needs-a-path = --output-schema requires the path of a JSON Schema file
+cli-output-schema-not-with-a-manifest = --output-schema cannot be used with --mode manifest, which has a reply for each step and none for the run
+cli-output-schema-not-served = --output-schema cannot be used with { $model }, which cannot be asked for a reply that matches a schema
+cli-output-schema-unreadable = cannot read the output schema { $path }: { $problem }
+cli-output-schema-not-json = the output schema { $path } is not JSON
+cli-output-schema-not-an-object = in the output schema { $path }, { $at } is not a JSON object
+cli-output-schema-unsupported = the output schema { $path } uses { $keyword } at { $at }, which is not supported
+cli-output-schema-malformed = the output schema { $path } gives { $keyword } at { $at } a value it cannot take
+cli-output-schema-mismatch = the reply does not match the output schema at { $at }: { $problem }
+cli-output-schema-rule-not-json = the reply is not a single JSON value
+cli-output-schema-rule-type = the value is of another type
+cli-output-schema-rule-enum = the value is not one of those listed
+cli-output-schema-rule-const = the value is not the one allowed
+cli-output-schema-rule-required = a required property is missing
+cli-output-schema-rule-extra = a property the schema does not list is present
+cli-output-schema-rule-length = the string is shorter or longer than allowed
+cli-output-schema-rule-count = the array has fewer or more items than allowed
+cli-output-schema-rule-range = the number is below or above what is allowed
 cli-unexpected-argument = unexpected argument: { $argument }
 cli-task-required = a task is required
 cli-configuration-problem = configuration error: { $problem }
@@ -1264,6 +1290,27 @@ mcp-move-not-recorded =
 mcp-move-no-handshake = { $alias } did not complete its handshake where its reply pointed: { $reason }
 mcp-move-again = { $alias } was redirected again, off where it was just moved, so that was refused
 
+## Programs asking for one more path for the session
+
+path-title = let programs reach another path?
+path-reads = programs this session starts may read { $path }
+path-writes = programs this session starts may read and write { $path }
+path-why = the planner says: { $why }
+path-explained =
+    Every command the planner runs from now until this session ends gets it. Nothing is written to
+    disk, so the next session asks again. /reach paths lists what was allowed and
+    /reach paths remove <number> ends one.
+path-not-trusted =
+    The directory is not marked trusted: what is in it is still labelled as it was, and a file
+    there is no more believed than before.
+path-yes = Yes, for this session
+path-no = No
+path-listed = { $number }. every command also { $access } { $path }, for this session
+path-none = no path was requested this session
+path-removed = ended: commands no longer { $access } { $path }
+path-refused-number = no requested path is numbered { $number }
+path-usage = /reach paths lists the paths programs were allowed to reach this session. /reach paths remove <number> ends one.
+
 ## Vouching for a directory, asked once when a session starts somewhere new
 
 trust-directory-title = trust this directory?
@@ -1532,7 +1579,7 @@ run-carries-remembered = { $sentence } (remembered for this command, allowed { $
 run-carries-remembered-read = { $program } also reads { $path } (remembered for this command, allowed { $date })
 run-carries-remembered-write = { $program } also reads and writes { $path } (remembered for this command, allowed { $date })
 # The /reach command: what it lists, what it says it did, and why it did nothing.
-reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one.
+reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one. /reach paths lists the paths a session was let reach, and /reach paths remove <number> ends one.
 reach-none = no reach is remembered for any command
 reach-listed = { $number }. { $command } also { $access } { $entry }, allowed { $date }, { $lifetime }
 reach-access-reads = reads
@@ -1807,6 +1854,10 @@ count-commands = { $count ->
     [one] { $count } command
    *[other] { $count } commands
     }
+count-requested-paths = { $count ->
+    [one] { $count } path
+   *[other] { $count } paths
+    }
 count-reach-grants = { $count ->
     [one] { $count } grant
    *[other] { $count } grants
@@ -1968,6 +2019,8 @@ status-remembered-this-session = remembered in this session
 status-remembered-earlier = remembered in an earlier session
 status-remembered-where = delete a line from { $path } to be asked again
 status-reach = Remembered reach
+status-requested-paths = Requested paths
+status-requested-paths-note = programs this session starts may reach these; the directories are not trusted. /reach paths remove <number> ends one
 status-reach-note = added to the plan of the command each names; /reach remove <number> forgets one
 status-remembered-and-more = { $count ->
     [one] … and 1 more, { $earlier } of them from an earlier session
@@ -2166,6 +2219,7 @@ scroller-key-prompts = previous / next prompt
 scroller-key-search = search, next/previous match
 scroller-key-count = a count first goes that many times as far
 scroller-key-search-run = run it / delete, then abandon
+scroller-key-expand = expand or collapse a call's result
 scroller-key-editor = open the transcript in $EDITOR
 scroller-key-this-list = this list
 scroller-key-close = close the scroller   (also ctrl-c)
@@ -2993,6 +3047,7 @@ verb-todo-write = Plan
 verb-spawn-processor = Isolated processor
 verb-load-skill = Skill
 verb-ask-user = Ask
+verb-request-path = Reach
 verb-run = Run
 verb-read-output = Read output
 verb-vet-content = Vet

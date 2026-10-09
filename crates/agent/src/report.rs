@@ -483,6 +483,9 @@ pub struct Returned {
     pub total: usize,
     /// The last lines rather than the first, because how a command went is at the end of it.
     pub from_the_end: bool,
+    /// The same lines as far as the agent kept them, for a key that expands the glimpse. Never
+    /// shorter than `lines`, and shorter than `total` where the cap on what is kept cut it.
+    pub whole: Vec<String>,
 }
 
 /// The command a result came from, and how it ended.
@@ -991,6 +994,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "spawn_processor" => t!(verb_spawn_processor),
         "load_skill" => t!(verb_load_skill),
         "ask_user" => t!(verb_ask_user),
+        "request_path" => t!(verb_request_path),
         "run" => t!(verb_run),
         "read_output" => t!(verb_read_output),
         "vet_content" => t!(verb_vet_content),

@@ -189,6 +189,9 @@ fn main() -> ExitCode {
         }
     }
 
+    // The host list a stage is held to, settled with the lists above for the same reason.
+    bravebot_config::sandbox_network::settle(&bravebot_config::Settings::load());
+
     // After the mode above is engaged, because an incognito session is given no directory to log
     // into, and before the first thing that could fail in a way worth recording.
     match take_log_level(&mut args) {
@@ -367,7 +370,8 @@ fn main() -> ExitCode {
         // would otherwise be caught below as unknown options.
         Some(
             "-p" | "--print" | "--mode" | "--model" | "--advisor" | "--effort" | "--file"
-            | "--add-dir" | "--trace" | "--json" | "--json-stream",
+            | "--add-dir" | "--trust-workspace" | "--trace" | "--json" | "--json-stream"
+            | "--output-schema",
         ) => run_task(&args, skip_permissions, agent, prompts),
         Some("doctor") if args.get(1).map(String::as_str) == Some("--sandbox-check") => {
             match args.len() {
@@ -998,6 +1002,7 @@ fn print_help() {
     for (flags, description) in [
         ("--file <path>", t!(cli_option_file)),
         ("--add-dir <path>", t!(cli_option_add_dir)),
+        ("--trust-workspace", t!(cli_option_trust_workspace)),
         ("--settings <path>", t!(cli_option_settings)),
         ("--run-network <open|closed>", t!(cli_option_run_network)),
         ("--sandbox <mode>", t!(cli_option_sandbox)),
@@ -1034,6 +1039,7 @@ fn print_help() {
         ("--trace", t!(cli_option_trace)),
         ("--json", t!(cli_option_json)),
         ("--json-stream", t!(cli_option_json_stream)),
+        ("--output-schema <path>", t!(cli_option_output_schema)),
         ("--incognito", t!(cli_option_incognito)),
         ("--safe", t!(cli_option_safe)),
         ("--locked", t!(cli_option_locked)),
@@ -1271,6 +1277,9 @@ struct Invocation {
     effort: Option<bravebot_session::store::Effort>,
     /// Directories outside the working one that this run may reach into.
     directories: Vec<String>,
+    /// Whether the person typed `--trust-workspace`, which gives this run the map a yes to the
+    /// startup question writes (TRUST-26).
+    trust_workspace: bool,
     trace: bool,
     print: bool,
     /// Whether stdout carries the result object rather than the prose reply.
@@ -1280,6 +1289,8 @@ struct Invocation {
     stream: bool,
     /// The earlier session this run carries on (CLI-25).
     resume: Option<continued::Resume>,
+    /// The file holding the JSON Schema the reply must match (CLI-28).
+    output_schema: Option<String>,
 }
 
 /// Parse `<prompt> [--file path]... [--add-dir path]... [--mode name] [--model name]
@@ -1292,11 +1303,13 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut advisor = None;
     let mut effort = None;
     let mut directories = Vec::new();
+    let mut trust_workspace = false;
     let mut trace = false;
     let mut print = false;
     let mut json = false;
     let mut stream = false;
     let mut resume = None;
+    let mut output_schema = None;
     let mut index = 0;
 
     while index < args.len() {
@@ -1366,6 +1379,12 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 }
                 _ => return Err(t!(cli_add_dir_needs_a_path).to_string()),
             },
+            // Repeats are one flag, as with `--incognito`: asking twice for what is already so is
+            // no mistake worth refusing a run over.
+            "--trust-workspace" => {
+                trust_workspace = true;
+                index += 1;
+            }
             "--trace" => {
                 trace = true;
                 index += 1;
@@ -1384,6 +1403,15 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 resume = Some(continued::Resume::Latest);
                 index += 1;
             }
+            // Refused when blank for the reason `--model` is: a script that computed an empty
+            // variable asked for a shape and would otherwise get free prose, untold.
+            "--output-schema" => match args.get(index + 1).map(|path| path.trim()) {
+                Some(path) if !path.is_empty() => {
+                    output_schema = Some(path.to_string());
+                    index += 2;
+                }
+                _ => return Err(t!(cli_output_schema_needs_a_path).to_string()),
+            },
             "--json" => {
                 json = true;
                 index += 1;
@@ -1414,11 +1442,13 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         advisor,
         effort,
         directories,
+        trust_workspace,
         trace,
         print,
         json,
         stream,
         resume,
+        output_schema,
     })
 }
 
@@ -1443,11 +1473,13 @@ fn run_task(
         advisor,
         effort,
         directories,
+        trust_workspace,
         trace,
         print,
         json: as_json,
         stream: as_stream,
         resume,
+        output_schema,
     } = invocation;
 
     // Read before the emptiness check below, since `cat notes.md | bravebot -p` is a complete
@@ -1486,6 +1518,23 @@ fn run_task(
             t!(cli_advisor_not_with_a_manifest),
         );
     }
+    // A manifest run has a reply per step and none for the run, so there is no one reply to hold to
+    // a schema.
+    if output_schema.is_some() && mode == Mode::Manifest {
+        return stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_output_schema_not_with_a_manifest),
+        );
+    }
+    // Read and vetted before anything is sent, so a schema outside what is checked is a refused
+    // argument and not a constraint the run quietly did not hold the reply to.
+    let output_schema = match output_schema.as_deref().map(load_output_schema).transpose() {
+        Ok(schema) => schema,
+        Err(complaint) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+        }
+    };
     // A manifest run's steps are planned and run from the plan, not chosen from a list of tools, so
     // the flags would be taken and limit nothing.
     if !bravebot_core::tool_set::settled().is_none() && mode == Mode::Manifest {
@@ -1724,6 +1773,7 @@ fn run_task(
         .with_cache(bravebot_agent::home::cache())
         .with_model(model_asked_for(named, pick.into_model()))
         .with_advisor(advisor)
+        .with_output_schema(output_schema)
         // The flag, then the settings layers and the saved pick ranked as BACKEND-43 ranks them.
         // The layers are the only route a machine where nobody ever opens the interface has to a
         // level that outlives one run.
@@ -1839,6 +1889,21 @@ fn run_task(
     // run cannot learn anywhere else.
     let reads_effort = bravebot_tui::app::adopt_listing_for_model(&mut config, &model);
 
+    // A model that cannot be asked for a reply of a given shape refuses the flag before anything
+    // is sent, rather than answering in prose that the check afterwards fails (CLI-28). Bedrock has
+    // no field for it here, and a roster row that states its parameters without one says the
+    // service would ignore it.
+    if task.output_schema.is_some()
+        && (config.bedrock_for(&model).is_some()
+            || !bravebot_tui::app::reads_structured_output(&config, &model))
+    {
+        return stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_output_schema_not_served, model = model.as_str()),
+        );
+    }
+
     // A level goes out only where the listing describing the model in force says it is read
     // (BACKEND-22). What is recorded stays recorded: the choice applies again the moment a model
     // that reads one is in force, so what a request carries does not depend on the order two
@@ -1874,10 +1939,18 @@ fn run_task(
             // What a continued session vouched for comes back with it, as it does in a session
             // (SESSION-1). The programs it vouched for do not (CLI-1): the run is handed none, and
             // the record keeps the ones it holds.
-            let trust = continued
+            let trust = match continued
                 .as_ref()
                 .and_then(|record| record.trust_map(workspace.root()))
-                .unwrap_or_else(|| bravebot_agent::workspace::trust_store(workspace.root()));
+            {
+                Some(mut carried) => {
+                    if trust_workspace {
+                        carried.trust(".");
+                    }
+                    carried
+                }
+                None => unattended_trust(workspace.root(), trust_workspace),
+            };
             let mut conversation = continued
                 .as_ref()
                 .map(|record| bravebot_agent::Conversation::restored(record.conversation.clone()))
@@ -1928,7 +2001,7 @@ fn run_task(
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            bravebot_agent::workspace::trust_store(workspace.root()),
+            unattended_trust(workspace.root(), trust_workspace),
             &Cancel::new(),
         ),
     };
@@ -1992,12 +2065,25 @@ fn run_task(
                 not_served.is_some(),
             );
 
+            // Held to the schema only once the turn is otherwise a success: a run that failed for
+            // another reason keeps that reason, and a reply that was not asked for in this shape
+            // has nothing to be held to (CLI-28).
+            let (ending, structured, off_schema) = match (&task.output_schema, ending) {
+                (Some(schema), Ending::Done) => match schema.check(outcome.reply_for_display()) {
+                    Ok(value) => (ending, Some(value), None),
+                    Err(broke) => (Ending::Schema, None, Some(off_schema_message(&broke))),
+                },
+                _ => (ending, None, None),
+            };
+
             // Built before the reply is chosen, because with `--json` the result object is what
             // goes on stdout in the reply's place and it has to hold the reply itself.
             let rendered = as_json.then(|| {
                 json::render(&json::Report {
                     ending,
-                    message: failure_of_a_turn(ending, not_served.as_deref()),
+                    message: off_schema
+                        .as_deref()
+                        .or_else(|| failure_of_a_turn(ending, not_served.as_deref())),
                     reply: outcome.reply_for_display(),
                     model: &outcome.model,
                     agent: outcome.addressed.as_ref().map(|addressed| addressed.name()),
@@ -2013,6 +2099,7 @@ fn run_task(
                     calls: reporter.calls(),
                     refusals: &refusals(sink.recorded()),
                     notices: &outcome.notices,
+                    structured: structured.as_deref(),
                 })
             });
 
@@ -2025,11 +2112,23 @@ fn run_task(
                 ending,
                 not_served: not_served.as_deref(),
             };
-            report(
-                &mut std::io::stdout().lock(),
-                &mut std::io::stderr().lock(),
-                &finished,
-            );
+            // Nothing of a reply that is off its schema goes where a pipe would take it for the
+            // shape it asked for. With `--json` the object holds it, beside the status that says so.
+            match (&off_schema, as_json) {
+                (Some(_), false) => report(
+                    &mut std::io::sink(),
+                    &mut std::io::stderr().lock(),
+                    &finished,
+                ),
+                _ => report(
+                    &mut std::io::stdout().lock(),
+                    &mut std::io::stderr().lock(),
+                    &finished,
+                ),
+            }
+            if let Some(complaint) = &off_schema {
+                eprintln!("{}", ending.told(complaint));
+            }
             ending.code()
         }
         // A run that stopped is the one worth looking at, so what it produced is printed
@@ -2081,6 +2180,64 @@ fn run_task(
             stopped
         }
     }
+}
+
+/// The schema a path names, read and vetted, or the sentence that says why it cannot be used.
+fn load_output_schema(path: &str) -> Result<bravebot_agent::output_schema::OutputSchema, String> {
+    use bravebot_agent::output_schema::{OutputSchema, SchemaError};
+    let text = std::fs::read_to_string(path).map_err(|err| {
+        t!(
+            cli_output_schema_unreadable,
+            path = path,
+            problem = err.to_string()
+        )
+        .to_string()
+    })?;
+    OutputSchema::parse(&text).map_err(|err| {
+        match err {
+            SchemaError::NotJson => t!(cli_output_schema_not_json, path = path),
+            SchemaError::NotAnObject { at } => {
+                t!(cli_output_schema_not_an_object, path = path, at = at)
+            }
+            SchemaError::Unsupported { at, keyword } => t!(
+                cli_output_schema_unsupported,
+                path = path,
+                at = at,
+                keyword = keyword
+            ),
+            SchemaError::Malformed { at, keyword } => t!(
+                cli_output_schema_malformed,
+                path = path,
+                at = at,
+                keyword = keyword
+            ),
+        }
+        .to_string()
+    })
+}
+
+/// Why a finished reply is not the shape it was asked for, naming where in it and which rule.
+///
+/// Built from a position and a rule alone, so nothing the reply spelt reaches the sentence.
+fn off_schema_message(broke: &bravebot_agent::output_schema::Mismatch) -> String {
+    use bravebot_agent::output_schema::Rule;
+    let problem = match broke.rule {
+        Rule::NotJson => t!(cli_output_schema_rule_not_json),
+        Rule::Type => t!(cli_output_schema_rule_type),
+        Rule::Enum => t!(cli_output_schema_rule_enum),
+        Rule::Const => t!(cli_output_schema_rule_const),
+        Rule::Required => t!(cli_output_schema_rule_required),
+        Rule::Extra => t!(cli_output_schema_rule_extra),
+        Rule::Length => t!(cli_output_schema_rule_length),
+        Rule::Count => t!(cli_output_schema_rule_count),
+        Rule::Range => t!(cli_output_schema_rule_range),
+    };
+    t!(
+        cli_output_schema_mismatch,
+        at = broke.at.as_str(),
+        problem = problem
+    )
+    .to_string()
 }
 
 /// Whether a result object was asked for, read straight off the command line.
@@ -2216,6 +2373,7 @@ fn what_ran(
         calls,
         refusals,
         notices,
+        structured: None,
     })
 }
 
@@ -2618,6 +2776,10 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
         request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         self.refusing.confirm_mcp_call(request)
+    }
+
+    fn confirm_path(&mut self, request: &bravebot_agent::confirm::PathRequest) -> Decision {
+        self.refusing.confirm_path(request)
     }
 
     fn confirm_move(&mut self, request: &bravebot_agent::confirm::MoveRequest) -> Decision {
@@ -3278,21 +3440,66 @@ fn skill_keys_unread(
         .collect()
 }
 
+/// The trust map a one-shot run opens with (TRUST-23, TRUST-26).
+///
+/// What a yes to the startup question writes where the person typed `--trust-workspace`, or where
+/// they kept an answer that settles a session here (TRUST-23): one about this directory or the
+/// root of the git worktree around it. Both are their own gesture, so neither is a guess made in
+/// their name (CLI-1). Anything else is the empty map. Nothing is written, and a kept answer is
+/// said on stderr, since a run nobody watches is where it would otherwise go unnoticed.
+fn unattended_trust(root: &Path, flagged: bool) -> bravebot_core::TrustStore {
+    let (trust, notice) = unattended_trust_with(
+        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
+        root,
+        flagged,
+    );
+    if let Some(notice) = notice {
+        eprintln!("{}", t!(cli_notice, notice = notice));
+    }
+    trust
+}
+
+/// [`unattended_trust`] with the state directory and the home given, and the notice returned.
+fn unattended_trust_with(
+    home: Option<&Path>,
+    profile: Option<&Path>,
+    root: &Path,
+    flagged: bool,
+) -> (bravebot_core::TrustStore, Option<String>) {
+    if flagged {
+        return (
+            bravebot_tui::trust_prompt::trusting_the_workspace(root),
+            None,
+        );
+    }
+    match bravebot_agent::trusted::honoured(home, profile, root) {
+        Some(bravebot_agent::trusted::Honoured { store, kept }) => (
+            bravebot_tui::trust_prompt::trusting_the_workspace(root),
+            Some(t!(
+                cli_trusting_kept,
+                directory = kept.root.display().to_string(),
+                when = bravebot_session::sessions::how_long_ago(kept.at),
+                path = store.path().display().to_string()
+            )),
+        ),
+        None => (bravebot_agent::workspace::trust_store(root), None),
+    }
+}
+
 /// The trust map a session starting in this directory would open with, without asking anybody.
 ///
 /// A remembered yes answers here as it answers there (TRUST-23); anything else is a directory
 /// nothing has vouched for, which is what an unanswered question leaves. Nothing is written and
 /// nobody is asked: `doctor` changes nothing and puts no question.
 fn trust_already_answered(root: &Path) -> bravebot_core::TrustStore {
-    let kept = bravebot_agent::trusted::honoured(
+    unattended_trust_with(
         bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
         root,
-    );
-    match kept {
-        Some(_) => bravebot_tui::trust_prompt::trusting_the_workspace(root),
-        None => bravebot_agent::workspace::trust_store(root),
-    }
+        false,
+    )
+    .0
 }
 
 /// Report whether configuration is usable, without revealing the signing key.
@@ -6237,6 +6444,147 @@ mod tests {
         }
     }
 
+    /// TRUST-26. The flag gives the run the map a yes writes: the working directory and what is
+    /// under it. A directory `--add-dir` opened sits beside it and is not covered, and neither is
+    /// anything above it.
+    #[test]
+    fn a_flagged_run_trusts_its_directory_and_nothing_outside_it() {
+        let scratch = Scratch::new("trust-flag-covers");
+        let project = scratch.directory("project");
+        let beside = scratch.directory("beside");
+
+        let (trust, notice) = unattended_trust_with(None, None, &project, true);
+
+        assert!(trust.is_trusted("."), "the working directory");
+        assert!(trust.is_trusted("src/lib.rs"), "a file under it");
+        assert!(
+            !trust.is_trusted(&beside.join("notes.md").display().to_string()),
+            "a directory opened beside the working one"
+        );
+        assert!(!trust.is_trusted("/etc/passwd"), "a path outside it");
+        assert_eq!(
+            notice, None,
+            "the person typed the flag, so nothing is said"
+        );
+    }
+
+    /// TRUST-26. The flag answers for this run alone, and the run without it keeps the empty map.
+    #[test]
+    fn a_flagged_run_writes_no_record_and_says_nothing() {
+        let scratch = Scratch::new("trust-flag-writes-nothing");
+        let project = scratch.directory("project");
+        let state = scratch.directory("state");
+
+        let (_, notice) = unattended_trust_with(Some(&state), None, &project, true);
+        assert_eq!(notice, None);
+        assert!(
+            !state.join("trusted").exists(),
+            "the flag kept an answer for later sessions"
+        );
+
+        let (trust, notice) = unattended_trust_with(Some(&state), None, &project, false);
+        assert!(!trust.is_trusted("."), "nothing was said and nothing kept");
+        assert_eq!(notice, None);
+    }
+
+    /// TRUST-23. A kept answer trusts a one-shot run in that directory and the run says where it
+    /// came from, since nobody is watching it open.
+    #[test]
+    fn a_kept_answer_trusts_a_one_shot_run_there_and_says_so() {
+        let scratch = Scratch::new("trust-kept-one-shot");
+        let project = scratch.directory("project");
+        let state = scratch.directory("state");
+        let Some(identity) = bravebot_agent::trusted::Identity::of(&project) else {
+            // A filesystem that cannot say when a directory was made keeps no answer to read.
+            return;
+        };
+        let store = bravebot_agent::trusted::Store::new(&state, &project);
+        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+        let (trust, notice) = unattended_trust_with(Some(&state), None, &project, false);
+
+        assert!(trust.is_trusted("."), "the kept answer did not apply");
+        assert!(trust.is_trusted("src/lib.rs"), "it did not cover the tree");
+        assert!(!trust.is_trusted("/etc/passwd"), "it covered too much");
+        let notice = notice.expect("a kept answer was used without saying so");
+        assert!(
+            notice.contains(&project.display().to_string())
+                && notice.contains(&store.path().display().to_string()),
+            "the notice names neither the directory nor the file: {notice}"
+        );
+    }
+
+    /// TRUST-23. A one-shot run started in a package of a repository whose root has a kept answer is
+    /// settled by it, as a session there is, trusts its own directory and says which one answered.
+    #[test]
+    fn a_kept_answer_about_the_repository_root_trusts_a_one_shot_run_in_a_package() {
+        let scratch = Scratch::new("trust-kept-root-one-shot");
+        let repository = scratch.directory("repository");
+        let package = scratch.directory("repository/packages/app");
+        let state = scratch.directory("state");
+        std::fs::create_dir_all(repository.join(".git")).expect("make the repository");
+        let Some(identity) = bravebot_agent::trusted::Identity::of(&repository) else {
+            return;
+        };
+        let store = bravebot_agent::trusted::Store::new(&state, &repository);
+        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+        let (trust, notice) = unattended_trust_with(Some(&state), None, &package, false);
+
+        assert!(trust.is_trusted("."), "the root's answer did not apply");
+        assert!(trust.is_trusted("src/lib.rs"), "it did not cover the tree");
+        let notice = notice.expect("a kept answer was used without saying so");
+        assert!(
+            notice.contains(&repository.display().to_string())
+                && !notice.contains(&package.display().to_string()),
+            "the notice does not name the root that answered, and only it: {notice}"
+        );
+    }
+
+    /// TRUST-23. The answer is about one directory: another at a different path, and a new
+    /// directory made at the same path, are not covered, and a run there trusts nothing.
+    #[test]
+    fn a_kept_answer_about_another_directory_trusts_a_one_shot_run_nowhere() {
+        let scratch = Scratch::new("trust-kept-elsewhere");
+        let project = scratch.directory("project");
+        let other = scratch.directory("other");
+        let state = scratch.directory("state");
+        let Some(identity) = bravebot_agent::trusted::Identity::of(&project) else {
+            return;
+        };
+        let store = bravebot_agent::trusted::Store::new(&state, &project);
+        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+        let (trust, notice) = unattended_trust_with(Some(&state), None, &other, false);
+        assert!(!trust.is_trusted("."), "another directory was trusted");
+        assert_eq!(notice, None);
+
+        std::fs::remove_dir_all(&project).expect("remove the directory answered about");
+        std::fs::create_dir_all(&project).expect("make another at the same path");
+        let (trust, notice) = unattended_trust_with(Some(&state), None, &project, false);
+        assert!(!trust.is_trusted("."), "a remade directory was trusted");
+        assert_eq!(notice, None);
+    }
+
+    /// TRUST-26. The flag is a switch on the command line that may be repeated, and its absence
+    /// leaves the run without it.
+    #[test]
+    fn the_workspace_flag_is_read_from_the_command_line_and_may_repeat() {
+        let typed = |arguments: &[&str]| {
+            parse_invocation(&args(arguments))
+                .expect("parses")
+                .trust_workspace
+        };
+        assert!(typed(&["--trust-workspace", "-p", "do a thing"]));
+        assert!(typed(&["-p", "do a thing", "--trust-workspace"]));
+        assert!(typed(&[
+            "--trust-workspace",
+            "--trust-workspace",
+            "do a thing"
+        ]));
+        assert!(!typed(&["-p", "do a thing"]));
+    }
+
     /// The mode composes rather than leads: what is left after taking it out is the invocation the
     /// person would have typed without it, so every dispatch below sees what it always saw.
     #[test]
@@ -7170,6 +7518,29 @@ mod tests {
         ] {
             let err = parse_invocation(&typed).expect_err("must refuse");
             assert!(err.contains("--model"), "{typed:?}: {err}");
+        }
+    }
+
+    /// `--output-schema` names the file holding the schema, and a run that gave none has none.
+    #[test]
+    fn an_output_schema_flag_names_the_file_holding_the_schema() {
+        let parsed = parse_invocation(&args(&["--output-schema", "verdict.json", "do a thing"]))
+            .expect("parses");
+        assert_eq!(parsed.output_schema.as_deref(), Some("verdict.json"));
+        assert_eq!(parsed.prompt, "do a thing");
+        let none = parse_invocation(&args(&["do a thing"])).expect("parses");
+        assert_eq!(none.output_schema, None);
+    }
+
+    #[test]
+    fn an_output_schema_flag_naming_no_file_is_refused() {
+        for typed in [
+            args(&["--output-schema"]),
+            args(&["--output-schema", "", "do a thing"]),
+            args(&["--output-schema", "   ", "do a thing"]),
+        ] {
+            let err = parse_invocation(&typed).expect_err("refused");
+            assert!(err.contains("--output-schema"), "{typed:?}: {err}");
         }
     }
 

@@ -7,7 +7,8 @@
     pr-fix.py comments <pr>             the review threads and reviews still waiting on a change
     pr-fix.py check <pr> [--target T]   run the checks the changed files call for, or the make
                                         targets named, printing only a failure
-    pr-fix.py push <pr>                 push over the head `start` fetched, and nothing newer
+    pr-fix.py push <pr>                 push over the head `start` fetched, and nothing newer; refuses to
+                                        make a signed pull request unsigned
     pr-fix.py review <pr>               ask netzenbot-reviewer to review the pull request again
 
 Every step that needs no judgement is decided here, so what it prints is only what a model has to
@@ -54,6 +55,7 @@ WAIT_SECONDS = 540
 MAX_PARALLEL = 8
 POLL_SECONDS = 30
 LOG_LINES = 40
+REASON_LINES = 3
 WIDTH = 300
 BODY_WIDTH = 1500
 THREADS = """
@@ -271,6 +273,18 @@ def mark_base(tree):
     base_marker(tree).write_text(git("rev-parse", "HEAD", cwd=tree), encoding="utf-8")
 
 
+def signed(sha, cwd):
+    """Whether the commit carries a signature, which needs no key to tell."""
+    headers = git("cat-file", "commit", sha, cwd=cwd).split("\n\n", 1)[0]
+    return any(line.startswith("gpgsig") for line in headers.splitlines())
+
+
+def signatures(onto, head, cwd):
+    """(signed, unsigned) counts for the commits on `head` that `onto` lacks."""
+    flags = [signed(sha, cwd) for sha in git("rev-list", f"{onto}..{head}", cwd=cwd).splitlines()]
+    return flags.count(True), flags.count(False)
+
+
 def changed(tree):
     """What a check is chosen from: the files resolved in the rebase and those changed since."""
     names = set(resolved(tree))
@@ -332,6 +346,14 @@ def plan(tree, files):
     return commands
 
 
+def stop_reason(text):
+    """What git said when a rebase stopped, from its first error on, without the hints that follow."""
+    lines = [one.strip() for one in re.split(r"[\r\n]+", text)]
+    lines = [one for one in lines if one and not one.startswith(("hint:", "Rebasing ("))]
+    first = next((n for n, one in enumerate(lines) if one.startswith(("error:", "fatal:"))), len(lines) - 1)
+    return [one[:WIDTH] for one in lines[max(first, 0) :][:REASON_LINES]]
+
+
 def describe(tree, name):
     path = Path(tree, name)
     if not path.is_file():
@@ -342,7 +364,7 @@ def describe(tree, name):
     return f"{name}:" + ",".join(f"{start}-{end}" for start, end in ranges)
 
 
-def report(pr):
+def report(pr, said=""):
     tree = pr.tree
     print(f"worktree {tree}")
     state = rebase_dir(tree)
@@ -360,14 +382,19 @@ def report(pr):
 
     def read(name):
         path = state / name
-        return path.read_text().strip() if path.is_file() else "?"
+        return path.read_text().strip() if path.is_file() else ""
 
-    step = f"{read('msgnum')}/{read('end')}" if (state / "msgnum").is_file() else f"{read('next')}/{read('last')}"
+    number, total = (read("msgnum"), read("end")) if (state / "msgnum").is_file() else (read("next"), read("last"))
+    step = f" at {number}/{total}" if number and total else ""
     stopped = run("git", "log", "-1", "--format=%h %s", "REBASE_HEAD", cwd=tree, check=False)
-    print(f"stopped at {step}: {stopped.stdout.strip()}")
+    print(f"stopped{step}: {stopped.stdout.strip()}")
     files = unmerged(tree)
     if not files:
-        print(f"stopped without a conflict; see `git -C {tree} status`")
+        reason = stop_reason(said)
+        print("stopped without a conflict" + ("; git said:" if reason else ""))
+        for line in reason:
+            print(f"  {line}")
+        print(f"see `git -C {tree} status`")
         return 1
     print("conflicts:")
     for name in files:
@@ -410,14 +437,16 @@ def start(pr):
         print(f"{pr.branch} has commits the pull request does not; they are kept")
     elif not subjects(pr.tip) <= subjects("HEAD"):
         die(f"{pr.branch} in {tree} and {pr.tip} have diverged")
+    said = ""
     if not succeeds("merge-base", "--is-ancestor", pr.onto, "HEAD", cwd=tree):
         resolved_log(tree).unlink(missing_ok=True)
         done = run("git", "rebase", pr.onto, cwd=tree, check=False)
         if done.returncode and rebase_dir(tree) is None:
             die(f"git rebase {pr.onto} failed:\n{(done.stderr or done.stdout).strip()}")
+        said = done.stderr
     if rebase_dir(tree) is None:
         mark_base(tree)
-    return report(pr)
+    return report(pr, said)
 
 
 def resume(pr):
@@ -446,7 +475,7 @@ def resume(pr):
         die(f"git rebase --continue failed:\n{(done.stderr or done.stdout).strip()}")
     if rebase_dir(tree) is None:
         mark_base(tree)
-    return report(pr)
+    return report(pr, done.stderr)
 
 
 def check(pr, targets):
@@ -493,6 +522,15 @@ def push(pr):
     if now == tip:
         print(f"{pr.url} is already at {now[:8]}; nothing to push")
         return 0
+    had_signed, had_unsigned = signatures(pr.onto, tip, tree)
+    unsigned = signatures(pr.onto, now, tree)[1]
+    if had_signed and unsigned > had_unsigned:
+        die(
+            f"{pr.tip} has signed commits and the push would leave {unsigned} commit(s) unsigned, so it "
+            "would replace the author's signed commits with unsigned ones or add unsigned commits to them. "
+            "Report the signing error to the person. Do not rebase the pull request on GitHub with "
+            "`update-branch`, which also leaves its commits unsigned."
+        )
     # The lease is the head `start` fetched, so a push made since is refused rather than lost.
     git(
         "push",
