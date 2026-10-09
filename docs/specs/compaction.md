@@ -365,3 +365,31 @@ against the window of the planner's model rather than this one
 `verified-by: bravebot_agent::turn::a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conversation_whole`
 `verified-by: bravebot_agent::compact::a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on`
 `verified-by: bravebot_agent::compact::a_summary_model_nothing_serves_is_named_in_the_refusal_it_causes`
+
+<a id="COMPACT-16"></a>
+### COMPACT-16: the planner's latest task list is sent again after the summary
+
+When a compaction takes out of the request the result of the planner's latest accepted `todo_write`,
+the summary message ends with that list, word for word, as the tool result returned it. A list in
+the part that is kept is sent as it was and is not repeated. A `todo_write` that was refused, or
+whose result the planner was not shown, is not the latest list. A compaction asked for when no list
+was written adds nothing. The copy is carried through later compactions until the planner writes a
+newer list.
+
+The list is the planner's own output and is already in its context, so it comes back at the label of
+the context it came from, and only while the summary is adopted ([COMPACT-1](#COMPACT-1)). The driver
+records which message holds the list from the name of the tool the planner called and branches on
+nothing inside it. The summariser has no tools ([COMPACT-2](#COMPACT-2)) and does not produce it.
+
+**Why.** A summary describes finished and unstarted work in prose, which loses the exact steps and
+their order in the middle of a turn, when the list matters most.
+
+**Not kept across a resume.** The position of the list is not written to the session record, so a
+resumed session carries a list forward only from the next `todo_write`.
+
+`verified-by: bravebot_agent::conversation::a_task_list_written_before_the_cut_is_in_the_request_after_it`
+`verified-by: bravebot_agent::conversation::a_conversation_with_no_task_list_gains_none_from_a_compaction`
+`verified-by: bravebot_agent::conversation::a_task_list_the_cut_leaves_in_place_is_not_sent_twice`
+`verified-by: bravebot_agent::conversation::the_carried_list_survives_a_second_compaction_until_a_newer_one_replaces_it`
+`verified-by: bravebot_agent::turn::a_task_list_the_summary_replaced_is_sent_again_after_the_cut`
+`verified-by: bravebot_agent::turn::a_compaction_adds_no_task_list_where_the_planner_never_wrote_one`

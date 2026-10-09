@@ -22344,6 +22344,99 @@ fn a_conversation_past_the_budget_is_summarised_before_the_next_request() {
     );
 }
 
+/// COMPACT-16: the planner's list is written in one turn and the compaction that cuts it out of the
+/// request comes in a later one. The refused call between the two proves a list that was not
+/// accepted does not stand in for the one that was.
+#[test]
+fn a_task_list_the_summary_replaced_is_sent_again_after_the_cut() {
+    let scratch = Scratch::new("compact-keeps-the-task-list");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "todo_write",
+            r#"{"todos":[{"content":"write the lexer","status":"completed"},{"content":"write the parser","status":"pending"}]}"#,
+        ),
+        tool_request("todo_write", r#"{}"#),
+        reply_with("planned"),
+        reply_with("they planned a lexer and a parser"),
+        reply_with("done"),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("plan it"),
+    )
+    .expect("the planning turn runs");
+    for (prompt, answer) in [
+        ("what about the error type", "widened it"),
+        ("now the tests", "updated them"),
+        ("and the docs", "written"),
+        ("carry on", "carrying on"),
+    ] {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+    }
+    conversation.measured(50_000);
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it"),
+    )
+    .expect("the compacting turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 5, "{bodies:#?}");
+    let planning = &bodies[4];
+    assert!(
+        planning.contains("they planned a lexer and a parser"),
+        "the summary did not reach the next request: {planning}"
+    );
+    assert!(
+        planning.contains("[pending] write the parser"),
+        "the list the summary replaced was not sent again: {planning}"
+    );
+    assert!(
+        !planning.contains("error:"),
+        "the refused call stood in for the list: {planning}"
+    );
+}
+
+/// COMPACT-16: no list, nothing added.
+#[test]
+fn a_compaction_adds_no_task_list_where_the_planner_never_wrote_one() {
+    let scratch = Scratch::new("compact-without-a-task-list");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("they are porting the parser"),
+        reply_with("done"),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it"),
+    )
+    .expect("turn runs");
+
+    let _summariser = received.recv().expect("the summariser's request");
+    let planning = received.recv().expect("the planner's request");
+    assert!(!planning.contains("as you last wrote it"), "{planning}");
+}
+
 /// The first round after a large read, or a switch to a smaller window, is refused by the service
 /// before any figure has said the conversation was large. The turn shortens the conversation once
 /// and sends the same request again, so the person is not left to run `/compact` and type the
