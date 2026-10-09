@@ -17,6 +17,12 @@ engine, the trust map and every question are the ones described in [prompting.md
 [trust-map.md](trust-map.md) and [layering.md](layering.md), and this spec decides only what the
 protocol adds: where each message comes from, and what an answer is allowed to grant.
 
+Before it reads a line the program settles the same process-wide sandbox answers `bravebot-rpc`
+does, the network its programs keep, the lists of paths a person wrote and the hosts a stage is held
+to ([SANDBOX-20](sandboxing.md#SANDBOX-20), [SANDBOX-25](sandboxing.md#SANDBOX-25) and
+[SANDBOX-24](sandboxing.md#SANDBOX-24)), so a session an editor hosts is confined as one in a
+window is.
+
 The agent advertises `loadSession: false`, no authentication methods, and prompt capabilities for
 text, links and images. It does not call the editor's file or terminal methods, so bytes an editor
 holds reach the agent only as a prompt or an attachment.
