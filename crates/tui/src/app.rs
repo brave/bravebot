@@ -1042,12 +1042,13 @@ fn status_report(
     // asking what they are carrying should be told what the file says now.
     let record = remembered_record(workspace);
     // Read now for the same reason: another session here may have kept or withdrawn it.
-    let kept = remembering(workspace.root()).and_then(|(store, identity)| {
-        let kept = store.kept(&identity)?;
-        Some((
-            bravebot_session::sessions::how_long_ago(kept.at),
-            store.path().to_path_buf(),
-        ))
+    let kept = honoured(workspace.root()).map(|honoured| {
+        let root = honoured.kept.root.clone();
+        (
+            bravebot_session::sessions::how_long_ago(honoured.kept.at),
+            honoured.store.path().to_path_buf(),
+            Some(root).filter(|root| root != workspace.root()),
+        )
     });
     let checkouts = workspace.session_checkouts();
     // Read now for the same reason: `/reach` in another session here may have added or removed one.
@@ -1097,7 +1098,11 @@ fn status_report(
         reach: &reach,
         kept_trust: kept
             .as_ref()
-            .map(|(when, path)| crate::status::KeptTrust { when, path }),
+            .map(|(when, path, root)| crate::status::KeptTrust {
+                when,
+                path,
+                root: root.as_deref(),
+            }),
     })
 }
 
@@ -6631,6 +6636,16 @@ fn remembering(
     )
 }
 
+/// The answer kept about `root` or the git worktree around it, which settles a session started
+/// there ([`bravebot_agent::trusted::honoured`]).
+fn honoured(root: &std::path::Path) -> Option<bravebot_agent::trusted::Honoured> {
+    bravebot_agent::trusted::honoured(
+        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
+        root,
+    )
+}
+
 /// Seconds since the epoch, which is how a kept answer says when it was given.
 fn seconds_now() -> u64 {
     std::time::SystemTime::now()
@@ -6657,12 +6672,31 @@ fn forget_trust(home: Option<&std::path::Path>, root: &std::path::Path) -> Strin
             path = store.path().display()
         );
     }
-    match store.forget() {
-        Ok(true) => t!(session_trust_forgotten, directory = directory),
-        Ok(false) => t!(session_trust_nothing_to_forget, directory = directory),
+    // The answer about the worktree root above, read before anything is withdrawn: it settles this
+    // directory too, so taking back only the directory's own would leave the next session unasked.
+    let above =
+        trusted::honoured_by_root(Some(home), bravebot_agent::home::profile().as_deref(), root);
+    let own = store.forget();
+    let Some(above) = above else {
+        return match own {
+            Ok(true) => t!(session_trust_forgotten, directory = directory),
+            Ok(false) => t!(session_trust_nothing_to_forget, directory = directory),
+            Err(error) => t!(
+                session_trust_not_forgotten,
+                path = store.path().display(),
+                error = error
+            ),
+        };
+    };
+    match own.and_then(|_| above.store.forget()) {
+        Ok(_) => t!(
+            session_trust_forgotten_root,
+            directory = directory,
+            root = above.kept.root.display()
+        ),
         Err(error) => t!(
             session_trust_not_forgotten,
-            path = store.path().display(),
+            path = above.store.path().display(),
             error = error
         ),
     }
@@ -6695,21 +6729,23 @@ fn opening_trust(
 ) -> Option<(TrustStore, Whence)> {
     let record = remembering(root);
     let where_it_is = root.display();
-    let kept = || {
-        record
-            .as_ref()
-            .and_then(|(store, identity)| store.kept(identity))
-    };
+    let kept = || honoured(root).map(|honoured| honoured.kept);
     let (trust, whence) = match opening_for(beginning, session.permission_mode(), root, kept) {
         Opening::Settled(trust, whence) => (trust, whence),
         // Asked as a session asked just now would be about what else the tree proposes: the person
         // is here, and what they said to remember was this question and no other.
         Opening::Remembered(trust, kept) => {
-            session.note(t!(
-                session_trusting_kept,
-                directory = where_it_is,
-                when = bravebot_session::sessions::how_long_ago(kept.at)
-            ));
+            let when = bravebot_session::sessions::how_long_ago(kept.at);
+            session.note(if kept.root == root {
+                t!(session_trusting_kept, directory = where_it_is, when = when)
+            } else {
+                t!(
+                    session_trusting_kept_root,
+                    directory = where_it_is,
+                    root = kept.root.display(),
+                    when = when
+                )
+            });
             return Some((trust, Whence::Asked));
         }
         Opening::Ask => {
@@ -24285,6 +24321,7 @@ mod tests {
         let kept = bravebot_agent::trusted::Kept {
             session: "1-2".to_string(),
             at: 7,
+            root: here().to_path_buf(),
         };
         for beginning in [Beginning::New, Beginning::Resumed(None)] {
             match opening_for(beginning, PermissionMode::Ask, here(), || {
@@ -24350,6 +24387,41 @@ mod tests {
             said,
             t!(session_trust_forgotten, directory = root.display()),
             "the line did not say the next session will ask",
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `/forget-trust` in a directory below a remembered worktree root withdraws the root's answer,
+    /// which is the one settling this directory, and names the root, so the next session in either
+    /// asks.
+    #[test]
+    fn forgetting_trust_below_a_remembered_root_takes_the_roots_answer_back() {
+        use bravebot_agent::trusted::{Identity, Store};
+
+        let scratch = crate::testutil::scratch_dir("bravebot-app-forget-root-trust");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = scratch.join("repo");
+        let package = root.join("packages/api");
+        std::fs::create_dir_all(root.join(".git")).expect("create");
+        std::fs::create_dir_all(&package).expect("create");
+        let Some(identity) = Identity::of(&root) else {
+            return;
+        };
+        let store = Store::new(&home, &root);
+        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+        let said = forget_trust(Some(&home), &package);
+
+        assert_eq!(store.kept(&identity), None, "the root's answer survived");
+        assert_eq!(
+            said,
+            t!(
+                session_trust_forgotten_root,
+                directory = package.display(),
+                root = root.canonicalize().expect("resolved").display()
+            ),
+            "the line did not name the root"
         );
         let _ = std::fs::remove_dir_all(&scratch);
     }

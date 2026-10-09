@@ -167,10 +167,14 @@ export interface SessionRecord {
   front: string | null
 }
 
-/** A yes kept about a directory: when it was given, in seconds since the epoch, and the file it is kept in. */
+/**
+ * A yes kept about a directory: when it was given, in seconds since the epoch, the file it is kept
+ * in, and the directory it is about, which is the session's own or the root of the git worktree around it.
+ */
 export interface KeptTrust {
   at: number
   path: string
+  root?: string
 }
 
 /** Why file backups may not account for everything a turn did (§7.1 `session.rewind`). */

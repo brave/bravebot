@@ -2629,9 +2629,8 @@ impl Opening {
             };
         }
         let record = remembering(project);
-        let kept = record.as_ref().and_then(|(store, identity)| {
-            Some((store.kept(identity)?, store.path().to_path_buf()))
-        });
+        let kept =
+            honoured(project).map(|honoured| (honoured.kept, honoured.store.path().to_path_buf()));
         let mut trust = bravebot_agent::workspace::trust_store(project);
         match kept {
             Some(remembered) => {
@@ -2682,15 +2681,30 @@ fn remembering(project: &Path) -> Option<(trusted::Store, trusted::Identity)> {
     )
 }
 
-/// A kept answer as a window is told about it: when it was given, and the file it is kept in.
+/// The answer kept about `project` or the git worktree around it, which settles a session started
+/// there (TRUST-23), read under the name a turn there resolves the directory to.
+fn honoured(project: &Path) -> Option<trusted::Honoured> {
+    trusted::honoured(
+        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
+        &project.canonicalize().ok()?,
+    )
+}
+
+/// A kept answer as a window is told about it: when it was given, the file it is kept in, and the
+/// directory it is about, which is the session's own or the root of the worktree around it.
 fn kept_json(kept: &trusted::Kept, path: &Path) -> Value {
-    json!({ "at": kept.at, "path": path.display().to_string() })
+    json!({
+        "at": kept.at,
+        "path": path.display().to_string(),
+        "root": kept.root.display().to_string(),
+    })
 }
 
 /// The answer kept about `project` as the record says now, or null where none answers.
 fn remembered_json(project: &Path) -> Value {
-    remembering(project)
-        .and_then(|(store, identity)| Some(kept_json(&store.kept(&identity)?, store.path())))
+    honoured(project)
+        .map(|honoured| kept_json(&honoured.kept, honoured.store.path()))
         .unwrap_or(Value::Null)
 }
 
@@ -2703,7 +2717,19 @@ fn forget_trust(project: &Path) -> Result<(), Failure> {
     let home = bravebot_agent::home::directory().ok_or_else(nothing)?;
     let root = project.canonicalize().map_err(|_| nothing())?;
     let store = trusted::Store::new(&home, &root);
-    match store.forget() {
+    // The answer about the worktree root settles this directory too, so it goes with the directory's
+    // own, or the next session here would still not ask.
+    let above = trusted::honoured_by_root(
+        Some(&home),
+        bravebot_agent::home::profile().as_deref(),
+        &root,
+    );
+    let own = store.forget();
+    let (store, removed) = match (&above, own) {
+        (Some(above), Ok(_)) => (&above.store, above.store.forget()),
+        (_, own) => (&store, own),
+    };
+    match removed {
         Ok(true) => Ok(()),
         Ok(false) => Err(nothing()),
         Err(error) => Err(Failure::new(

@@ -50,9 +50,10 @@ export function TrustPrompt({ directory, keeping, onAnswer }: Props): React.JSX.
           <li>
             <Icon name="pin" />
             <p><strong>Trust and remember</strong> also skips this question in later sessions
-              started in exactly this directory. A session started inside or above this
-              directory is still asked, and so is one started in a directory deleted and made
-              again here.</p>
+              started in this directory, or below it where this directory is the root of a git
+              repository. A session started above this directory is still asked, and so is one
+              started below it where this is no repository root, in a repository nested inside
+              it, or in a directory deleted and made again here.</p>
           </li>
         )}
       </ul>

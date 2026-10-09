@@ -1061,7 +1061,7 @@ tree, which is why it is narrower than the answer it keeps.
 of definitions' memories a write left untrusted.
 
 <a id="TRUST-23"></a>
-### TRUST-23: a remembered yes answers for later sessions started in exactly that directory
+### TRUST-23: a remembered yes answers for later sessions started in that directory, or below the root of its git worktree
 
 **Offered.** Remembering is offered at the question about the working directory and nowhere else:
 not at a directory a settings file named, not at the rules a checkout proposed. The terminal
@@ -1076,8 +1076,7 @@ working directory is not a filesystem root, not the user's home and not a direct
 (compared both as named and with links resolved, since `$HOME` is often named through a link the
 working directory is resolved past), the filesystem says when the directory was made, and the
 session is not incognito. One check decides that for every front end, so none keeps or honours an
-answer another would refuse. The question says what remembering does, that the directory has to be
-this one exactly, how to take it back, and the file it writes, since nobody can endorse a record they
+answer another would refuse. The question says what remembering does, how far it reaches, how to take it back, and the file it writes, since nobody can endorse a record they
 were not shown. Where the box is too short for those lines they scroll below the keys, and `r` in the
 terminal interface is taken only once they have all been on the screen in one draw; until then the
 row above the keys says why it does nothing, or that they do not fit where they are taller than the
@@ -1099,13 +1098,21 @@ untrusted, and says as it opens that it is trusting the directory because the pe
 said to remember it, when, and how to be asked again. A session in lines has no `/forget-trust`, so
 it names that command in the interface that draws, and the file holding the answer with the lines
 naming the directory as what to delete, since a directory whose path is spelled alike shares the
-file. Only the directory itself: a session
-started in a directory inside it or above it is asked, since a tree rule covers everything below it
-and an answer kept about `~/projects` would otherwise answer for a session started in every
-repository cloned under it later. A session started in the remembered directory still trusts
-everything below it, what arrived since included, as a yes there does. Only the directory that was
-answered about: one deleted and made again at the same path is asked about, since a different clone
-at the same name is not what the person vouched for.
+file. A session started below the
+directory is not asked either where that directory is the root of a git worktree: the nearest
+directory above the session's, walking upward, that holds a `.git` entry (a directory or a file, so a
+linked worktree and a submodule each end the walk at themselves) is the directory answered about. A
+nested repository or a submodule is therefore below its own root and is asked unless it was answered
+about itself, and a directory above the remembered one is asked, since an answer kept about
+`~/projects` would otherwise answer for a session started in every repository cloned under it
+later. Only whether the `.git` entry exists is read, never what is in it, and an entry whose
+presence cannot be read leaves the session asked. The session starts from the rule a yes writes for
+its own working directory and from nothing else, and says which directory the answer was kept about.
+A directory below the root that was made after the answer is covered as one that arrived since is:
+the person vouched for the root's tree as it grows, a copied tree included. A session started in the
+remembered directory still trusts everything below it, what arrived since included, as a yes there
+does. Only the directory that was answered about: one deleted and made again at the same path is
+asked about, since a different clone at the same name is not what the person vouched for.
 
 **Asked instead, whenever in doubt.** No state directory, a record that cannot be read, no line
 about this directory, lines only about an earlier directory at this path, and a line about this
@@ -1132,6 +1139,13 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_agent::trusted::an_answer_kept_about_one_directory_answers_for_no_other`
 `verified-by: bravebot_agent::trusted::a_directory_sharing_a_key_with_another_is_not_answered_by_its_lines`
 `verified-by: bravebot_agent::trusted::another_directory_at_the_same_path_is_asked_about`
+`verified-by: bravebot_agent::trusted::a_directory_below_a_remembered_worktree_root_is_not_asked`
+`verified-by: bravebot_agent::trusted::a_nested_repository_is_asked_about`
+`verified-by: bravebot_agent::trusted::a_repository_made_again_asks_for_its_packages`
+`verified-by: bravebot_agent::trusted::only_a_worktree_root_answers_for_what_is_below_it`
+`verified-by: bravebot_agent::trusted::a_home_that_is_a_worktree_answers_for_nothing_below_it`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_worktree_root_answers_for_a_directory_below_it`
+`verified-by: bravebot_cli::plain::a_remembered_worktree_root_settles_a_session_in_lines_below_it`
 `verified-by: bravebot_agent::trusted::a_directory_removed_and_made_again_has_another_identity`
 `verified-by: bravebot_agent::trusted::nothing_is_kept_about_a_directory_that_cannot_be_told_apart`
 `verified-by: bravebot_agent::trusted::home_and_what_holds_it_are_never_remembered`
@@ -1168,12 +1182,14 @@ yes writes rather than everything the session went on to record.
 
 `/status` in the terminal interface, and the permissions a desktop session lists, say that a later
 session started in the working directory will trust it without asking, when the person said to
-remember it, the file it is kept in and how to withdraw it. The record is read when the report is
-drawn rather than when the session began, since it belongs to every session in the directory.
-Nothing is said where nothing is kept.
+remember it, the file it is kept in and how to withdraw it. Where the answer was kept about the root
+of the git worktree around the directory ([TRUST-23](#TRUST-23)), they name that root. The record is
+read when the report is drawn rather than when the session began, since it belongs to every session
+in the directory. Nothing is said where nothing is kept.
 
 `/forget-trust`, or forgetting it from the desktop's list, removes every line kept about the working
-directory, whichever directory was at the path when each was written and whether or not this build
+directory and, where the answer settling it was kept about the root of the git worktree around it, every
+line kept about that root, and names the root, whichever directory was at the path when each was written and whether or not this build
 can read the rest of it, and leaves every line about another directory as it found it. A file left
 empty is removed. The next session started there asks; this one keeps the map it has, and `/clear`
 or a new desktop session starts one that asks. With nothing kept it says so rather than claiming to
@@ -1187,6 +1203,9 @@ the file would still say they had vouched for it.
 `verified-by: bravebot_tui::status::the_report_says_a_directory_is_trusted_by_a_remembered_answer`
 `verified-by: bravebot_tui::app::forgetting_trust_makes_the_next_session_here_ask`
 `verified-by: bravebot_tui::app::forgetting_trust_where_nothing_is_kept_says_so`
+`verified-by: bravebot_tui::app::forgetting_trust_below_a_remembered_root_takes_the_roots_answer_back`
+`verified-by: bravebot_tui::status::the_report_names_the_root_whose_remembered_answer_settles_the_directory`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_worktree_root_answers_for_a_directory_below_it`
 `verified-by: bravebot_ui_bridge::remembered_trust::forgetting_a_remembered_answer_makes_the_next_session_there_ask`
 `verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_yes_settles_the_next_session_started_there`
 `verified-by: bravebot_agent::trusted::forgetting_removes_this_directorys_answers_and_keeps_the_rest`

@@ -95,6 +95,10 @@ cli-plain-trusting-kept =
     { $directory } approuvé (vous avez demandé de le retenir { $when } ; pour que la question
     soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
     lignes qui le nomment)
+cli-plain-trusting-kept-root =
+    { $directory } approuvé, dans { $root } (vous avez demandé de retenir { $root } { $when } ; pour que la
+    question soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
+    lignes qui nomment { $root })
 # Dit quand une session en arrière-plan est relancée et que sa conversation précédente a été relue
 # depuis son enregistrement (BG-1).
 cli-plain-resumed = Reprise de la conversation précédente de cette session ({ $count }).
@@ -1095,9 +1099,9 @@ trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
 trust-directory-remember = faire confiance et retenir
 trust-directory-remember-explained =
-    r : lui faire confiance, et ne plus poser cette question aux sessions démarrées plus tard exactement dans ce répertoire
+    r : lui faire confiance, et ne plus poser cette question aux sessions démarrées plus tard dans ce répertoire, ou en dessous s'il est une racine git
 trust-directory-remember-exact =
-    La question reste posée à une session démarrée dans un répertoire qu'il contient ou qui le contient, ou dans un répertoire supprimé puis recréé ici.
+    La question reste posée à une session démarrée au-dessus, dans un dépôt imbriqué, ou dans un répertoire supprimé puis recréé ici.
 trust-directory-remember-where = /forget-trust revient dessus, et c'est noté ici :
 trust-directory-remember-unseen = ↑↓ r ne retient rien : ce qu'il écrit n'est pas encore affiché
 trust-directory-remember-too-small = r ne retient rien : ce qu'il écrit dépasse la hauteur du cadre
@@ -1609,6 +1613,7 @@ status-directory-untrusted = non fiable, chaque écriture vous est donc montrée
 status-directory-kept = retenu { $when }
 status-directory-kept-note = les sessions démarrées ici plus tard l'approuvent sans demander
 status-directory-kept-where = /forget-trust pour que la question soit reposée ; la réponse est retenue dans { $path }
+status-directory-kept-root-note = les sessions démarrées ici plus tard l'approuvent sans demander, car { $root } a été retenu
 status-also-open = Aussi ouvert
 status-added-directory = ajouté avec /add-dir
 status-scratch = Temporaire
@@ -2115,12 +2120,16 @@ session-trusting-unasked =
     { $directory } approuvé (--dangerously-skip-permissions, la question ne vous a pas été posée)
 session-trusting-kept =
     { $directory } approuvé (vous avez demandé de le retenir { $when } ; /forget-trust pour que la question soit reposée)
+session-trusting-kept-root =
+    { $directory } approuvé, dans { $root } (vous avez demandé de retenir { $root } { $when } ; /forget-trust pour que la question soit reposée)
 session-trust-kept =
     { $directory } approuvé, et les sessions démarrées ici plus tard ne demanderont plus ; /forget-trust revient dessus
 session-trust-not-kept =
     { $directory } approuvé pour cette session seulement : la réponse n'a pas pu être écrite dans { $path }, la prochaine session ici demandera donc
 session-trust-forgotten =
     la prochaine session démarrée dans { $directory } demandera s'il faut l'approuver ; celle-ci garde sa réponse, et /clear en démarre une qui demande
+session-trust-forgotten-root =
+    la prochaine session démarrée dans { $directory } ou ailleurs dans { $root } demandera s'il faut l'approuver ; celle-ci garde sa réponse, et /clear en démarre une qui demande
 session-trust-nothing-to-forget = aucune réponse n'est retenue pour { $directory }, il n'y a donc rien à oublier
 session-trust-not-forgotten = la réponse retenue dans { $path } n'a pas pu être supprimée : { $error }
 session-trust-forget-incognito =

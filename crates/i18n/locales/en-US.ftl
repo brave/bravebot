@@ -86,6 +86,9 @@ cli-plain-takes-nothing-else =
 cli-plain-trusting-kept =
     trusting { $directory } (you said to remember it { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming it from { $path })
+cli-plain-trusting-kept-root =
+    trusting { $directory }, inside { $root } (you said to remember { $root } { $when }; to be asked again, run
+    /forget-trust in bravebot without --plain, or delete the lines naming { $root } from { $path })
 
 # Said when a background session is started again and its earlier conversation was read back from
 # its record (BG-1).
@@ -1272,9 +1275,9 @@ trust-directory-no = ask me about every write
 # were not shown.
 trust-directory-remember = trust and remember
 trust-directory-remember-explained =
-    r: trust it, and skip this question in later sessions started in exactly this directory
+    r: trust it, and skip this question in later sessions started in this directory, or below it if it is a git root
 trust-directory-remember-exact =
-    A session started inside or above this directory is still asked, and so is one started in a directory deleted and made again here.
+    A session started above it is still asked, and so is one in a nested repository or in a directory deleted and made again here.
 trust-directory-remember-where = /forget-trust takes it back, and it is written down here:
 # Above the keys while the lines saying what r does and where it writes have not been on the screen
 # together, which is when r is not taken. What r does comes first, so a narrow terminal that cuts the
@@ -1824,6 +1827,7 @@ status-directory-untrusted = not trusted, so every write is shown to you
 status-directory-kept = remembered { $when }
 status-directory-kept-note = later sessions started here trust it without asking
 status-directory-kept-where = /forget-trust to be asked again; the answer is kept in { $path }
+status-directory-kept-root-note = later sessions started here trust it without asking, because { $root } was remembered
 status-also-open = Also open
 status-added-directory = added with /add-dir
 status-scratch = Scratch
@@ -2519,6 +2523,8 @@ session-trusting-unasked =
 # in this session and the line is the only thing on the screen that says where it came from.
 session-trusting-kept =
     trusting { $directory } (you said to remember it { $when }; /forget-trust to be asked again)
+session-trusting-kept-root =
+    trusting { $directory }, inside { $root } (you said to remember { $root } { $when }; /forget-trust to be asked again)
 session-trust-kept =
     trusting { $directory }, and later sessions started here will not ask; /forget-trust takes it back
 # The answer was given, but writing it down failed, so the next session will ask after all.
@@ -2526,6 +2532,8 @@ session-trust-not-kept =
     trusting { $directory } for this session only: the answer could not be written to { $path }, so the next session here will ask
 session-trust-forgotten =
     the next session started in { $directory } will ask whether to trust it; this one keeps its answer, and /clear starts one that asks
+session-trust-forgotten-root =
+    the next session started in { $directory } or anywhere else in { $root } will ask whether to trust it; this one keeps its answer, and /clear starts one that asks
 session-trust-nothing-to-forget = no answer about { $directory } is kept, so there is nothing to forget
 session-trust-not-forgotten = the answer kept in { $path } could not be removed: { $error }
 # Incognito writes nothing, and removing a line is a write.
