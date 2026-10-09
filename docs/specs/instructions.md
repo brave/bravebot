@@ -464,8 +464,9 @@ which file is read.
 Accepted deliberately. Do not "fix" one without changing this spec first.
 
 - **Each recorded directory costs one existence check and one directory listing every turn**, up
-  to the 64 the record keeps, for the same reason. A directory only listed, searched or named in a
-  shell command is not recorded: only a read or a write is.
+  to the 64 the record keeps. There is no cache, because one would have to be invalidated when a
+  file appears or changes mid-session. A directory only listed, searched or named in a shell
+  command is not recorded: only a read or a write is.
 - **Resolution costs up to three directory listings and up to three file reads every turn.** Cheap
   next to the model call it precedes, and the alternative is a cache that has to be invalidated by
   something, which is a second thing to be wrong about how the filesystem looks. A project keeping
