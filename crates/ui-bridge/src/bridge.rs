@@ -145,10 +145,14 @@ impl Bridge {
                     .get(&request.string("session")?)
                     .ok_or_else(Failure::no_such_session)?;
                 let cursor = request.param("cursor").as_u64().unwrap_or(0);
+                let settings =
+                    crate::settings::layers(Some(&open.project), self.settings.as_deref());
+                let sources = session_workspace(open, &settings)?.reference_sources();
                 Ok(crate::mentions::offer(
                     &open.project,
                     &request.string("line")?,
                     usize::try_from(cursor).unwrap_or(usize::MAX),
+                    &sources,
                 ))
             }
             "mentions.named" => {

@@ -3866,6 +3866,7 @@ fn event_loop(
     // The saved pick where a checkout's settings do not outrank it (BACKEND-11), before the window
     // below is asked for, which is the window of whichever model this settles on.
     session.adopt_model(&settings, config);
+    session.set_reference_sources(workspace.reference_sources());
     let mut mcp_servers = std::mem::take(servers);
     let absent = std::mem::take(&mut mcp_servers.notes);
     session.servers = mcp_servers;
@@ -5095,7 +5096,9 @@ fn add_directory(
     // resolving it would be guessing at a home the caller never named.
     let expanded = expand_home(directory);
 
-    match workspace.add_directory(&expanded) {
+    let outcome = workspace.add_directory(&expanded);
+    session.set_reference_sources(workspace.reference_sources());
+    match outcome {
         Ok(added) => {
             trust.trust(&bravebot_agent::workspace::key_of(&added));
             session.note(t!(
@@ -5133,7 +5136,9 @@ fn close_directory(
         session.note(t!(session_close_dir_needs_a_path));
         return false;
     }
-    match workspace.close_added_directory(&expand_home(directory)) {
+    let outcome = workspace.close_added_directory(&expand_home(directory));
+    session.set_reference_sources(workspace.reference_sources());
+    match outcome {
         Ok(closed) => {
             let directory = closed.display().to_string();
             // Where no trusted rule went, the directory answers as it did before the close, so
@@ -5233,6 +5238,7 @@ fn change_directory(
     // here starts one for this directory with the person asked again.
     *servers = None;
     session.now_in_workspace(&moved.root);
+    session.set_reference_sources(workspace.reference_sources());
     // An MCP server is not a tree's, so it stays; answer 2 is about a project, so it moves.
     if let Some(mcp) = &session.servers.session {
         mcp.now_in_workspace(&moved.root);
@@ -8315,7 +8321,12 @@ fn run_turn_animated(
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
     // line. Read back out of the prompt rather than tracked while it is typed, so the line that was
     // sent and the files that came with it cannot disagree.
-    for file in files_named_in(prompt, wrote) {
+    for file in files_named_in(
+        prompt,
+        wrote,
+        workspace.root(),
+        &workspace.reference_sources(),
+    ) {
         task = task.with_file(file);
     }
     if session.take_driver_prompt() || wrote == Wrote::TheDriver {
@@ -9143,9 +9154,18 @@ fn will_look_again(session: &Session, wrote: Wrote) -> bool {
 /// for the path, so a sentence this program wrote has nothing to vouch with: an `@` a judge
 /// happened to put in a reason would otherwise open a file on its own say-so, wearing an
 /// endorsement nobody gave.
-fn files_named_in(prompt: &str, wrote: Wrote) -> Vec<String> {
+fn files_named_in(
+    prompt: &str,
+    wrote: Wrote,
+    root: &std::path::Path,
+    sources: &bravebot_mentions::Sources,
+) -> Vec<String> {
     match wrote {
-        Wrote::ThePerson => bravebot_mentions::referenced(prompt),
+        // A name under a reference's alias is the file in that directory (REFER-6).
+        Wrote::ThePerson => bravebot_mentions::referenced(prompt)
+            .into_iter()
+            .map(|name| bravebot_mentions::resolved(root, &name, sources))
+            .collect(),
         Wrote::TheDriver => Vec::new(),
     }
 }
@@ -17753,7 +17773,7 @@ mod tests {
             "the reason was not quoted, so nothing here could name a file: {carrying_on}"
         );
         assert!(
-            files_named_in(&carrying_on, wrote).is_empty(),
+            files_named_in(&carrying_on, wrote, std::path::Path::new("."), &[]).is_empty(),
             "a sentence this program wrote opened a file"
         );
     }
@@ -17784,9 +17804,41 @@ mod tests {
 
         assert!(!judged, "the goal was judged before the person's line went");
         assert_eq!(
-            files_named_in(&queued, wrote),
+            files_named_in(&queued, wrote, std::path::Path::new("."), &[]),
             vec!["crates/core/src/policy.rs".to_string()],
             "a line the person typed stopped naming its files"
+        );
+    }
+
+    /// REFER-6: `@alias/path` in a line the person typed names the file in the reference's
+    /// directory, and the same text in a line the driver wrote names nothing.
+    #[test]
+    fn a_name_under_a_reference_alias_names_the_file_in_its_directory() {
+        let sources = vec![(
+            "parser".to_string(),
+            std::path::PathBuf::from("/refs/parser"),
+        )];
+        let line = "see @parser/src/lexer.rs and @crates/x.rs";
+        assert_eq!(
+            files_named_in(
+                line,
+                Wrote::ThePerson,
+                std::path::Path::new("/work"),
+                &sources
+            ),
+            vec![
+                "/refs/parser/src/lexer.rs".to_string(),
+                "crates/x.rs".to_string()
+            ]
+        );
+        assert!(
+            files_named_in(
+                line,
+                Wrote::TheDriver,
+                std::path::Path::new("/work"),
+                &sources
+            )
+            .is_empty()
         );
     }
 

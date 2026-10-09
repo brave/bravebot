@@ -16,12 +16,17 @@ use std::path::Path;
 /// `typed` is what follows the `@` of the last word, or null when the line is not being typed
 /// towards a name, which is what closes the list. `completes` is whether Enter on that row
 /// completes the name rather than sending the line (NAME-7).
-pub fn offer(project: &Path, line: &str, cursor: usize) -> Value {
+pub fn offer(
+    project: &Path,
+    line: &str,
+    cursor: usize,
+    sources: &bravebot_mentions::Sources,
+) -> Value {
     let Some(typed) = bravebot_mentions::typed_reference(line) else {
         return json!({ "typed": null, "entries": [], "completes": false });
     };
-    let entries = bravebot_mentions::matching(project, &typed);
-    let completes = bravebot_mentions::enter_completes(project, &typed, &entries, cursor);
+    let entries = bravebot_mentions::matching(project, &typed, sources);
+    let completes = bravebot_mentions::enter_completes(project, &typed, &entries, cursor, sources);
     let entries: Vec<Value> = entries
         .into_iter()
         .map(|entry| json!({ "path": entry.path, "directory": entry.is_directory }))
@@ -38,6 +43,10 @@ pub fn offer(project: &Path, line: &str, cursor: usize) -> Value {
 pub fn named(workspace: &Workspace, prompt: &str) -> Result<Vec<String>, Failure> {
     bravebot_mentions::referenced(prompt)
         .into_iter()
+        // A name under a reference's alias is the file in that directory (REFER-6).
+        .map(|name| {
+            bravebot_mentions::resolved(workspace.root(), &name, &workspace.reference_sources())
+        })
         .map(|name| match workspace.survey(&name) {
             Ok(_) => Ok(name),
             Err(WorkspaceError::Binary { .. }) => Err(Failure::bad_request(format!(

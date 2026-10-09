@@ -3,6 +3,8 @@ id: REFER
 title: Reference directories
 status: normative
 governs:
+  - crates/mentions/src/lib.rs
+  - crates/ui-bridge/src/mentions.rs
   - crates/config/src/settings.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/preamble.rs
@@ -102,7 +104,20 @@ What it holds is quarantined and read only through a processor. It is refreshed 
 <a id="REFER-6"></a>
 ### REFER-6: `@alias/path` completes in the box and vouches for nothing more than naming a file does
 
-Proposed, not built. The alias list is offered after `@`, and a path under one is named under the
-rules of [naming-files.md](naming-files.md).
+Typing `@` offers each open reference's alias beside the workspace's own entries, and a slash after
+one lists that directory, every name still written under the alias. A name under an alias is the
+file in the reference's directory, and sending reads it as any file named with `@` is read
+([naming-files.md](naming-files.md)): the person's keystroke is the only thing that vouches for it,
+and `..` is refused as everywhere else. A workspace entry of the same name as an alias wins, so a
+reference never hides a file the person could already name. The terminal and the desktop window ask
+the same `bravebot-mentions` code. Only references the workspace opened are offered, and the terminal
+says again which they are whenever `/add-dir`, `/add-dir close` or `/cd` changes what is open.
 
-`verified-by: none`
+**Why.** A reference is kept to be consulted, and typing a path to it blind is what the alias is
+there to stop.
+
+`verified-by: bravebot_mentions::lib::an_alias_is_offered_and_a_slash_descends_into_its_directory`
+`verified-by: bravebot_mentions::lib::a_workspace_entry_is_not_shadowed_by_an_alias`
+`verified-by: bravebot_mentions::lib::a_name_under_an_alias_resolves_to_the_file_and_cannot_climb_out`
+`verified-by: bravebot_tui::app::a_name_under_a_reference_alias_names_the_file_in_its_directory`
+`verified-by: bravebot_ui_bridge::mentions::the_window_names_a_file_under_a_reference_alias`

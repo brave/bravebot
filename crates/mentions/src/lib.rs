@@ -24,7 +24,7 @@
 //! `bravebot-core` nor `bravebot-agent`, so none of it runs inside the driver.
 #![forbid(unsafe_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// How many entries are offered at once.
 ///
@@ -62,6 +62,33 @@ pub fn session_entry(id: &str, title: &str, note: String) -> Entry {
     }
 }
 
+/// The directories the person's settings named as references, each with the alias it is written
+/// under after an `@` (REFER-6).
+///
+/// Only what the workspace opened: a directory that could not be opened has no row here, so
+/// nothing offered through it is a path the file tools would refuse.
+pub type Sources = [(String, PathBuf)];
+
+/// Where `typed` is looked for: the directory, what is left to find in it, and what is written
+/// before each name offered there so the line still reads `@alias/...`.
+///
+/// A name under an alias is the alias's directory, unless the workspace holds an entry of that
+/// name, in which case the workspace has it: a reference must not shadow a file the person can
+/// already see and has always been able to name.
+fn anchored<'a>(
+    root: &'a Path,
+    typed: &'a str,
+    sources: &'a Sources,
+) -> (&'a Path, &'a str, String) {
+    if let Some((alias, rest)) = typed.split_once('/')
+        && let Some((_, directory)) = sources.iter().find(|(name, _)| name == alias)
+        && root.join(alias).symlink_metadata().is_err()
+    {
+        return (directory, rest, format!("{alias}/"));
+    }
+    (root, typed, String::new())
+}
+
 /// Entries matching a half-typed reference, directories first and then files, each alphabetical.
 ///
 /// `typed` is what follows the `@`. An empty one lists the workspace root. Anything with a slash in
@@ -69,16 +96,17 @@ pub fn session_entry(id: &str, title: &str, note: String) -> Entry {
 ///
 /// Directories come first because a reference is usually typed by walking into one, and being able
 /// to go deeper matters more than the file that happens to sort first.
-pub fn matching(root: &Path, typed: &str) -> Vec<Entry> {
+pub fn matching(root: &Path, typed: &str, sources: &Sources) -> Vec<Entry> {
     // Refused rather than resolved: `..` would walk out of the workspace, and an absolute path
     // names something the reference syntax has no business reaching.
     if typed.contains("..") || typed.starts_with('/') {
         return Vec::new();
     }
 
-    let (directory, prefix) = match typed.rsplit_once('/') {
+    let (root, typed_here, tag) = anchored(root, typed, sources);
+    let (directory, prefix) = match typed_here.rsplit_once('/') {
         Some((directory, prefix)) => (directory, prefix),
-        None => ("", typed),
+        None => ("", typed_here),
     };
 
     let listed = root.join(directory);
@@ -118,9 +146,9 @@ pub fn matching(root: &Path, typed: &str) -> Vec<Entry> {
             }
             let is_directory = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
             let path = if directory.is_empty() {
-                name
+                format!("{tag}{name}")
             } else {
-                format!("{directory}/{name}")
+                format!("{tag}{directory}/{name}")
             };
             Some(Entry {
                 path: if is_directory {
@@ -134,6 +162,19 @@ pub fn matching(root: &Path, typed: &str) -> Vec<Entry> {
             })
         })
         .collect();
+
+    // The aliases, offered beside the workspace's own entries while the first word is typed. An
+    // alias the workspace has an entry of its name for is left out, as `anchored` does.
+    if tag.is_empty() && !typed.contains('/') {
+        for (alias, _) in sources {
+            if alias.starts_with(typed) && root.join(alias).symlink_metadata().is_err() {
+                entries.push(Entry {
+                    path: format!("{alias}/"),
+                    is_directory: true,
+                });
+            }
+        }
+    }
 
     // Sorted so the list is the same on every platform: `read_dir` returns whatever order the
     // filesystem holds, which would otherwise reshuffle the offered entries between machines.
@@ -217,7 +258,7 @@ fn unescape(written: &str) -> String {
 /// read, which is the same distinction [`referenced`] makes. Decided without following a symlink,
 /// so the answer agrees with the way [`matching`] classifies the same entry: a name the list would
 /// offer as a file is a finished name.
-pub fn names_a_file(root: &Path, typed: &str) -> bool {
+pub fn names_a_file(root: &Path, typed: &str, sources: &Sources) -> bool {
     // `..` and an absolute path are refused rather than resolved, the same string refusal
     // `matching` makes of what is being typed. Not a confinement check, and it cannot become one:
     // `matching` offers a symlink pointing out of the workspace as a file of its own, and a name
@@ -231,6 +272,7 @@ pub fn names_a_file(root: &Path, typed: &str) -> bool {
     if typed.starts_with(SESSION_PREFIX) {
         return false;
     }
+    let (root, typed, _) = anchored(root, typed, sources);
     root.join(typed)
         .symlink_metadata()
         .is_ok_and(|named| !named.is_dir())
@@ -276,6 +318,19 @@ fn words_after_at(line: &str) -> impl Iterator<Item = String> + '_ {
         .map(unescape)
 }
 
+/// A name written as `alias/path` as the file it means: the path under the alias's directory,
+/// absolute, so the turn reads it the way it reads any file in a directory opened by name.
+///
+/// Every other name comes back as it was. A name with `..` in it is left for the read to refuse,
+/// the way NAME-5 refuses it everywhere else.
+pub fn resolved(root: &Path, name: &str, sources: &Sources) -> String {
+    let (base, rest, tag) = anchored(root, name, sources);
+    if tag.is_empty() || rest.is_empty() || name.contains("..") {
+        return name.to_string();
+    }
+    base.join(rest).display().to_string()
+}
+
 /// Whether Enter on a half-typed reference completes it rather than sending the line.
 ///
 /// `offered` is what [`matching`] returned for `typed`, and `cursor` is the row the person moved to,
@@ -287,8 +342,14 @@ fn words_after_at(line: &str) -> impl Iterator<Item = String> + '_ {
 /// Asked of the workspace through [`names_a_file`] rather than of `offered`, which is capped for
 /// display: forty directories sharing the prefix sort above the file and cut it from the list, and
 /// scanning the list would then complete a finished name away into a directory nobody chose.
-pub fn enter_completes(root: &Path, typed: &str, offered: &[Entry], cursor: usize) -> bool {
-    if cursor == 0 && names_a_file(root, typed) {
+pub fn enter_completes(
+    root: &Path,
+    typed: &str,
+    offered: &[Entry],
+    cursor: usize,
+    sources: &Sources,
+) -> bool {
+    if cursor == 0 && names_a_file(root, typed, sources) {
         return false;
     }
     offered
@@ -339,7 +400,7 @@ mod tests {
     #[test]
     fn an_empty_reference_lists_the_root_with_directories_first() {
         let scratch = Scratch::new("root");
-        let offered = matching(&scratch.path, "");
+        let offered = matching(&scratch.path, "", &[]);
         assert_eq!(paths(&offered), vec!["crates/", "Cargo.toml", "Makefile"]);
     }
 
@@ -347,8 +408,8 @@ mod tests {
     #[test]
     fn a_prefix_narrows_the_list() {
         let scratch = Scratch::new("prefix");
-        assert_eq!(paths(&matching(&scratch.path, "Ma")), vec!["Makefile"]);
-        assert!(matching(&scratch.path, "zz").is_empty());
+        assert_eq!(paths(&matching(&scratch.path, "Ma", &[])), vec!["Makefile"]);
+        assert!(matching(&scratch.path, "zz", &[]).is_empty());
     }
 
     /// A slash lists the directory it names, so a reference is typed by walking into one.
@@ -357,11 +418,11 @@ mod tests {
         let scratch = Scratch::new("nested");
         // Whole paths, not just the last segment: what is offered is what gets typed.
         assert_eq!(
-            paths(&matching(&scratch.path, "crates/")),
+            paths(&matching(&scratch.path, "crates/", &[])),
             vec!["crates/tui/"]
         );
         assert_eq!(
-            paths(&matching(&scratch.path, "crates/tui/l")),
+            paths(&matching(&scratch.path, "crates/tui/l", &[])),
             vec!["crates/tui/lib.rs"]
         );
     }
@@ -373,7 +434,7 @@ mod tests {
     #[test]
     fn noise_directories_are_not_offered() {
         let scratch = Scratch::new("noise");
-        let offered = matching(&scratch.path, "");
+        let offered = matching(&scratch.path, "", &[]);
         let root = paths(&offered);
         assert!(!root.contains(&"target/"), "build output was offered");
         assert!(!root.contains(&".git/"), "version control was offered");
@@ -389,7 +450,7 @@ mod tests {
         );
         // Withheld under the name a checkout of this shape gives it, which is a file.
         assert!(
-            !paths(&matching(&scratch.path, "crates/tui/")).contains(&"crates/tui/.git"),
+            !paths(&matching(&scratch.path, "crates/tui/", &[])).contains(&"crates/tui/.git"),
             "version control was offered"
         );
     }
@@ -399,9 +460,9 @@ mod tests {
     #[test]
     fn a_reference_cannot_climb_out_of_the_workspace() {
         let scratch = Scratch::new("escape");
-        assert!(matching(&scratch.path, "../").is_empty());
-        assert!(matching(&scratch.path, "../../etc/").is_empty());
-        assert!(matching(&scratch.path, "/etc/").is_empty());
+        assert!(matching(&scratch.path, "../", &[]).is_empty());
+        assert!(matching(&scratch.path, "../../etc/", &[]).is_empty());
+        assert!(matching(&scratch.path, "/etc/", &[]).is_empty());
     }
 
     /// A reference is offered while the word is being typed, and left alone once a space says the
@@ -439,23 +500,23 @@ mod tests {
     #[test]
     fn what_counts_as_already_naming_a_file() {
         let scratch = Scratch::new("finished");
-        assert!(names_a_file(&scratch.path, "Makefile"));
-        assert!(names_a_file(&scratch.path, "crates/tui/lib.rs"));
-        assert!(!names_a_file(&scratch.path, "crates"), "a directory");
-        assert!(!names_a_file(&scratch.path, "Make"), "half typed");
-        assert!(!names_a_file(&scratch.path, ""), "a bare `@`");
+        assert!(names_a_file(&scratch.path, "Makefile", &[]));
+        assert!(names_a_file(&scratch.path, "crates/tui/lib.rs", &[]));
+        assert!(!names_a_file(&scratch.path, "crates", &[]), "a directory");
+        assert!(!names_a_file(&scratch.path, "Make", &[]), "half typed");
+        assert!(!names_a_file(&scratch.path, "", &[]), "a bare `@`");
 
         // More siblings sharing the prefix than the list can hold. They sort above the file, so
         // the cut takes the file first and nothing about it having been typed has changed.
         for n in 0..MAX_ENTRIES + 5 {
             std::fs::create_dir_all(scratch.path.join(format!("Makefile{n:03}"))).expect("create");
         }
-        let offered = matching(&scratch.path, "Makefile");
+        let offered = matching(&scratch.path, "Makefile", &[]);
         assert!(
             !paths(&offered).contains(&"Makefile"),
             "the file was still offered, so the cap was never reached"
         );
-        assert!(names_a_file(&scratch.path, "Makefile"));
+        assert!(names_a_file(&scratch.path, "Makefile", &[]));
     }
 
     /// A symlink counts as whatever the offered list calls it. The list classifies without
@@ -468,7 +529,7 @@ mod tests {
         let scratch = Scratch::new("finished-symlink");
         std::os::unix::fs::symlink("crates", scratch.path.join("notes")).expect("link");
         assert_eq!(
-            matching(&scratch.path, "notes"),
+            matching(&scratch.path, "notes", &[]),
             vec![Entry {
                 path: "notes".to_string(),
                 is_directory: false,
@@ -477,7 +538,7 @@ mod tests {
             }],
             "the list offers a symlink as a file, following nothing"
         );
-        assert!(names_a_file(&scratch.path, "notes"));
+        assert!(names_a_file(&scratch.path, "notes", &[]));
     }
 
     /// Nothing outside the workspace is a name this answers for, the same refusal `matching` makes.
@@ -488,10 +549,10 @@ mod tests {
         // while still existing, which is what makes the refusal say anything.
         let root = scratch.path.join("crates");
         let outside = scratch.path.join("Makefile");
-        assert!(names_a_file(&scratch.path, "Makefile"), "it is there");
-        assert!(!names_a_file(&root, "../Makefile"), "climbing out");
+        assert!(names_a_file(&scratch.path, "Makefile", &[]), "it is there");
+        assert!(!names_a_file(&root, "../Makefile", &[]), "climbing out");
         assert!(
-            !names_a_file(&root, outside.to_str().expect("utf8")),
+            !names_a_file(&root, outside.to_str().expect("utf8"), &[]),
             "an absolute path"
         );
     }
@@ -548,10 +609,10 @@ mod tests {
         std::fs::create_dir_all(scratch.path.join("My Documents")).expect("create");
         std::fs::write(scratch.path.join("My Documents/notes.md"), "").expect("write");
         assert_eq!(
-            paths(&matching(&scratch.path, "My Documents/")),
+            paths(&matching(&scratch.path, "My Documents/", &[])),
             vec!["My Documents/notes.md"]
         );
-        assert!(names_a_file(&scratch.path, "My Documents/notes.md"));
+        assert!(names_a_file(&scratch.path, "My Documents/notes.md", &[]));
         assert_eq!(last_word_starts_at(r"read @My\ Doc"), 5);
     }
 
@@ -560,29 +621,29 @@ mod tests {
     #[test]
     fn what_enter_does_with_a_half_typed_or_finished_name() {
         let scratch = Scratch::new("enter");
-        let half = matching(&scratch.path, "Make");
+        let half = matching(&scratch.path, "Make", &[]);
         assert!(
-            enter_completes(&scratch.path, "Make", &half, 0),
+            enter_completes(&scratch.path, "Make", &half, 0, &[]),
             "half typed"
         );
 
         std::fs::create_dir_all(scratch.path.join("Makefiles")).expect("create");
-        let finished = matching(&scratch.path, "Makefile");
+        let finished = matching(&scratch.path, "Makefile", &[]);
         assert_eq!(paths(&finished), vec!["Makefiles/", "Makefile"]);
         assert!(
-            !enter_completes(&scratch.path, "Makefile", &finished, 0),
+            !enter_completes(&scratch.path, "Makefile", &finished, 0, &[]),
             "a finished name was completed away into the directory above it"
         );
         assert!(
-            !enter_completes(&scratch.path, "Makefile", &finished, 1),
+            !enter_completes(&scratch.path, "Makefile", &finished, 1, &[]),
             "the row the cursor is on is what was typed"
         );
         assert!(
-            enter_completes(&scratch.path, "Makefile", &[finished[0].clone()], 5),
+            enter_completes(&scratch.path, "Makefile", &[finished[0].clone()], 5, &[]),
             "a cursor past the end of the list chooses its last row"
         );
         assert!(
-            !enter_completes(&scratch.path, "zz", &[], 0),
+            !enter_completes(&scratch.path, "zz", &[], 0, &[]),
             "nothing offered"
         );
     }
@@ -604,7 +665,7 @@ mod tests {
     fn a_session_row_completes_to_its_reference_and_enter_sends_it_finished() {
         let scratch = Scratch::new("session-row");
         std::fs::write(scratch.path.join("session:abc"), "").expect("write");
-        assert!(!names_a_file(&scratch.path, "session:abc"));
+        assert!(!names_a_file(&scratch.path, "session:abc", &[]));
         let row = session_entry("abc", "fix the build", "2 days ago".to_string());
         assert_eq!(row.path, "session:abc");
         assert!(!row.is_directory);
@@ -612,8 +673,100 @@ mod tests {
             &scratch.path,
             "session:abc",
             std::slice::from_ref(&row),
-            0
+            0,
+            &[]
         ));
-        assert!(enter_completes(&scratch.path, "session:a", &[row], 0));
+        assert!(enter_completes(&scratch.path, "session:a", &[row], 0, &[]));
+    }
+
+    /// A scratch workspace with a reference directory beside it, and the alias list naming it.
+    fn with_a_reference(name: &str) -> (Scratch, Scratch, Vec<(String, PathBuf)>) {
+        let workspace = Scratch::new(name);
+        let library = Scratch::new(&format!("{name}-library"));
+        std::fs::create_dir_all(library.path.join("src")).expect("src");
+        std::fs::write(library.path.join("src/lexer.rs"), "x").expect("file");
+        std::fs::write(library.path.join("README.md"), "x").expect("file");
+        let sources = vec![("parser".to_string(), library.path.clone())];
+        (workspace, library, sources)
+    }
+
+    /// REFER-6: the alias is offered among the workspace's own entries, and a slash descends into
+    /// the directory behind it with every name still written under the alias.
+    #[test]
+    fn an_alias_is_offered_and_a_slash_descends_into_its_directory() {
+        let (workspace, _library, sources) = with_a_reference("alias-offered");
+        assert_eq!(
+            paths(&matching(&workspace.path, "", &sources)),
+            vec!["crates/", "parser/", "Cargo.toml", "Makefile"],
+        );
+        assert_eq!(
+            paths(&matching(&workspace.path, "par", &sources)),
+            vec!["parser/"]
+        );
+        assert_eq!(
+            paths(&matching(&workspace.path, "parser/", &sources)),
+            vec![
+                "parser/crates/",
+                "parser/src/",
+                "parser/Cargo.toml",
+                "parser/Makefile",
+                "parser/README.md"
+            ]
+        );
+        assert_eq!(
+            paths(&matching(&workspace.path, "parser/src/l", &sources)),
+            vec!["parser/src/lexer.rs"]
+        );
+    }
+
+    /// REFER-6: an entry of the workspace's own is not hidden by an alias of the same name.
+    #[test]
+    fn a_workspace_entry_is_not_shadowed_by_an_alias() {
+        let (workspace, _library, sources) = with_a_reference("alias-shadow");
+        std::fs::create_dir_all(workspace.path.join("parser")).expect("dir");
+        std::fs::write(workspace.path.join("parser/own.rs"), "x").expect("file");
+        assert_eq!(
+            paths(&matching(&workspace.path, "par", &sources)),
+            vec!["parser/"],
+            "one row, the workspace's"
+        );
+        assert_eq!(
+            paths(&matching(&workspace.path, "parser/", &sources)),
+            vec!["parser/own.rs"]
+        );
+        assert_eq!(
+            resolved(&workspace.path, "parser/own.rs", &sources),
+            "parser/own.rs"
+        );
+    }
+
+    /// REFER-6: a name under an alias is the file in the directory, `..` leaves the reference, and
+    /// a finished name sends rather than completes.
+    #[test]
+    fn a_name_under_an_alias_resolves_to_the_file_and_cannot_climb_out() {
+        let (workspace, library, sources) = with_a_reference("alias-resolved");
+        assert_eq!(
+            resolved(&workspace.path, "parser/src/lexer.rs", &sources),
+            library.path.join("src/lexer.rs").display().to_string()
+        );
+        assert_eq!(
+            resolved(&workspace.path, "parser/../x", &sources),
+            "parser/../x"
+        );
+        assert!(matching(&workspace.path, "parser/../", &sources).is_empty());
+        assert_eq!(
+            resolved(&workspace.path, "other/a.rs", &sources),
+            "other/a.rs"
+        );
+        assert!(names_a_file(&workspace.path, "parser/README.md", &sources));
+        assert!(!names_a_file(&workspace.path, "parser/src", &sources));
+        let offered = matching(&workspace.path, "parser/README.md", &sources);
+        assert!(!enter_completes(
+            &workspace.path,
+            "parser/README.md",
+            &offered,
+            0,
+            &sources
+        ));
     }
 }
