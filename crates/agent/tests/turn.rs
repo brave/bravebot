@@ -16916,39 +16916,70 @@ fn keeping_a_request_writes_nothing_where_it_was_not_offered_or_was_refused() {
 }
 
 /// SANDBOX-26: the request is refused, and the program does not start, where the mode accepts
-/// none. `standard` already reads the machine and `off` has no profile to add to. The planner is
-/// told, in the same words, that nothing was added; no prompt is raised.
+/// none: `off` has no profile to add to. The planner is told, in the same words, that nothing was
+/// added; no prompt is raised.
 #[test]
-fn scopes_are_refused_under_standard_and_under_off() {
+fn scopes_are_refused_under_off() {
     if cannot_confine_here() {
         return;
     }
-    for mode in [
-        bravebot_sandbox::SandboxMode::Standard,
-        bravebot_sandbox::SandboxMode::Off,
-    ] {
-        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
-        let seen = confirmer.seen.clone();
-        let result = scoped_run(
-            &format!("scopes-refused-{mode}"),
-            serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["aws"] }),
-            mode,
-            bravebot_agent::PermissionMode::default(),
-            trusting_the_workspace(),
-            no_programs,
-            &mut confirmer,
-        );
-        assert!(
-            message_from(&result.second, "Result of run").contains("does not accept a request"),
-            "{mode}: {}",
-            result.second
-        );
-        assert!(!result.ran, "{mode}: the line ran");
-        assert!(
-            seen.lock().unwrap().is_empty(),
-            "{mode}: a prompt was raised"
-        );
+    let mode = bravebot_sandbox::SandboxMode::Off;
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+    let result = scoped_run(
+        "scopes-refused-off",
+        serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["aws"] }),
+        mode,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut confirmer,
+    );
+    assert!(
+        message_from(&result.second, "Result of run").contains("does not accept a request"),
+        "{mode}: {}",
+        result.second
+    );
+    assert!(!result.ran, "{mode}: the line ran");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "{mode}: a prompt was raised"
+    );
+}
+
+/// SANDBOX-26: `standard` accepts the request as `strict` does. The person is asked about the line
+/// with the names shown, and the line runs once they approve. The control is the same call under
+/// `off`, which is refused, so the run below is the mode's doing and not the harness's.
+#[test]
+fn scopes_are_asked_about_and_run_under_standard() {
+    if cannot_confine_here() {
+        return;
     }
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = asked.seen.clone();
+    let result = scoped_run(
+        "scopes-standard",
+        serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["remote", "aws"] }),
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut asked,
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "the request was not asked about");
+    assert_eq!(seen[0].requested_scopes(), ["remote", "aws"]);
+    assert!(seen[0].asks_for_scopes());
+    assert!(
+        result.ran,
+        "the approved line did not run: {}",
+        result.second
+    );
+    assert!(
+        !message_from(&result.second, "Result of run").contains("does not accept a request"),
+        "{}",
+        result.second
+    );
 }
 
 /// SANDBOX-26, TRUST-7: the request is refused in a workspace the person declined to trust, where
@@ -17113,6 +17144,30 @@ fn the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu() {
     assert_eq!(one, two);
     for name in ["remote", "aws", "kubernetes", "docker", "cargo", "gradle"] {
         assert!(one.contains(name), "{name} missing from {one}");
+    }
+}
+
+/// SANDBOX-19: the same sentence follows a failure under `standard`, which names the menu too.
+#[test]
+fn the_failure_sentence_names_the_menu_under_standard() {
+    if cannot_confine_here() {
+        return;
+    }
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let result = scoped_run(
+        "scopes-failure-sentence-standard",
+        serde_json::json!({ "command": "sh -c 'exit 1'" }),
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut confirmer,
+    );
+    let said = message_from(&result.second, "Result of run").to_string();
+    assert!(said.contains("exited 1"), "{said}");
+    let sentence = &said[said.find("Confinement:").expect("a confinement sentence")..];
+    for name in ["remote", "aws", "kubernetes", "docker", "cargo", "gradle"] {
+        assert!(sentence.contains(name), "{name} missing from {sentence}");
     }
 }
 

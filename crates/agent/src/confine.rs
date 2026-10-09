@@ -616,11 +616,12 @@ impl Confinement {
                  a place that holds a credential was read only where a credential scope added it \
                  for the steps that named one (credential scopes: {}). Any other path is refused \
                  by the operating system as `Operation not permitted` or `Permission denied`. \
-                 Network: {}.{}",
+                 Network: {}.{}{}",
                 directories.join(", "),
                 named(scopes),
                 network,
                 rules,
+                self.menu_sentence(),
             );
         }
         format!(
@@ -639,11 +640,12 @@ impl Confinement {
         )
     }
 
-    /// The sentence naming what a line may ask for, or nothing where this mode accepts no request.
+    /// The sentence naming what a line may ask for, or nothing where this session names no home to
+    /// apply a request under.
     ///
     /// The same words follow every failure of the line, the exit code not among its inputs.
     fn menu_sentence(&self) -> String {
-        match self.mode == SandboxMode::Strict && self.accepts_requests() {
+        match self.accepts_requests() {
             true => format!(" {}", requests_menu_sentence()),
             false => String::new(),
         }
@@ -876,7 +878,6 @@ fn stated(
     if !confine_runs || mode == SandboxMode::Off {
         return None;
     }
-    let listed = mode == SandboxMode::Strict;
     let mut said = String::from(match prelude {
         Some(Prelude::Windows) => {
             "Programs this tool starts are confined. Each may reach only the directories the \
@@ -888,7 +889,7 @@ fn stated(
              for such a path was stopped by the sandbox and not by a fault in the machine. Only \
              the person widens it (`/add-dir`, `--add-dir`); a command cannot ask for more."
         }
-        Some(Prelude::Linux | Prelude::MacOs) if listed => {
+        Some(Prelude::Linux | Prelude::MacOs) if mode == SandboxMode::Strict => {
             "Programs this tool starts are confined. Each may reach only the directories the \
              session was opened on, the scratch directory and the temporary directory, all read \
              and written, the system and program directories and git's configuration files, \
@@ -906,15 +907,15 @@ fn stated(
              caches, and reads a credential directory only where the command's scope names it. \
              A path outside those is refused by the operating system as `Operation not \
              permitted` or `Permission denied`, so a program that reports either for such a path \
-             was stopped by the sandbox and not by a fault in the machine. Only the person \
-             widens it (`/add-dir`, `--add-dir`); a command cannot ask for more."
+             was stopped by the sandbox and not by a fault in the machine. The person widens it \
+             (`/add-dir`, `--add-dir`)."
         }
         None => {
             "Programs this tool starts are not confined on this platform: they run with the \
              access of the person's own account."
         }
     });
-    if prelude.is_some() && listed {
+    if prelude.is_some() {
         said.push(' ');
         said.push_str(&requests_menu_sentence());
     }
@@ -1625,11 +1626,11 @@ mod tests {
         );
     }
 
-    /// SANDBOX-19, SANDBOX-26: the failure sentence of a strict session names the menu, and is
-    /// built from the confinement and the steps alone, so it is the same words for exit 1 and exit
-    /// 2. A session that accepts no request does not name one.
+    /// SANDBOX-19, SANDBOX-26: the failure sentence names the menu in `strict` and in `standard`,
+    /// and is built from the confinement and the steps alone, so it is the same words for exit 1
+    /// and exit 2. A session that names no home to apply a request under does not name one.
     #[test]
-    fn the_failure_sentence_names_the_menu_only_where_a_request_is_accepted() {
+    fn the_failure_sentence_names_the_menu_where_a_request_is_accepted() {
         let script = step("/bin/sh", &["-c", "false"]);
         let strict = confinement(&["/work/project"]).with_mode(SandboxMode::Strict);
         let line = strict.profile(&[&script]);
@@ -1640,20 +1641,27 @@ mod tests {
 
         let standard = reading_confinement(Prelude::MacOs, &["/work/project"]);
         let said = standard.profile(&[&script]);
-        assert!(!said.contains("scopes` argument"), "{said}");
-        assert!(!said.contains("kubernetes, docker, cargo"), "{said}");
+        assert!(said.contains("scopes` argument"), "{said}");
+        for name in Requested::MENU {
+            assert!(said.contains(name), "{name} missing from {said}");
+        }
+        assert_eq!(said, standard.profile(&[&script]));
     }
 
-    /// SANDBOX-26: the planner is told of the argument and its menu only where it will be honoured.
+    /// SANDBOX-26: the planner is told of the argument and its menu where it will be honoured, in
+    /// `strict` and in `standard`, and not in `off`.
     #[test]
-    fn the_planner_is_told_of_the_menu_only_in_strict() {
+    fn the_planner_is_told_of_the_menu_in_strict_and_standard() {
         let told = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode);
-        let strict = told(SandboxMode::Strict).expect("strict says something");
-        assert!(strict.contains("`scopes`"), "{strict}");
-        for name in Requested::MENU {
-            assert!(strict.contains(name), "{name} missing from {strict}");
+        for mode in [SandboxMode::Strict, SandboxMode::Standard] {
+            let said = told(mode).expect("says something");
+            assert!(said.contains("`scopes`"), "{said}");
+            for name in Requested::MENU {
+                assert!(said.contains(name), "{name} missing from {said}");
+            }
         }
-        assert!(!told(SandboxMode::Standard).unwrap().contains("`scopes`"));
+        let standard = told(SandboxMode::Standard).unwrap();
+        assert!(!standard.contains("cannot ask for more"), "{standard}");
         assert_eq!(told(SandboxMode::Off), None);
     }
 
@@ -2675,7 +2683,7 @@ mod tests {
         let open = confinement(&["/work/project"]);
         let make = step("/usr/bin/make", &[]);
         assert!(open.policy(&make, Path::new("/work"), &[]).allow_network);
-        assert!(open.profile(&[&make]).ends_with("Network: open."));
+        assert!(open.profile(&[&make]).contains("Network: open."));
     }
 
     /// A file the plan could have written, under a directory it may write to, gets no network by
