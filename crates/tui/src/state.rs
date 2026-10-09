@@ -16156,6 +16156,33 @@ mod tests {
         assert_eq!(s.input, "a newer thought");
     }
 
+    /// The other half of the refusal: a turn that is still running keeps its prompt sent. A
+    /// prompt arriving in the box mid-turn would be a line the person did not type, waiting to be
+    /// sent again on top of the work already going.
+    ///
+    /// The status is reached by submitting rather than by setting the field, so the test fails if
+    /// submitting stops leaving the session busy.
+    #[test]
+    fn a_returned_prompt_is_refused_while_a_turn_is_running() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        assert_ne!(
+            s.status,
+            Status::Idle,
+            "submitting left the session idle, so this test no longer reaches the refusal"
+        );
+        assert!(s.input.is_empty(), "submitting left the box holding text");
+
+        s.return_prompt("rewrite the parser");
+
+        assert!(
+            s.input.is_empty(),
+            "a prompt was put back into the box while a turn was running: {:?}",
+            s.input
+        );
+    }
+
     /// Earlier exchanges are untouched, so cancelling does not eat the conversation.
     #[test]
     fn restoring_keeps_earlier_exchanges() {

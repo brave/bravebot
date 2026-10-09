@@ -555,6 +555,7 @@ prompt written over it would cost them that line.
 `verified-by: bravebot_tui::app::undoing_a_turn_puts_its_prompt_back_in_the_box`
 `verified-by: bravebot_tui::state::a_returned_prompt_lands_in_the_box_as_a_prompt`
 `verified-by: bravebot_tui::state::a_returned_prompt_does_not_overwrite_a_line_being_typed`
+`verified-by: bravebot_tui::state::a_returned_prompt_is_refused_while_a_turn_is_running`
 
 A complete rewind that goes back past the session's first turn removes its record rather than
 leaving one with nothing in it. A rewind with incomplete coverage, failed restorations or changed file decisions saves its state even there, and a name the user gave the session before that turn stays with
