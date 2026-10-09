@@ -26,6 +26,7 @@ pub mod goal;
 pub mod granted;
 pub mod home;
 pub mod hooks;
+pub mod host_proxy;
 pub mod lsp;
 pub mod manifest;
 pub mod mcp;

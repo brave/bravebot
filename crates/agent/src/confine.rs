@@ -14,6 +14,7 @@
 use crate::confirm::{Carried, Confined, Remembered};
 use crate::exec::ExecError;
 use crate::reach::{Grant, Reached};
+use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
@@ -40,6 +41,9 @@ pub struct Confinement {
     user_cache: Option<PathBuf>,
     /// What the session decided about the network for the stages it starts.
     network: Network,
+    /// The host list the session's stages with egress are held to, or none for no filtering and
+    /// no proxy (SANDBOX-24).
+    hosts: Option<Hosts>,
     /// How much of the machine a step reads (SANDBOX-22). `Off` never reaches a confinement: a turn
     /// in that mode builds none ([`Confinement::here`] is not asked), so the rows below are the
     /// two modes that confine.
@@ -100,6 +104,7 @@ impl Confinement {
             scratch: scratch.map(canonical),
             user_cache: None,
             network: Network::Open,
+            hosts: None,
             mode: SandboxMode::Standard,
             grants: Vec::new(),
             filesystem: Rules::none(),
@@ -115,6 +120,60 @@ impl Confinement {
     pub fn with_network(mut self, network: Network) -> Self {
         self.network = network;
         self
+    }
+
+    /// This confinement with the session's host list. A list that is set, even an empty one,
+    /// filters every stage that has egress through a proxy; no `allowedHosts` leaves the stages
+    /// as they were (SANDBOX-24).
+    pub fn with_hosts(mut self, hosts: Option<&Hosts>) -> Self {
+        self.hosts = hosts.filter(|hosts| hosts.allowed.is_some()).cloned();
+        self
+    }
+
+    /// The proxy variables the stage `step` is started with, or none where it is not filtered.
+    ///
+    /// Applied after the person's environment and the step's own assignments, so an assignment a
+    /// model wrote cannot point the stage at another proxy. A stage with no egress is given none:
+    /// it reaches nothing. Where the proxy cannot be started the stage is refused, since starting
+    /// it without the filter is the unfiltered reach the list exists to remove.
+    fn host_environment(&self, step: &Step) -> Result<Vec<(String, String)>, String> {
+        let Some(hosts) = &self.hosts else {
+            return Ok(Vec::new());
+        };
+        if !self.egress(step) {
+            return Ok(Vec::new());
+        }
+        let spelled = |entries: &[bravebot_config::sandbox_network::HostEntry]| {
+            entries
+                .iter()
+                .map(|host| host.entry.clone())
+                .collect::<Vec<_>>()
+        };
+        let requested = self.requested_for(step);
+        let toolchains: Vec<Toolchain> = Toolchain::of(&step.resolved)
+            .into_iter()
+            .chain(requested.iter().filter_map(|request| match request {
+                Requested::Toolchain(toolchain) => Some(*toolchain),
+                _ => None,
+            }))
+            .collect();
+        let remote = Scope::of(&step.resolved, &step.args, &step.environment)
+            == Some(Scope::Remote)
+            || requested
+                .iter()
+                .any(|request| matches!(request, Requested::Scope(Scope::Remote)))
+            || self
+                .granted(step)
+                .any(|grant| matches!(grant.reached, Reached::Scope(Scope::Remote)));
+        let list = crate::host_proxy::list_for(
+            &spelled(hosts.allowed.as_deref().unwrap_or_default()),
+            &spelled(&hosts.denied),
+            remote,
+            &toolchains,
+        )?;
+        let proxy = crate::host_proxy::proxy_for(&list)
+            .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))?;
+        Ok(proxy.environment())
     }
 
     /// This confinement with the person's own filesystem lists (`sandbox.filesystem`), resolved
@@ -698,11 +757,18 @@ impl Confinement {
         step: &Step,
         directory: &Path,
     ) -> Result<Prepared, ExecError> {
-        let environment = effective_environment(command);
         let not_confined = |detail: String| ExecError::NotConfined {
             program: step.program.clone(),
             detail,
         };
+        let proxied = self.host_environment(step).map_err(not_confined)?;
+        let environment = overlay(
+            effective_environment(command),
+            proxied
+                .iter()
+                .map(|(name, value)| (OsStr::new(name), Some(OsStr::new(value)))),
+            FOLD_CASE,
+        );
         #[cfg(test)]
         if self.unconfinable.as_deref() == Some(step.program.as_str()) {
             return Err(not_confined("a test made the platform refuse".to_string()));
@@ -3207,5 +3273,41 @@ mod tests {
         assert_eq!(lookup(&held, "PATH", true), Some(r"C:\bin".to_string()));
         assert_eq!(lookup(&held, "PATH", false), None);
         assert_eq!(lookup(&held, "TEMP", true), None);
+    }
+
+    fn hosts_listing(allowed: Option<&[&str]>) -> Hosts {
+        let entry = |name: &&str| bravebot_config::sandbox_network::HostEntry {
+            entry: name.to_string(),
+            by: None,
+        };
+        Hosts {
+            allowed: allowed.map(|names| names.iter().map(entry).collect()),
+            ..Hosts::default()
+        }
+    }
+
+    /// A stage the closed setting left no egress is given no proxy to reach, and one that kept it
+    /// is; the same stages under a session with no list are given nothing. The regression it
+    /// rejects is the proxy variables applied to every stage, which hands a stage with no reason
+    /// to reach the network a route there.
+    #[test]
+    fn only_a_stage_with_egress_is_pointed_at_the_proxy_and_only_under_a_list() {
+        let closed = confinement(&["/work/project"]).with_network(Network::Closed);
+        let filtered = closed
+            .clone()
+            .with_hosts(Some(&hosts_listing(Some(&["a.example"]))));
+        let kept = step("/usr/bin/curl", &["https://a.example"]);
+        let lost = step("/bin/cat", &["a"]);
+
+        assert!(closed.egress(&kept) && !closed.egress(&lost));
+        assert!(filtered.host_environment(&lost).unwrap().is_empty());
+        let told = filtered.host_environment(&kept).unwrap();
+        assert!(
+            told.iter().any(|(name, _)| name == "HTTPS_PROXY"),
+            "{told:?}"
+        );
+        assert!(closed.host_environment(&kept).unwrap().is_empty());
+        let no_list = closed.with_hosts(Some(&hosts_listing(None)));
+        assert!(no_list.host_environment(&kept).unwrap().is_empty());
     }
 }

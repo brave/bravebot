@@ -188,6 +188,9 @@ fn main() -> ExitCode {
         }
     }
 
+    // The host list a stage is held to, settled with the lists above for the same reason.
+    bravebot_config::sandbox_network::settle(&bravebot_config::Settings::load());
+
     // After the mode above is engaged, because an incognito session is given no directory to log
     // into, and before the first thing that could fail in a way worth recording.
     match take_log_level(&mut args) {

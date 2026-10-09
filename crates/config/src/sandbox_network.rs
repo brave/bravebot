@@ -157,6 +157,22 @@ pub struct Resolved {
     pub unread: Vec<HostEntry>,
 }
 
+static SETTLED: std::sync::OnceLock<Resolved> = std::sync::OnceLock::new();
+
+/// Read the layers on this machine and settle the host list for the rest of this process.
+///
+/// Called once from the entry point with the other sandbox settings, so every stage of every
+/// line holds one answer. First call wins, for the reason [`crate::settle_run_network`] does.
+pub fn settle(settings: &Settings) -> &'static Resolved {
+    SETTLED.get_or_init(|| resolve(settings, &Managed::load()))
+}
+
+/// The list [`settle`] settled, or none where nothing did, which is every test that does not
+/// start from an entry point.
+pub fn settled() -> Option<&'static Resolved> {
+    SETTLED.get()
+}
+
 /// The answer for the settings layers and the managed layer, none read from the machine here.
 ///
 /// A managed `allowedHosts` is the whole allowed set, so a person's entries are not added to it,
