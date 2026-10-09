@@ -740,7 +740,10 @@ not a GitHub pull request, is refused with a usage note and no turn starts.
 The planner fetches the diff with `run` (`git diff`, `git show` or `gh pr diff`), so you are asked
 about the program like any other. Where the diff comes back as lines you have vouched for, the planner
 reviews it. Where it comes back as a reference, the planner may not see it, and hands it to a
-processor whose findings are shown to you as untrusted content and to no model. The command writes
+processor whose findings are shown to you as untrusted content and to no model. If the working
+directory has a `REVIEW.md`, the planner reads it first as the project's notes on what a review
+should flag or leave alone. It sees the file only where you have vouched for it, and reviews
+without it otherwise. The command writes
 nothing and the prompt forbids changes, commits, pushes and comments. A prompt file or skill named
 `review` is shadowed by the command.
 
