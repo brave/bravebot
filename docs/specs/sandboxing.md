@@ -2192,10 +2192,14 @@ reported as what it is.
   agent.
 - The Windows base is empty, on the ground that a container reads the system directories through
   an entry the platform already wrote. The Windows job starts `cmd.exe /c` and the compiler on
-  its `PATH` under it. `git` does not start: it opens `/dev/null`, which is `NUL`, before it reads
-  its arguments, and a container is denied that device, so every stage that runs `git` ends
-  with "could not open '/dev/null'" until a way to give a container the device is found. No other
-  program is started, and whether a `PATH` or session directory
+  its `PATH` under it, and `git`. `git` opens `/dev/null`, which is `NUL`, before it reads its
+  arguments, so it starts only where the device lets a container open it. On Windows Server 2025
+  (build 26100, the runner image) the device's access list names no ALL APPLICATION PACKAGES
+  entry, a container is denied it, and every stage that runs `git` ends with "could not open
+  '/dev/null'" until an administrator adds the entry. No grant of this backend can add it, since
+  the device is not a path under a directory the account owns, so the job adds it before the tests
+  and a machine that runs `git` confined needs the same. Whether another build of Windows names
+  the entry is not shown. No other program is started, and whether a `PATH` or session directory
   the account cannot change refuses the whole program is argued and not shown. A program that needs
   a file outside those directories is refused by the kernel until its plan names the file.
 - A grant on a single file is written without inheritance, which is the entry a file takes. The
@@ -2241,6 +2245,3 @@ reported as what it is.
   listener run on Unix only, so whether a container reaches a loopback listener, and with it the
   denial of egress on Windows, is shown by the capability the token is built with and not by a
   connection.
-- One test that would show a defect on Windows is marked `#[ignore]` so the job stays green:
-  `git_starts_under_the_empty_base` in the sandbox crate, which fails for the reason above.
-  Removing the `#[ignore]` is part of fixing it.

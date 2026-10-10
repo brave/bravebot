@@ -72,8 +72,9 @@ impl Prelude {
 
     /// The device a program discards output to, where this platform has one a profile can name.
     ///
-    /// `NUL` is not a path under any directory, so there is no row to write for it, and a
-    /// program opens it whatever it is granted.
+    /// `NUL` is not a path under any directory, so there is no row to write for it. A container
+    /// opens it only where the device's access list names ALL APPLICATION PACKAGES, which no
+    /// grant of this backend can add.
     fn null_device(self) -> Option<&'static str> {
         match self {
             Self::Linux | Self::MacOs => Some(THE_NULL_DEVICE),

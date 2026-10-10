@@ -189,19 +189,25 @@ fn cmd_and_a_compiler_start_under_the_empty_base() {
     assert_eq!(code, Some(0), "{printed}");
 }
 
-/// The regression it rejects: an empty base that leaves `git` unable to start. It does not start
-/// today: `git` opens `/dev/null` as `NUL` before it reads its arguments, and a container is
-/// denied that device (`cmd.exe /c "type nul"` ends with "Access is denied" in the same
-/// container), so every stage that runs `git` ends with "could not open '/dev/null'".
+/// The regression it rejects: an empty base that leaves `git` unable to start. `git` opens
+/// `/dev/null` as `NUL` before it reads its arguments, so the base starts it only where the device
+/// lets a container open it. On Windows Server 2025 the device's access list names no ALL
+/// APPLICATION PACKAGES entry, a container is denied it (`cmd.exe /c "type nul"` ends with "Access
+/// is denied" in the same container), and every stage that runs `git` ends with "could not open
+/// '/dev/null'" until an administrator adds the entry. The job adds it before this runs.
 #[test]
-#[ignore = "exposes that a container is denied the NUL device, which git opens before it reads its arguments"]
 fn git_starts_under_the_empty_base() {
     let sandbox = sandbox();
     let policy = the_base("git");
 
     let (code, printed) = run(&sandbox, "git", &["--version"], &policy).expect("git starts");
 
-    assert_eq!(code, Some(0), "{printed}");
+    assert_eq!(
+        code,
+        Some(0),
+        "{printed} (a container can start git only where the NUL device names ALL APPLICATION \
+         PACKAGES)"
+    );
     assert!(printed.starts_with("git version"), "{printed}");
 }
 
