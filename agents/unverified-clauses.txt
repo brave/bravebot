@@ -13,6 +13,16 @@ docs/specs/background-sessions.md:BG-8: the mode is fixed for the process, bypas
 docs/specs/background-sessions.md:BG-9: attaching draws the session as a foreground one, and detaching leaves it running
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
+docs/specs/plugins.md:PLUGIN-1: a plugin is installed only by a command a person types
+docs/specs/plugins.md:PLUGIN-2: `plugin.toml` names its parts, and a part it does not name is not installed
+docs/specs/plugins.md:PLUGIN-3: fetching a source is a network effect, and the host is put to the person before it happens
+docs/specs/plugins.md:PLUGIN-4: the install lists every part in full and asks once
+docs/specs/plugins.md:PLUGIN-5: a plugin installs at user scope, into one directory the person's own, and a workspace plugin is inert
+docs/specs/plugins.md:PLUGIN-6: a plugin carries no decision
+docs/specs/plugins.md:PLUGIN-7: installing a part does not approve it
+docs/specs/plugins.md:PLUGIN-8: a marketplace is an index naming sources and digests, and it installs nothing
+docs/specs/plugins.md:PLUGIN-9: update, remove and list work from the recorded source
+docs/specs/plugins.md:PLUGIN-10: a plugin's text reaches a turn only as the part it is
 docs/specs/references.md:REFER-5: a `repository` entry is fetched once, with the person's yes, into `~/.bravebot/references`
 docs/specs/session-messages.md:MSG-1: `message_session` has one routing field, the target's name, and one content field, the text
 docs/specs/session-messages.md:MSG-2: a message is sent only from a context that has met nothing untrusted, and carries what that context held
