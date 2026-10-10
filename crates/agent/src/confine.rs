@@ -18,7 +18,7 @@ use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
-use bravebot_sandbox::base::{Prelude, base, run_base, with_security_cache};
+use bravebot_sandbox::base::{Prelude, base, credential_locations, run_base, with_security_cache};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::rules::{Lists, Rules, without_verbatim_prefix};
@@ -780,6 +780,26 @@ impl Confinement {
         }
     }
 
+    /// The first session directory that is, holds or lies inside a credential location, and that
+    /// location (SANDBOX-18). Only a Windows container is checked: the other platforms refuse the
+    /// location itself inside the grant, and a Windows container cannot be refused anything.
+    fn root_reaching_credentials(&self) -> Option<(&Path, PathBuf)> {
+        let home = self
+            .home
+            .as_deref()
+            .filter(|_| self.prelude == Prelude::Windows)?;
+        let locations = credential_locations(self.prelude, home);
+        self.roots.iter().find_map(|root| {
+            locations.iter().find_map(|location| {
+                let resolved = canonical(location);
+                [location, &resolved]
+                    .into_iter()
+                    .any(|candidate| overlaps(root, candidate))
+                    .then(|| (root.as_path(), location.clone()))
+            })
+        })
+    }
+
     /// What `command` is started as under this confinement, or the reason it cannot be.
     ///
     /// Refused rather than started unconfined where the platform's mechanism is missing or will
@@ -794,6 +814,14 @@ impl Confinement {
             program: step.program.clone(),
             detail,
         };
+        if let Some((root, location)) = self.root_reaching_credentials() {
+            return Err(not_confined(format!(
+                "the session directory `{}` is or holds `{}`, which a Windows stage cannot be \
+                 kept out of; open the session on a project directory instead",
+                root.display(),
+                location.display()
+            )));
+        }
         let proxied = self.host_environment(step).map_err(not_confined)?;
         let environment = overlay(
             effective_environment(command),
@@ -1177,6 +1205,21 @@ fn canonical(path: &Path) -> PathBuf {
     without_verbatim_prefix(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
 }
 
+/// Whether one of `a` and `b` is the other or lies inside it, comparing components without regard
+/// to case, as a Windows file system does.
+///
+/// A component is folded as text only when both sides are text; otherwise the bytes are compared,
+/// folding ASCII, so two names that differ only in what a lossy rendering replaces stay different.
+fn overlaps(a: &Path, b: &Path) -> bool {
+    let same_name = |left: &OsStr, right: &OsStr| match (left.to_str(), right.to_str()) {
+        (Some(left), Some(right)) => left.to_lowercase() == right.to_lowercase(),
+        _ => left.eq_ignore_ascii_case(right),
+    };
+    a.components()
+        .zip(b.components())
+        .all(|(left, right)| same_name(left.as_os_str(), right.as_os_str()))
+}
+
 /// The system temporary directory with its links followed, which is how a backend matches it.
 fn temporary_directory() -> PathBuf {
     // Nothing is created here: the path becomes the base's temporary row.
@@ -1301,6 +1344,111 @@ mod tests {
             .writable
             .iter()
             .any(|row| row.path == Path::new(path))
+    }
+
+    fn prepared_in(confinement: &Confinement) -> Result<(), ExecError> {
+        confinement
+            .prepared(
+                &Command::new("/bin/cat"),
+                &step("/bin/cat", &[]),
+                Path::new(HOME),
+            )
+            .map(|_| ())
+    }
+
+    fn refused_naming(confinement: &Confinement, location: &str) {
+        match prepared_in(confinement) {
+            Err(ExecError::NotConfined { detail, .. }) => {
+                assert!(detail.contains(location), "{detail}")
+            }
+            other => panic!("expected a refusal naming {location}, got {other:?}"),
+        }
+    }
+
+    /// A Windows container cannot be refused a location inside a directory it is granted, so a
+    /// session directory that is the home directory, or holds the state directory, is refused
+    /// rather than granted. The regression it rejects: the grant covering `~/.bravebot`, whose
+    /// `settings.json` a program could then rewrite to set `sandbox.mode` to `off`, and `~/.ssh`.
+    #[test]
+    fn a_windows_session_on_the_home_directory_is_refused_for_the_state_directory() {
+        refused_naming(&confinement(&[HOME]), ".bravebot");
+        refused_naming(&confinement(&["/"]), ".bravebot");
+    }
+
+    #[test]
+    fn a_windows_session_inside_a_credential_location_is_refused() {
+        refused_naming(&confinement(&["/home/person/.bravebot"]), ".bravebot");
+        refused_naming(
+            &confinement(&["/home/person/.bravebot/profiles"]),
+            ".bravebot",
+        );
+        refused_naming(&confinement(&["/home/person/.ssh/keys"]), ".ssh");
+        refused_naming(&confinement(&["/home/person/.config/gcloud"]), "gcloud");
+        refused_naming(&confinement(&["/home/person/.config"]), "gcloud");
+    }
+
+    #[test]
+    fn a_windows_session_is_compared_to_the_credential_locations_without_regard_to_case() {
+        refused_naming(&confinement(&["/home/person/.AWS"]), ".aws");
+        refused_naming(&confinement(&["/HOME/Person"]), ".bravebot");
+    }
+
+    /// The regression it rejects: comparing the components as lossy text, which makes a name with a
+    /// byte that is not UTF-8 equal to the name its replacement-character rendering spells.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_is_not_text_is_not_taken_for_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = Path::new(OsStr::from_bytes(b"/home/person/tool-\xff"));
+        let lookalike = Path::new("/home/person/tool-\u{FFFD}");
+        assert!(!overlaps(invalid, lookalike) && !overlaps(lookalike, invalid));
+        assert!(overlaps(invalid, invalid));
+        assert!(overlaps(
+            invalid,
+            Path::new(OsStr::from_bytes(b"/HOME/Person/TOOL-\xff/inside"))
+        ));
+
+        let home = PathBuf::from(OsStr::from_bytes(b"/home/per\xffson"));
+        let confined = |root: PathBuf| {
+            Confinement::new(
+                Prelude::Windows,
+                PathBuf::from("/tmp"),
+                Some(&home),
+                vec![root],
+                Some(Path::new("/var/scratch")),
+            )
+        };
+        assert!(
+            confined(home.join(".ssh"))
+                .root_reaching_credentials()
+                .is_some()
+        );
+        assert!(
+            confined(PathBuf::from("/home/per\u{FFFD}son/.ssh"))
+                .root_reaching_credentials()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_windows_session_beside_the_credential_locations_is_not_refused() {
+        for root in [
+            "/home/person/project",
+            "/home/person/.sshfoo",
+            "/home/other",
+            "/work",
+        ] {
+            assert!(
+                confinement(&[root]).root_reaching_credentials().is_none(),
+                "{root}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_windows_session_with_one_root_on_the_home_directory_is_refused_whatever_the_others_are() {
+        refused_naming(&confinement(&["/work", HOME]), ".bravebot");
     }
 
     /// The directories a session was opened on are the only places of the person's own a program
