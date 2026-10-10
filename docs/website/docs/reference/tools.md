@@ -863,7 +863,8 @@ session was opened on is the usual cause.
 
 You are shown the path, whether it is to be read or written, and the planner's reason, and you
 answer yes or no. A yes lasts for this session, is not saved, and does **not** mark the directory
-trusted, as [`/add-dir`](commands.md) does. `/reach paths` lists what you have allowed and
+trusted, as [`/add-dir`](commands.md) does. It does not let `read_file`, `write_file`, `edit_file`,
+`list_files` or `search` reach the path either: those are opened with `/add-dir`. `/reach paths` lists what you have allowed and
 `/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
 the answer is yes without a question.
 

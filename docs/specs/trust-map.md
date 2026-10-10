@@ -502,9 +502,18 @@ the window ([DROP-3](dropping.md#DROP-3)), which a call that writes, edits, list
 since a drop only ever reads. Naming the file with `@` is not offered, since a name cannot leave the
 workspace either ([NAME-5](naming-files.md#NAME-5)). The planner can do none of these itself, so a
 refusal that names nothing it can pass on leaves it looking for another route to the file, such as
-`run`. Every other refusal for leaving the workspace offers nothing, since opening a directory would
-not make that path work: one that climbs with `..`, one a link carries out, and an absolute path
-that lands inside the root, where no directory can be opened.
+`run`. A path that climbs out with `..` is refused the same way, and the refusal also says that a
+path with `..` never reaches a file in an opened directory: once the directory is opened the file
+is named by its absolute path. Where the directory the climb lands in is already open, the refusal
+offers only that absolute spelling, unless a link on the way makes the landing uncertain, in which
+case it offers nothing. Every other refusal for leaving the workspace offers nothing,
+since opening a directory would not make that path work: a climb that lands inside the root or
+leaves no directory to open, one a link carries out, and an absolute path that lands inside the
+root, where no directory can be opened.
+
+`request_path` ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is not among these remedies. It
+reaches programs and not these tools, and `/add-dir` is the grant that reaches them, with the trust
+that comes with it ([TRUST-9](#TRUST-9)).
 
 Putting a file back is a write, and where it lands is decided when it is put back rather than when
 it was written. That holds for a rewind and for a file a command line wrote being put back as it was.
@@ -532,6 +541,10 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
 `verified-by: bravebot_agent::workspace::a_refused_write_outside_the_workspace_does_not_offer_a_drop`
 `verified-by: bravebot_agent::turn::a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do`
+`verified-by: bravebot_agent::workspace::a_path_climbing_to_a_sibling_directory_is_told_to_use_the_absolute_spelling`
+`verified-by: bravebot_agent::workspace::a_path_climbing_out_under_reads_stay_in_workspace_is_not_told_to_open_a_directory`
+`verified-by: bravebot_agent::workspace::a_path_climbing_after_a_link_is_not_told_to_use_the_absolute_spelling`
+`verified-by: bravebot_agent::turn::a_read_climbing_to_a_sibling_directory_tells_the_planner_to_ask_for_the_directory`
 `verified-by: bravebot_agent::workspace::a_parent_component_cannot_climb_out_of_an_added_directory`
 `verified-by: bravebot_agent::workspace::a_symlink_out_of_an_added_directory_is_refused`
 `verified-by: bravebot_agent::workspace::creating_a_file_through_a_symlinked_directory_out_of_the_workspace_is_refused`
