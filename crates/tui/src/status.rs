@@ -136,7 +136,11 @@ pub struct Facts<'a> {
     pub premium: Option<bool>,
     pub theme: &'a str,
     pub config: &'a Config,
+    /// What the platform can confine, without the sandbox mode: the mode is [`Facts::sandbox_mode`]
+    /// and is put beside it here, so the line follows `/sandbox`.
     pub confinement: &'a str,
+    /// The sandbox mode programs `run` starts are held to now, which `/sandbox` can change.
+    pub sandbox_mode: bravebot_sandbox::SandboxMode,
     /// The MCP servers the session started.
     pub servers: &'a crate::state::Servers,
     /// How much the session is asking before it acts, as the mode key last left it.
@@ -251,6 +255,26 @@ pub fn named_mode(
         PermissionMode::AcceptEdits => Some(t!(mode_accept_edits)),
         PermissionMode::Plan => Some(t!(mode_plan)),
         PermissionMode::Bypass => Some(t!(mode_bypass)),
+    }
+}
+
+/// The confinement line with the sandbox mode beside it, where the mode is not the one a session
+/// runs under unless somebody chose otherwise.
+///
+/// Said for `strict` and for `off`: the first changes what a program can read, and the second is the
+/// one a person has to be able to see without asking, since nothing else on the screen shows that a
+/// program `run` starts is not confined at all (SANDBOX-22).
+pub fn with_the_sandbox_mode(confinement: &str, mode: bravebot_sandbox::SandboxMode) -> String {
+    use bravebot_sandbox::SandboxMode;
+    match mode {
+        SandboxMode::Standard => confinement.to_string(),
+        SandboxMode::Strict => t!(
+            confinement_with_mode,
+            level = confinement,
+            mode = mode.name()
+        )
+        .to_string(),
+        SandboxMode::Off => t!(confinement_with_mode_off, level = confinement).to_string(),
     }
 }
 
@@ -489,12 +513,14 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // it, the same line reads as a guarantee over the reads, writes and programs the session runs,
     // which have never been confined. A local MCP server is the one process it does confine.
     lines.push(
-        Line::new(t!(status_confinement), facts.confinement).with_note(
-            match facts.servers.confined {
-                true => t!(status_confinement_servers),
-                false => t!(status_confinement_nothing_confined),
-            },
-        ),
+        Line::new(
+            t!(status_confinement),
+            with_the_sandbox_mode(facts.confinement, facts.sandbox_mode),
+        )
+        .with_note(match facts.servers.confined {
+            true => t!(status_confinement_servers),
+            false => t!(status_confinement_nothing_confined),
+        }),
     );
 
     // Only where it is closed, for the reason the mode and the vetting lines are: an open network is
@@ -502,7 +528,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // closed it, because the way to open it again depends on that.
     lines.extend(network_line(
         bravebot_config::settled_run_network(),
-        bravebot_config::sandbox::in_force().mode,
+        facts.sandbox_mode,
     ));
     // Beside it and on the same terms: nothing for a session that wrote no list, which is the
     // session this screen has always described.
@@ -986,6 +1012,39 @@ mod tests {
         trust
     }
 
+    /// SANDBOX-22: the line names `strict` and `off` and says nothing for `standard`, and the
+    /// report draws the mode its facts carry. The regressions it rejects are `off` shown as the
+    /// platform's level alone, which reads as a session whose programs are confined, and a report
+    /// that reads the mode start-up settled and so ignores `/sandbox`.
+    #[test]
+    fn the_confinement_line_names_the_mode_unless_it_is_standard() {
+        use bravebot_sandbox::SandboxMode;
+        let level = "kernel-enforced";
+        assert_eq!(with_the_sandbox_mode(level, SandboxMode::Standard), level);
+        let strict = with_the_sandbox_mode(level, SandboxMode::Strict);
+        assert!(
+            strict.starts_with(level) && strict.contains("strict"),
+            "{strict}"
+        );
+        let off = with_the_sandbox_mode(level, SandboxMode::Off);
+        assert!(off.starts_with(level) && off.contains("off"), "{off}");
+        assert_ne!(off, strict);
+
+        let config = config_for("https://ai-chat.bsg.brave.com", None);
+        let trust = TrustStore::new("/work");
+        for mode in [SandboxMode::Strict, SandboxMode::Off] {
+            let mut facts = facts(&config, &trust);
+            facts.sandbox_mode = mode;
+            let shown = report(&facts)
+                .lines
+                .into_iter()
+                .find(|line| line.label.trim() == t!(status_confinement))
+                .expect("the confinement is on the report")
+                .value;
+            assert!(shown.contains(mode.name()), "{mode}: {shown}");
+        }
+    }
+
     /// Facts with nothing vouched for, which is what a session that has not been asked looks like.
     /// Tests about the programs line build their own list and set it.
     fn facts<'a>(config: &'a Config, trust: &'a TrustStore) -> Facts<'a> {
@@ -1012,6 +1071,7 @@ mod tests {
             theme: "brave",
             config,
             confinement: "kernel-enforced",
+            sandbox_mode: bravebot_sandbox::SandboxMode::Standard,
             servers: &NO_SERVERS,
             // Asking, which is what every session does unless somebody changed it. The tests about
             // the line set this themselves.
@@ -2103,11 +2163,17 @@ mod tests {
 
         for config in [&premium, &free] {
             let session = crate::state::Session::new("kernel-enforced").on_tier(config);
-            let opening = crate::logo::lines(&session.confinement, &session.tier, 90, 24)
-                .iter()
-                .map(|line| line.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
+            let opening = crate::logo::lines(
+                &session.confinement,
+                session.sandbox_mode(),
+                &session.tier,
+                90,
+                24,
+            )
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
             assert!(
                 opening.contains(configured_tier(config)),
                 "the opening screen says something the configuration does not: {opening}"

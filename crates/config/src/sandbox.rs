@@ -123,35 +123,68 @@ pub fn resolve(
             source: Source::File(file.to_path_buf()),
         }),
     };
-    let Some(pinned_in) = managed.path().map(Path::to_path_buf) else {
-        return Ok(asked.unwrap_or_default());
-    };
-    let closed = managed.network() == Some(bravebot_sandbox::network::Network::Closed);
-    let (floor, because) = match managed.sandbox() {
-        Some(pinned) if pinned <= SandboxMode::Standard || !closed => (Some(pinned), Floor::Mode),
-        _ if closed => (Some(SandboxMode::Standard), Floor::Network),
-        _ => (None, Floor::Mode),
-    };
-    let Some(floor) = floor else {
+    let Some(floor) = floor(managed) else {
         return Ok(asked.unwrap_or_default());
     };
     match asked {
-        Some(asked) if asked.mode.is_looser_than(floor) => Err(Refused {
+        Some(asked) if asked.mode.is_looser_than(floor.mode) => Err(Refused {
             asked: asked.mode,
             asked_in: match asked.source {
                 Source::File(file) => Some(file),
                 _ => None,
             },
-            pinned: floor,
-            pinned_in,
-            because,
+            pinned: floor.mode,
+            pinned_in: floor.file,
+            because: floor.because,
         }),
         Some(asked) => Ok(asked),
-        None if because == Floor::Network => Ok(Choice::default()),
+        None if floor.because == Floor::Network => Ok(Choice::default()),
         None => Ok(Choice {
-            mode: floor,
-            source: Source::Managed(pinned_in),
+            mode: floor.mode,
+            source: Source::Managed(floor.file),
         }),
+    }
+}
+
+/// The loosest mode the managed file allows, and the file and key that say so.
+struct Held {
+    mode: SandboxMode,
+    file: PathBuf,
+    because: Floor,
+}
+
+/// What the managed file holds the mode to, or `None` where it holds it to nothing.
+fn floor(managed: &crate::Managed) -> Option<Held> {
+    let file = managed.path().map(Path::to_path_buf)?;
+    let closed = managed.network() == Some(bravebot_sandbox::network::Network::Closed);
+    let (mode, because) = match managed.sandbox() {
+        Some(pinned) if pinned <= SandboxMode::Standard || !closed => (pinned, Floor::Mode),
+        _ if closed => (SandboxMode::Standard, Floor::Network),
+        _ => return None,
+    };
+    Some(Held {
+        mode,
+        file,
+        because,
+    })
+}
+
+/// Whether a session already running may move to `mode`, which is the question [`resolve`] puts to a
+/// flag at start-up and is answered by the same floor.
+///
+/// What `/sandbox` asks before it changes anything. Nothing but the managed file is consulted: the
+/// command is a person's word and ranks as `--sandbox` does, so a checkout's `strict` does not
+/// outrank it.
+pub fn allowed_in_session(mode: SandboxMode, managed: &crate::Managed) -> Result<(), Refused> {
+    match floor(managed) {
+        Some(held) if mode.is_looser_than(held.mode) => Err(Refused {
+            asked: mode,
+            asked_in: None,
+            pinned: held.mode,
+            pinned_in: held.file,
+            because: held.because,
+        }),
+        _ => Ok(()),
     }
 }
 

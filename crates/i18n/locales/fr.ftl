@@ -2006,6 +2006,7 @@ command-style = Choisir la manière dont le planificateur répond : lister les s
 command-config = Choisir le mode d'édition de la zone de saisie
 command-add-dir = Ouvrir un autre répertoire et l'approuver pour cette session, ou en fermer un
 command-reach = Retenir un répertoire ou un identifiant pour une commande, ou les lister et les retirer
+command-sandbox = Afficher le mode du bac à sable, ou le changer dès le prochain tour
 command-cd = Travailler désormais dans un autre répertoire, et l'approuver pour cette session
 command-rename = Appeler cette conversation autrement
 command-branch = Copier cette session et continuer dans la copie, en gardant l'originale pour y revenir
@@ -2861,3 +2862,25 @@ handoff-untrusted = le résumé n'a pas été proposé : cette conversation a re
 handoff-failed = le résumé n'a pas pu être écrit : { $problem }
 handoff-started = transmis : ceci est une nouvelle session, et la précédente est restée telle quelle. Pour y revenir, lancez `bravebot --resume { $id }`
 resume-handed-off = depuis { $id }
+
+# /sandbox. Le mode est le choix d'une personne, et les phrases disent ce qu'il change et à partir de quand.
+session-sandbox-report = mode du bac à sable : { $detail }
+session-sandbox-from-command = { $mode } depuis /sandbox
+session-sandbox-from-flag = { $mode } depuis --sandbox
+session-sandbox-needs-a-mode = /sandbox demande l'un de : { $names }, ou rien pour afficher le mode en vigueur
+session-sandbox-already = Le mode du bac à sable est déjà { $mode }.
+session-sandbox-kept = Le mode du bac à sable reste { $mode }.
+session-sandbox-set = Le mode du bac à sable est { $mode } dès le prochain tour, pour le reste de cette session.
+session-sandbox-set-off = Le mode du bac à sable est off dès le prochain tour, pour le reste de cette session : les programmes que `run` lance n'ont aucun profil.
+session-sandbox-refused-mode =
+    /sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une session peut
+    être plus stricte que cela mais pas moins.
+session-sandbox-refused-network =
+    /sandbox { $asked } est refusé : { $pinned_in } fixe run.network à closed, et un programme lancé sans
+    bac à sable n'y est pas tenu. Utilisez /sandbox standard ou strict.
+ask-sandbox-off-title = bac à sable
+ask-sandbox-off-header = Bac à sable désactivé
+ask-sandbox-off-question = Les programmes que `run` lance n'auront aucun profil : rien ne limitera ce qu'ils lisent, écrivent ou atteignent. Désactiver le bac à sable pour le reste de cette session ?
+ask-sandbox-off-no = Non, garder { $mode }
+ask-sandbox-off-yes = Oui, lancer les programmes sans profil
+ask-sandbox-off-yes-detail = S'applique dès le prochain tour. /sandbox standard ou /sandbox strict le réactive.

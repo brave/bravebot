@@ -2033,6 +2033,7 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> Transcript {
     if opening {
         lines.extend(logo::lines(
             &session.confinement,
+            session.sandbox_mode(),
             &session.tier,
             width,
             height,

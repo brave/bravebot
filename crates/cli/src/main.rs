@@ -3093,7 +3093,6 @@ fn interactive(
         Ok(sandbox) => named(sandbox.capabilities().level),
         Err(_) => named(bravebot_sandbox::policy::ConfinementLevel::None),
     };
-    let confinement = with_the_sandbox_mode(confinement, bravebot_config::sandbox::in_force().mode);
 
     // Settled on the plain terminal before the screen takes it, so a question about a server this
     // checkout requests is a line somebody answers rather than a dialog drawn over a session that
@@ -3162,25 +3161,6 @@ fn resume_hint(left: &Resumable, started_in: &Path) -> String {
         ),
     };
     format!("{heading}\nbravebot --resume {}", left.id)
-}
-
-/// The confinement line with the sandbox mode beside it, where the mode is not the one a session
-/// runs under unless somebody chose otherwise.
-///
-/// Said for `strict` and for `off`: the first changes what a program can read, and the second is the
-/// one a person has to be able to see without asking, since nothing else on the screen shows that a
-/// program `run` starts is not confined at all (SANDBOX-22).
-fn with_the_sandbox_mode(confinement: String, mode: SandboxMode) -> String {
-    match mode {
-        SandboxMode::Standard => confinement,
-        SandboxMode::Strict => t!(
-            confinement_with_mode,
-            level = confinement,
-            mode = mode.name()
-        )
-        .to_string(),
-        SandboxMode::Off => t!(confinement_with_mode_off, level = confinement).to_string(),
-    }
 }
 
 /// What to call the confinement that was achieved.
@@ -8319,25 +8299,5 @@ mod tests {
             refused.contains("strict") && refused.contains("off"),
             "{refused}"
         );
-    }
-
-    /// SANDBOX-22: the line names `strict` and `off` and says nothing for `standard`. The
-    /// regression it rejects is `off` shown as the platform's level alone, which reads as a
-    /// session whose programs are confined.
-    #[test]
-    fn the_confinement_line_names_the_mode_unless_it_is_standard() {
-        let level = "kernel-enforced".to_string();
-        assert_eq!(
-            with_the_sandbox_mode(level.clone(), SandboxMode::Standard),
-            level
-        );
-        let strict = with_the_sandbox_mode(level.clone(), SandboxMode::Strict);
-        assert!(
-            strict.starts_with(&level) && strict.contains("strict"),
-            "{strict}"
-        );
-        let off = with_the_sandbox_mode(level.clone(), SandboxMode::Off);
-        assert!(off.starts_with(&level) && off.contains("off"), "{off}");
-        assert_ne!(off, strict);
     }
 }

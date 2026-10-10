@@ -2399,6 +2399,7 @@ command-style = Choose how the planner answers: list the styles, pick one, or cl
 command-config = Choose how the input box edits text
 command-add-dir = Open another directory and trust it for this session, or close one
 command-reach = Remember a directory or credential for a command, or list and remove them
+command-sandbox = Show the sandbox mode, or change it from the next turn
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
 command-branch = Copy this session and carry on in the copy, keeping the original to return to
@@ -3360,3 +3361,25 @@ doctor-sandbox-fix-login = gh has a login outside the sandbox that it cannot rea
 doctor-sandbox-log = log
 doctor-sandbox-total = total
 doctor-sandbox-counts = { $passed } passed, { $failed } failed, { $skipped } skipped
+
+# /sandbox. The mode is a person's to choose, and the sentences say what it changes and from when.
+session-sandbox-report = sandbox mode: { $detail }
+session-sandbox-from-command = { $mode } from /sandbox
+session-sandbox-from-flag = { $mode } from --sandbox
+session-sandbox-needs-a-mode = /sandbox takes one of { $names }, or nothing to report the mode in force
+session-sandbox-already = The sandbox mode is already { $mode }.
+session-sandbox-kept = The sandbox mode stays { $mode }.
+session-sandbox-set = The sandbox mode is { $mode } from the next turn, for the rest of this session.
+session-sandbox-set-off = The sandbox mode is off from the next turn, for the rest of this session: programs `run` starts have no profile.
+session-sandbox-refused-mode =
+    /sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a session may be
+    stricter than that but not looser.
+session-sandbox-refused-network =
+    /sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started with
+    no sandbox is not held to that. Use /sandbox standard or strict.
+ask-sandbox-off-title = sandbox
+ask-sandbox-off-header = Sandbox off
+ask-sandbox-off-question = Programs `run` starts will have no profile, so nothing confines what they read, write or reach. Turn the sandbox off for the rest of this session?
+ask-sandbox-off-no = No, keep { $mode }
+ask-sandbox-off-yes = Yes, start programs with no profile
+ask-sandbox-off-yes-detail = Applies from the next turn. /sandbox standard or /sandbox strict turns it back on.
