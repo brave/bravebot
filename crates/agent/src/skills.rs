@@ -349,6 +349,18 @@ pub struct Skill {
     pub runs_as: RunsAs,
     /// The keys its file declared that nothing here reads, for a report a person asks for.
     pub unread: Vec<String>,
+    /// Where the skill's directory is named to the planner, as `load_skill` says it and a read
+    /// spells it, for a skill that has one. A built-in is not a file and has none.
+    pub directory: Option<String>,
+    /// The regular files beneath that directory other than `SKILL.md`, by name relative to it,
+    /// sorted. Found when the catalogue was resolved and never again, so the set is fixed before
+    /// the turn begins (LOAD-4).
+    pub files: Vec<String>,
+    /// The directory on disk where a read may reach it once the skill is loaded, which is set only
+    /// for the user's own skills: they are trusted by provenance (SKILL-3), so a read there takes
+    /// its label from that and not from a map that has nothing to say about it. A project's skill
+    /// is read through the trust map like any other file of the project and needs no reach.
+    reach: Option<std::path::PathBuf>,
     /// The instructions themselves, still carrying the label they were read with.
     ///
     /// Kept labelled rather than as bare text so the planner is shown them through
@@ -372,6 +384,11 @@ impl Skill {
     /// The instructions, which reach the planner only when it asks for them by name.
     pub fn body(&self) -> &Labelled<String> {
         &self.body
+    }
+
+    /// The directory a read may reach beside this skill once it is loaded, for the user's own.
+    pub fn reach(&self) -> Option<&Path> {
+        self.reach.as_deref()
     }
 }
 
@@ -641,6 +658,9 @@ pub fn discover<S: Sink>(
             // is trusted for being this program's own words, which is what the label says.
             body: Labelled::trusted(built_in.body.to_string()),
             origin: "built-in".to_string(),
+            directory: None,
+            files: Vec::new(),
+            reach: None,
             source: Source::BuiltIn,
             // A built-in is this program's own text, so there is no file to have named a model or
             // an effort and no key nothing reads: it runs as the session does.
@@ -656,7 +676,13 @@ pub fn discover<S: Sink>(
     }
 
     if let Some(home) = home {
-        discover_home(policy, &home.join(SKILLS), &mut catalogue, &mut notices);
+        discover_home(
+            policy,
+            workspace,
+            &home.join(SKILLS),
+            &mut catalogue,
+            &mut notices,
+        );
     }
     discover_workspace(policy, workspace, &mut catalogue, &mut notices);
 
@@ -697,6 +723,7 @@ pub fn resolved<S: Sink>(
 /// Skills from `~/.bravebot/skills`, labelled from where they sit.
 fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
     root: &Path,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
@@ -727,12 +754,22 @@ fn discover_home<S: Sink>(
                     body_after_frontmatter(&whole).to_string()
                 });
                 let runs_as = runs_as(&front, &origin, notices);
+                let directory = root.join(&name);
+                // Trusted by provenance like the file beside them (SKILL-3), so only a deny rule
+                // keeps one off the list.
+                let files = files_beside(&directory, |relative| {
+                    let named = directory.join(relative);
+                    !workspace.rule_denies_reading(policy, &named.to_string_lossy())
+                });
                 catalogue.insert(Skill {
                     name: front.name,
                     description: front.description,
                     argument_hint: front.argument_hint,
                     body,
                     origin,
+                    directory: Some(format!("~/.bravebot/{SKILLS}/{name}")),
+                    files,
+                    reach: Some(directory),
                     source: Source::Home,
                     runs_as,
                     unread: front.unread,
@@ -843,12 +880,22 @@ fn discover_workspace_root<S: Sink>(
                     body_after_frontmatter(&whole).to_string()
                 });
                 let runs_as = runs_as(&front, &relative, notices);
+                let directory = format!("{skills_root}/{name}");
+                // A file name is content, so each is asked of the rules and of the trust map as the
+                // file itself would be before it is named (SKILL-4).
+                let files = files_beside(&root.join(&name), |beside| {
+                    let named = format!("{directory}/{beside}");
+                    !workspace.rule_denies_reading(policy, &named) && policy.trusts_path(&named)
+                });
                 catalogue.insert(Skill {
                     name: front.name,
                     description: front.description,
                     argument_hint: front.argument_hint,
                     body,
                     origin: relative,
+                    directory: Some(directory),
+                    files,
+                    reach: None,
                     source: Source::Workspace,
                     runs_as,
                     unread: front.unread,
@@ -869,6 +916,74 @@ fn discover_workspace_root<S: Sink>(
             notices.push(Notice::new(format!(
                 "{count} in {skills_root} {verb} not loaded: {why}"
             )));
+        }
+    }
+}
+
+/// The most files a skill's listing names, and the deepest a directory under it is searched.
+///
+/// The listing is part of what `load_skill` hands back, so an unbounded tree would be an unbounded
+/// result.
+const MAX_LISTED_FILES: usize = 200;
+const MAX_LISTED_DEPTH: usize = 6;
+
+/// The regular files beneath a skill's directory other than its `SKILL.md`, by name relative to it,
+/// for the ones `keep` accepts, sorted so the same directory is described the same way every time.
+///
+/// A link is left out whatever it points at, and the directory itself is searched where it lands, so
+/// a link out of the directory is never followed and never named (LOAD-4). A name that is not text,
+/// or that holds a control character, is left out as well: it would be written into a result a
+/// planner reads, where a newline would start a line of its own.
+fn files_beside(directory: &Path, keep: impl Fn(&str) -> bool) -> Vec<String> {
+    let Ok(landed) = directory.canonicalize() else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    collect_files(&landed, "", 0, &keep, &mut found);
+    found.sort();
+    found.truncate(MAX_LISTED_FILES);
+    found
+}
+
+fn collect_files(
+    directory: &Path,
+    prefix: &str,
+    depth: usize,
+    keep: &impl Fn(&str) -> bool,
+    found: &mut Vec<String>,
+) {
+    if depth > MAX_LISTED_DEPTH || found.len() >= MAX_LISTED_FILES {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if name.chars().any(char::is_control) {
+            continue;
+        }
+        let relative = format!("{prefix}{name}");
+        if kind.is_dir() {
+            collect_files(
+                &entry.path(),
+                &format!("{relative}/"),
+                depth + 1,
+                keep,
+                found,
+            );
+        } else if kind.is_file() && relative != SKILL_FILE && keep(&relative) {
+            found.push(relative);
+        }
+        if found.len() >= MAX_LISTED_FILES {
+            return;
         }
     }
 }
@@ -1131,6 +1246,9 @@ mod tests {
             description: "how commit messages are written here".to_string(),
             argument_hint: None,
             origin: "SKILL.md".to_string(),
+            directory: None,
+            files: Vec::new(),
+            reach: None,
             source: Source::Home,
             runs_as: RunsAs::default(),
             unread: Vec::new(),

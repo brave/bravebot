@@ -1935,6 +1935,48 @@ impl Workspace {
         Ok(resolved)
     }
 
+    /// [`Workspace::resolve`], and for a read alone also a file under the directory of a skill of the
+    /// user's own that was loaded this turn.
+    ///
+    /// Only where the name is absolute and lands, once links are followed, inside one of `skills`:
+    /// a file beside the loaded `SKILL.md`, which is the reach `load_skill` offers. Never for a
+    /// write, an edit or a listing, which resolve through [`Workspace::resolve`] and refuse the
+    /// directory as before, since a file there is the user's own configuration and an instruction
+    /// the next session trusts. Never where a settings layer kept the file tools inside the
+    /// workspace (PERM-16). The directories are the driver's, named by a load that already
+    /// happened, so nothing a file or a planner said widens this.
+    fn resolve_for_reading(
+        &self,
+        relative: &str,
+        skills: &[PathBuf],
+    ) -> Result<PathBuf, WorkspaceError> {
+        let refused = match self.resolve(relative) {
+            Ok(resolved) => return Ok(resolved),
+            Err(refused) => refused,
+        };
+        if self.reads_stay_inside || skills.is_empty() {
+            return Err(refused);
+        }
+        let Ok(expanded) = expand_home(relative, self.home.as_deref()) else {
+            return Err(refused);
+        };
+        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(relative));
+        if !candidate.is_absolute()
+            || candidate
+                .components()
+                .any(|part| matches!(part, Component::ParentDir))
+        {
+            return Err(refused);
+        }
+        let Some(resolved) = destination(candidate) else {
+            return Err(refused);
+        };
+        let inside = skills.iter().any(|directory| {
+            destination(directory).is_some_and(|landed| resolved.starts_with(landed))
+        });
+        if inside { Ok(resolved) } else { Err(refused) }
+    }
+
     /// What a person can do so that `resolved`, which no opened directory holds, is reached.
     /// Inside the root a directory cannot be opened, and the relative path reaches the file.
     fn remedy_outside(&self, resolved: &Path) -> Remedy {
@@ -2223,8 +2265,10 @@ impl Workspace {
         offset: usize,
         limit: usize,
     ) -> Result<Labelled<Page>, WorkspaceError> {
-        self.gated_read(policy, path, |relative, label| {
-            Ok(self.labelled_page(relative, label, offset, limit)?.0)
+        self.gated_read(policy, path, |relative, label, skills| {
+            Ok(self
+                .labelled_page(relative, label, offset, limit, skills)?
+                .0)
         })
     }
 
@@ -2238,8 +2282,9 @@ impl Workspace {
         label: Label,
         offset: usize,
         limit: usize,
+        skills: &[PathBuf],
     ) -> Result<(Labelled<Page>, String), WorkspaceError> {
-        let page = self.page(relative, offset, limit)?;
+        let page = self.page_reaching(relative, offset, limit, skills)?;
         let token = page.change_token.clone();
         Ok((Labelled::new(page, label), token))
     }
@@ -2250,7 +2295,7 @@ impl Workspace {
         &self,
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
-        read: impl FnOnce(&str, Label) -> Result<R, WorkspaceError>,
+        read: impl FnOnce(&str, Label, &[PathBuf]) -> Result<R, WorkspaceError>,
     ) -> Result<R, WorkspaceError> {
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
@@ -2265,7 +2310,7 @@ impl Workspace {
                 })?;
 
             let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
-            read(&relative, label)
+            read(&relative, label, policy.loaded_skill_directories())
         })
     }
 
@@ -2285,9 +2330,11 @@ impl Workspace {
         limit: usize,
         shown: Option<&str>,
     ) -> Result<Reading, WorkspaceError> {
-        self.gated_read(policy, path, |relative, label| {
+        self.gated_read(policy, path, |relative, label, skills| {
             if let Some(shown) = shown {
-                let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
+                let resolved = self
+                    .resolve_for_reading(relative, skills)
+                    .map_err(WorkspaceError::for_a_read)?;
                 // A file that cannot be inspected falls through to the read, which says why.
                 if let Ok(metadata) = std::fs::metadata(&resolved)
                     && change_token(&metadata) == shown
@@ -2295,7 +2342,7 @@ impl Workspace {
                     return Ok(Reading::Unchanged);
                 }
             }
-            let (page, token) = self.labelled_page(relative, label, offset, limit)?;
+            let (page, token) = self.labelled_page(relative, label, offset, limit, skills)?;
             Ok(Reading::Page { page, token })
         })
     }
@@ -2313,7 +2360,20 @@ impl Workspace {
         offset: usize,
         limit: usize,
     ) -> Result<Page, WorkspaceError> {
-        let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
+        self.page_reaching(relative, offset, limit, &[])
+    }
+
+    /// [`Workspace::page`] that may also land in the directory of a skill loaded this turn.
+    fn page_reaching(
+        &self,
+        relative: &str,
+        offset: usize,
+        limit: usize,
+        skills: &[PathBuf],
+    ) -> Result<Page, WorkspaceError> {
+        let resolved = self
+            .resolve_for_reading(relative, skills)
+            .map_err(WorkspaceError::for_a_read)?;
         let io = |e: std::io::Error| WorkspaceError::Io {
             path: relative.to_string(),
             detail: io_detail(&e, relative, &self.root),
