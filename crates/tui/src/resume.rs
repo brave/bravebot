@@ -587,6 +587,13 @@ fn describe(session: &Summary) -> String {
     if let Some(branch) = &session.branch {
         parts.push(branch.clone());
     }
+    // Shortened to the front of the id, which is what tells one session of a list from another.
+    if let Some(source) = &session.handed_off_from {
+        parts.push(t!(
+            resume_handed_off,
+            id = source.chars().take(8).collect::<String>()
+        ));
+    }
     parts.push(sessions::size(session.bytes));
     parts.join("  ·  ")
 }
@@ -602,6 +609,7 @@ mod tests {
             branch: Some("main".to_string()),
             issue: None,
             pull_request: None,
+            handed_off_from: None,
             updated,
             bytes: 1024,
             manifest: false,
@@ -615,10 +623,25 @@ mod tests {
             branch: Some("main".to_string()),
             issue: None,
             pull_request: None,
+            handed_off_from: None,
             updated,
             bytes: 1024,
             manifest: true,
         }
+    }
+
+    /// A session begun by a handoff says on its row which one it came from, and one that was not
+    /// says nothing of the kind.
+    #[test]
+    fn a_handed_off_session_names_its_source_on_its_row() {
+        let mut handed = summary("a", "Port the parser", 100);
+        handed.handed_off_from = Some("0a1b2c3d-0000-4000-8000-000000000000".to_string());
+        assert!(
+            describe(&handed).contains("from 0a1b2c3d"),
+            "{}",
+            describe(&handed)
+        );
+        assert!(!describe(&summary("b", "Other", 100)).contains("from "));
     }
 
     fn drawn(picker: &Picker) -> String {
@@ -658,6 +681,7 @@ mod tests {
             branch: Some(branch.to_string()),
             issue: issue.map(str::to_string),
             pull_request: pull_request.map(str::to_string),
+            handed_off_from: None,
             ..summary(id, "a title that names none of them", 100)
         }
     }

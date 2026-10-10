@@ -1293,6 +1293,16 @@ pub struct Session {
     /// mode rather than a character: it is never part of `input`, and the command that runs is
     /// exactly what the user sees after the marker.
     pub shell: bool,
+    /// Whether the line in the box is the brief `/handoff` wrote, which Enter starts a new session
+    /// from rather than sending as a prompt.
+    ///
+    /// Like `shell`, a mode over the line and not part of it, and it goes with the line: set only
+    /// by [`Session::propose_handoff`], and dropped the moment the box is replaced or found empty,
+    /// so a prompt typed after the brief was wiped out is never the one that starts a session.
+    handoff: bool,
+    /// The prompt a new session is to begin with, once the session [`Session::hand_over`] named has
+    /// been set up, and the next pass of the loop sends it.
+    handed_over: Option<String>,
     /// Whether the list of keys is up.
     ///
     /// Like `shell`, the `?` that opens it is a mode rather than a character: it is never part of
@@ -1938,6 +1948,8 @@ impl Session {
             caret: 0,
             stashed: None,
             shell: false,
+            handoff: false,
+            handed_over: None,
             shortcuts: false,
             // The box everybody has, until a settings file or a choice says otherwise. A session
             // constructed by a test reads nothing from disk and edits the ordinary way.
@@ -5746,6 +5758,7 @@ impl Session {
     /// The steps to undo go too, being copies of a line that is no longer the one in the box. Kept,
     /// `u` after a send would put back the prompt that had just gone.
     fn set_input(&mut self, line: impl Into<String>) {
+        self.handoff = false;
         self.put_in_the_box(line);
         self.undo.clear();
         self.inserting = None;
@@ -7070,6 +7083,76 @@ impl Session {
         self.set_input(prompt);
         self.shell = false;
         self.completion = 0;
+    }
+
+    /// Put the brief `/handoff` wrote in the box for the person to read and edit.
+    ///
+    /// A line already in the box is kept as the draft Up brings back, as clearing it does, so a
+    /// brief arriving after the person started typing something else costs them nothing. Enter on
+    /// the line then starts a new session from it (see [`Session::take_handoff`]), and any edit that
+    /// leaves the box empty, or replaces it, ends that.
+    pub fn propose_handoff(&mut self, brief: &str) {
+        if self.status != Status::Idle {
+            return;
+        }
+        if !self.input.trim().is_empty() {
+            self.history.keep_draft(self.input.clone());
+        }
+        self.history.leave();
+        self.set_input(brief);
+        self.shell = false;
+        self.handoff = true;
+    }
+
+    /// Whether Enter on the box starts a new session from it.
+    pub fn handoff_pending(&self) -> bool {
+        self.handoff && !self.input.trim().is_empty()
+    }
+
+    /// End a handoff the box was holding, where the box has since been emptied.
+    ///
+    /// Asked before each key and each paste: the one edit that leaves the box empty is the one
+    /// that decides the next thing typed is a new line and not the brief being edited.
+    pub fn drop_a_wiped_handoff(&mut self) {
+        if self.input.trim().is_empty() {
+            self.handoff = false;
+        }
+    }
+
+    /// Take the brief as the person left it, to start a new session from.
+    ///
+    /// The line comes off the box with what it named, as a command's does. It is not recorded in the
+    /// history here: it is recorded as the prompt it becomes, by [`Session::start_handed_over`].
+    pub fn take_handoff(&mut self) -> Option<String> {
+        if !self.handoff_pending() || self.status != Status::Idle {
+            return None;
+        }
+        let typed = self.input.trim().to_string();
+        let text = self.unfolded(&typed);
+        self.take_line(&typed);
+        Some(text)
+    }
+
+    /// Hold the prompt the session beginning now is to open with.
+    pub fn hand_over(&mut self, prompt: String) {
+        self.handed_over = Some(prompt);
+    }
+
+    /// Send the prompt [`Session::hand_over`] held, as the person's own line.
+    ///
+    /// It goes through [`Session::submit`], the path a prompt they typed takes, because that is what
+    /// it is: they read it and chose to send it. Nothing is sent where the box has something in it
+    /// by now, which stays theirs.
+    pub fn start_handed_over(&mut self) -> Option<String> {
+        if self.status != Status::Idle {
+            return None;
+        }
+        let prompt = self.handed_over.take()?;
+        if !self.input.trim().is_empty() {
+            self.history.keep_draft(self.input.clone());
+        }
+        self.set_input(prompt);
+        self.submit()
     }
 
     /// Discard whatever has been typed, keeping it as the draft Up brings back first.
