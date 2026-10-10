@@ -1,6 +1,6 @@
 //! Permission modes in the desktop front end, as docs/specs/permission-modes.md has them. A window
 //! chooses asking, accepting edits or planning for a session with `session.mode` (MODE-11), every
-//! session opens asking (MODE-10), and a turn keeps the mode it was accepted in (MODE-8).
+//! session opens asking (MODE-10), and a running turn follows the mode chosen last (MODE-8).
 //!
 //! Driven through the binary against a model service of the test's own. Whether a write landed is
 //! read off the disk, and whether anything was asked is read off what the bridge said.
@@ -537,10 +537,10 @@ fn planning_writes_nothing_and_asks_nothing_about_a_write() {
     );
 }
 
-/// MODE-8: a mode chosen while a turn runs leaves that turn's questions as they were, and the next
-/// turn runs in it.
+/// MODE-8: a mode chosen while a turn runs is the one the rest of that turn runs in. The window
+/// accepts edits over the first write's question, so the turn's second write is not asked about.
 #[test]
-fn a_mode_chosen_while_a_turn_runs_is_the_next_turns() {
+fn a_mode_chosen_while_a_turn_runs_applies_to_that_turn() {
     let scratch = Scratch::new("bridge-mode-mid-turn");
     let (endpoint, _rounds) = a_planner_writing_twice_a_turn();
     let mut front = FrontEnd::start(&scratch, &endpoint);
@@ -555,17 +555,47 @@ fn a_mode_chosen_while_a_turn_runs_is_the_next_turns() {
         "the mode could not be chosen while a turn ran"
     );
     front.reply("confirm.reply", &session, &first, "approve");
-    let second = front.question_or_the_end();
+    let ended = front.question_or_the_end();
     assert_eq!(
-        second["event"], "confirm.request",
-        "the running turn stopped asking: {second}"
+        ended["event"], "turn.done",
+        "the running turn went on asking after the window stopped it: {ended}"
     );
-    front.reply("confirm.reply", &session, &second, "approve");
-    assert_eq!(front.question_or_the_end()["event"], "turn.done");
     assert!(scratch.written("notes-0.md").is_some() && scratch.written("notes-1.md").is_some());
 
     assert_eq!(front.ask(&session), "acceptEdits");
     let ended = front.question_or_the_end();
     assert_eq!(ended["event"], "turn.done", "the next turn asked: {ended}");
     assert!(scratch.written("notes-2.md").is_some() && scratch.written("notes-3.md").is_some());
+}
+
+/// MODE-8, toward planning: the window moves to plan mode over the first write's question, so the
+/// turn's second write is refused and the planner is told plan mode applies.
+#[test]
+fn planning_chosen_while_a_turn_runs_refuses_the_rest_of_that_turn() {
+    let scratch = Scratch::new("bridge-plan-mid-turn");
+    let (endpoint, rounds) = a_planner_writing_twice_a_turn();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, false);
+    assert_eq!(front.ask(&session), "ask");
+
+    let first = front.question_or_the_end();
+    assert_eq!(first["event"], "confirm.request", "{first}");
+    front.mode(&session, "plan");
+    front.reply("confirm.reply", &session, &first, "approve");
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+    assert!(
+        scratch.written("notes-0.md").is_some(),
+        "the approved write was lost"
+    );
+    assert_eq!(
+        scratch.written("notes-1.md"),
+        None,
+        "plan mode did not hold"
+    );
+    let sent: Vec<String> = rounds.try_iter().collect();
+    assert!(
+        sent.last().is_some_and(|last| last.contains("Plan mode.")),
+        "the planner was not told plan mode began"
+    );
 }

@@ -293,8 +293,8 @@ box. A mode is a standing answer to the questions above, given once instead of o
 
 **Asking is where a session opens**, and it is what holds when nobody has chosen. The key comes round
 to the first again, so no mode is one you cannot press your way out of, and it works while a turn
-runs: the turn in flight keeps the mode it began with, so a diff already on your screen does not have
-the question withdrawn from under you.
+runs: the turn in flight follows it from its next question or tool call, and a diff already on your
+screen does not have its question withdrawn from under you.
 
 **A session started with `--dangerously-skip-permissions` says so when it stops bypassing.** The line
 under the input box and `/status` name asking there, where a session started without the flag draws
@@ -415,8 +415,8 @@ invented on your behalf is reported to the planner as your own words.
 The control beside the model in the composer offers asking, accepting edits and plan mode, and
 `⇧⌘M` (`Ctrl+Shift+M` on Windows and Linux) walks them in that order. Bypassing is not offered: the
 desktop has no command line for the flag to be given on. The mode belongs to the open session and
-every session opens asking, a resumed one and a fork included. A turn keeps the mode it began with,
-so a change made while one runs applies from the next.
+every session opens asking, a resumed one and a fork included. A change made while a turn
+runs applies to the rest of that turn.
 
 ### A mode belongs to the sitting it was chosen in
 

@@ -671,7 +671,7 @@ reaches planning. With a task it also starts a turn on that task, which runs in 
 
 The turn is sent the task and not the line, so it never sees `/plan`. Bare `/plan` sets the mode and
 sends nothing. There is no command for bypassing every check. Typed while a turn runs it waits for
-the turn to end, and the turn in flight keeps the mode it began with.
+the turn to end, and then sets the mode.
 
 ## `/manifest <task>`
 

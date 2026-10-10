@@ -21,7 +21,7 @@ use bravebot_agent::confirm::Decision;
 use bravebot_agent::trusted;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
 use bravebot_agent::workspace::WorkspaceError;
-use bravebot_agent::{Confining, PermissionMode, Workspace};
+use bravebot_agent::{Confining, LiveMode, PermissionMode, Workspace};
 use bravebot_config::{Config, Settings};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::trust::TrustStore;
@@ -68,7 +68,7 @@ struct Open {
     ///
     /// Held here rather than sent with each `turn.send`, because a watch fires a turn that no
     /// request asked for, and that turn must run in the mode the window shows.
-    permission_mode: PermissionMode,
+    permission_mode: LiveMode,
 }
 
 /// Drives the agent for a front-end.
@@ -322,7 +322,7 @@ impl Bridge {
             model: None,
             auto_vetting,
             definition: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: LiveMode::default(),
         });
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
@@ -518,7 +518,7 @@ impl Bridge {
             model: None,
             auto_vetting,
             definition: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: LiveMode::default(),
         });
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
@@ -677,7 +677,7 @@ impl Bridge {
             auto_vetting,
             definition: None,
             // Not the parent's. A fork is a session opened again, and opens asking as one does.
-            permission_mode: PermissionMode::Ask,
+            permission_mode: LiveMode::default(),
         });
         self.ask_about_trust(&child);
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
@@ -811,8 +811,8 @@ impl Bridge {
 
     /// Choose what the session's next turn asks before it acts.
     ///
-    /// Accepted while a turn runs, and it changes nothing about that turn: the turn read its mode
-    /// when it was accepted and keeps it (MODE-8). A write already on screen keeps its question.
+    /// Accepted while a turn runs, and the turn follows it from its next decision: it holds this
+    /// session's own handle on the mode (MODE-8). A write already on screen keeps its question.
     fn set_permission_mode(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let mode = wire::permission_mode(request.param("mode"))?;
@@ -820,7 +820,7 @@ impl Bridge {
             .open
             .get_mut(&handle)
             .ok_or_else(Failure::no_such_session)?;
-        open.permission_mode = mode;
+        open.permission_mode.set(mode);
         Ok(json!({ "permissionMode": wire::permission_mode_name(mode) }))
     }
 
@@ -948,10 +948,9 @@ impl Bridge {
         let auto_vetting = open.auto_vetting;
         let sandbox =
             bravebot_config::sandbox::for_a_window(&settings, &bravebot_config::Managed::load());
-        // Read once, here, and carried to the worker: the mode the planner is told and the mode its
-        // prompts are answered in are then the same one, whatever the window chooses while the turn
-        // runs (MODE-8).
-        let permission_mode = open.permission_mode;
+        // The session's own handle, carried to the worker: the planner, the tools and the prompts all
+        // read what the window chose last, including a choice made while the turn runs (MODE-8).
+        let permission_mode = open.permission_mode.clone();
         // Each MCP server the settings request, with the file that requested it (SERVERS-2). Read
         // on every turn and used by the first, which is the one that starts them.
         let mcp_requested: Vec<(PathBuf, String)> = settings
@@ -995,7 +994,7 @@ impl Bridge {
             &handle,
             json!({
                 "turn": turn_number,
-                "mode": wire::permission_mode_name(permission_mode),
+                "mode": wire::permission_mode_name(permission_mode.get()),
             }),
         ));
 
@@ -1108,8 +1107,8 @@ impl Bridge {
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let sandbox =
             bravebot_config::sandbox::for_a_window(&settings, &bravebot_config::Managed::load());
-        // Read when the run is accepted and kept to its end, as a turn keeps its own (MODE-8).
-        let permission_mode = open.permission_mode;
+        // The session's own handle, as a turn holds it (MODE-8).
+        let permission_mode = open.permission_mode.clone();
         let workspace = session_workspace(open, &settings)?;
 
         let project = open.project.clone();
@@ -1141,7 +1140,7 @@ impl Bridge {
         self.emitter.send(Event::new(
             "manifest.started",
             &handle,
-            json!({ "run": run, "mode": wire::permission_mode_name(permission_mode) }),
+            json!({ "run": run, "mode": wire::permission_mode_name(permission_mode.get()) }),
         ));
 
         if let Some(open) = self.open.get_mut(&handle) {
@@ -1935,8 +1934,8 @@ struct Work {
     auto_vetting: bool,
     /// How far the programs this turn runs may reach, from the settings and the managed file.
     sandbox: bravebot_sandbox::SandboxMode,
-    /// The session's as it stood when the turn was accepted.
-    permission_mode: PermissionMode,
+    /// The session's own handle, so a change made while the turn runs reaches it.
+    permission_mode: LiveMode,
     /// Each MCP server the settings request, with the file that requested it.
     mcp_requested: Vec<(PathBuf, String)>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
@@ -2123,7 +2122,7 @@ fn work(work: Work) {
         .with_confined_runs(true)
         .with_sandbox_mode(sandbox)
         .with_auto_vetting(auto_vetting)
-        .with_permission_mode(permission_mode)
+        .with_permission_mode(permission_mode.clone())
         // The rules the session opened under, and not the files as they are now (PERM-12).
         .with_permissions(state.rules.permissions.clone())
         .with_mcp(mcp)
@@ -2782,7 +2781,7 @@ mod coverage_tests {
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting: false,
             definition: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: LiveMode::default(),
         });
         let call = |bridge: &mut Bridge, method: &str, params: Value| {
             let line = json!({"id": 1, "method": method, "params": params}).to_string();
@@ -2878,7 +2877,7 @@ mod coverage_tests {
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting: false,
             definition: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: LiveMode::default(),
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "session.fork", "params": {
@@ -2961,7 +2960,7 @@ mod permissions_tests {
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting: false,
             definition: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: LiveMode::default(),
         });
         let revoke = Request::parse(
             &json!({"id": 1, "method": "permissions.revoke", "params": {
@@ -3002,7 +3001,7 @@ mod permissions_tests {
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting: false,
             definition: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: LiveMode::default(),
         });
         let list = Request::parse(
             &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
@@ -3077,7 +3076,7 @@ mod watch_tests {
             watches: Arc::clone(&watches),
             auto_vetting: false,
             definition: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: LiveMode::default(),
         });
         std::fs::write(
             root.join("watched"),
@@ -3140,7 +3139,7 @@ mod watch_tests {
             watches: Arc::new(Mutex::new(watches)),
             auto_vetting: false,
             definition: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: LiveMode::default(),
         });
         change(&root);
         bridge.poll_watches_at(now + Duration::from_secs(6));
@@ -3227,7 +3226,7 @@ mod watch_tests {
             watches: Arc::clone(&watches),
             auto_vetting: false,
             definition: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: LiveMode::default(),
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "turn.cancel", "params": {"session": handle}}).to_string(),
@@ -3278,7 +3277,7 @@ mod watch_tests {
             watches: Arc::clone(&watches),
             auto_vetting: false,
             definition: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: LiveMode::default(),
         });
         bridge.poll_watches_at(now + Duration::from_secs(7 * 24 * 60 * 60));
         assert!(watches.lock().unwrap().is_empty());

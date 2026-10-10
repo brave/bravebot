@@ -503,7 +503,7 @@ pub fn run(
     // (DELEGATE-27).
     effort: Option<bravebot_aichat::protocol::Effort>,
     // The spawning turn's, since a delegate is that turn's work done elsewhere.
-    permission_mode: crate::PermissionMode,
+    permission_mode: impl Into<crate::LiveMode>,
     // The spawning turn's as well, and it travels with the mode because the two are read together.
     // The confirmer a delegate is lent is the parent's, screening by what the parent was asked for,
     // so a delegate left at the default would be a run whose check is not made and whose word is

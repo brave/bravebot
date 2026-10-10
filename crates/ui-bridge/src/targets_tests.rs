@@ -69,7 +69,7 @@ fn session_running(target: u64) -> Session {
         watches: Arc::clone(&watches),
         auto_vetting: false,
         definition: None,
-        permission_mode: PermissionMode::Ask,
+        permission_mode: PermissionMode::Ask.into(),
     });
     Session {
         bridge,

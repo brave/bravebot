@@ -23,8 +23,8 @@
  * no `CommandId` names an approval, so there is nothing for the menu layer to dispatch.
  *
  * Choosing a permission mode is a command, and it is not an exception. A mode answers questions
- * the next turn has not asked yet, and never one that is waiting: a turn keeps the mode it began
- * with, so a card already on screen keeps its question whatever the key does (MODE-8).
+ * the turn has not asked yet, and never one that is waiting: a card already on screen keeps its
+ * question whatever the key does, and the turn follows the key from its next one (MODE-8).
  */
 
 export type CommandId =
@@ -165,7 +165,7 @@ export const COMMANDS: readonly Command[] = [
   { id: 'turn.send', label: 'Send', accelerator: 'CmdOrCtrl+Enter', requires: 'sendable' },
   { id: 'turn.cancel', label: 'Cancel Turn', accelerator: 'CmdOrCtrl+.', requires: 'running' },
   // Not Shift+Tab, which the terminal uses: in a text field that key moves focus backwards.
-  // Offered while a turn runs, since the mode chosen describes the next turn.
+  // Offered while a turn runs, since the mode chosen applies to the rest of it.
   {
     id: 'mode.cycle',
     label: 'Cycle Permission Mode',

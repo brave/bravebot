@@ -359,7 +359,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
               disabled={!canAttach} tooltip={!canAttach ? 'Send a first message, then attach files' : 'Attach files'} />
             <span className="toolbar-spacer" />
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
-            {permissionMode && onMode && <PermissionModePicker key={`mode-${session}`} mode={permissionMode} running={running} onChoose={onMode} />}
+            {permissionMode && onMode && <PermissionModePicker key={`mode-${session}`} mode={permissionMode} onChoose={onMode} />}
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
             {onPlan && <ModeMenu mode={planBlocked ? 'agent' : mode} blocked={planBlocked} disabled={running} onMode={setMode} />}
             <IconButton icon={running ? 'stop-circle' : 'arrow-up'} label={running ? 'Stop' : 'Send'}

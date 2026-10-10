@@ -17,7 +17,7 @@ use crate::running::State;
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink};
 use bravebot_agent::manifest::Attempt;
 use bravebot_agent::turn::{Task, TurnError};
-use bravebot_agent::{Confining, PermissionMode, Workspace};
+use bravebot_agent::{Confining, LiveMode, Workspace};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_net::Egress;
@@ -37,9 +37,9 @@ pub(crate) struct Walk {
     pub deadlines: bravebot_agent::exec::Deadlines,
     pub sandbox: bravebot_sandbox::SandboxMode,
     pub model: Option<String>,
-    /// The session's as it stood when the run was accepted. Plan mode refuses a plan that writes
-    /// (MODE-3).
-    pub permission_mode: PermissionMode,
+    /// The session's own handle. Plan mode refuses a plan that writes (MODE-3), and a change made
+    /// while the run walks applies to the rest of it (MODE-8).
+    pub permission_mode: LiveMode,
     pub workspace: Workspace,
     pub task: String,
     pub run: usize,
@@ -107,7 +107,7 @@ pub(crate) fn walk(walk: Walk) {
         // runner does not read them today, so no rule holds in a run. A front end says so on the
         // plan it puts to the person.
         .with_permissions(state.rules.permissions.clone())
-        .with_permission_mode(permission_mode);
+        .with_permission_mode(permission_mode.clone());
 
     let mut reporter = BridgeReporter::new(emitter.clone(), &session);
     let mut asking = BridgeConfirmer::new(

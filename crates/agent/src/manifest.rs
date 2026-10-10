@@ -663,7 +663,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     // read, nothing has been written, and nobody has been asked to approve a plan whose writes
     // were never going to land. A plan that writes nothing runs, because there is nothing in it
     // for the mode to refuse.
-    if task.permission_mode.refuses_writes()
+    if task.permission_mode.get().refuses_writes()
         && let Some((index, _)) = planned
             .plan
             .steps()

@@ -1484,7 +1484,7 @@ pub struct Session {
     /// gave while watching a particular piece of work, and a resumed session is a different sitting.
     /// Coming back tomorrow into a session that had stopped asking about writes, with nothing on
     /// screen having been chosen today, is the wrong way for this to be wrong.
-    permission_mode: bravebot_agent::PermissionMode,
+    permission_mode: bravebot_agent::LiveMode,
     /// Whether the fourth rung is on the ladder above. True until a settings layer wrote
     /// `permissions.bypassUnreachable`, and never true again after that.
     bypass_reachable: bool,
@@ -1977,7 +1977,7 @@ impl Session {
             language_servers: bravebot_agent::lsp::Roster::default(),
             // Asking, which is what a session has always done. `starting_in_bypass` moves it; the
             // key reaches bypass from there unless a layer made it unreachable (MODE-5).
-            permission_mode: bravebot_agent::PermissionMode::default(),
+            permission_mode: bravebot_agent::LiveMode::default(),
             bypass_reachable: true,
             began_in_bypass: false,
             // No subscription until a caller says otherwise, which is what a build with no premium
@@ -2095,7 +2095,8 @@ impl Session {
     /// the key leaves bypass (MODE-5).
     pub fn starting_in_bypass(mut self) -> Self {
         self.began_in_bypass = true;
-        self.permission_mode = bravebot_agent::PermissionMode::Bypass;
+        self.permission_mode
+            .set(bravebot_agent::PermissionMode::Bypass);
         self
     }
 
@@ -2106,15 +2107,22 @@ impl Session {
     /// later `/cd` into a checkout that wrote nothing does not put the rung back (PERM-17).
     pub fn make_bypass_unreachable(&mut self) {
         self.bypass_reachable = false;
-        if self.permission_mode == bravebot_agent::PermissionMode::Bypass {
-            self.permission_mode = bravebot_agent::PermissionMode::Ask;
+        if self.permission_mode.get() == bravebot_agent::PermissionMode::Bypass {
+            self.permission_mode
+                .set(bravebot_agent::PermissionMode::Ask);
             self.note(t!(session_bypass_made_unreachable));
         }
     }
 
     /// How much this session asks before it acts.
     pub fn permission_mode(&self) -> bravebot_agent::PermissionMode {
-        self.permission_mode
+        self.permission_mode.get()
+    }
+
+    /// A handle on the mode that a running turn reads, so a key pressed while it runs applies to it
+    /// (MODE-8). Hand this to a turn rather than the value [`Session::permission_mode`] returns.
+    pub fn live_permission_mode(&self) -> bravebot_agent::LiveMode {
+        self.permission_mode.clone()
     }
 
     /// Whether the session opened in bypass because the flag that skips permissions was given.
@@ -2127,7 +2135,8 @@ impl Session {
     /// A note in the transcript would be a running commentary on a key somebody is pressing to see
     /// what the modes are, and the one place a mode has to be legible is while it is in force.
     pub fn cycle_permission_mode(&mut self) {
-        self.permission_mode = self.permission_mode.cycle(self.bypass_reachable);
+        self.permission_mode
+            .set(self.permission_mode.get().cycle(self.bypass_reachable));
     }
 
     /// Set plan mode, from whichever mode the session is in, and say nothing for the reason
@@ -2136,7 +2145,8 @@ impl Session {
     /// Plan mode only narrows what is permitted, so this grants nothing the key would not, and no
     /// word reaches bypassing (MODE-5).
     pub fn enter_plan_mode(&mut self) {
-        self.permission_mode = bravebot_agent::PermissionMode::Plan;
+        self.permission_mode
+            .set(bravebot_agent::PermissionMode::Plan);
     }
 
     /// Start a turn on a person's task, after [`Session::enter_plan_mode`] (MODE-12).
@@ -3679,10 +3689,8 @@ impl Session {
     /// follows and for the same reason: a test, and a session asked to leave nothing behind, must
     /// not rewrite the developer's own answer.
     ///
-    /// Takes effect from the next turn. The turn in flight keeps the mode it began with, which is
-    /// the rule the permission mode already follows: a key pressed while a turn runs describes what
-    /// comes after it, and a question already on the screen must not be withdrawn from under the
-    /// person answering it.
+    /// Takes effect from the next turn. The turn in flight keeps the setting it began with, so a
+    /// question already on the screen is not withdrawn from under the person answering it.
     pub fn choose_vetting(&mut self, auto: bool) {
         if self.persist {
             bravebot_session::store::save_vetting(auto);
