@@ -3365,7 +3365,7 @@ done
 
     /// One scratch directory per test, for the reason [`REJECTS_A_POSITION`] gives. nextest runs each
     /// test in a process of its own, where [`LAUNCHING`] orders nothing, so a shared name lets one
-    /// test's setup delete the server another test is running.
+    /// test replace the server script another test is running.
     #[cfg(unix)]
     const DECLARED_AND_APPROVED: &str = "bravebot-lsp-declared-and-approved";
 
@@ -3460,11 +3460,36 @@ done
     }
 
     #[cfg(unix)]
-    const DIAGNOSING: &str = "bravebot-lsp-diagnosing";
+    const DIAGNOSING_AFTER_THE_CHANGE: &str = "bravebot-lsp-diagnosing-after-the-change";
 
     #[cfg(unix)]
-    fn the_diagnosing_server(_: &str) -> Option<PathBuf> {
-        Some(crate::testutil::scratch_dir(DIAGNOSING).join("server"))
+    const DIAGNOSING_A_STALE_NOTICE: &str = "bravebot-lsp-diagnosing-a-stale-notice";
+
+    #[cfg(unix)]
+    const DIAGNOSING_SILENTLY: &str = "bravebot-lsp-diagnosing-silently";
+
+    #[cfg(unix)]
+    const DIAGNOSING_WITHOUT_THE_CAPABILITY: &str =
+        "bravebot-lsp-diagnosing-without-the-capability";
+
+    #[cfg(unix)]
+    fn the_server_diagnosing_after_the_change(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_AFTER_THE_CHANGE).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_with_a_stale_notice(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_A_STALE_NOTICE).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_silent_server(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_SILENTLY).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_without_the_capability(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_WITHOUT_THE_CAPABILITY).join("server"))
     }
 
     #[cfg(unix)]
@@ -3769,12 +3794,12 @@ done
     #[cfg(unix)]
     #[test]
     fn a_running_server_reports_the_notice_that_follows_the_file_it_was_sent() {
-        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING);
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_AFTER_THE_CHANGE);
         std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
         let mut servers = Servers::new(
             scratch.to_path_buf(),
             None,
-            the_diagnosing_server,
+            the_server_diagnosing_after_the_change,
             false,
             Vec::new,
         );
@@ -3811,7 +3836,7 @@ done
     #[cfg(unix)]
     #[test]
     fn a_notice_from_before_the_file_changed_is_not_the_answer() {
-        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING);
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_A_STALE_NOTICE);
         std::fs::write(
             scratch.join("server"),
             DIAGNOSING_SERVER.replacen(
@@ -3824,7 +3849,7 @@ done
         let mut servers = Servers::new(
             scratch.to_path_buf(),
             None,
-            the_diagnosing_server,
+            the_server_with_a_stale_notice,
             false,
             Vec::new,
         );
@@ -3855,7 +3880,7 @@ done
     #[cfg(unix)]
     #[test]
     fn a_silent_server_is_not_reported_as_finding_no_errors() {
-        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING);
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_SILENTLY);
         std::fs::write(
             scratch.join("server"),
             DIAGNOSING_SERVER.replacen("while IFS=", "SILENT=1\nwhile IFS=", 1),
@@ -3864,7 +3889,7 @@ done
         let mut servers = Servers::new(
             scratch.to_path_buf(),
             None,
-            the_diagnosing_server,
+            the_silent_server,
             false,
             Vec::new,
         );
@@ -3896,12 +3921,13 @@ done
     #[cfg(unix)]
     #[test]
     fn diagnostics_start_no_server_and_need_the_capability() {
-        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING);
+        let (_launching, scratch, file) =
+            a_workspace_a_server_rejects(DIAGNOSING_WITHOUT_THE_CAPABILITY);
         std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
         let mut servers = Servers::new(
             scratch.to_path_buf(),
             None,
-            the_diagnosing_server,
+            the_server_without_the_capability,
             false,
             Vec::new,
         );
