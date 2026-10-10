@@ -2309,6 +2309,7 @@ int main(void) {
         let policy = crate::scope::Scope::Remote.grant(
             crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
             &home,
+            &crate::signing::Place::default(),
         );
         let at = |path: PathBuf| path.display().to_string();
         let code = |program: &str, path: PathBuf| {
@@ -2402,6 +2403,7 @@ int main(void) {
         let policy = crate::scope::Scope::Remote.grant(
             crate::base::run_base(crate::base::Prelude::MacOs, &temporary, Some(&home)),
             &home,
+            &crate::signing::Place::default(),
         );
         let code = |path: PathBuf| {
             exit_code_under(
@@ -2520,7 +2522,11 @@ int main(void) {
         };
 
         assert_ne!(sign(&run_base()), Some(0), "signed with no scope");
-        let key_only = crate::scope::Scope::Signing.grant(run_base(), &home);
+        let key_only = crate::scope::Scope::Signing.grant(
+            run_base(),
+            &home,
+            &crate::signing::Place::default(),
+        );
         assert_ne!(sign(&key_only), Some(0), "signed with no agent");
         let key_and_agent = key_only.allow_write(&socket);
         assert_eq!(sign(&key_and_agent), Some(0), "the signature failed");

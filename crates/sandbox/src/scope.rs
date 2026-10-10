@@ -17,6 +17,7 @@ use crate::base::{
     STATE_DIRECTORY, under,
 };
 use crate::policy::SandboxPolicy;
+use crate::signing::Place;
 use crate::toolchain::Toolchain;
 use std::path::{Component, Path, PathBuf};
 
@@ -124,7 +125,8 @@ impl Scope {
         }
     }
 
-    /// `policy` with this scope's rows added to it, for the account whose home is `home`.
+    /// `policy` with this scope's rows added to it, for the account whose home is `home`, and a
+    /// run at `place`, which decides the key a signed commit is made with ([`crate::signing`]).
     ///
     /// No row names a private key or `~/.ssh` as a directory: a push signs through the agent, and
     /// what ssh reads beside it is the configuration, the hosts it has verified, and the public
@@ -135,7 +137,7 @@ impl Scope {
     /// without one gets one created rather than a directory nobody asked for. A tool's directory
     /// is read and never written, since what a write there leaves is a command the person's own
     /// shell runs later: a `credential_process`, an exec plugin, a `credsStore` helper.
-    pub fn grant(self, policy: SandboxPolicy, home: &Path) -> SandboxPolicy {
+    pub fn grant(self, policy: SandboxPolicy, home: &Path, place: &Place) -> SandboxPolicy {
         match self {
             Self::Remote => {
                 let mut policy = policy;
@@ -146,12 +148,12 @@ impl Scope {
                     policy = policy.allow_read(public_key);
                 }
                 // A pull that merges or rebases signs the commit it makes.
-                if let Some(key) = crate::signing::read(home).file() {
+                if let Some(key) = crate::signing::read(home, place).file() {
                     policy = policy.allow_read(key);
                 }
                 policy.allow_write_file(under(home, KNOWN_HOSTS))
             }
-            Self::Signing => match crate::signing::read(home).file() {
+            Self::Signing => match crate::signing::read(home, place).file() {
                 Some(key) => policy.allow_read(key),
                 None => policy,
             },
@@ -499,18 +501,22 @@ pub(crate) fn judged_public_key(named: &Path, home: &Path) -> Option<PathBuf> {
     }
     // Where the name is a link, what it leads to is what ssh opens, and that is judged.
     let resolved = std::fs::canonicalize(&spelled).ok()?;
-    let real_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
     let a_public_key = resolved.extension().is_some_and(|ending| ending == "pub")
         && std::fs::metadata(&resolved).is_ok_and(|held| held.is_file());
-    let in_another_credential_location = [home, real_home.as_path()].iter().any(|home| {
+    (a_public_key && !in_another_credential_location(&resolved, home)).then_some(resolved)
+}
+
+/// Whether `resolved`, already resolved, is in a credential location other than `~/.ssh`.
+pub(crate) fn in_another_credential_location(resolved: &Path, home: &Path) -> bool {
+    let real_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    [home, real_home.as_path()].iter().any(|home| {
         CREDENTIAL_DIRECTORIES
             .iter()
             .chain(MACOS_CREDENTIAL_DIRECTORIES)
             .chain(LINUX_CREDENTIAL_DIRECTORIES)
             .filter(|row| **row != ".ssh")
             .any(|row| resolved.starts_with(under(home, row)))
-    });
-    (a_public_key && !in_another_credential_location).then_some(resolved)
+    })
 }
 
 /// The hosts ssh has verified, the one row of the remote scope that is also written.
@@ -805,7 +811,11 @@ mod tests {
     }
 
     fn a_scope(scope: Scope) -> SandboxPolicy {
-        scope.grant(SandboxPolicy::strict(), Path::new(A_HOME))
+        scope.grant(
+            SandboxPolicy::strict(),
+            Path::new(A_HOME),
+            &Place::default(),
+        )
     }
 
     fn granted_paths(policy: &SandboxPolicy) -> Vec<PathBuf> {
@@ -1239,7 +1249,7 @@ mod tests {
     fn read_for_the_configuration(home: &Path) -> Vec<PathBuf> {
         let fixed: Vec<PathBuf> = REMOTE.iter().map(|row| under(home, row)).collect();
         Scope::Remote
-            .grant(SandboxPolicy::strict(), home)
+            .grant(SandboxPolicy::strict(), home, &Place::default())
             .readable
             .into_iter()
             .filter(|row| !fixed.contains(row))
@@ -1274,7 +1284,7 @@ mod tests {
                 home.join(".ssh/work.pub"),
             ]
         );
-        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home);
+        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home, &Place::default());
         for private in [".ssh/work", ".ssh/quoted", ".ssh"] {
             assert!(
                 !granted_paths(&policy).contains(&home.join(private)),
@@ -1422,7 +1432,7 @@ mod tests {
             NAMED_PUBLIC_KEYS_LIMIT
         );
         for scope in [Scope::Aws, Scope::Kubernetes, Scope::Docker] {
-            let policy = scope.grant(SandboxPolicy::strict(), &home);
+            let policy = scope.grant(SandboxPolicy::strict(), &home, &Place::default());
             assert!(!reaches(
                 &policy,
                 home.join(".ssh/key-0.pub").to_str().unwrap()
@@ -1445,7 +1455,7 @@ mod tests {
         );
 
         for scope in EVERY_SCOPE {
-            let policy = scope.grant(base.clone(), Path::new(A_HOME));
+            let policy = scope.grant(base.clone(), Path::new(A_HOME), &Place::default());
             assert!(policy.readable.starts_with(&base.readable), "{scope:?}");
             assert!(policy.writable.starts_with(&base.writable), "{scope:?}");
             assert_eq!(policy.allow_network, base.allow_network, "{scope:?}");
@@ -2044,7 +2054,7 @@ mod tests {
     #[cfg(unix)]
     fn the_signing_scope_reads_the_public_key_and_nothing_else() {
         let home = a_home_that_signs("signing-scope-grant");
-        let policy = Scope::Signing.grant(SandboxPolicy::strict(), &home);
+        let policy = Scope::Signing.grant(SandboxPolicy::strict(), &home, &Place::default());
         assert_eq!(granted_paths(&policy), [home.join("keys/work.pub")]);
         assert!(policy.writable.is_empty());
         std::fs::remove_dir_all(&home).unwrap();
@@ -2063,7 +2073,7 @@ mod tests {
             "[user]\nsigningkey = ~/keys/work.pub\n",
         ] {
             std::fs::write(home.join(".gitconfig"), gitconfig).unwrap();
-            let policy = Scope::Signing.grant(SandboxPolicy::strict(), &home);
+            let policy = Scope::Signing.grant(SandboxPolicy::strict(), &home, &Place::default());
             assert!(granted_paths(&policy).is_empty(), "{gitconfig}");
         }
         std::fs::remove_dir_all(&home).unwrap();
@@ -2075,7 +2085,7 @@ mod tests {
     #[cfg(unix)]
     fn the_remote_scope_reads_the_signing_key_as_well() {
         let home = a_home_that_signs("signing-remote-grant");
-        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home);
+        let policy = Scope::Remote.grant(SandboxPolicy::strict(), &home, &Place::default());
         assert!(granted_paths(&policy).contains(&home.join("keys/work.pub")));
         for private in ["keys/work", ".ssh/id_ed25519", ".ssh"] {
             assert!(

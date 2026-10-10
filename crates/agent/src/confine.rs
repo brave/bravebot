@@ -40,6 +40,9 @@ pub struct Confinement {
     home: Option<PathBuf>,
     roots: Vec<PathBuf>,
     scratch: Option<PathBuf>,
+    /// Where the run is, for the `[includeIf]` blocks of the person's git configuration: the
+    /// session's first directory, and every directory the session may write.
+    place: signing::Place,
     /// The per-user cache directory the platform names, resolved by the host on macOS, where the
     /// keychain lookup of `gh` and `git` writes under it.
     user_cache: Option<PathBuf>,
@@ -100,12 +103,18 @@ impl Confinement {
         roots: Vec<PathBuf>,
         scratch: Option<&Path>,
     ) -> Self {
+        let roots: Vec<PathBuf> = roots.iter().map(|root| canonical(root)).collect();
+        let scratch = scratch.map(canonical);
         Self {
             prelude,
             temporary,
             home: home.map(canonical),
-            roots: roots.iter().map(|root| canonical(root)).collect(),
-            scratch: scratch.map(canonical),
+            place: signing::Place {
+                directory: roots.first().cloned(),
+                sessions: roots.iter().chain(scratch.iter()).cloned().collect(),
+            },
+            roots,
+            scratch,
             user_cache: None,
             network: Network::Open,
             hosts: None,
@@ -520,7 +529,7 @@ impl Confinement {
                 || self
                     .home
                     .as_deref()
-                    .is_some_and(|home| signing::read(home).enabled)
+                    .is_some_and(|home| signing::read(home, &self.place).enabled)
         })
     }
 
@@ -659,7 +668,7 @@ impl Confinement {
                 policy = toolchain.grant(policy, self.prelude, home);
             }
             if let Some(scope) = scope {
-                policy = scope.grant(policy, home);
+                policy = scope.grant(policy, home, &self.place);
                 if !self.reads_the_machine() {
                     for reach in reaches(resolved, scope, home, environment) {
                         policy = policy.allow_read(reach.path);
@@ -677,7 +686,7 @@ impl Confinement {
                 policy = match *request {
                     Requested::Toolchain(toolchain) => toolchain.grant(policy, self.prelude, home),
                     Requested::Scope(scope) => {
-                        let mut policy = scope.grant(policy, home);
+                        let mut policy = scope.grant(policy, home, &self.place);
                         if !self.reads_the_machine() {
                             for reach in requested_reach(scope, home, environment) {
                                 policy = policy.allow_read(reach.path);
@@ -687,7 +696,7 @@ impl Confinement {
                         // person whose git signs with ssh.
                         let lends_the_agent = match scope {
                             Scope::Remote => true,
-                            Scope::Signing => signing::read(home).enabled,
+                            Scope::Signing => signing::read(home, &self.place).enabled,
                             _ => false,
                         };
                         match variable(environment, "SSH_AUTH_SOCK") {
@@ -699,7 +708,7 @@ impl Confinement {
             }
             for grant in self.granted(step) {
                 policy = match &grant.reached {
-                    Reached::Scope(scope) => scope.grant(policy, home),
+                    Reached::Scope(scope) => scope.grant(policy, home, &self.place),
                     Reached::Directory(_) => match grant.directory(home) {
                         Some(path) if grant.write => policy.allow_read(&path).allow_write(path),
                         Some(path) => policy.allow_read(path),
@@ -748,28 +757,44 @@ impl Confinement {
     /// program chose, since a program's error text is not where the profile is decided. It ends
     /// with the fixed sentence about credential locations.
     pub fn profile(&self, steps: &[&Step]) -> String {
-        let refusal = match self.signing_key_refused(steps) {
-            true => SIGNING_KEY_REFUSED_SENTENCE,
-            false => "",
+        let (signs, refused) = self.signing_state(steps);
+        let source = if signs {
+            SIGNING_KEY_SOURCE_SENTENCE
+        } else {
+            ""
+        };
+        let refusal = if refused {
+            SIGNING_KEY_REFUSED_SENTENCE
+        } else {
+            ""
         };
         format!(
-            "{}{refusal}{CREDENTIAL_LOCATIONS_SENTENCE}",
+            "{}{source}{refusal}{CREDENTIAL_LOCATIONS_SENTENCE}",
             self.reach(steps)
         )
     }
 
-    /// Whether a step of `steps` signs and the person's `user.signingkey` names a file no scope
-    /// reads, so that the signature fails and the planner is told why.
-    fn signing_key_refused(&self, steps: &[&Step]) -> bool {
+    /// Whether a step of `steps` carries the signing scope, and then whether the person's
+    /// `user.signingkey` names a file no scope reads, so that the signature fails and the planner
+    /// is told why.
+    fn signing_state(&self, steps: &[&Step]) -> (bool, bool) {
         let Some(home) = self.home.as_deref() else {
-            return false;
+            return (false, false);
         };
-        steps.iter().any(|step| {
+        let asked = steps.iter().any(|step| {
             self.scope_of(step) == Some(Scope::Signing)
                 || self
                     .requested_for(step)
                     .contains(&Requested::Scope(Scope::Signing))
-        }) && signing::read(home).key == signing::Key::Refused
+        });
+        if !asked {
+            return (false, false);
+        }
+        let signing = signing::read(home, &self.place);
+        (
+            signing.enabled,
+            signing.enabled && signing.key == signing::Key::Refused,
+        )
     }
 
     /// What the programs of `steps` could reach, by name, without the closing fixed sentence.
@@ -1160,6 +1185,15 @@ const CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location such as `~/.
      request, a credential scope is how a line reaches one. Any other path a command needs is \
      asked for with the `request_path` tool: the person is asked, and a yes lasts for this \
      session.";
+
+/// Said to the planner whenever a step carries the signing scope, so that a signature that fails
+/// for want of a key can be told from one the scope never reached. Fixed text: it does not depend
+/// on any configuration of the repository.
+const SIGNING_KEY_SOURCE_SENTENCE: &str = " A step that signs a commit is lent the public key \
+     that `user.signingkey` names in the person's `~/.gitconfig` or `~/.config/git/config`, or in \
+     a file their `[includeIf \"gitdir:...\"]` includes for this directory. A `user.signingkey` \
+     set in a repository's own configuration is not read, so git signing with it fails with \
+     \"Couldn't load public key\" until the person sets that key in one of those places.";
 
 /// Said once to the planner when a step signs and the key `user.signingkey` names is one no scope
 /// reads. It names the setting and never the value, which is the person's.
@@ -4142,7 +4176,122 @@ mod tests {
 
         let (home, confined) =
             a_confinement_over_a_home_that("accepted", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
-        assert!(!confined.profile(&[&commit]).contains("user.signingkey"));
+        let line = confined.profile(&[&commit]);
+        assert!(line.contains(SIGNING_KEY_SOURCE_SENTENCE), "{line}");
+        assert!(!line.contains(SIGNING_KEY_REFUSED_SENTENCE), "{line}");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: a stage that carries the signing scope is always told where the key comes from
+    /// and that a repository's own `user.signingkey` is not read, so a signature that fails with
+    /// "Couldn't load public key" can be traced to the setting. The text is fixed: it is the same
+    /// whatever the repository holds, and it is said to no step that does not sign.
+    #[test]
+    #[cfg(unix)]
+    fn a_stage_that_signs_is_always_told_where_the_key_comes_from() {
+        use bravebot_sandbox::scope::Requested;
+        let (home, confined) =
+            a_confinement_over_a_home_that("source", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
+        let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
+        let status = step("/usr/bin/git", &["status"]);
+        let script = step("/bin/sh", &["-c", "git rebase main"]);
+
+        let before = confined.profile(&[&commit]);
+        assert!(before.contains(SIGNING_KEY_SOURCE_SENTENCE), "{before}");
+        assert!(before.contains("`~/.gitconfig`"), "{before}");
+        assert!(before.contains("`~/.config/git/config`"), "{before}");
+        assert!(before.contains("`[includeIf"), "{before}");
+        assert!(before.contains("is not read"), "{before}");
+        assert!(!confined.profile(&[&status]).contains("user.signingkey"));
+        assert!(!confined.profile(&[&script]).contains("user.signingkey"));
+        let asked = confined
+            .clone()
+            .with_requested(&[Requested::Scope(Scope::Signing)]);
+        assert!(
+            asked
+                .profile(&[&script])
+                .contains(SIGNING_KEY_SOURCE_SENTENCE)
+        );
+
+        std::fs::write(
+            home.join(".gitconfig"),
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/keys/other.pub\n",
+        )
+        .unwrap();
+        let after = confined.profile(&[&commit]);
+        assert!(after.contains(SIGNING_KEY_SOURCE_SENTENCE), "{after}");
+        assert!(!after.contains("other.pub"), "{after}");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: a key an `[includeIf "gitdir:..."]` of the person's own configuration supplies
+    /// for the run's directory is the one the stage is lent, in place of the one set above it. A
+    /// key in the repository's own configuration is not read.
+    #[test]
+    #[cfg(unix)]
+    fn a_stage_that_signs_is_lent_the_key_an_include_if_supplies_for_its_directory() {
+        let (home, _) = a_confinement_over_a_home_that(
+            "include-if",
+            "",
+            &["keys/default.pub", "keys/work.pub", "keys/repo.pub"],
+        );
+        std::fs::write(
+            home.join(".work-config"),
+            "[user]\nsigningkey = ~/keys/work.pub\n",
+        )
+        .unwrap();
+        std::fs::write(
+            home.join(".gitconfig"),
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/keys/default.pub\n\
+             [includeIf \"gitdir:~/work/\"]\n\tpath = ~/.work-config\n",
+        )
+        .unwrap();
+        let project = home.join("work/project");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::write(
+            project.join(".git/config"),
+            "[user]\nsigningkey = ~/keys/repo.pub\n",
+        )
+        .unwrap();
+        let confined = Confinement::new(
+            Prelude::Windows,
+            PathBuf::from("/tmp"),
+            Some(&home),
+            vec![project.clone()],
+            Some(Path::new("/var/scratch")),
+        )
+        .with_network(Network::Closed);
+        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
+        let policy = confined.policy(&commit, &project, &environment);
+        assert!(reads(&policy, home.join("keys/work.pub").to_str().unwrap()));
+        assert!(!reads(
+            &policy,
+            home.join("keys/default.pub").to_str().unwrap()
+        ));
+        assert!(!reads(
+            &policy,
+            home.join("keys/repo.pub").to_str().unwrap()
+        ));
+        assert!(writes(&policy, "/run/agent.sock"));
+
+        let elsewhere = Confinement::new(
+            Prelude::Windows,
+            PathBuf::from("/tmp"),
+            Some(&home),
+            vec![home.join("other")],
+            Some(Path::new("/var/scratch")),
+        )
+        .with_network(Network::Closed);
+        let policy = elsewhere.policy(&commit, &home.join("other"), &environment);
+        assert!(reads(
+            &policy,
+            home.join("keys/default.pub").to_str().unwrap()
+        ));
+        assert!(!reads(
+            &policy,
+            home.join("keys/work.pub").to_str().unwrap()
+        ));
         std::fs::remove_dir_all(&home).unwrap();
     }
 }
