@@ -2734,7 +2734,11 @@ impl Session {
     /// Record what the turn is waiting on.
     pub fn set_phase(&mut self, phase: Phase) {
         self.phase = Some(phase);
-        self.waiting_on = None;
+        // A delegate announces its own phases while the turn waits on another, and none of them
+        // ends that wait.
+        if self.attributed_to.is_none() {
+            self.waiting_on = None;
+        }
         // A phase is announced once at the top of every round and again when a request is being
         // sent afresh. Either way what was on the screen belongs to a reply that is over or to
         // one that has been thrown away, so the tail starts empty.
@@ -18125,6 +18129,21 @@ mod tests {
             s.waiting_on_delegate(bravebot_agent::report::DelegateId::nth(1));
             s.set_phase(Phase::Thinking);
             assert_eq!(s.indicator().expect("working").verb, named_nothing);
+        }
+
+        /// A second delegate announcing a phase while the turn waits on the first is not the
+        /// turn starting a round, so the indicator keeps naming the delegate waited on.
+        #[test]
+        fn another_delegates_phase_does_not_end_the_wait_the_indicator_names() {
+            let mut s = working();
+            s.set_phase(Phase::Thinking);
+            let waiting = bravebot_agent::report::DelegateId::nth(1);
+            s.waiting_on_delegate(waiting);
+            let named = s.indicator().expect("working").verb;
+            s.reporting_for(Some(bravebot_agent::report::DelegateId::nth(2)));
+            s.set_phase(Phase::Thinking);
+            s.reporting_for(None);
+            assert_eq!(s.indicator().expect("working").verb, named);
         }
 
         /// CHECK-14: a picture has no lines to count, and "Checking 1 line" over a photograph is
