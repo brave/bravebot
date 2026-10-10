@@ -330,6 +330,7 @@ impl Confined {
             Scope::Aws => t!(run_carries_aws, program = program),
             Scope::Kubernetes => t!(run_carries_kubernetes, program = program),
             Scope::Docker => t!(run_carries_docker, program = program),
+            Scope::Signing => t!(run_carries_signing, program = program),
         }
         .to_string()
     }
@@ -2774,6 +2775,7 @@ mod tests {
                 carried("kubectl", Scope::Kubernetes),
                 carried("docker", Scope::Docker),
                 carried("gh", Scope::Remote),
+                carried("git", Scope::Signing),
                 Carried {
                     program: "npm".into(),
                     toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Node),
@@ -2787,12 +2789,13 @@ mod tests {
 
         let sentences = confined.sentences();
 
-        assert_eq!(sentences.len(), 5);
+        assert_eq!(sentences.len(), 6);
         for (sentence, (program, reached)) in sentences.iter().zip([
             ("aws", "~/.aws"),
             ("kubectl", "~/.kube"),
             ("docker", "~/.docker"),
             ("gh", "never a private key"),
+            ("git", "signs with"),
             ("npm", "node toolchain"),
         ]) {
             assert!(sentence.starts_with(program), "{sentence}");

@@ -1567,6 +1567,7 @@ run-carries-remote = { $program } also reads your git and gh logins, your ssh co
 run-carries-aws = { $program } also reads your aws credentials in ~/.aws
 run-carries-kubernetes = { $program } also reads your kubernetes credentials in ~/.kube
 run-carries-docker = { $program } also reads your docker credentials in ~/.docker
+run-carries-signing = { $program } also reads the public key your git configuration signs with, and signs through your ssh agent, never reading a private key
 run-carries-reach = { $program } also reads { $path }, where your { $variable } points
 run-network-closed = the network is closed for programs this session starts, except for those below
 run-keeps-network = { $program } also reaches the network
