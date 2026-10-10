@@ -1537,8 +1537,8 @@ An entry that is refused is not in force. A refused allowance leaves reach where
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
 is, and the result names the key and the entry. Where the backend cannot subtract from a grant
 (Windows) a stage the refusal would reach is refused as [SANDBOX-1](#SANDBOX-1) requires, and a
-`denyRead` or `denyWrite` inside the directory the session was opened on is reported as not in force,
-with why, by `doctor` and by the window, since a stage there is refused and none runs with the path
+`denyRead` or `denyWrite` inside the directory the session was opened on, or inside an `allowRead` or
+`allowWrite` entry, is reported as not in force, with why, by `doctor` and by the window, since a stage there is refused and none runs with the path
 held back. Where it
 grants a directory with everything beneath it (Landlock) a directory above a refused write is listed
 and granted entry by entry as [SANDBOX-12](#SANDBOX-12) does for a read, which leaves that directory
@@ -1599,8 +1599,10 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::windows::a_policy_refusing_a_write_is_refused_rather_than_applied`
 `verified-by: bravebot_sandbox::windows::a_policy_that_refuses_a_read_or_a_write_starts_no_program`
 `verified-by: bravebot_sandbox::windows::capabilities_report_what_a_container_enforces`
-`verified-by: bravebot_sandbox::rules::a_denial_beneath_the_session_directory_is_found_whichever_way_each_is_spelled`
+`verified-by: bravebot_sandbox::rules::a_denial_beneath_a_grant_is_found_whichever_way_each_is_spelled`
+`verified-by: bravebot_sandbox::rules::a_denial_beneath_a_persons_allowance_is_found_for_the_kind_of_row_it_cuts`
 `verified-by: bravebot_agent::permissions::a_denial_the_backend_cannot_subtract_is_not_in_force_and_nothing_else_changes`
+`verified-by: bravebot_agent::permissions::a_denial_beneath_an_allowance_is_not_in_force_where_the_backend_cannot_subtract`
 `verified-by: bravebot_cli::main::doctor_reports_a_denial_the_backend_cannot_subtract_as_not_in_force`
 `verified-by: bravebot_agent::confine::a_refusal_of_the_persons_is_not_lifted_by_the_scope_a_stage_carries`
 `verified-by: bravebot_agent::confine::every_kind_of_stage_holds_the_lists`
