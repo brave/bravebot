@@ -9323,3 +9323,21 @@ fn a_directory_opened_through_a_clone_is_open_in_the_workspace_it_came_from() {
     assert!(turn.added_directories().is_empty());
     assert!(!reaches(&turn), "the turn kept reaching it");
 }
+
+/// INSTR-14: the directories a session has worked in are names relative to the root, so moving the
+/// root drops them. Kept, `pkg` would name a directory under the new root that nothing there
+/// touched.
+#[test]
+fn moving_the_working_directory_forgets_the_directories_worked_in() {
+    let scratch = Scratch::new("moved-touched");
+    std::fs::create_dir_all(scratch.path.join("inner")).unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    workspace.record_touch("pkg/a.rs");
+    assert_eq!(workspace.touched_directories(), ["pkg"]);
+
+    workspace
+        .change_root(scratch.path.join("inner").to_str().expect("utf-8 path"))
+        .expect("the working directory moves");
+
+    assert!(workspace.touched_directories().is_empty());
+}

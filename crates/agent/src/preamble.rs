@@ -175,6 +175,19 @@ pub fn compose_in<S: Sink>(
         Ok(None) => {}
         Err(notice) => preamble.notices.push(notice),
     }
+    if !safe {
+        for relative in nested_agents_files(sources) {
+            match read_nested_agents(policy, sources, &relative) {
+                Ok(Some(text)) => {
+                    standing.push(Provenance::Driver, format!("From {relative}:\n\n"));
+                    standing.push(Provenance::TrustedFile(relative), text.trim());
+                    standing.push(Provenance::Driver, "\n\n");
+                }
+                Ok(None) => {}
+                Err(notice) => preamble.notices.push(notice),
+            }
+        }
+    }
     if let Some(appended) = appended {
         standing.push(Provenance::Driver, "From the command line:\n\n");
         standing.push(Provenance::Trusted("command line"), appended.trim());
@@ -614,6 +627,34 @@ fn read_home_agents<S: Sink>(policy: &mut Policy<'_, S>, home: &Path) -> Option<
     let origin = format!("~/.bravebot/{AGENTS_FILE}");
     let labelled = policy.label_user_configuration(&origin, text);
     policy.read_trusted_content("preamble", &labelled).ok()
+}
+
+/// The `AGENTS.md` files in the directories below the root that the session has read from or
+/// written to, workspace-relative and shallowest first (INSTR-14).
+///
+/// Which directories is the driver's record of the paths the planner named, and only the existence
+/// of a file is asked here, so nothing a file holds decides which file is looked for.
+fn nested_agents_files(workspace: &Workspace) -> Vec<String> {
+    workspace
+        .touched_directories()
+        .into_iter()
+        .map(|directory| format!("{directory}/{AGENTS_FILE}"))
+        .filter(|relative| workspace.root().join(relative).is_file())
+        .collect()
+}
+
+/// A nested `AGENTS.md`, read through the trust gate as the root one is.
+///
+/// Neither a pointer nor an `@path` import is followed: the file is taken as it stands.
+fn read_nested_agents<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    relative: &str,
+) -> Result<Option<String>, Notice> {
+    if workspace.rule_denies_reading(policy, relative) {
+        return Err(Notice::denied_by_rule(relative));
+    }
+    read_instructions(policy, workspace, relative)
 }
 
 /// Standing instructions found in the workspace, and which file they came from.

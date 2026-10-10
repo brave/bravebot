@@ -22,7 +22,7 @@ It does not cover what a skill file looks like or what any source is trusted for
 ## The sources
 
 <a id="INSTR-1"></a>
-### INSTR-1: eight sources kept as files, and no others
+### INSTR-1: ten sources kept as files, and no others
 
 | File | Applies to |
 |---|---|
@@ -34,6 +34,8 @@ It does not cover what a skill file looks like or what any source is trusted for
 | `<workspace>/.claude/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.agents/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.bravebot/agents/<name>.md` | this project |
+| `<workspace>/<directory>/AGENTS.md` | this project, once the session has worked in that directory |
+| `<workspace>/<directory>/.bravebot/skills/<name>/SKILL.md` | this project, once the session has worked in that directory |
 
 The two roots are spelled differently on purpose: the user's own directory is already `.bravebot`,
 so its skills and definitions sit directly beneath it, while a project keeps its own out of the
@@ -60,8 +62,8 @@ of instructions under two names, and reading both would state everything twice.
 **Why more than one name.** More than one is in use, and a project that wrote its conventions down
 should not have them ignored over the spelling. This is still one source, resolved by name.
 
-There is no search of parent directories and no nested instructions file. A file at any other path
-is an ordinary file, read only when something asks for it by name, or when the source names it,
+There is no search of parent directories. A nested file is a source only under
+[INSTR-14](#INSTR-14). A file at any other path is an ordinary file, read only when something asks for it by name, or when the source names it,
 which is [INSTR-8](#INSTR-8).
 
 A definition's memory, `<workspace>/.bravebot/memory/<name>.md`, is one of those ordinary files.
@@ -98,7 +100,7 @@ than a reason to refuse to start.
 `verified-by: bravebot_agent::skills::no_home_directory_is_not_an_error`
 
 <a id="INSTR-3"></a>
-### INSTR-3: only the project root is a source, never a directory opened alongside it
+### INSTR-3: only the project's own tree is a source, never a directory opened alongside it
 
 A directory opened by name during a session widens where files may be read from. It adds no
 standing instructions and no skills, whatever it contains.
@@ -391,7 +393,7 @@ shadows one of the same name under either of the others, by the shadowing of
 [INSTR-4](#INSTR-4). A project that ships its own version of a ported skill means it.
 
 The project root only. A `.claude/skills` or `.agents/skills` inside a subdirectory is an ordinary
-directory and no source, which is [INSTR-1](#INSTR-1)'s refusal to walk upward read downward as
+directory and no source, whatever the session has worked in, which is [INSTR-1](#INSTR-1)'s refusal to walk upward read downward as
 well: what a turn is advertised would otherwise depend on how deep the checkout is.
 
 Each is read through the trust map like `.bravebot/skills`, so an untrusted project offers none of
@@ -413,10 +415,58 @@ here.
 `verified-by: bravebot_agent::skills::a_foreign_skill_in_an_untrusted_project_is_counted_and_not_named`
 `verified-by: bravebot_agent::skills::a_skill_a_vouched_root_offers_is_not_also_reported_as_not_loaded`
 
+<a id="INSTR-14"></a>
+### INSTR-14: a directory the session has worked in adds its own `AGENTS.md` and `.bravebot/skills`
+
+For each directory below the project root that a file tool has read from or written to in this
+session, and each directory above it down to the root's own children, the `AGENTS.md` in it is a
+source after the project's, and so is `.bravebot/skills` in it. Shallower directories come first and
+a deeper one last, so the most specific has the last word ([INSTR-4](#INSTR-4)). A skill of the
+same name replaces the project's, and a shallower directory's.
+
+Which directories is the driver's record of the names the planner typed to `read_file` and to the
+writing tools, placed by spelling alone, so a link is not followed to where it lands and nothing a
+file holds is consulted. A name outside the root records nothing, and the record keeps at most 64
+directories. What is recorded is the planner's choice of paths and is never read out of a file.
+
+Each file is read through the trust map and the `deny` rules as the project's `AGENTS.md` and
+`.bravebot/skills` are, so a distrusted one never reaches the prompt and the person is told which
+file, or which skills directory with a count, and never what it holds ([SKILL-4](skills.md#SKILL-4),
+[SKILL-6](skills.md#SKILL-6)). A nested `AGENTS.md` is taken as it stands: a pointer
+([INSTR-8](#INSTR-8)) and an `@path` import ([INSTR-11](#INSTR-11)) in it are ordinary text. Only
+`.bravebot/skills` is read below the root, as [INSTR-13](#INSTR-13) says. A safe session reads none.
+
+Composed per turn like every other source ([INSTR-7](#INSTR-7)): a file read in a turn takes effect
+from the next turn, and the turn that read it keeps the instructions it started with. The record is
+the session's, so it is empty again in a resumed session and after `/cd`.
+
+**Why.** A package in a monorepo has conventions the project's root file cannot state without
+every turn carrying every package's. Reading downward only into directories the planner chose, and
+only through the trust map, keeps what [INSTR-1](#INSTR-1) refused when it refused to walk upward:
+what a turn is told does not depend on what sits above the project, and nothing untrusted decides
+which file is read.
+
+`verified-by: bravebot_agent::preamble::a_nested_agents_file_is_in_the_prompt_only_after_a_path_under_it_is_touched`
+`verified-by: bravebot_agent::preamble::nested_agents_files_follow_the_root_one_and_the_deeper_is_last`
+`verified-by: bravebot_agent::preamble::a_distrusted_nested_agents_file_never_reaches_the_prompt`
+`verified-by: bravebot_agent::preamble::a_nested_agents_file_a_deny_rule_covers_never_reaches_the_prompt`
+`verified-by: bravebot_agent::preamble::a_path_outside_the_root_does_not_make_its_directory_a_source`
+`verified-by: bravebot_agent::skills::a_nested_skill_is_offered_after_the_session_works_in_its_directory`
+`verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_and_not_named`
+`verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_read`
+`verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_written`
+`verified-by: bravebot_agent::workspace::moving_the_working_directory_forgets_the_directories_worked_in`
+`verified-by: bravebot_agent::safe::a_safe_session_offers_no_nested_skill`
+`verified-by: bravebot_agent::safe::a_safe_session_reads_no_nested_agents_file`
+
 ## Known costs
 
 Accepted deliberately. Do not "fix" one without changing this spec first.
 
+- **Each recorded directory costs one existence check and one directory listing every turn**, up
+  to the 64 the record keeps. There is no cache, because one would have to be invalidated when a
+  file appears or changes mid-session. A directory only listed, searched or named in a shell
+  command is not recorded: only a read or a write is.
 - **Resolution costs up to three directory listings and up to three file reads every turn.** Cheap
   next to the model call it precedes, and the alternative is a cache that has to be invalidated by
   something, which is a second thing to be wrong about how the filesystem looks. A project keeping

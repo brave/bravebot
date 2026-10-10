@@ -584,6 +584,10 @@ pub struct Workspace {
     /// path reached by a program is not a path the file tools open or a directory vouched for.
     /// Shared for the reason `checkouts` is.
     path_reach: Arc<Mutex<Vec<PathReach>>>,
+    /// The directories below the root that a file tool has read from or written to, each by the
+    /// spelling the planner typed, with every directory above it down to the root's child
+    /// (INSTR-14). Shared for the reason `checkouts` is, so a delegate's reads count.
+    touched: Arc<Mutex<std::collections::BTreeSet<String>>>,
     /// The directories the person's own settings named, in alias order (REFER-3).
     ///
     /// Each is also in `added`, which is what makes it reachable, so a reference is exactly as
@@ -614,6 +618,10 @@ struct WorkingWrites {
     /// For each name, the number of the last write to it.
     last: std::collections::BTreeMap<String, u64>,
 }
+
+/// The most directories [`Workspace::record_touch`] keeps, so a planner reading through a large
+/// tree cannot make every turn look for instructions in thousands of directories.
+const TOUCHED_LIMIT: usize = 64;
 
 /// `typed`, a name a planner gave a file, placed under `root` by its spelling alone, as the
 /// `/`-joined path relative to `root`. `None` where it lands outside `root` or names `root`.
@@ -1232,6 +1240,7 @@ impl Workspace {
             temporary_checkouts: Arc::default(),
             working_writes: Arc::default(),
             path_reach: Arc::default(),
+            touched: Arc::default(),
             references: Vec::new(),
             reference_problems: Vec::new(),
         })
@@ -1670,6 +1679,8 @@ impl Workspace {
 
         // The old root among them: it is a directory that was open, and after this it is not.
         let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
+        // Names relative to the root left behind mean nothing under the new one (INSTR-14).
+        self.touched = Arc::default();
         {
             let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
             let (overlapping, kept) = std::mem::take(&mut *added)
@@ -4764,9 +4775,47 @@ impl Workspace {
         Ok(delegate)
     }
 
+    /// Record that a file tool read from or wrote to `typed`, a name the planner gave (INSTR-14).
+    ///
+    /// Only the directories are kept, placed by the spelling alone as a write is: no file is
+    /// opened and nothing a file holds is consulted, so what is recorded is the planner's own
+    /// choice of names. A name outside the root, or naming it, records nothing. The record stops
+    /// growing at [`TOUCHED_LIMIT`] directories.
+    pub fn record_touch(&self, typed: &str) {
+        let Some(relative) = place_by_spelling(&self.root, typed) else {
+            return;
+        };
+        let mut parts: Vec<&str> = relative.split('/').collect();
+        parts.pop();
+        let mut touched = self.touched.lock().unwrap_or_else(|e| e.into_inner());
+        for end in 1..=parts.len() {
+            if touched.len() >= TOUCHED_LIMIT {
+                return;
+            }
+            touched.insert(parts[..end].join("/"));
+        }
+    }
+
+    /// The directories below the root the session has read from or written to, `/`-joined and
+    /// relative to it, shallowest first and in name order within a depth (INSTR-14).
+    pub fn touched_directories(&self) -> Vec<String> {
+        let mut directories: Vec<String> = self
+            .touched
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .cloned()
+            .collect();
+        directories.sort_by_key(|directory| directory.matches('/').count());
+        directories
+    }
+
     /// Record a write in the checkout this workspace is, where it is one: by the name the planner
     /// typed, or as one more write through a reference where it gave none.
     pub(crate) fn record_write(&self, typed: Option<&str>) {
+        if let Some(typed) = typed {
+            self.record_touch(typed);
+        }
         let Some(checkout) = &self.checkout else {
             if let Some(relative) = typed.and_then(|typed| place_by_spelling(&self.root, typed)) {
                 let mut writes = self
