@@ -93,6 +93,10 @@ impl Confirmer for Asked {
     fn confirm_path(&mut self, _: &PathRequest) -> Decision {
         Decision::Reject
     }
+
+    fn confirm_host(&mut self, _: &HostRequest) -> Decision {
+        Decision::Reject
+    }
     fn ask_user(&mut self, _: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
         Vec::new()
     }

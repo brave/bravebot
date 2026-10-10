@@ -44,6 +44,12 @@ fr:doctor-scrub-pattern
 fr:doctor-scrub-pattern-matched
 fr:doctor-settings-summary-ignored
 fr:doctor-state-directory-logs
+fr:host-asked
+fr:host-explained
+fr:host-no
+fr:host-row
+fr:host-title
+fr:host-yes
 fr:path-explained
 fr:path-listed
 fr:path-no
@@ -61,6 +67,8 @@ fr:reply-stopping
 fr:request-instruction-file
 fr:request-instruction-files
 fr:request-no-instruction-files
+fr:status-hosts-asked
+fr:status-hosts-files-ask
 fr:status-requested-paths
 fr:status-requested-paths-note
 fr:summary-model-needs-sign-in

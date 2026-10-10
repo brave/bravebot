@@ -1336,6 +1336,21 @@ path-removed = ended: commands no longer { $access } { $path }
 path-refused-number = no requested path is numbered { $number }
 path-usage = /reach paths lists the paths programs were allowed to reach this session. /reach paths remove <number> ends one.
 
+## Programs asking for hosts the allowed-hosts list does not cover
+
+host-title = let programs reach more hosts?
+host-asked = { $count ->
+    [one] a program this session started asked for a host that sandbox.network.allowedHosts does not list:
+   *[other] programs this session started asked for { $count } hosts that sandbox.network.allowedHosts does not list:
+    }
+host-row = { $host }
+host-explained =
+    The program was refused, so run it again after a yes. Every command the planner runs from now
+    until this session ends may reach these hosts, unless sandbox.network.deniedHosts names them.
+    Nothing is written to disk, so the next session asks again.
+host-yes = Yes, for this session
+host-no = No
+
 ## Vouching for a directory, asked once when a session starts somewhere new
 
 trust-directory-title = trust this directory?
@@ -2016,6 +2031,8 @@ status-hosts-counts = { $allowed } allowed, { $denied } denied
 status-hosts-files = from { $files }; a host no entry covers is refused
 status-hosts-managed = the managed settings
 status-hosts-refused = a host no entry covers is refused
+status-hosts-files-ask = from { $files }; a host no entry covers is asked about
+status-hosts-asked = a host no entry covers is asked about
 status-this-session = This session
 # Where a session's wall clock went. Four figures, because the whole is unactionable: a session
 # that took an hour on the model, an hour on subprocesses, and an hour waiting for its user to

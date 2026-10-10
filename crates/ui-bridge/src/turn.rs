@@ -633,6 +633,10 @@ impl Confirmer for BridgeConfirmer {
         Decision::Reject
     }
 
+    fn confirm_host(&mut self, _request: &bravebot_agent::confirm::HostRequest) -> Decision {
+        Decision::Reject
+    }
+
     /// Ask whether a remote MCP server moved where its reply pointed (SERVERS-11).
     ///
     /// Nothing was sent there. A yes declares the server at the new address, and every later

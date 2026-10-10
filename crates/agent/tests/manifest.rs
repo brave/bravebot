@@ -1345,6 +1345,13 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -1505,6 +1512,13 @@ impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
     fn confirm_path(
         &mut self,
         _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::Decision::Reject
     }

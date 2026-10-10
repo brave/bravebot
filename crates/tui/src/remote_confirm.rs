@@ -20,7 +20,7 @@
 //! decision taken against a question nobody matched is worse than no decision at all.
 
 use bravebot_agent::confirm::{
-    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, ManifestRequest,
     McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
     ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
@@ -116,6 +116,9 @@ pub enum ToMain {
     Move(MoveRequest),
     /// The planner is asking for programs to reach one more path. The main thread must reply.
     Path(PathRequest),
+    /// Programs a line started asked for hosts the allowed-hosts list does not cover. The main
+    /// thread must reply.
+    Host(HostRequest),
     /// The planner is asking the user something. The main thread must reply.
     Ask(Asking),
     /// The task list changed. No reply.
@@ -194,6 +197,7 @@ pub enum Reply {
     McpCall(CallDecision),
     Move(Decision),
     Path(Decision),
+    Host(Decision),
     Ask(Vec<Answer>),
 }
 
@@ -322,6 +326,13 @@ impl Confirmer for RemoteConfirmer {
     fn confirm_path(&mut self, request: &PathRequest) -> Decision {
         match self.exchange(ToMain::Path(request.clone())) {
             Some(Reply::Path(decision)) => decision,
+            _ => Decision::Reject,
+        }
+    }
+
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+        match self.exchange(ToMain::Host(request.clone())) {
+            Some(Reply::Host(decision)) => decision,
             _ => Decision::Reject,
         }
     }
@@ -604,6 +615,32 @@ mod tests {
             "consent to a write was taken as consent to a whole plan"
         );
         responder.join().expect("responder finished");
+    }
+
+    /// SANDBOX-24: the hosts cross to the terminal and the answer comes back, and a yes to a path is
+    /// not a yes to the hosts, since a path and a host widen different things.
+    #[test]
+    fn hosts_cross_with_every_name_and_only_their_own_yes_comes_back() {
+        for (reply, expected) in [
+            (Reply::Host(Decision::Approve), Decision::Approve),
+            (Reply::Path(Decision::Approve), Decision::Reject),
+        ] {
+            let (outbound, inbound) = channel::<ToMain>();
+            let (answer_tx, answer_rx) = channel();
+            let responder = thread::spawn(move || {
+                match inbound.recv().expect("a message arrived") {
+                    ToMain::Host(asked) => assert_eq!(asked.hosts, ["a.example", "b.example"]),
+                    other => panic!("expected a host question, got {other:?}"),
+                }
+                answer_tx.send(reply).expect("answered");
+            });
+            let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+            let request = HostRequest {
+                hosts: vec!["a.example".to_string(), "b.example".to_string()],
+            };
+            assert_eq!(confirmer.confirm_host(&request), expected);
+            responder.join().expect("responder finished");
+        }
     }
 
     fn a_list() -> ToolListRequest {
@@ -1043,6 +1080,7 @@ mod tests {
                     ToMain::McpCall(_) => seen.push("mcp call"),
                     ToMain::Move(_) => seen.push("move"),
                     ToMain::Path(_) => seen.push("path"),
+                    ToMain::Host(_) => seen.push("host"),
                     ToMain::Todos(_) => seen.push("todos"),
                     ToMain::Spent(_) => seen.push("spent"),
                     ToMain::PromptRecorded(_) => seen.push("prompt"),

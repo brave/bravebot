@@ -1485,8 +1485,10 @@ The managed layer pins the keys it writes. Its `allowedHosts` is the whole allow
 person wrote is added to it, so a person's entry cannot widen it and `doctor` lists the pinned keys.
 An empty one pins a list that refuses every host, and filters a session that set none. Its
 `deniedHosts` is added to the person's and nothing lifts it. Its `onUnlisted` is the answer whatever
-a person said. A managed value that is not a list of strings, or an `onUnlisted` that is neither
-word, pins nothing and `doctor` names it.
+a person said. A managed `allowedHosts` also drops the person's `onUnlisted: ask` unless the managed
+file sets `onUnlisted` itself, since a yes to the prompt below adds to the allowed set, which is the
+widening the pin exists to prevent. A managed value that is not a list of strings, or an
+`onUnlisted` that is neither word, pins nothing and `doctor` names it.
 
 A stage with egress under a set list is started with those variables, and a stage with no egress
 is not, because it reaches nothing. A stage's list is the person's allowed set and the defaults its
@@ -1523,11 +1525,26 @@ same way. `/status` shows a line with how many entries the allowed and denied li
 files that wrote them, and no entry, for a session with an `allowedHosts` list that is not run
 with the sandbox off.
 
+Under `onUnlisted: ask`, the hosts a foreground run was refused for want of an entry are put to the
+person once that run has stopped. Nothing waits on the answer: the program was refused already, and
+a yes lets the lines that follow reach the hosts, so the person runs it again. The question names
+each host on a row of its own, up to eight at a time, and says that a yes holds until the session
+ends and writes nothing to disk. A yes adds the hosts to the allowed set of every stage from the
+next line on, which starts another proxy because the list is another list. A host the denied list
+names stays refused. A no is kept for the session, so the same host is not asked about again. The
+hosts asked about are those the proxy refused as not listed and that are host names or addresses;
+a host refused for its port, or by a denied entry, or a name that is not a host name, is not put to
+anyone. A delegate's lines are not asked about, and the mode that asks nothing refuses, so
+`ask` behaves as `refuse` under bypass and for a session nobody is at. Bypass does not keep the
+refusal, so a session that leaves it asks about the same host. The answer is recorded under
+`host_grant` with the hosts. The hosts are a program's own bytes: they go to the person's screen
+and the trail, the planner is told nothing about them, and nothing branches on one.
+
 Half built. The list, its defaults, the proxy, the settings that carry the list through the
 layers, the managed pin, the environment injection, the port-limited policy on macOS, the trace
-record and the `/status` line are written and tested. Unbuilt: a backend on Linux and Windows that
-limits egress to the port, and the prompt for an unlisted host, so `onUnlisted: ask` is read and
-an unlisted host is refused whichever word is set.
+record, the `/status` line and the prompt for an unlisted host are written and tested. Unbuilt: a
+backend on Linux and Windows that limits egress to the port, so a networked stage is refused there
+while a list is set.
 
 `verified-by: bravebot_sandbox::policy::the_port_egress_is_limited_to_is_carried_and_goes_with_the_network`
 `verified-by: bravebot_sandbox::macos::egress_limited_to_a_port_names_the_port_and_no_other_address`
@@ -1562,6 +1579,20 @@ an unlisted host is refused whichever word is set.
 `verified-by: bravebot_agent::confine::the_trail_names_the_entry_that_decided_and_a_session_without_a_list_records_nothing`
 `verified-by: bravebot_cli::running::a_host_a_run_asked_for_is_recorded_with_what_the_list_decided`
 `verified-by: bravebot_tui::status::host_lists_are_reported_by_count_and_file_and_never_by_host`
+`verified-by: bravebot_config::sandbox_network::a_pinned_allowed_list_is_not_widened_by_the_persons_ask`
+`verified-by: bravebot_agent::workspace::host_answers_are_shared_remembered_and_lifted_by_a_yes`
+`verified-by: bravebot_agent::workspace::a_new_workspace_holds_no_host_answers`
+`verified-by: bravebot_agent::confine::only_a_host_refused_for_want_of_an_entry_is_put_to_the_person`
+`verified-by: bravebot_agent::confine::only_on_unlisted_ask_under_a_list_asks_about_hosts`
+`verified-by: bravebot_agent::confine::a_granted_host_changes_the_list_the_next_line_is_held_to`
+`verified-by: bravebot_agent::confine::a_granted_host_is_carried_by_the_proxy_and_a_denied_one_still_is_not`
+`verified-by: bravebot_agent::tools::hosts_put_to_the_person_are_asked_once_and_the_answer_is_kept`
+`verified-by: bravebot_agent::permission_mode::a_host_question_is_asked_in_every_mode_but_bypass_which_refuses`
+`verified-by: bravebot_core::policy::a_host_answer_leaves_a_trail_that_tells_a_yes_from_a_no`
+`verified-by: bravebot_tui::confirm::a_host_prompt_shows_each_host_and_what_a_yes_does`
+`verified-by: bravebot_tui::confirm::a_host_list_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
+`verified-by: bravebot_tui::remote_confirm::hosts_cross_with_every_name_and_only_their_own_yes_comes_back`
+`verified-by: bravebot_cli::plain::hosts_are_asked_in_lines_and_only_a_yes_lets_programs_reach_them`
 `verified-by: bravebot_sandbox::proxy::the_environment_points_every_proxy_variable_at_the_loopback_port`
 `verified-by: bravebot_sandbox::proxy::dropping_the_proxy_stops_it_listening`
 `verified-by: bravebot_agent::host_proxy::a_stage_holds_the_defaults_its_own_reasons_bring_and_no_others`
