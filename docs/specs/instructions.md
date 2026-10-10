@@ -347,10 +347,10 @@ gate and reads each import through it, so nothing untrusted decides what is read
 `verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_imports_does_not_reach_the_system_prompt`
 
 <a id="INSTR-12"></a>
-### INSTR-12: a built-in output style stands where `--system-prompt` stands, and yields to it
+### INSTR-12: an output style stands where `--system-prompt` stands, and yields to it
 
-`/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`),
-`/style off` clears the pick and `/style` alone says which is in force and lists the names. The
+`/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`)
+or one of the person's own, `/style off` clears the pick and `/style` alone says which is in force and lists the names. The
 pick lasts for the session and is not recorded, so a resumed session starts with none. A name is
 compared whole against the built-in list and the person's own files, and nothing a person types after
 `/style` reaches the prompt.
@@ -378,9 +378,10 @@ refuses it, and the guidance on reading a tool's output is not in the opening, s
 remove it. `proactive` says so in its own words and does not change the mode.
 
 **Why.** Wording for tone and format is a thing a person wants to switch between tasks, and
-`--system-prompt` can only be given when the program starts. Fixing the set at build time keeps the
-rule INSTR-10 relies on: the words in the opening are written by this program or typed by the person,
-and nothing read from a project reaches that place.
+`--system-prompt` can only be given when the program starts. Taking a style only from this build or
+from `~/.bravebot` keeps the rule INSTR-10 relies on, that the words in the opening are written by
+this program or by the person, typed or kept in the person's own configuration, and that nothing
+read from a project reaches that place.
 
 **Known costs.** Only the terminal interface has `/style`. Styles are not read from a project, there
 is no `style` setting, and the choice is not written to the trace. Each needs the trust map or the
