@@ -701,7 +701,8 @@ with ssh sees no difference, the network under a closed setting included. The la
 assignment win, section and variable names are matched without regard to case, a quoted value is
 unquoted and an unquoted `#` or `;` starts a comment. A `[gpg "ssh"]` or `[user "name"]` section is
 another section, a value holding a backslash is not read, and a repository's configuration, an
-`[include]` and `GIT_CONFIG_GLOBAL` are not followed. The key is read where `user.signingkey` is a
+`[include]`, an `[includeIf]` of any condition but `gitdir:` and `gitdir/i:`, and `GIT_CONFIG_GLOBAL` are
+not followed. The key is read where `user.signingkey` is a
 key written out (`ssh-` or `key::`), which needs no file, where it is unset, which signs with the
 agent's first key and needs no file, or where it is an absolute path or one beginning `~/` that
 resolves to an existing regular file named `*.pub` inside the home directory and outside every
@@ -715,6 +716,28 @@ and lends the same agent socket, to a person whose git signs with ssh only, and 
 [SANDBOX-27](#SANDBOX-27) does not remember. The configuration limits are these: `-S<key>` and `--gpg-sign=<key>` in the argv do
 not move the key that is read, and a hook or a `gpg.ssh.program` the plan wrote into `.git` runs
 with the scope, as one runs with the remote scope.
+
+An `[includeIf "gitdir:<pattern>"]` or `[includeIf "gitdir/i:<pattern>"]` in either of those two files
+is followed, in the place of the file where it stands, so that a person who signs with one key for the
+work under `~/work/` and another elsewhere is lent the key git signs with there. The condition is
+matched as git matches it, against the `.git` inside the first directory of the session: `~/` is the
+home, `./` is the directory of the file that holds the line, a pattern with none of `/`, `~/` and `./`
+before it is preceded by `**/`, a trailing `/` adds `**`, `*` and `?` stay inside one part of a path,
+`**` is any number of parts, and `gitdir/i` ignores case. A pattern holding `[` or `\` matches
+nothing. A `hasconfig:` and an `onbranch:` condition are not followed, because the first reads the
+repository's configuration and the second its state, and a linked worktree is matched by its own
+`.git` and not by the directory it links to. The file the `path` names, beside the including file
+where it is relative, is read only where it resolves to a regular file inside the home, outside every
+credential location other than `~/.ssh`, and outside every directory the session may write, which
+are its directories and its scratch directory, since the plan can write those and the key would then
+be one the plan chose. An included file's own `[includeIf]` is not followed. The repository's own
+configuration is still not read, whatever it holds: a plan can write it, and the file it names is
+read on the strength of it. The profile line of a stage that carries the signing scope, or was asked
+to carry it, always says that the key comes from `~/.gitconfig` or `~/.config/git/config` or a file
+an `[includeIf]` of theirs includes for the directory, and that a `user.signingkey` set in a
+repository's own configuration is not read. The text is fixed: it holds no value from any
+configuration and does not change with the repository, so that a signature which fails with "Couldn't
+load public key" is traced to the setting by the planner without reading anything it was not lent.
 
 Where a variable moves what a tool reads, the stage also reads the place the variable names, as that
 place and read only: for `gh`, `GH_CONFIG_DIR` if the environment the stage starts with sets it, else
@@ -828,10 +851,22 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_sandbox::signing::a_value_that_is_not_a_public_key_in_the_home_is_refused`
 `verified-by: bravebot_sandbox::signing::the_last_value_of_the_right_section_is_the_one_read`
 `verified-by: bravebot_sandbox::signing::a_value_with_a_backslash_is_refused`
+`verified-by: bravebot_sandbox::signing::an_include_if_that_matches_the_runs_directory_supplies_the_key`
+`verified-by: bravebot_sandbox::signing::an_include_if_is_read_where_it_stands_in_the_file`
+`verified-by: bravebot_sandbox::signing::a_gitdir_condition_matches_as_git_matches_it`
+`verified-by: bravebot_sandbox::signing::a_gitdir_pattern_with_a_class_or_an_escape_matches_no_directory`
+`verified-by: bravebot_sandbox::signing::a_relative_include_path_is_beside_the_file_that_holds_it`
+`verified-by: bravebot_sandbox::signing::an_include_if_whose_file_is_inside_the_workspace_is_refused`
+`verified-by: bravebot_sandbox::signing::an_include_if_whose_file_is_not_a_plain_file_in_the_home_is_refused`
+`verified-by: bravebot_sandbox::signing::an_include_inside_an_included_file_and_a_plain_include_are_not_followed`
+`verified-by: bravebot_sandbox::signing::a_repository_key_is_not_read_when_a_global_key_overrides_it`
+`verified-by: bravebot_sandbox::signing::a_glob_matches_by_path_part`
 `verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_the_key_and_the_agent_where_the_person_signs_with_ssh`
 `verified-by: bravebot_agent::confine::a_stage_that_signs_carries_nothing_where_the_person_does_not_sign_with_ssh`
 `verified-by: bravebot_agent::confine::a_stage_that_does_not_sign_is_not_lent_the_agent`
 `verified-by: bravebot_agent::confine::a_signing_key_no_scope_reads_is_explained_to_the_planner_without_its_path`
+`verified-by: bravebot_agent::confine::a_stage_that_signs_is_always_told_where_the_key_comes_from`
+`verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_the_key_an_include_if_supplies_for_its_directory`
 `verified-by: bravebot_sandbox::macos::a_stage_that_signs_loads_the_public_key_and_reaches_the_agent_never_the_private_key`
 `verified-by: bravebot_sandbox::scope::the_ssh_configuration_adds_a_bounded_number_of_keys_to_the_remote_scope_alone`
 `verified-by: bravebot_sandbox::macos::a_remote_stage_reads_a_public_key_its_configuration_names_and_never_the_private_one`
