@@ -3883,6 +3883,54 @@ fn a_server_enabled_in_a_checkout_is_requested_there_until_disabled() {
     assert!(approvals(&scratch).contains(&declaration.digest().to_string()));
 }
 
+/// INCOG-6: the mode is engaged from the entry point only for an invocation that asked for it.
+/// The same command that writes a request when typed plainly is refused, and writes nothing, when
+/// the flag is repeated and comes last, so `main` neither engages the mode unprompted nor misses a
+/// flag that is not first.
+#[test]
+fn the_mode_is_engaged_by_the_flag_wherever_it_stands_and_by_nothing_else() {
+    let (declaration, entry) = weather();
+    let scratch = Scratch::new("cli-running-incognito-engaged-by-the-flag")
+        .with_state(
+            "mcp.json",
+            &format!(r#"{{"servers": {{"weather": {entry}}}}}"#),
+        )
+        .with_state("mcp-approved", &format!("{}\n", declaration.digest()));
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(&checkout).expect("create the checkout");
+    let project = checkout.join(".bravebot").join("settings.json");
+
+    let incognito = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        &[],
+        &[
+            "mcp",
+            "enable",
+            "weather",
+            "-s",
+            "project",
+            "--incognito",
+            "--incognito",
+        ],
+    );
+    let (_, stderr) = said(&incognito);
+    assert_eq!(incognito.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("incognito"), "{stderr}");
+    assert!(!project.exists(), "an incognito session wrote the request");
+
+    let ordinary = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        &[],
+        &["mcp", "enable", "weather", "-s", "project"],
+    );
+    let (stdout, stderr) = said(&ordinary);
+    assert!(ordinary.status.success(), "{stderr}");
+    assert!(stdout.contains("enabled weather in"), "{stdout}");
+    assert!(project.exists(), "an ordinary session kept nothing");
+}
+
 /// SERVERS-5: `get` prints the whole digest, which is what an approval is recorded against.
 #[test]
 fn get_shows_the_digest_an_approval_binds_to() {
