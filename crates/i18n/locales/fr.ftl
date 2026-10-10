@@ -1422,6 +1422,9 @@ run-write-not-remembered =
     une ligne nommant un fichier à écrire est soumise à chaque fois, celle-ci ne peut donc pas être retenue
 run-stdin-not-remembered =
     une ligne alimentée par une référence est soumise à chaque fois, celle-ci ne peut donc pas être retenue
+run-unconfined = le planificateur a demandé que cette seule ligne s'exécute sans isolation : aucun profil ne la limite, et la ligne suivante est de nouveau soumise au mode de la session
+run-unconfined-not-remembered =
+    une ligne que le planificateur a demandé d'exécuter sans isolation est soumise à chaque fois, ni la ligne ni la demande ne sont donc retenues
 run-scopes-not-remembered =
     une ligne pour laquelle le planificateur a demandé une portée d'identifiants ou une chaîne d'outils est soumise à chaque fois, la ligne elle-même ne peut donc pas être retenue
 run-keep-reach-explained =

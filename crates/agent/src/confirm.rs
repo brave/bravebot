@@ -257,6 +257,13 @@ pub struct RunRequest {
     /// reach at all, with a session to key a session-long answer to. The path rather than a flag,
     /// for the reason [`RunRequest::record`] carries one.
     pub reach_record: Option<std::path::PathBuf>,
+    /// Whether the planner asked for this one line to start with no profile (SANDBOX-29).
+    ///
+    /// The prompt says so and offers no answer that lasts past the line: nothing recorded can
+    /// stand for the same line run under a profile, and no answer remembers a request to run
+    /// without one. [`RunRequest::confined`] is `None` for such a line, since its stages start
+    /// with no profile.
+    pub unconfined: bool,
 }
 
 /// What a confined `run` is held to, in the words a prompt needs.
@@ -485,6 +492,7 @@ impl RunRequest {
             stdin: None,
             confined: None,
             reach_record: None,
+            unconfined: false,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -567,7 +575,7 @@ impl RunRequest {
     /// One question rather than a list of reasons repeated at each place that asks, so a reason
     /// added later cannot reach the drawing and miss the layer that acts on the answer.
     pub fn can_be_remembered(&self) -> bool {
-        self.plan.can_be_remembered() && !self.asks_for_scopes()
+        self.plan.can_be_remembered() && !self.asks_for_scopes() && !self.unconfined
     }
 
     /// Whether the planner asked this line to carry a credential scope or a toolchain list.
@@ -652,7 +660,7 @@ impl RunRequest {
 
     /// Whether the prompt may offer to record this answer past the session.
     pub fn may_record(&self) -> bool {
-        self.record.is_some()
+        self.record.is_some() && !self.unconfined
     }
 
     /// Whether the prompt may also offer to record this line with its number left free: it may
@@ -699,7 +707,7 @@ impl RunRequest {
     /// list.
     pub fn would_vouch_for(&self) -> Vec<bravebot_core::programs::Command> {
         let mut named: Vec<bravebot_core::programs::Command> = Vec::new();
-        if self.asks_for_scopes() {
+        if self.asks_for_scopes() || self.unconfined {
             return named;
         }
         for step in self.plan.steps() {
@@ -2484,6 +2492,7 @@ mod tests {
             stdin: None,
             confined: None,
             reach_record: None,
+            unconfined: false,
         };
         let offered = request(
             a_listed_line(),

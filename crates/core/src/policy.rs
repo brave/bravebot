@@ -6004,6 +6004,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.plan_needs_approval_requesting(plan, &[])
     }
 
+    /// Whether a line the planner asked to start with no sandbox is put to a person: always.
+    ///
+    /// Asked before any rule and any standing answer is read, for the reason a requested scope is:
+    /// an entry or a remembered line made for the same line under a profile would otherwise cover it
+    /// with none, and a rule was not written knowing the line would be unconfined (SANDBOX-29).
+    pub fn plan_needs_approval_unconfined(&mut self) -> bool {
+        self.allow(
+            "approval",
+            "the planner asked for this line to run with no sandbox, which no vouched entry, \
+             remembered line or rule records, asking"
+                .to_string(),
+        );
+        true
+    }
+
     /// [`Policy::plan_needs_approval`] for a line the planner asked to carry the credential scopes
     /// or toolchain lists `requested` names, each a word of the fixed menu.
     ///

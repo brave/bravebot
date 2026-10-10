@@ -1354,3 +1354,50 @@ fn a_session_with_no_question_numbers_left_refuses_to_ask() {
         "a question went out with no number"
     );
 }
+
+/// What a run confirmed under a person who approves whatever is put to them comes back as, and
+/// whether any question was put to them at all.
+fn confirm_run_with_an_approving_window(request: RunRequest) -> (RunDecision, bool) {
+    let harness = harness();
+    let running = harness.running;
+    let pending = Arc::clone(&running.pending);
+    let mut confirmer = harness.confirmer;
+    let done = Arc::new(AtomicBool::new(false));
+    let finished = Arc::clone(&done);
+    let handle = std::thread::spawn(move || {
+        let decision = confirmer.confirm_run(&request);
+        finished.store(true, std::sync::atomic::Ordering::SeqCst);
+        decision
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut asked = false;
+    while !done.load(std::sync::atomic::Ordering::SeqCst) && std::time::Instant::now() < deadline {
+        let waiting = *pending.lock().expect("not poisoned");
+        if let Some(question) = waiting {
+            asked = true;
+            running.answer(question.id, Reply::Run(RunDecision::approve()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    (handle.join().expect("confirmer"), asked)
+}
+
+/// SANDBOX-29: the window draws no card for a request to run a line with no sandbox and refuses it,
+/// where an approving window would have said yes. The control is the same line without the request,
+/// which the window is asked about and approves. The regression it rejects is a bridge that
+/// forwards the request, since the window reads `off` as `standard` and has no line showing a
+/// program is unconfined.
+#[test]
+fn the_window_refuses_an_unconfined_run_without_asking() {
+    let (decision, asked) = confirm_run_with_an_approving_window(a_run());
+    assert!(asked, "the control was not put to the window");
+    assert!(decision.approved());
+
+    let (decision, asked) = confirm_run_with_an_approving_window(RunRequest {
+        unconfined: true,
+        ..a_run()
+    });
+    assert!(!asked, "a card was drawn for it");
+    assert_eq!(decision.decision, Decision::Reject);
+    assert!(!decision.remember);
+}

@@ -328,7 +328,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// Accepting edits does not accept runs. A write lands in a tree that `git diff` will show in
     /// full afterwards; a command runs with everything the user's shell has and leaves no diff.
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
-        if self.mode.get().answers_a_run_unasked() {
+        // Not a line that asked to start with no sandbox: the permission mode never widens the
+        // sandbox mode (SANDBOX-22), and an approved request is the mode `off` for that line, so it
+        // goes to the person in this mode as in every other.
+        if self.mode.get().answers_a_run_unasked() && !request.unconfined {
             RunDecision::approve()
         } else {
             self.inner.confirm_run(request)

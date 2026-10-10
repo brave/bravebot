@@ -217,6 +217,7 @@ printed.
 A line whose call asks for a credential scope or a toolchain list ([SANDBOX-26](../sandboxing.md#SANDBOX-26))
 is asked about whatever answers the same line without the request: a vouched entry and a
 remembered line hold the program, its arguments and a tree, and not what the line was lent.
+The same holds for a line whose call asks to run with no sandbox ([SANDBOX-29](../sandboxing.md#SANDBOX-29)).
 
 **Why.** An unprompted write is worse than an unwanted prompt, so nothing that could be wrong about
 a write may answer the question. The middle two are the same authority the first road has, exercised

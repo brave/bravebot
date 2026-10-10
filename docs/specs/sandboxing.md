@@ -1231,13 +1231,15 @@ read there as `standard`, because a window has no line that shows its programs a
 subagent's programs run under the mode of the session that started it, and the mode is not in the
 session record, so a resumed session takes the mode its start-up chose and not the one it was
 saved under. The mode is chosen separately from the permission mode ([MODE-1](permission-modes.md#MODE-1))
-and from `--dangerously-skip-permissions`: neither widens it.
+and from `--dangerously-skip-permissions`: neither widens it. One line may start with no profile
+where a person approves it ([SANDBOX-29](#SANDBOX-29)), which is the mode `off` for that line only.
 
 Under `off` the opening screen and `/status` do not report a closed network, since nothing then holds
 a program to it.
 
 Each `run` on a session that confines records a gate, `sandbox`, whose detail names the mode
-the programs ran in ([TRACE-1](trace.md#TRACE-1)).
+the programs ran in ([TRACE-1](trace.md#TRACE-1)), or `unconfined` for a line that asked to start
+with no profile ([SANDBOX-29](#SANDBOX-29)).
 
 **Why.** A program that is refused a read or a write is a program the person wanted to run, and
 having no way to say "not under this" sends them to a wrapper script outside the tool that confines
@@ -1809,6 +1811,56 @@ rules, and the reason is drawn for the person and recorded.
 `verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
 `verified-by: bravebot_cli::plain::a_path_is_asked_in_lines_and_only_a_yes_lets_programs_reach_it`
 `verified-by: bravebot_ui_bridge::refusal::a_request_for_a_path_is_refused_with_no_card_whatever_the_window_would_say`
+
+<a id="SANDBOX-29"></a>
+### SANDBOX-29: a `run` call may ask for one line to start with no sandbox, and the person is asked every time
+
+`run` takes an optional `unconfined`, a boolean. With `true`, the stages of that one line start with
+no profile, as under the mode `off` ([SANDBOX-22](#SANDBOX-22)), and the next line is built from the
+session's mode again. It is for the line that has to write where a credential scope reads and never
+writes ([SANDBOX-16](#SANDBOX-16)), such as `docker login` into `~/.docker/config.json` or
+`aws sso login` into `~/.aws/sso/cache`, which `request_path` and `allowWrite` refuse for the same
+reason ([SANDBOX-28](#SANDBOX-28), [SANDBOX-25](#SANDBOX-25)). A value that is not a boolean is an
+error and nothing runs. `unconfined` with `scopes` is an error, since a line with no profile has
+none to add to.
+
+- **Asked every time.** The line is put to a person before any vouched entry, remembered line or
+  rule is read ([RUN-5](tools/run.md#RUN-5)). The prompt says the line runs with no sandbox and
+  offers no answer that lasts: not `a`, `r` or `f`, and not `m` or `e` ([SANDBOX-27](#SANDBOX-27)).
+  An answer that names one anyway is not acted on, so the line is not vouched for and not recorded.
+- **Not approved by the mode that asks nothing.** `--dangerously-skip-permissions` approves a
+  `scopes` request ([SANDBOX-26](#SANDBOX-26)) and does not approve this one, since the permission
+  mode never widens the sandbox mode ([SANDBOX-22](#SANDBOX-22)) and an approved request is `off`
+  for its line. It goes to the confirmer in that mode as in every other, and a run with nobody to
+  ask refuses it.
+- **Refused, with one sentence that does not say which setting withheld it,** in `strict`, under
+  `off`, in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)), under a
+  managed `run.network` of `closed`, for the reason the managed file floors `off` there
+  ([SANDBOX-22](#SANDBOX-22)), and in a delegate's `run`, since a sub-task asking to run unconfined
+  is reach the person never set up. A managed `sandbox.mode` of `strict` is the mode `strict`.
+  The sentence does not suggest the argument: the planner learns it from the `run` description.
+- **What it prints is quarantined** as an unvouched line's output is ([RUN-4](tools/run.md#RUN-4)).
+- **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
+  session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
+- The desktop draws no card for it and refuses, since a window reads `off` as `standard` and has
+  no line showing that a program is unconfined ([SANDBOX-22](#SANDBOX-22)).
+
+**Why.** Without it the only way to run `docker login` or `aws sso login` from a session is to start
+it with `--sandbox off`, which removes the profile from every program for the whole session. The
+routing field is the boolean beside the command line the person already reads, and "run this line
+with no sandbox" is a sentence a person can approve on its own. Asking every time and remembering
+nothing keeps the request from becoming a standing allowance approved for a different line.
+
+`verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
+`verified-by: bravebot_agent::tools::only_a_managed_closed_network_refuses_an_unconfined_request`
+`verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
+`verified-by: bravebot_agent::turn::an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confined_again`
+`verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
+`verified-by: bravebot_agent::turn::the_mode_that_asks_nothing_does_not_approve_an_unconfined_line`
+`verified-by: bravebot_agent::turn::an_unconfined_line_is_refused_where_the_session_does_not_accept_it`
+`verified-by: bravebot_agent::turn::an_unconfined_value_that_is_not_a_boolean_is_an_error`
+`verified-by: bravebot_tui::confirm::a_run_asking_to_be_unconfined_says_so_and_binds_no_lasting_key`
+`verified-by: bravebot_ui_bridge::refusal::the_window_refuses_an_unconfined_run_without_asking`
 
 ## Programs a person asked for
 
