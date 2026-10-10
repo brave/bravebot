@@ -36,7 +36,7 @@ because the code it runs is not ours: `run` starts it under the profile its plan
 Linux and macOS ([SANDBOX-17](#SANDBOX-17)), and the last section here is what that profile is. The inhibitor `/caffeinate` starts
 is neither: its program and arguments are fixed in our code
 ([commands.md](commands.md#CMD-12)), so it is not confined, and it is found as
-[SANDBOX-29](#SANDBOX-29) says.
+[SANDBOX-30](#SANDBOX-30) says.
 
 Confinement is an operating-system boundary. Everywhere else in these specs the boundary is the
 capability set and the label on a value, which is a different mechanism answering a different
