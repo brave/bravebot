@@ -10335,6 +10335,55 @@ fn a_tools_list_offers_no_tool_of_an_approved_server() {
     );
 }
 
+/// SERVERS-16: with `deferMcpToolsAbove` set, a run limited by `--tools` is offered no `load_tool`,
+/// since no server's tool is among its tools, and the same home without the flag is offered it.
+#[cfg(unix)]
+#[test]
+fn a_tools_list_offers_no_loader_for_deferred_server_tools() {
+    let run = |name: &str, flags: &[&str]| {
+        let gateway = a_gateway_listing(r#"["tools"]"#);
+        let settings = settings_for(&gateway).replacen(
+            '{',
+            r#"{"deferMcpToolsAbove": 1, "mcp": {"request": ["weather"]},"#,
+            1,
+        );
+        let argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            A_SERVER_OFFERING_FORECAST.to_string(),
+        ];
+        let declaration =
+            bravebot_config::mcp::Declaration::stdio(argv.clone(), vec!["PATH".into()], None)
+                .expect("a declaration");
+        let declared = serde_json::json!({"servers": {"weather": {
+            "transport": "stdio", "argv": argv, "variables": ["PATH"]}}});
+        let scratch = Scratch::new(name)
+            .with_settings(&settings)
+            .with_state("mcp.json", &declared.to_string())
+            .with_state("mcp-approved", &format!("{}\n", declaration.digest()));
+        let mut arguments = flags.to_vec();
+        arguments.extend(["--dangerously-skip-permissions", "-p", "say something"]);
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot(&scratch.path, &environment, &arguments);
+        let offered = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        (offered, said(&output).1)
+    };
+    let (offered, stderr) = run("cli-running-tools-loader-control", &[]);
+    assert!(
+        offered.contains("load_tool") && offered.contains("weather:forecast"),
+        "the control run was not offered the loader, so the limited run proves nothing: {offered}\n{stderr}"
+    );
+    let (offered, _) = run("cli-running-tools-loader", &["--tools", "read_file"]);
+    assert!(
+        !offered.contains("load_tool") && !offered.contains("weather:forecast"),
+        "a run limited by --tools was offered the loader: {offered}"
+    );
+}
+
 /// CLI-26: a list that names nothing, a name that is no tool, and the flags where nothing offers a
 /// tool are each refused as a bad argument before any configuration is read.
 #[test]

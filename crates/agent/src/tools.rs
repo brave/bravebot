@@ -1513,6 +1513,38 @@ pub fn offer_advisor(tools: &mut Vec<Tool>) {
     tools.push(advisor);
 }
 
+/// Add `load_tool` to the list of a turn whose server tools are offered by name only (SERVERS-16).
+///
+/// Built here rather than in the table because it exists only where tools are deferred, and a
+/// description naming a tool that is not on the list sends the planner to a name that is not
+/// there. `names` are the `alias:tool` of tools a person vouched for, so nothing a server wrote
+/// decides what is listed.
+pub fn offer_tool_loader(tools: &mut Vec<Tool>, names: &[String]) {
+    let mut loader = Tool::function(
+        "load_tool",
+        format!(
+            "Load a tool of an MCP server the user connected, so that it is offered to you from \
+             your next request on. These tools exist but are not shown to you until you name one, \
+             to keep this conversation short. Only the names listed here exist; there is nothing \
+             to search. The user is still asked before each call to a loaded tool. The tools: {}.",
+            names.join(", ")
+        ),
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The name of a tool exactly as it is listed here, written \
+                                    alias:tool."
+                }
+            },
+            "required": ["name"]
+        }),
+    );
+    ask_why(&mut loader);
+    tools.push(loader);
+}
+
 /// Say in the `run` description what its programs are held to, for a turn that confines them.
 ///
 /// Appended to the table's description rather than a parameter of it, so the many callers that
@@ -1759,6 +1791,9 @@ pub struct Output {
     /// Unlike `loaded` it is set for every skill, so the turn can tag the result and a compaction
     /// can send the skill again (COMPACT-17). The catalogue's own string, never the call's.
     pub skill: Option<String>,
+    /// The wire name of the MCP server tool the planner asked to have offered from the next round
+    /// on (SERVERS-16). Carried back because the offer is the turn's to hold.
+    pub tool_loaded: Option<String>,
 }
 
 /// Everything a tool works with that is not the policy.
@@ -2484,6 +2519,8 @@ struct Produced {
     loaded: Option<(String, crate::skills::RunsAs)>,
     /// The name of the skill this call loaded, as the catalogue spells it.
     skill: Option<String>,
+    /// The wire name of the server tool the planner loaded (SERVERS-16), for the turn to offer.
+    tool_loaded: Option<String>,
 }
 
 impl Produced {
@@ -2524,6 +2561,7 @@ impl Produced {
             delegate: Vec::new(),
             loaded: None,
             skill: None,
+            tool_loaded: None,
         }
     }
 
@@ -2568,6 +2606,7 @@ impl Produced {
             delegate: Vec::new(),
             loaded: None,
             skill: None,
+            tool_loaded: None,
         }
     }
 
@@ -2820,7 +2859,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "search" => Some("pattern"),
         "read_git" => Some("query"),
         "lsp" => Some("path"),
-        "load_skill" => Some("name"),
+        "load_skill" | "load_tool" => Some("name"),
         "fetch_url" => Some("url"),
         "job_output" => Some("job"),
         "vet_content" => Some("ref"),
@@ -3184,6 +3223,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 delegate: produced.delegate,
                 loaded: produced.loaded,
                 skill: produced.skill,
+                tool_loaded: produced.tool_loaded,
             };
         }
     };
@@ -3202,6 +3242,10 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         Some((_, alias, tool)) => format!("{alias}:{tool}"),
         None => target_of(policy, &name, tools.slots, &arguments),
     };
+    // `load_tool` is offered only where a turn defers its server tools, so a definition's `tools:`
+    // line cannot name it and `--tools` cannot take it away: a `tools:` line without `mcpServers:`
+    // selects no server, and with either holding the server's tools back the offer is not deferred.
+    let loads_a_tool = name == "load_tool" && tools.mcp.is_some_and(|offer| offer.is_deferred());
     let why = why_of(policy, &name, &arguments);
     reporter.tool_started(
         Activity::running(verb, target.clone())
@@ -3214,6 +3258,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // it, and it was offered only where the run holds its server.
         unoffered
             if server_tool.is_none()
+                && !loads_a_tool
                 && tools
                     .confined_to
                     .is_some_and(|offered| !offered.iter().any(|tool| tool == unoffered)) =>
@@ -3222,7 +3267,11 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         }
         // What the command line took away is refused whoever asks, a delegate included, since the
         // flags limit the run and not one turn of it.
-        taken_away if server_tool.is_none() && !bravebot_core::tool_set::allows(taken_away) => {
+        taken_away
+            if server_tool.is_none()
+                && !loads_a_tool
+                && !bravebot_core::tool_set::allows(taken_away) =>
+        {
             Produced::problem(format!("error: no such tool '{taken_away}'"))
         }
         // A mode that refuses writes refuses them whether or not anybody would have been asked,
@@ -3234,6 +3283,19 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                  have answered. Do not retry; say what you would change and why.",
             )
         }
+        // A tool the offer holds and has not loaded is not offered, so naming it is a mistake
+        // worth correcting and not a call to put to the person (SERVERS-16).
+        unloaded if tools.mcp.is_some_and(|offer| offer.is_unloaded(unloaded)) => {
+            let shown = server_tool.as_ref().map_or_else(
+                || name.clone(),
+                |(_, alias, tool)| format!("{alias}:{tool}"),
+            );
+            Produced::problem(format!(
+                "refused: {shown} is not loaded, so it was not called. Call load_tool with the \
+                 name {shown} first."
+            ))
+        }
+        "load_tool" if loads_a_tool => load_tool(policy, tools.mcp, &arguments),
         "read_file" => read_file(policy, tools, confirmer, reporter, &arguments),
         "list_files" => list_files(policy, tools.workspace, &arguments),
         "search" => search(policy, tools.workspace, &arguments),
@@ -3368,6 +3430,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         delegate: produced.delegate,
         loaded: produced.loaded,
         skill: produced.skill,
+        tool_loaded: produced.tool_loaded,
     }
 }
 
@@ -9195,6 +9258,49 @@ fn load_skill<S: Sink>(
     // to change.
     if skill.runs_as.names_anything() {
         produced.loaded = Some((skill.name.clone(), skill.runs_as.clone()));
+    }
+    produced
+}
+
+/// Load a tool of an MCP server out of the ones a person vouched for (SERVERS-16).
+///
+/// The name is routing, promoted as a skill's is, and it only **selects** from the offer the turn
+/// holds: matched exactly against `alias:tool` of a vouched tool, so a name one character out
+/// loads nothing. The result is a sentence of this process's own and holds no byte a server sent.
+fn load_tool<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    offer: Option<&crate::mcp::Offer>,
+    arguments: &Value,
+) -> Produced {
+    let Some(proposed) = argument(arguments, "name") else {
+        return Produced::problem("error: 'name' is required and must be a string");
+    };
+    let name = match policy.promote_confined_read("load_tool", "name", &proposed) {
+        Ok(name) => name,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    let Ok(name) = name.into_trusted() else {
+        return Produced::problem("error: the tool name was not usable");
+    };
+    let Some(offer) = offer else {
+        return Produced::problem("error: no tools are waiting to be loaded");
+    };
+    let Some((wire, loaded)) = offer.named(&name) else {
+        return Produced::problem(format!(
+            "error: no tool named '{name}'. The tools you can load are listed in the description \
+             of load_tool; there are no others."
+        ));
+    };
+    let note = if loaded { "already loaded" } else { "loaded" };
+    let mut produced = confirmed(
+        format!(
+            "{name} is loaded and is offered to you from your next request on. Calling it still \
+             asks the user first."
+        ),
+        note,
+    );
+    if !loaded {
+        produced.tool_loaded = Some(wire.to_string());
     }
     produced
 }

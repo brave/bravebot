@@ -3059,6 +3059,7 @@ verb-todo-write = Plan
 # remember which of the verbs meant that.
 verb-spawn-processor = Isolated processor
 verb-load-skill = Skill
+verb-load-tool = Load
 verb-ask-user = Ask
 verb-request-path = Reach
 verb-run = Run
