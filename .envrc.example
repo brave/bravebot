@@ -51,6 +51,10 @@ DEV_SERVICES_KEY="replace-me"
 DEV_KEY_ID="replace-me"
 DEV_ENDPOINT="https://ai-chat.bsg.brave.software"
 DEV_PREMIUM_ENDPOINT="https://ai-chat-premium.bsg.brave.software"
+# Opt in to the relay by pasting a key here. Left empty, requests are signed
+# exactly as they have always been, which is what every environment without
+# this line already does.
+DEV_API_KEY=""
 
 # --- prod ------------------------------------------------------------------
 # Import the matching subscription with:  bravebot import-leo-creds stable
@@ -58,6 +62,9 @@ PROD_SERVICES_KEY="replace-me"
 PROD_KEY_ID="replace-me"
 PROD_ENDPOINT="https://ai-chat.bsg.brave.com"
 PROD_PREMIUM_ENDPOINT="https://ai-chat-premium.bsg.brave.com"
+# Empty because the relay is not deployed here yet. A key is issued for one
+# environment, so a dev key presented to prod is a 401 rather than a fallback.
+PROD_API_KEY=""
 
 # ---------------------------------------------------------------------------
 # Selection. An unrecognised BRAVEBOT_ENV fails here rather than silently leaving
@@ -69,12 +76,14 @@ case "$BRAVEBOT_ENV" in
     export BRAVE_SERVICES_KEY_ID="$DEV_KEY_ID"
     export BRAVE_AI_CHAT_ENDPOINT="$DEV_ENDPOINT"
     export BRAVE_AI_CHAT_PREMIUM_ENDPOINT="$DEV_PREMIUM_ENDPOINT"
+    export BRAVE_AI_CHAT_API_KEY="${BRAVE_AI_CHAT_API_KEY-$DEV_API_KEY}"
     ;;
   prod)
     export SERVICES_KEY_AICHAT="$PROD_SERVICES_KEY"
     export BRAVE_SERVICES_KEY_ID="$PROD_KEY_ID"
     export BRAVE_AI_CHAT_ENDPOINT="$PROD_ENDPOINT"
     export BRAVE_AI_CHAT_PREMIUM_ENDPOINT="$PROD_PREMIUM_ENDPOINT"
+    export BRAVE_AI_CHAT_API_KEY="${BRAVE_AI_CHAT_API_KEY-$PROD_API_KEY}"
     ;;
   *)
     echo "BRAVEBOT_ENV must be 'dev' or 'prod', got '$BRAVEBOT_ENV'" >&2
@@ -88,6 +97,34 @@ esac
 # The premium endpoint is optional. Without it premium is unavailable and every
 # request goes to the free endpoint; a subscription credential is never sent
 # there, since it does not belong to that host.
+
+# ---------------------------------------------------------------------------
+# BRAVE_AI_CHAT_API_KEY, set above per environment, decides which of the two
+# handlers at the same host and path answers a chat request.
+#
+# Empty, the request is signed with the services key, which is what happens
+# without this line at all. Set, it presents the key instead of a signature and
+# is answered by the handler that relays the whole OpenAI parameter list, so
+# /effort reaches the model rather than being accepted and dropped.
+#
+# The signing key is still required either way: GET /v1/models is signed
+# whichever handler answers the chat request.
+#
+# Presenting a key skips premium. That handler reads no cookie, so a
+# subscription credential sent with the request would be spent for nothing and
+# is not asked for.
+#
+# Either way round for one command, without editing this file:
+#
+#   BRAVE_AI_CHAT_API_KEY=brv_live_... direnv exec . bravebot doctor
+#   BRAVE_AI_CHAT_API_KEY= direnv exec . bravebot doctor
+#
+# Both work because the export above reads ${BRAVE_AI_CHAT_API_KEY-...} rather
+# than assigning outright: an unset name takes the value for the environment,
+# while a name set to nothing stays nothing. The other exports in that block
+# overwrite what they were given, so this is the one that can be turned on and
+# off from outside.
+# ---------------------------------------------------------------------------
 
 # Model to request from POST /v1/chat/completions when the user has not chosen
 # one. `/model` in the interface picks from what GET /v1/models lists and that

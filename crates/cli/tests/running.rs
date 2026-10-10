@@ -1475,6 +1475,54 @@ fn doctor_names_the_tier_of_every_credential_it_accounts_for() {
     }
 }
 
+/// CLI-7: `doctor` says which handler at Brave's endpoint will answer a chat request, since the
+/// host and the path are the same either way. Both directions from one fixture: a report that
+/// always said `signed`, or always said `API key`, passes one run and fails the other. A blank key
+/// is not an opt-in (BACKEND-54), so it is run as well, and the key itself is never printed.
+#[test]
+fn doctor_says_whether_requests_are_signed_or_present_an_api_key() {
+    let scratch = Scratch::new("cli-running-doctor-requests");
+    let brave = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        // Not one of Brave's hosts, so the model in force is not one of Brave's and the report is
+        // not one that ends in failure for lack of a model to serve a turn.
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-west-2"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ];
+    let requests_line = |extra: Option<&str>| {
+        let mut environment = brave.to_vec();
+        if let Some(value) = extra {
+            environment.push(("BRAVE_AI_CHAT_API_KEY", value));
+        }
+        let output = bravebot(&scratch.path, &environment, &["doctor"]);
+        let (stdout, stderr) = said(&output);
+        assert!(output.status.success(), "doctor did not run: {stderr}");
+        assert!(
+            !stdout.contains("an-api-key"),
+            "doctor printed the API key: {stdout}"
+        );
+        stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("requests"))
+            .unwrap_or_else(|| panic!("doctor has no requests line: {stdout}"))
+            .to_owned()
+    };
+
+    let without = requests_line(None);
+    assert!(without.ends_with("signed"), "no key exported: {without}");
+
+    let blank = requests_line(Some("   "));
+    assert!(blank.ends_with("signed"), "a blank key: {blank}");
+
+    let with = requests_line(Some("an-api-key"));
+    assert!(with.contains("API key"), "a key exported: {with}");
+    assert!(!with.contains("signed"), "a key exported: {with}");
+}
+
 /// CRED-2: an imported subscription's credential batch is a credential in use, so the report
 /// accounts for it and names the tier its walk stopped at. It is the one credential here that
 /// stops above Held, so a report that defaulted every tier to the bottom of the scale passes
