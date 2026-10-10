@@ -396,9 +396,15 @@ pub struct Server<'a> {
 pub fn server_lines(server: &Server<'_>) -> Vec<String> {
     let mut lines = vec![printable(server.summary), printable(server.program)];
     if !server.arguments.is_empty() {
-        lines.push(t!(server_arguments, arguments = printable(server.arguments)));
+        lines.push(t!(
+            server_arguments,
+            arguments = printable(server.arguments)
+        ));
     }
-    lines.push(t!(server_workspace, workspace = printable(server.workspace)));
+    lines.push(t!(
+        server_workspace,
+        workspace = printable(server.workspace)
+    ));
     // What a program a person named runs is not known here, so the prompt says that rather than
     // that it runs nothing.
     lines.push(if server.declared {
