@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::hosts::{HostList, Refusal, Verdict};
+use crate::hosts::{HostList, Refusal, Verdict, recordable};
 
 /// The ports a tunnel may be opened to unless a caller says otherwise.
 pub const DEFAULT_PORTS: &[u16] = &[443, 80];
@@ -37,11 +37,31 @@ Connection: close\r\n\r\n";
 const UNREACHABLE: &[u8] =
     b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
+/// The most decisions a proxy holds before they are taken. A program can ask for as many hosts as
+/// it likes, so what is kept is bounded and the rest are counted.
+pub const MAX_KEPT: usize = 256;
+
 /// One decision the proxy took: the host a request named and what the list said of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decision {
-    pub host: String,
+    /// The name as [`recordable`] allows it, or `None` where the request named something that is
+    /// neither a host name nor an address. The decision itself was taken on the raw name.
+    pub host: Option<String>,
     pub verdict: Verdict,
+}
+
+/// What [`Proxy::take_decisions`] hands over.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Taken {
+    pub decisions: Vec<Decision>,
+    /// How many further decisions were taken and not kept, because [`MAX_KEPT`] was reached.
+    pub dropped: usize,
+}
+
+#[derive(Debug, Default)]
+struct Log {
+    kept: Vec<Decision>,
+    dropped: usize,
 }
 
 /// What a proxy is started with.
@@ -65,7 +85,7 @@ impl ProxyConfig {
 pub struct Proxy {
     addr: SocketAddr,
     stop: Arc<AtomicBool>,
-    decisions: Arc<Mutex<Vec<Decision>>>,
+    decisions: Arc<Mutex<Log>>,
     accept: Option<JoinHandle<()>>,
 }
 
@@ -75,7 +95,7 @@ impl Proxy {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let addr = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
-        let decisions = Arc::new(Mutex::new(Vec::new()));
+        let decisions = Arc::new(Mutex::new(Log::default()));
         let shared = Arc::new(config);
         let accept = {
             let (stop, decisions) = (stop.clone(), decisions.clone());
@@ -121,11 +141,23 @@ impl Proxy {
             .collect()
     }
 
-    /// Every decision taken so far, oldest first.
+    /// Every decision kept and not yet taken, oldest first.
     pub fn decisions(&self) -> Vec<Decision> {
         self.decisions
             .lock()
-            .map(|decisions| decisions.clone())
+            .map(|log| log.kept.clone())
+            .unwrap_or_default()
+    }
+
+    /// Hands over the decisions kept since the last call and forgets them, so each is recorded
+    /// once and the proxy holds only what has not been.
+    pub fn take_decisions(&self) -> Taken {
+        self.decisions
+            .lock()
+            .map(|mut log| Taken {
+                decisions: std::mem::take(&mut log.kept),
+                dropped: std::mem::take(&mut log.dropped),
+            })
             .unwrap_or_default()
     }
 }
@@ -141,11 +173,7 @@ impl Drop for Proxy {
     }
 }
 
-fn serve(
-    mut client: TcpStream,
-    config: &ProxyConfig,
-    decisions: &Mutex<Vec<Decision>>,
-) -> io::Result<()> {
+fn serve(mut client: TcpStream, config: &ProxyConfig, decisions: &Mutex<Log>) -> io::Result<()> {
     client.set_read_timeout(Some(HEAD_TIMEOUT))?;
     let (head, rest) = read_head(&mut client)?;
     let Some((host, port)) = connect_target(&head) else {
@@ -156,10 +184,13 @@ fn serve(
         verdict = Verdict::Refused(Refusal::Port);
     }
     if let Ok(mut log) = decisions.lock() {
-        log.push(Decision {
-            host: host.clone(),
-            verdict: verdict.clone(),
-        });
+        match log.kept.len() < MAX_KEPT {
+            true => log.kept.push(Decision {
+                host: recordable(&host),
+                verdict: verdict.clone(),
+            }),
+            false => log.dropped += 1,
+        }
     }
     if !verdict.is_allowed() {
         return client.write_all(REFUSAL);
@@ -378,7 +409,7 @@ mod tests {
         let mut reply = Vec::new();
         stream.read_to_end(&mut reply).unwrap();
         assert!(reply.starts_with(b"HTTP/1.1 403"));
-        assert_eq!(proxy.decisions()[0].host, "evil.example");
+        assert_eq!(proxy.decisions()[0].host.as_deref(), Some("evil.example"));
     }
 
     #[test]
@@ -410,8 +441,15 @@ mod tests {
         let _ = connect(&proxy, "bad.example.com:443");
         let _ = connect(&proxy, "other.example:443");
         let decisions = proxy.decisions();
-        let hosts: Vec<_> = decisions.iter().map(|d| d.host.as_str()).collect();
-        assert_eq!(hosts, ["127.0.0.1", "bad.example.com", "other.example"]);
+        let hosts: Vec<_> = decisions.iter().map(|d| d.host.as_deref()).collect();
+        assert_eq!(
+            hosts,
+            [
+                Some("127.0.0.1"),
+                Some("bad.example.com"),
+                Some("other.example")
+            ]
+        );
         assert!(
             matches!(&decisions[0].verdict, Verdict::Allowed(rule) if rule.spelling() == "127.0.0.1")
         );
@@ -419,6 +457,66 @@ mod tests {
             matches!(&decisions[1].verdict, Verdict::Refused(Refusal::Denied(rule)) if rule.spelling() == "bad.example.com")
         );
         assert_eq!(decisions[2].verdict, Verdict::Refused(Refusal::NotListed));
+    }
+
+    fn ask(proxy: &Proxy, target: &str) {
+        let mut stream = TcpStream::connect(proxy.addr()).unwrap();
+        write!(stream, "CONNECT {target} HTTP/1.1\r\n\r\n").unwrap();
+        let mut reply = Vec::new();
+        stream.read_to_end(&mut reply).unwrap();
+    }
+
+    /// Taking the decisions hands each over once. A recorder that read them without taking them
+    /// would write the same refusal into the trail again at the end of every later line.
+    #[test]
+    fn a_decision_is_handed_over_once() {
+        let proxy = proxy_for(&["listed.example"], &[], vec![443]);
+        ask(&proxy, "a.example:443");
+        ask(&proxy, "listed.example:8080");
+        let first = proxy.take_decisions();
+        assert_eq!(first.decisions.len(), 2);
+        assert_eq!(first.dropped, 0);
+        assert_eq!(proxy.take_decisions(), Taken::default());
+        ask(&proxy, "b.example:443");
+        let later = proxy.take_decisions();
+        assert_eq!(later.decisions.len(), 1);
+        assert_eq!(later.decisions[0].host.as_deref(), Some("b.example"));
+    }
+
+    /// A program can ask for any number of hosts. The proxy keeps [`MAX_KEPT`] of them and counts
+    /// the rest, so a loop of requests cannot grow what the session holds without bound.
+    #[test]
+    fn decisions_beyond_the_cap_are_counted_and_not_kept() {
+        let proxy = proxy_for(&[], &[], vec![443]);
+        for at in 0..MAX_KEPT + 3 {
+            ask(&proxy, &format!("h{at}.example:443"));
+        }
+        let taken = proxy.take_decisions();
+        assert_eq!(taken.decisions.len(), MAX_KEPT);
+        assert_eq!(taken.dropped, 3);
+        assert_eq!(proxy.take_decisions(), Taken::default());
+    }
+
+    /// A name that is neither a host name nor an address is decided on, and recorded as no name.
+    /// The regression it rejects is a program putting its own bytes, an escape sequence or a line
+    /// break among them, into a record a person reads.
+    #[test]
+    fn a_request_for_something_that_is_not_a_host_name_is_recorded_without_it() {
+        let proxy = proxy_for(&["listed.example"], &[], vec![443]);
+        for target in [
+            "x\u{1b}[2J.example:443",
+            "bad!name.example:443",
+            "[::1]:443",
+        ] {
+            ask(&proxy, target);
+        }
+        let hosts: Vec<_> = proxy
+            .take_decisions()
+            .decisions
+            .into_iter()
+            .map(|decision| decision.host)
+            .collect();
+        assert_eq!(hosts, [None, None, Some("::1".to_string())]);
     }
 
     #[test]

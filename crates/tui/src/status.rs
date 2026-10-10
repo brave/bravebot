@@ -335,6 +335,43 @@ fn filesystem_line(settled: Option<&bravebot_config::Filesystem>) -> Option<Line
     )
 }
 
+/// The line for the hosts a program `run` starts may reach, where a list is set: how many entries
+/// each list holds and the files that wrote them, never an entry, for the reason the filesystem
+/// line gives. Nothing for a session with no `allowedHosts`, which filters nothing, and nothing
+/// under `off`, where nothing confines a program to the list.
+fn hosts_line(
+    settled: Option<&bravebot_config::sandbox_network::Resolved>,
+    mode: bravebot_sandbox::SandboxMode,
+) -> Option<Line> {
+    let hosts = &settled?.hosts;
+    let allowed = hosts.allowed.as_ref()?;
+    if mode == bravebot_sandbox::SandboxMode::Off {
+        return None;
+    }
+    let mut sources: Vec<String> = Vec::new();
+    for entry in allowed.iter().chain(&hosts.denied) {
+        let source = match &entry.by {
+            Some(path) => path.display().to_string(),
+            None => t!(status_hosts_managed).to_string(),
+        };
+        if !sources.contains(&source) {
+            sources.push(source);
+        }
+    }
+    let counts = t!(
+        status_hosts_counts,
+        allowed = allowed.len(),
+        denied = hosts.denied.len()
+    )
+    .to_string();
+    Some(
+        Line::new(t!(status_hosts), counts).with_note(match sources.is_empty() {
+            true => t!(status_hosts_refused).to_string(),
+            false => t!(status_hosts_files, files = sources.join(", ")).to_string(),
+        }),
+    )
+}
+
 /// Why an entry of one of the filesystem lists is not in force, in the words `doctor` uses.
 pub fn filesystem_reason(reason: bravebot_sandbox::rules::Reason) -> &'static str {
     bravebot_agent::permissions::filesystem_reason(reason)
@@ -534,6 +571,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // session this screen has always described.
     lines.extend(filesystem_line(
         bravebot_config::settled_sandbox_filesystem(),
+    ));
+
+    // After the filesystem lists and on the same terms: nothing for a session that wrote no host
+    // list, which is the session this screen has always described.
+    lines.extend(hosts_line(
+        bravebot_config::sandbox_network::settled(),
+        facts.sandbox_mode,
     ));
 
     // Named rather than counted, since the question is which of them this session can reach, and
@@ -2255,6 +2299,65 @@ mod tests {
         assert!(!line.value.contains("very-secret") && !line.note.contains("very-secret"));
         assert!(line.note.contains("/home/a/.bravebot/settings.json"));
         assert!(line.note.contains(t!(status_sandbox_filesystem_flags)));
+    }
+
+    /// The host list is on the report with how many entries each list holds and the files that
+    /// wrote them, never a host, and a session with no `allowedHosts` or none under `off` says
+    /// nothing. The regression it rejects is a list in force that the screen never mentions.
+    #[test]
+    fn host_lists_are_reported_by_count_and_file_and_never_by_host() {
+        use bravebot_config::sandbox_network::{HostEntry, Hosts, Resolved};
+        use bravebot_sandbox::SandboxMode::{Off, Standard};
+        let entry = |host: &str, by: Option<&str>| HostEntry {
+            entry: host.to_string(),
+            by: by.map(Into::into),
+        };
+        let settled = |allowed, denied| Resolved {
+            hosts: Hosts {
+                allowed,
+                denied,
+                on_unlisted: None,
+            },
+            ..Default::default()
+        };
+
+        assert!(hosts_line(None, Standard).is_none());
+        assert!(
+            hosts_line(
+                Some(&settled(None, vec![entry("a.example", None)])),
+                Standard
+            )
+            .is_none()
+        );
+        let listed = settled(
+            Some(vec![
+                entry(
+                    "very-secret.example",
+                    Some("/home/a/.bravebot/settings.json"),
+                ),
+                entry("*.other.example", Some("/home/a/.bravebot/settings.json")),
+            ]),
+            vec![entry("bad.example", None)],
+        );
+        assert!(hosts_line(Some(&listed), Off).is_none());
+        let line = hosts_line(Some(&listed), Standard).expect("a line");
+
+        assert_eq!(line.label.trim(), t!(status_hosts));
+        assert!(
+            line.value.contains("2 allowed") && line.value.contains("1 denied"),
+            "{}",
+            line.value
+        );
+        let shown = format!("{} {}", line.value, line.note);
+        assert!(
+            !shown.contains("very-secret") && !shown.contains("bad.example"),
+            "{shown}"
+        );
+        assert!(line.note.contains("/home/a/.bravebot/settings.json"));
+        assert!(line.note.contains(t!(status_hosts_managed)));
+        let empty = hosts_line(Some(&settled(Some(vec![]), vec![])), Standard).expect("a line");
+        assert!(empty.value.contains("0 allowed"), "{}", empty.value);
+        assert_eq!(empty.note, t!(status_hosts_refused));
     }
 
     /// Before the first turn nothing has been observed, so the panel says premium is available

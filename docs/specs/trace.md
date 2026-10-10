@@ -65,13 +65,16 @@ asked", which is most of what anyone asks it.
 ### TRACE-2: the trail holds no content
 
 Every field is a gate name, a capability, a label, a path, a destination host or a slot id.
-Network decisions omit URL userinfo, paths, queries and fragments. That is why it can be shown
+Network decisions omit URL userinfo, paths, queries and fragments. A host a confined program asked
+a proxy for is recorded only where it is a host name or an address ([SANDBOX-24](sandboxing.md#SANDBOX-24)).
+That is why it can be shown
 on a screen and written to a file without any release, and it is what makes the record safe to keep
 for a workspace nobody vouched for.
 
 `verified-by: bravebot_agent::turn::nothing_recorded_about_a_request_carries_the_credential_in_its_url`
 `verified-by: bravebot_agent::turn::the_trail_records_the_slot_and_the_path_rather_than_the_content`
 `verified-by: bravebot_agent::turn::a_fetch_records_the_host_and_none_of_the_rest_of_the_url_in_the_trail`
+`verified-by: bravebot_agent::confine::the_trail_carries_no_byte_of_a_name_that_is_not_a_host`
 
 <a id="TRACE-3"></a>
 ### TRACE-3: an assertion a person made is recorded as one

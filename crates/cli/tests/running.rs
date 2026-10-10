@@ -2786,6 +2786,71 @@ fn an_allowed_hosts_list_points_the_programs_a_run_starts_at_the_proxy() {
     );
 }
 
+/// SANDBOX-24: a host a program of a `run` asks the session's proxy for, and what the list decided,
+/// are written to the trail after the line, and a session with no list writes nothing of the kind.
+///
+/// A property of the process: the list reaches the proxy through the settled settings, and the
+/// record is made by the code that runs a line, so only a run through the entry point shows that
+/// the two are joined. The program is `curl`, which reads the proxy variables itself and needs no
+/// network beyond the loopback port, so the request is refused by the list and recorded. The run
+/// with no list is the control that the entry is not written for every run.
+#[cfg(unix)]
+#[test]
+fn a_host_a_run_asked_for_is_recorded_with_what_the_list_decided() {
+    let holds_to_a_port = bravebot_sandbox::for_current_platform()
+        .is_ok_and(|sandbox| sandbox.capabilities().egress_limited_to_a_port);
+    if !bravebot_sandbox::confinement_works_here()
+        || !holds_to_a_port
+        || !std::path::Path::new("/usr/bin/curl").exists()
+    {
+        return;
+    }
+    let run_in = |name: &str, hosts: Option<&str>| {
+        let gateway =
+            a_gateway_asking_to_run("curl --max-time 5 https://unlisted.example > out.txt");
+        let mut settings: serde_json::Value =
+            serde_json::from_str(&settings_for(&gateway)).expect("settings for a gateway");
+        if let Some(hosts) = hosts {
+            settings["sandbox"] = serde_json::json!({"network": {"allowedHosts": [hosts]}});
+        }
+        let scratch = Scratch::new(name).with_settings(&settings.to_string());
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &environment,
+            &[
+                "--dangerously-skip-permissions",
+                "--trace",
+                "-p",
+                "fetch it",
+            ],
+        );
+        let (_, stderr) = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        stderr
+    };
+
+    let listed = run_in("cli-running-hosts-trail-listed", Some("example.com"));
+    assert!(
+        listed.contains(
+            "hosts: the host list decided for the proxy of stage 1: unlisted.example refused, not listed"
+        ),
+        "the refused host was not recorded: {listed}"
+    );
+    let control = run_in("cli-running-hosts-trail-control", None);
+    assert!(
+        !control.contains("host list decided"),
+        "a run with no list recorded a decision: {control}"
+    );
+}
+
 /// SANDBOX: `--sandbox-deny-write` and a settings file's `sandbox.filesystem.denyWrite` reach the
 /// programs `run` starts, and a run with neither reaches none.
 ///

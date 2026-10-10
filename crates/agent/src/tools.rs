@@ -8184,6 +8184,15 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             },
         )
     };
+    // After the line has stopped, so every request its programs made has been decided. Taken
+    // whether or not the line ended well: a program that asked for a host and then failed has
+    // still asked.
+    if let Some(detail) = confinement
+        .as_ref()
+        .and_then(|confinement| confinement.hosts_for_the_trail(&plan.steps()))
+    {
+        policy.record_hosts(detail);
+    }
     // A proof about inputs before execution cannot label output captured beside a write.
     // Our own effect entries each advance the revision once and are accounted for separately.
     let label = if authority.is_current(started_revision.wrapping_add(effects.len() as u64)) {
