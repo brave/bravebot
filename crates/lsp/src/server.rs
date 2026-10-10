@@ -1099,7 +1099,7 @@ impl Server {
             return self.send_open(path, uri);
         };
         let text = std::fs::read_to_string(path).map_err(|e| LspError::Transport {
-            language: self.language,
+            language: self.served.clone(),
             detail: format!("could not read {path} to send it: {e}"),
         })?;
         self.notify(
@@ -1615,9 +1615,23 @@ impl Servers {
         server.ask(question)
     }
 
-    /// Whether a server is running for this file's language.
+    /// Whether a server is running for this file, whether from the table or declared.
     pub fn covers(&self, path: &str) -> bool {
-        Language::for_path(path).is_some_and(|language| self.running.contains_key(&language))
+        self.key_for(path)
+            .is_some_and(|key| self.running.contains_key(&key))
+    }
+
+    /// The key of the server a file is routed to, decided from the path alone as [`Self::target`]
+    /// does and with the same precedence: a declaration naming the extension first, then the table.
+    fn key_for(&self, path: &str) -> Option<Key> {
+        if let Some(declared) = self
+            .declared
+            .iter()
+            .find(|declared| declared.serves(path).is_some())
+        {
+            return Some(Key::Declared(declared.digest.clone()));
+        }
+        Language::for_path(path).map(Key::Builtin)
     }
 
     /// What a running server says is wrong with a file just written, or `None` where there is
@@ -1637,7 +1651,8 @@ impl Servers {
         if !policy.holds_capability(Capability::LanguageServer) {
             return None;
         }
-        let server = self.running.get_mut(&Language::for_path(path)?)?;
+        let key = self.key_for(path)?;
+        let server = self.running.get_mut(&key)?;
         // Recorded as the capability use it is, and only now that a server is there to use.
         if let Err(denial) = policy.before_capability(Capability::LanguageServer) {
             return Some(Err(LspError::Denied(denial)));
