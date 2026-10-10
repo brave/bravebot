@@ -21224,6 +21224,40 @@ mod tests {
         );
     }
 
+    /// A `!!` line queued behind a turn comes out of the queue as the private action, the one whose
+    /// output is drawn and never recorded.
+    ///
+    /// Rejects: `queued_next` returning `Action::Run` for a queued private line, which would put the
+    /// output of a line the person asked to keep private into the conversation.
+    #[test]
+    fn the_private_command_line_queued_while_a_turn_ran_is_run_privately() {
+        let mut session = Session::new("none");
+        // Both markers are typed at rest, since `!` arms nothing mid-turn.
+        type_line(&mut session, "!!");
+        assert!(session.shell_private(), "the second marker did not take");
+        session.status = Status::Working;
+
+        for c in "cat .env".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.queued.len(), 1, "the command line is not waiting");
+        assert_eq!(
+            queued_next(&mut session),
+            None,
+            "it ran while the turn was still running"
+        );
+
+        session.status = Status::Idle;
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::RunPrivately("cat .env".to_string())),
+            "a queued private line was not run privately"
+        );
+        assert!(session.queued.is_empty(), "it is still waiting");
+        assert_eq!(queued_next(&mut session), None, "it ran twice");
+    }
+
     /// The mode lasts one command line, whether that line ran at once or waited for a turn. Left
     /// armed over an emptied box it would claim whatever was typed next, which is the reason `!`
     /// itself is refused mid-turn: nobody armed a mode over a sentence they have not written yet.
