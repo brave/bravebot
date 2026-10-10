@@ -289,6 +289,14 @@ pub struct Policy<'sink, S: Sink> {
     /// the workspace does. [`Policy::integrity_in_force`] is where that happens, and it is the only
     /// thing this field is for.
     scratch: Option<std::path::PathBuf>,
+    /// The directories of the user's own skills that this turn has loaded, spelled as the host
+    /// names them.
+    ///
+    /// Added only by [`Policy::reach_skill_directory`], one at a time as `load_skill` answers, so a
+    /// directory is here because a skill was loaded out of it this turn and for no other reason.
+    /// [`Policy::integrity_in_force`] reads it, and the workspace reads it to know where a read
+    /// may land outside the project.
+    skill_reach: Vec<std::path::PathBuf>,
     /// Whether the host separates one segment of a path from the next with a backslash as well as
     /// with a slash, which decides how a name is spelled before the map is asked about it
     /// ([`crate::spelling::to_key`]). Supplied by the caller, since this crate asks the host
@@ -468,6 +476,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             trust: crate::file_authority::FileAuthority::new(TrustStore::new("/")),
             root: None,
             scratch: None,
+            skill_reach: Vec::new(),
             backslash_separates: false,
             programs: crate::programs::TrustedPrograms::new(),
             asked: crate::programs::AskedAbout::new(),
@@ -1174,12 +1183,61 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// gives.
     fn integrity_in_force(&self, path: &str) -> Option<Integrity> {
         let path = &*self.keyed(path);
+        // Provenance, not the map: the user's own skill directory is trusted for being the user's
+        // own (SKILL-3), and the map is keyed by workspace-relative paths and has nothing to say
+        // about it (TRUST-11).
+        if self.is_loaded_skill_file(path) {
+            return Some(Integrity::Trusted);
+        }
         let assumed = if self.is_scratch(path) {
             self.trust.integrity_of("")
         } else {
             None
         };
         self.trust.integrity_of_or(path, assumed)
+    }
+
+    /// Whether the key `path` lands in a directory a skill was loaded out of this turn.
+    ///
+    /// A key holding `..` is not, as for [`Policy::is_scratch`]: matching by component would take a
+    /// name that climbs out of the directory for one inside it.
+    fn is_loaded_skill_file(&self, path: &str) -> bool {
+        let path = std::path::Path::new(path);
+        if path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return false;
+        }
+        self.skill_reach.iter().any(|directory| {
+            path.starts_with(std::path::Path::new(
+                &*self.keyed(&directory.to_string_lossy()),
+            ))
+        })
+    }
+
+    /// Record that a skill of the user's own was loaded out of `directory`, so the files beside its
+    /// `SKILL.md` may be read for the rest of the turn and are labelled by where they are.
+    ///
+    /// Only for a directory under `~/.bravebot/skills`, which is trusted by provenance. It is never
+    /// asked of a project's skill directory, which the trust map governs like any other file of the
+    /// project, and nothing a file or a planner said is the argument: the caller is `load_skill`,
+    /// naming a directory the driver found before the turn began.
+    pub fn reach_skill_directory(&mut self, directory: &std::path::Path) {
+        self.allow(
+            "provenance",
+            format!(
+                "{}: files beside the loaded skill are read as trusted, from the user's own \
+                 configuration directory",
+                directory.display()
+            ),
+        );
+        self.skill_reach.push(directory.to_path_buf());
+    }
+
+    /// The directories of the user's own skills loaded this turn, which a read may land in.
+    pub fn loaded_skill_directories(&self) -> &[std::path::PathBuf] {
+        &self.skill_reach
     }
 
     /// [`Policy::integrity_in_force`] for a whole subtree, which is what a command line's read set

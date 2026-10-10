@@ -878,6 +878,11 @@ The name selects from a set fixed before the turn started and **never becomes a 
 `../` matches nothing and the call is refused. A name close to a real one is refused rather than
 guessed at. See [Skills](../customize/skills.md).
 
+Where the skill keeps other files beside its `SKILL.md`, the result ends with the skill's directory
+and their names. Once a skill of your own is loaded, [`read_file`](#read_file) can read those files
+for the rest of the turn; a project's skill is read through the trust map like any other file in the
+project.
+
 ## `ask_user`
 
 Puts up to four questions to you and waits. More than four is refused whole rather than trimmed.

@@ -9298,7 +9298,25 @@ fn load_skill<S: Sink>(
     let note = note_for(policy, "load_skill", skill.body(), |text: String| {
         tally(text.lines().count(), "line", "lines")
     });
-    let mut produced = Produced::new(skill.body().clone(), skill.origin.clone(), note);
+    // The files beside the skill, as the driver found them before the turn began (LOAD-4). A name is
+    // written into the result in the kernel, after the body, so the body keeps the label it was read
+    // with and the names are the driver's own list and never a lookup of the planner's.
+    let body = match (&skill.directory, skill.files.is_empty()) {
+        (Some(directory), false) => {
+            let listing = beside_the_skill(directory, &skill.files);
+            policy.render_in_place("load_skill", skill.body(), |text| {
+                format!("{text}{listing}")
+            })
+        }
+        _ => skill.body().clone(),
+    };
+    // The way into those files for a skill of the user's own: a read of one, which no read reaches
+    // otherwise. For a project's skill the files are inside the workspace already and the trust map
+    // decides each, as it does any other read.
+    if let Some(reach) = skill.reach() {
+        policy.reach_skill_directory(reach);
+    }
+    let mut produced = Produced::new(body, skill.origin.clone(), note);
     produced.skill = Some(skill.name.clone());
     // Carried out rather than acted on here. The rounds after this one are the turn's to ask, and a
     // skill that named neither carries nothing, so a turn holding no answer is a turn with nothing
@@ -9307,6 +9325,25 @@ fn load_skill<S: Sink>(
         produced.loaded = Some((skill.name.clone(), skill.runs_as.clone()));
     }
     produced
+}
+
+/// What follows a skill's body when it keeps other files beside its `SKILL.md`.
+///
+/// This process's own words around names the driver listed. The files are read with `read_file`,
+/// naming the directory and then the file, and nothing here is a path the planner could not have
+/// typed already.
+fn beside_the_skill(directory: &str, files: &[String]) -> String {
+    let mut listing = format!(
+        "\n\n---\nFiles kept beside this skill in {directory}. Read one with read_file, \
+         naming the directory and the file, for example {directory}/{}:\n",
+        files[0]
+    );
+    for file in files {
+        listing.push_str("- ");
+        listing.push_str(file);
+        listing.push('\n');
+    }
+    listing
 }
 
 /// Load a tool of an MCP server out of the ones a person vouched for (SERVERS-16).
@@ -16165,5 +16202,350 @@ mod tests {
                  a file from nothing, write it yourself with write_file."
             );
         }
+    }
+    #[cfg(unix)]
+    use arguments::{Scratch as ArgumentsScratch, told, with_tools};
+    #[cfg(unix)]
+    use bravebot_core::capability::{Capability, CapabilitySet};
+    #[cfg(unix)]
+    use bravebot_core::event::RecordingSink;
+    #[cfg(unix)]
+    use bravebot_core::policy::{ReleasePlan, Routing};
+    #[cfg(unix)]
+    use bravebot_core::trust::TrustStore;
+
+    #[cfg(unix)]
+    const SKILL_FILE_MARKER: &str = "REFERENCE-BESIDE-THE-SKILL";
+
+    /// A home holding the skill `notes` with files beside it, a file beside the home skill
+    /// `other` that nothing loads, and a secret outside every skill directory; and a project
+    /// beside it. `~` in a path names this home.
+    #[cfg(unix)]
+    struct SkillFixture {
+        /// Held for its removal of the directory when the test ends.
+        _scratch: ArgumentsScratch,
+        home: std::path::PathBuf,
+        project: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl SkillFixture {
+        fn new(name: &str) -> Self {
+            let scratch = ArgumentsScratch::new(name);
+            let home = scratch.path.join("h");
+            let project = scratch.path.join("project");
+            for (skill, files) in [
+                ("notes", &["reference.md", "scripts/helper.sh"][..]),
+                ("other", &["unloaded.md"][..]),
+            ] {
+                let at = home.join(".bravebot/skills").join(skill);
+                std::fs::create_dir_all(at.join("scripts")).unwrap();
+                std::fs::write(
+                    at.join("SKILL.md"),
+                    format!("---\nname: {skill}\ndescription: d\n---\nbody of {skill}\n"),
+                )
+                .unwrap();
+                for file in files {
+                    std::fs::write(at.join(file), format!("{SKILL_FILE_MARKER} {file}\n")).unwrap();
+                }
+            }
+            std::fs::write(home.join("secret.md"), "OUTSIDE-EVERY-SKILL\n").unwrap();
+            std::os::unix::fs::symlink(
+                home.join("secret.md"),
+                home.join(".bravebot/skills/notes/escape.md"),
+            )
+            .unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            Self {
+                _scratch: scratch,
+                home,
+                project,
+            }
+        }
+
+        fn workspace(&self) -> Workspace {
+            Workspace::new(&self.project)
+                .expect("workspace")
+                .with_home(Some(self.home.clone()))
+        }
+
+        fn catalogue(&self, workspace: &Workspace) -> crate::skills::Catalogue {
+            crate::skills::resolved(
+                workspace,
+                Some(&self.home.join(".bravebot")),
+                TrustStore::new("/work"),
+                bravebot_core::permissions::Permissions::default(),
+                &mut RecordingSink::new(),
+            )
+        }
+    }
+
+    #[cfg(unix)]
+    fn skill_policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "read a skill's files");
+        Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+            sink,
+        )
+        .expect("policy")
+        .with_trust(TrustStore::new("/work"))
+    }
+
+    /// `read_file` or `write_file` through dispatch, the door a planner uses.
+    #[cfg(unix)]
+    fn skill_call(
+        policy: &mut Policy<'_, RecordingSink>,
+        workspace: &Workspace,
+        tool: &str,
+        arguments: Value,
+    ) -> (bool, bool, String) {
+        let call: ToolCall = serde_json::from_value(json!({
+            "id": "a",
+            "function": {"name": tool, "arguments": arguments.to_string()}
+        }))
+        .expect("a call");
+        let produced = with_tools(workspace, |tools| {
+            dispatch(
+                policy,
+                tools,
+                &mut crate::confirm::ApproveWrites,
+                &mut crate::report::IgnoreReports,
+                &call,
+            )
+        });
+        let trusted = produced.deferred.is_none() && produced.text.label().is_trusted();
+        let said = told(policy, &produced.text);
+        let failed = said.starts_with("error:") || said.starts_with("refused:");
+        (failed, trusted, said)
+    }
+
+    #[cfg(unix)]
+    fn load_named(
+        policy: &mut Policy<'_, RecordingSink>,
+        catalogue: &crate::skills::Catalogue,
+        name: &str,
+    ) -> String {
+        let produced = load_skill(policy, catalogue, &json!({ "name": name }));
+        assert!(!produced.failed, "the skill did not load");
+        told(policy, &produced.text)
+    }
+
+    /// The regression it rejects: a skill's sibling file being readable before the skill is
+    /// loaded, never being readable, or being read as quarantined (a map answering about a
+    /// directory it does not govern). A skill that is not loaded is the control, so reach that
+    /// was granted to every skill in the directory would pass the first assertion only.
+    #[cfg(unix)]
+    #[test]
+    fn a_home_skills_sibling_file_is_readable_after_it_is_loaded_and_not_before() {
+        let fixture = SkillFixture::new("skill-files-read");
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        let read = |policy: &mut Policy<'_, RecordingSink>, path: &str| {
+            skill_call(policy, &workspace, "read_file", json!({ "path": path }))
+        };
+
+        let (failed, _, before) = read(&mut policy, "~/.bravebot/skills/notes/reference.md");
+        assert!(
+            failed && !before.contains(SKILL_FILE_MARKER),
+            "read before load: {before}"
+        );
+
+        let loaded = load_named(&mut policy, &catalogue, "notes");
+        assert!(
+            loaded.contains("~/.bravebot/skills/notes")
+                && loaded.contains("- reference.md\n")
+                && loaded.contains("- scripts/helper.sh\n"),
+            "the listing is missing: {loaded}"
+        );
+
+        let (failed, trusted, after) = read(&mut policy, "~/.bravebot/skills/notes/reference.md");
+        assert!(
+            !failed && after.contains(SKILL_FILE_MARKER),
+            "read after load: {after}"
+        );
+        assert!(
+            trusted,
+            "the file was labelled by the map, not by provenance"
+        );
+
+        let (failed, _, nested) = read(&mut policy, "~/.bravebot/skills/notes/scripts/helper.sh");
+        assert!(
+            !failed && nested.contains(SKILL_FILE_MARKER),
+            "nested: {nested}"
+        );
+
+        let (failed, _, other) = read(&mut policy, "~/.bravebot/skills/other/unloaded.md");
+        assert!(
+            failed && !other.contains(SKILL_FILE_MARKER),
+            "a skill nobody loaded was reached: {other}"
+        );
+    }
+
+    /// The regression it rejects: the reach being a general opening of the directory, so a
+    /// planner writes into the user's own configuration or climbs out of the skill's directory.
+    #[cfg(unix)]
+    #[test]
+    fn reaching_a_loaded_skills_files_is_for_reading_inside_the_directory_only() {
+        let fixture = SkillFixture::new("skill-files-confined");
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        load_named(&mut policy, &catalogue, "notes");
+
+        let target = fixture.home.join(".bravebot/skills/notes/reference.md");
+        let (failed, _, said) = skill_call(
+            &mut policy,
+            &workspace,
+            "write_file",
+            json!({"path": target.to_string_lossy(), "contents": "planted"}),
+        );
+        assert!(failed, "a write beside a loaded skill was accepted: {said}");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            format!("{SKILL_FILE_MARKER} reference.md\n"),
+            "the file was changed"
+        );
+
+        for path in [
+            "~/.bravebot/skills/notes/../../../secret.md",
+            "~/.bravebot/skills/notes/escape.md",
+            "~/secret.md",
+        ] {
+            let (failed, _, said) = skill_call(
+                &mut policy,
+                &workspace,
+                "read_file",
+                json!({ "path": path }),
+            );
+            assert!(
+                failed && !said.contains("OUTSIDE-EVERY-SKILL"),
+                "{path} reached a file outside the skill's directory: {said}"
+            );
+        }
+    }
+
+    /// The regression it rejects: a setting that keeps the file tools inside the project (PERM-16)
+    /// being bypassed by the reach a load grants.
+    #[cfg(unix)]
+    #[test]
+    fn a_load_does_not_widen_a_session_kept_inside_its_project() {
+        let fixture = SkillFixture::new("skill-files-kept-inside");
+        let workspace = fixture.workspace().with_reads_kept_inside(true);
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+        load_named(&mut policy, &catalogue, "notes");
+
+        let (failed, _, said) = skill_call(
+            &mut policy,
+            &workspace,
+            "read_file",
+            json!({"path": "~/.bravebot/skills/notes/reference.md"}),
+        );
+        assert!(failed && !said.contains(SKILL_FILE_MARKER), "{said}");
+    }
+
+    /// The regression it rejects: a listing that follows a link out of the directory, names the
+    /// skill's own file, or names a file a deny rule covers. The skill is listed with the file
+    /// beside it as the control, since an empty listing would pass every "not named" check.
+    #[cfg(unix)]
+    #[test]
+    fn the_listing_names_regular_files_inside_the_directory_and_nothing_a_rule_covers() {
+        let fixture = SkillFixture::new("skill-files-listing");
+        let workspace = fixture.workspace();
+        let (rules, rejected) = bravebot_core::permissions::Permissions::parse(
+            &["Read(~/.bravebot/skills/notes/scripts/**)".to_string()],
+            &[],
+            &[],
+            &bravebot_core::permissions::Anchors {
+                home: Some(fixture.home.to_string_lossy().into_owned()),
+                ..bravebot_core::permissions::Anchors::none()
+            },
+        );
+        assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+        let all = fixture.catalogue(&workspace);
+        let covered = crate::skills::resolved(
+            &workspace,
+            Some(&fixture.home.join(".bravebot")),
+            TrustStore::new("/work"),
+            rules,
+            &mut RecordingSink::new(),
+        );
+
+        let files = |catalogue: &crate::skills::Catalogue| {
+            catalogue.get("notes").expect("offered").files.clone()
+        };
+        assert_eq!(files(&all), ["reference.md", "scripts/helper.sh"]);
+        assert_eq!(
+            files(&covered),
+            ["reference.md"],
+            "a file a deny rule covers was named"
+        );
+    }
+
+    /// The regression it rejects: a listing that renders a name lossily, so a file whose name is
+    /// not text is listed under the replacement-character name of a different file (PATH-003).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_listing_leaves_out_a_name_that_is_not_text_and_does_not_merge_it_with_its_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let fixture = SkillFixture::new("skill-files-not-text");
+        let workspace = fixture.workspace();
+        let beside = fixture.home.join(".bravebot/skills/notes");
+        std::fs::write(beside.join(std::ffi::OsStr::from_bytes(b"x-\xff")), "x").unwrap();
+        std::fs::write(beside.join("x-\u{FFFD}"), "x").unwrap();
+
+        let catalogue = fixture.catalogue(&workspace);
+        let files = &catalogue.get("notes").expect("offered").files;
+        assert_eq!(
+            files
+                .iter()
+                .filter(|name| name.as_str() == "x-\u{FFFD}")
+                .count(),
+            1,
+            "{files:?}"
+        );
+        assert_eq!(files.len(), 3, "{files:?}");
+    }
+
+    /// The regression it rejects: a project's skill naming a file the trust map does not vouch
+    /// for (a name is content), or being handed the provenance reach that is for the user's own.
+    #[cfg(unix)]
+    #[test]
+    fn a_project_skill_lists_only_the_files_the_trust_map_vouches_for() {
+        let fixture = SkillFixture::new("skill-files-project");
+        let at = fixture.project.join(".bravebot/skills/lint");
+        std::fs::create_dir_all(at.join("vetted")).unwrap();
+        std::fs::create_dir_all(at.join("unvetted")).unwrap();
+        std::fs::write(
+            at.join("SKILL.md"),
+            "---\nname: lint\ndescription: d\n---\nbody\n",
+        )
+        .unwrap();
+        std::fs::write(at.join("vetted/a.md"), "a").unwrap();
+        std::fs::write(at.join("unvetted/b.md"), "b").unwrap();
+        let workspace = fixture.workspace();
+        let mut store = TrustStore::new("/work");
+        store.trust(".bravebot/skills");
+        store.distrust(".bravebot/skills/lint/unvetted");
+        let catalogue = crate::skills::resolved(
+            &workspace,
+            None,
+            store,
+            bravebot_core::permissions::Permissions::default(),
+            &mut RecordingSink::new(),
+        );
+
+        let skill = catalogue.get("lint").expect("offered");
+        assert_eq!(skill.files, ["vetted/a.md"]);
+        assert_eq!(skill.directory.as_deref(), Some(".bravebot/skills/lint"));
+        assert!(skill.reach().is_none(), "a project skill was given reach");
     }
 }
