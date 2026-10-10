@@ -1327,15 +1327,12 @@ fn draw_run(
             format!("     {}", t!(run_keep_reach_lifetimes)),
             Style::default().fg(theme::muted()),
         )));
-        let toolchains = request.requested_toolchains();
-        if !toolchains.is_empty() {
+        let asked_again = request.requested_not_remembered();
+        if !asked_again.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!(
                     "     {}",
-                    t!(
-                        run_keep_reach_toolchains,
-                        toolchains = toolchains.join(", ")
-                    )
+                    t!(run_keep_reach_asked_again, names = asked_again.join(", "))
                 ),
                 Style::default().fg(theme::muted()),
             )));

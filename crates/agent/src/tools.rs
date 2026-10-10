@@ -955,8 +955,8 @@ fn table(
                         "items": { "type": "string", "enum": bravebot_sandbox::scope::Requested::MENU },
                         "description": "Credential scopes and toolchain lists to add to every \
                                         stage of this one line, by name from the list given, for \
-                                        a script that runs `gh`, `aws` or a build inside it and \
-                                        so shows no operation of its own. Only where the session \
+                                        a script that runs `gh`, `aws`, `git commit` or a build inside it \
+                                        and so shows no operation of its own. Only where the session \
                                         is told it accepts them. The user is asked about the line \
                                         every time with the names shown, and no answer to it is \
                                         remembered. A name outside the list is an error."

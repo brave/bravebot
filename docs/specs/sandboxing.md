@@ -709,8 +709,10 @@ credential location other than `~/.ssh`. A private key, a name nothing is at, a 
 holding `..`, a file outside the home and a link that leads out of those places are refused, and
 the stage is told so in the profile line without the value, since the signature then fails. `git
 pull` merges or rebases and signs the commit it makes, so the remote scope reads the same file. The
-scope is not on the menu of [SANDBOX-26](#SANDBOX-26): a line carries it by its argv and the planner
-never names it. The configuration limits are these: `-S<key>` and `--gpg-sign=<key>` in the argv do
+scope is also on the menu of [SANDBOX-26](#SANDBOX-26), for a script that runs `git commit` or `git
+rebase` inside it and so shows no operation of its own: a request for `signing` reads the same file
+and lends the same agent socket, to a person whose git signs with ssh only, and it is the only scope `/reach` does not name and
+[SANDBOX-27](#SANDBOX-27) does not remember. The configuration limits are these: `-S<key>` and `--gpg-sign=<key>` in the argv do
 not move the key that is read, and a hook or a `gpg.ssh.program` the plan wrote into `.git` runs
 with the scope, as one runs with the remote scope.
 
@@ -816,7 +818,7 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_sandbox::scope::an_operation_that_signs_carries_the_signing_scope`
 `verified-by: bravebot_sandbox::scope::a_signing_operation_that_names_a_program_carries_nothing`
 `verified-by: bravebot_sandbox::scope::signing_does_not_change_the_other_scopes`
-`verified-by: bravebot_sandbox::scope::signing_cannot_be_named`
+`verified-by: bravebot_sandbox::scope::signing_can_be_requested_and_not_remembered`
 `verified-by: bravebot_sandbox::scope::the_signing_scope_reads_the_public_key_and_nothing_else`
 `verified-by: bravebot_sandbox::scope::the_signing_scope_reads_nothing_where_the_key_is_refused_or_signing_is_off`
 `verified-by: bravebot_sandbox::scope::the_remote_scope_reads_the_signing_key_as_well`
@@ -1692,12 +1694,13 @@ because the path it names is the one the person was protecting.
 <a id="SANDBOX-26"></a>
 ### SANDBOX-26: a `run` call may ask for a credential scope or a toolchain list by name, and the person is asked every time
 
-`run` takes an optional `scopes`: an array of names from the fixed menu `remote`, `aws`,
+`run` takes an optional `scopes`: an array of names from the fixed menu `remote`, `signing`, `aws`,
 `kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven` and `gradle`. It is for the line
 whose argv shows no operation to key a scope on ([SANDBOX-16](#SANDBOX-16)), a script that runs
-`gh` or `cargo` inside it. Each name is the scope or toolchain list of the same name, with the rows,
-the egress under a closed network ([SANDBOX-20](#SANDBOX-20)) and the ssh agent socket that scope
-has when a stage's argv names it, and the places the environment moves its tool's configuration to
+`gh` or `cargo` inside it, or `git rebase` that signs what it rewrites. Each name is the scope or
+toolchain list of the same name, with the rows, the egress under a closed network
+([SANDBOX-20](#SANDBOX-20)) and the ssh agent socket that scope has when a stage's argv names it
+(`remote` and `signing` both have one), and the places the environment moves its tool's configuration to
 ([SANDBOX-16](#SANDBOX-16)), each named in the prompt with its variable. It is added to every stage
 of the line that has no `NAME=value` in front of it. A name outside the menu, compared exactly, is an error and nothing runs: `root`,
 `Remote` and the empty string are not requests for less.
@@ -1733,6 +1736,7 @@ for a different line.
 
 `verified-by: bravebot_sandbox::scope::a_request_is_a_word_of_the_menu_and_nothing_near_it`
 `verified-by: bravebot_sandbox::scope::the_menu_is_every_scope_and_every_toolchain`
+`verified-by: bravebot_sandbox::scope::signing_can_be_requested_and_not_remembered`
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_remembered_line_that_asks_for_a_scope_is_asked_about_anyway`
 `verified-by: bravebot_core::policy::a_requested_scope_leaves_a_trail`
@@ -1743,6 +1747,8 @@ for a different line.
 `verified-by: bravebot_agent::confine::a_request_is_kept_once_in_the_menus_order`
 `verified-by: bravebot_agent::confine::the_description_names_each_requested_scope_and_the_stage_it_is_for`
 `verified-by: bravebot_agent::confine::a_strict_stage_that_asked_for_a_scope_reads_that_credential_only`
+`verified-by: bravebot_agent::confine::a_stage_that_asked_for_signing_is_lent_the_key_and_the_agent`
+`verified-by: bravebot_agent::confine::a_request_for_signing_over_a_key_no_scope_reads_is_explained`
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
 `verified-by: bravebot_agent::turn::a_standing_answer_to_a_request_remembers_nothing`
@@ -1769,8 +1775,8 @@ person reads, and a session that asks for nothing is not asked about it.
   starts with an option has no operation to key on, so the line is offered neither key. The keys are
   unbound where they are not drawn, and the acting layer works the shapes out again from the plan and
   the closed scope table rather than from what was drawn.
-- A toolchain list is never remembered, whether it was asked for alone or beside a scope. The prompt
-  says so.
+- A toolchain list is never remembered, whether it was asked for alone or beside a scope, and nor
+  is the `signing` scope, which `/reach` has no name for. The prompt says so.
 - The line that asked is still asked about every time, with the remembered scope shown on it, and
   neither key vouches for a program, records the line or stops the asking; what it prints is
   quarantined as it was ([SANDBOX-26](#SANDBOX-26)).
@@ -1792,6 +1798,7 @@ more than the person read.
 `verified-by: bravebot_agent::turn::keeping_a_request_for_the_session_remembers_the_scope_for_that_session_only`
 `verified-by: bravebot_agent::turn::keeping_a_request_for_every_session_is_read_by_another_session`
 `verified-by: bravebot_agent::turn::keeping_a_request_leaves_a_toolchain_out`
+`verified-by: bravebot_agent::turn::a_request_for_signing_is_asked_about_and_never_remembered`
 `verified-by: bravebot_agent::turn::keeping_a_request_writes_nothing_where_it_was_not_offered_or_was_refused`
 `verified-by: bravebot_tui::confirm::the_keep_keys_approve_and_remember_the_reach_only`
 `verified-by: bravebot_tui::confirm::the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them`
