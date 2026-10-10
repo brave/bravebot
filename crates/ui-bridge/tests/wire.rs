@@ -710,6 +710,11 @@ fn a_stage_started_through_a_link_sends_the_link() {
     let value = wire::run_request(1, &request);
     assert_eq!(value["stages"][0]["resolved"], "/usr/bin/python3.12");
     assert_eq!(value["stages"][0]["startedAs"], "/w/.venv/bin/python");
+    assert_eq!(
+        value["stages"][0]["binary"],
+        "/w/.venv/bin/python -> /usr/bin/python3.12"
+    );
+    assert!(value["confinement"].is_null());
 }
 
 #[test]

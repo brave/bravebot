@@ -58,7 +58,11 @@ declared in a person's own directory and asked about before it starts.
 
 Every question a turn raises that is a permission is sent as `session/request_permission`, carrying
 what the drawn prompt shows: the call, its target, and the change, the command, the address, the
-server or the tools, in the lines the terminal draws for them. Content nobody vouched for, which is
+server or the tools, in the lines the terminal draws for them. Those lines are worded once, in
+`bravebot-approval`, and the terminal and this side both call that crate. What the agent words in
+its own catalog (the confinement a run is under, and the sentence for each access a run reaches)
+crosses the bridge as the sentence or as a name this side maps back, and a name it does not know
+refuses the question. Content nobody vouched for, which is
 a command's output, a file's text and what a server says about its tools, is behind the margin
 the terminal puts in front of it and has its control characters pictured. The text is sent as a
 code block no content of its own can end. The request as the bridge sent it is not sent, since
@@ -78,6 +82,8 @@ unreadable has the same effect as no answer.
 `verified-by: bravebot_ui_bridge::acp::a_cancelled_or_refusing_or_unlisted_answer_is_a_refusal`
 `verified-by: bravebot_ui_bridge::acp::a_standing_answer_to_a_question_that_offers_none_is_the_single_yes`
 `verified-by: bravebot_ui_bridge::acp::every_question_the_bridge_raises_is_shown_in_words`
+`verified-by: bravebot_ui_bridge::acp::a_write_question_reads_to_the_editor_as_it_reads_in_the_terminal`
+`verified-by: bravebot_ui_bridge::acp::the_other_questions_read_to_the_editor_as_they_read_in_the_terminal`
 `verified-by: bravebot_ui_bridge::acp::content_nobody_vouched_for_is_drawn_behind_the_margin_with_its_escapes_pictured`
 `verified-by: bravebot_ui_bridge::acp::a_question_it_cannot_show_is_refused_and_not_put_to_the_editor`
 `verified-by: bravebot_ui_bridge::acp::a_fence_is_longer_than_any_run_of_backticks_in_what_it_holds`

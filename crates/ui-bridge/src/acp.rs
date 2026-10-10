@@ -863,297 +863,221 @@ fn strings(list: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The rows of a question's text. A row the driver wrote has its control characters pictured, and
-/// content nobody vouched for goes behind the margin the terminal draws it behind.
-#[derive(Default)]
-struct Rows(Vec<String>);
-
-impl Rows {
-    fn say(&mut self, text: &str) {
-        if !text.is_empty() {
-            self.0.push(pictured(text));
-        }
-    }
-
-    fn field(&mut self, label: &str, value: &str) {
-        if !value.is_empty() {
-            self.say(&format!("{label}: {value}"));
-        }
-    }
-
-    fn list(&mut self, label: &str, items: &[String]) {
-        if !items.is_empty() {
-            self.say(&format!("{label}:"));
-            self.0
-                .extend(items.iter().map(|item| format!("  {}", pictured(item))));
-        }
-    }
-
-    fn quarantined(&mut self, content: &str) {
-        self.0.extend(bravebot_approval::quarantined(content));
-    }
-
-    /// What a check made of the content, which is advice and decides nothing. The verdict is the
-    /// driver's word and the reason is a checker's free text, so it goes behind the margin.
-    fn checked(&mut self, vetting: &Value) {
-        self.field(
-            "Automated check (advice, not a decision)",
-            vetting["verdict"].as_str().unwrap_or_default(),
-        );
-        if let Some(reason) = vetting["reason"].as_str() {
-            self.quarantined(reason);
-        }
-    }
-
-    /// What a line reaches that nothing here holds, which a yes grants.
-    fn ambient(&mut self, data: &Value) {
-        for spent in data["ambient"].as_array().into_iter().flatten() {
-            let authority = spent["authority"].as_str().unwrap_or_default();
-            let named = spent["named"].as_str().unwrap_or_default();
-            self.say(&format!("Reaches {authority} (named by {named})"));
-        }
-    }
-
-    fn text(self) -> String {
-        self.0.join("\n")
-    }
+fn text_of<'a>(data: &'a Value, key: &str) -> &'a str {
+    data[key].as_str().unwrap_or_default()
 }
 
-/// An argument list as one line, with an argument that holds a space quoted so it cannot read as
-/// two.
-fn argv(list: &Value) -> String {
-    strings(list)
-        .iter()
-        .map(|arg| {
-            if arg.is_empty() || arg.contains(char::is_whitespace) {
-                format!("{arg:?}")
-            } else {
-                arg.clone()
-            }
+/// What a check made of the content, read from the verdict word the bridge sent. The checker's own
+/// sentence is not read, for the reason the terminal leaves it out.
+fn check_of(data: &Value) -> bravebot_approval::Check {
+    bravebot_approval::Check::from_word(data["vetting"]["verdict"].as_str().unwrap_or_default())
+}
+
+/// The sentence for each access a line reaches that nothing holds. `None` where one is of a kind
+/// this side does not know, since a question that leaves one out is not the question that was asked.
+fn ambient_of(data: &Value) -> Option<Vec<String>> {
+    data["ambient"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|spent| {
+            let authority =
+                bravebot_core::ambient::Authority::from_name(spent["authority"].as_str()?)?;
+            Some(bravebot_agent::confirm::authority_sentence(
+                authority,
+                spent["named"].as_str().unwrap_or_default(),
+            ))
         })
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect()
 }
 
-/// A value the planner wrote, cut where it would be a wall of text.
-fn clipped(text: &str) -> String {
-    const MOST: usize = 2000;
-    match text.char_indices().nth(MOST) {
-        Some((at, _)) => format!(
-            "{}\u{2026} ({} more characters)",
-            &text[..at],
-            text[at..].chars().count()
-        ),
-        None => text.to_string(),
-    }
+fn run_text(data: &Value) -> Option<String> {
+    let steps: Vec<bravebot_approval::RunStep> = data["stages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|stage| bravebot_approval::RunStep {
+            written: text_of(stage, "display").to_string(),
+            binary: text_of(stage, "binary").to_string(),
+        })
+        .collect();
+    let confinement = data["confinement"].is_object().then(|| {
+        let confined = &data["confinement"];
+        bravebot_approval::Confinement {
+            heading: text_of(confined, "heading").to_string(),
+            directories: strings(&confined["directories"]),
+            sentences: strings(&confined["sentences"]),
+        }
+    });
+    Some(
+        bravebot_approval::run_lines(&bravebot_approval::Run {
+            summary: text_of(data, "summary"),
+            steps: &steps,
+            writes: &strings(&data["writes"]),
+            confinement: confinement.as_ref(),
+            ambient: &ambient_of(data)?,
+            releases_private: data["releasesPrivate"].as_bool() == Some(true),
+        })
+        .join("\n"),
+    )
+}
+
+fn vet_text(data: &Value) -> String {
+    let picture = data["picture"]["path"].as_str().map(|path| {
+        let pdf = data["picture"]["media"].as_str() == Some(bravebot_core::vetting::PDF);
+        (path, pdf)
+    });
+    bravebot_approval::vet_lines(&bravebot_approval::Vet {
+        summary: text_of(data, "summary"),
+        expects: text_of(data, "expects"),
+        check: check_of(data),
+        content: text_of(data, "content"),
+        picture: picture.map(|(path, pdf)| bravebot_approval::Picture { path, pdf }),
+    })
+    .join("\n")
+}
+
+fn tools_text(data: &Value) -> String {
+    let arguments: Vec<Vec<String>> = data["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|tool| strings(&tool["arguments"]))
+        .collect();
+    let tools: Vec<bravebot_approval::Tool<'_>> = data["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .zip(&arguments)
+        .map(|(tool, arguments)| bravebot_approval::Tool {
+            name: text_of(tool, "name"),
+            arguments,
+            description: tool["description"].as_str(),
+        })
+        .collect();
+    bravebot_approval::tools_lines(&bravebot_approval::Tools {
+        alias: text_of(data, "alias"),
+        tools: &tools,
+        refused: data["refused"].as_u64().map_or(0, |n| n as usize),
+        changed: data["changed"].as_bool() == Some(true),
+        check: check_of(data),
+    })
+    .join("\n")
+}
+
+fn call_text(data: &Value) -> String {
+    let arguments: Vec<(String, String)> = data["arguments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|argument| {
+            (
+                text_of(argument, "name").to_string(),
+                text_of(argument, "value").to_string(),
+            )
+        })
+        .collect();
+    bravebot_approval::call_lines(&bravebot_approval::Call {
+        name: text_of(data, "name"),
+        arguments: &arguments,
+        description: data["description"].as_str(),
+    })
+    .join("\n")
 }
 
 /// What a question is about, for a person reading it: a title, the kind of call, and the text the
-/// drawn prompt shows. `None` for a question there is no way to show.
+/// drawn prompt shows, which is the terminal's own lines for the same question. `None` for a
+/// question there is no way to show.
 fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> {
-    let text = |key: &str| data[key].as_str().unwrap_or_default();
-    let mut rows = Rows::default();
-    let (title, kind) = match stem {
-        "confirm" => {
-            rows.0.push(write_text(data));
-            (
-                format!(
-                    "{} {}",
-                    data["intent"].as_str().unwrap_or("write"),
-                    text("path")
-                ),
-                "edit",
+    let text = |key: &str| text_of(data, key);
+    let (title, kind, lines) = match stem {
+        "confirm" => (
+            format!(
+                "{} {}",
+                data["intent"].as_str().unwrap_or("write"),
+                text("path")
+            ),
+            "edit",
+            write_text(data),
+        ),
+        "run" => (format!("run {}", text("plan")), "execute", run_text(data)?),
+        "fetch" => (
+            format!("fetch {}", text("url")),
+            "fetch",
+            bravebot_approval::fetch_lines(
+                text("host"),
+                text("url"),
+                data["ambient"]
+                    .as_array()
+                    .is_some_and(|ambient| !ambient.is_empty()),
             )
-        }
-        "run" => {
-            rows.say(text("summary"));
-            for stage in data["stages"].as_array().into_iter().flatten() {
-                rows.say(stage["display"].as_str().unwrap_or_default());
-                if let Some(binary) = stage["resolved"].as_str() {
-                    rows.say(&format!("  {binary}"));
-                }
-            }
-            rows.field("In", text("directory"));
-            rows.list("Writes", &strings(&data["writes"]));
-            rows.field("Input from", data["stdin"].as_str().unwrap_or_default());
-            if data["releasesPrivate"].as_bool() == Some(true) {
-                rows.say("Sends private data to a program.");
-            }
-            rows.field(
-                "Asks to be lent",
-                &strings(&data["requestedScopes"]).join(", "),
-            );
-            rows.ambient(data);
-            (format!("run {}", text("plan")), "execute")
-        }
-        "fetch" => {
-            rows.say(text("summary"));
-            rows.field("URL", text("url"));
-            rows.field("Host", text("host"));
-            rows.ambient(data);
-            (format!("fetch {}", text("url")), "fetch")
-        }
-        "output" => {
-            rows.say(text("summary"));
-            rows.checked(&data["vetting"]);
-            rows.say("The output, as the model would read it:");
-            rows.quarantined(text("output"));
-            (format!("read the output of {}", text("command")), "read")
-        }
-        "vouch" => {
-            rows.field("File", text("path"));
-            rows.checked(&data["vetting"]);
-            let preview = text("preview");
-            if preview.is_empty() {
-                rows.say("Its text cannot be shown.");
-            } else if data["truncated"].as_bool() == Some(true) {
-                rows.say("The start of it, which is not all of it:");
-            } else {
-                rows.say("All of it:");
-            }
-            rows.quarantined(preview);
-            (format!("trust {}", text("path")), "read")
-        }
-        "vet" => {
-            rows.field("From", text("origin"));
-            rows.field("Expected", text("expects"));
-            rows.checked(&data["vetting"]);
-            if let Some(media) = data["picture"]["media"].as_str() {
-                let bytes = data["picture"]["bytes"].as_u64().unwrap_or_default();
-                rows.say(&format!(
-                    "A {media} of {bytes} bytes. Its content cannot be shown here."
-                ));
-            } else {
-                rows.quarantined(text("content"));
-            }
-            (format!("read {}", text("origin")), "read")
-        }
-        "manifest" => {
-            rows.field("Task", text("task"));
-            rows.say("Steps:");
-            for step in strings(&data["steps"]) {
-                rows.say(&format!("  {step}"));
-            }
-            (format!("run the plan for {}", text("task")), "execute")
-        }
-        "exposure" => {
-            rows.say(text("summary"));
-            rows.field("File", text("path"));
-            rows.list("The scan found", &strings(&data["credentials"]));
-            (
-                format!("read {}, which holds a credential", text("path")),
-                "read",
-            )
-        }
-        "server" => {
-            rows.say(text("summary"));
-            rows.field("Language", text("language"));
-            rows.field("Program", text("program"));
-            rows.field("Workspace", text("workspace"));
-            if data["runsBuildTooling"].as_bool() == Some(true) {
-                rows.say(
-                    "Starting it runs code from the dependency tree with your own access, as a build does.",
-                );
-            }
-            (
-                format!("start the {} language server", text("language")),
-                "execute",
-            )
-        }
-        "mcp-server" => {
-            rows.field("Server", text("alias"));
-            rows.field("Transport", text("transport"));
-            rows.field("Command", &argv(&data["command"]));
-            rows.field("URL", data["url"].as_str().unwrap_or_default());
-            rows.field("Program", data["program"].as_str().unwrap_or_default());
-            rows.field("Directory", data["directory"].as_str().unwrap_or_default());
-            let variables: Vec<String> = data["variables"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|variable| {
-                    let name = variable["name"].as_str().unwrap_or_default();
-                    if variable["stored"].as_bool() == Some(true) {
-                        format!("{name} (a value you stored)")
-                    } else {
-                        name.to_string()
-                    }
-                })
-                .collect();
-            rows.list("Receives", &variables);
-            rows.list("May read", &strings(&data["reads"]));
-            rows.field("Declaration", text("digest"));
-            rows.field(
-                "Requested by",
-                data["requestedBy"].as_str().unwrap_or_default(),
-            );
-            if data["changed"].as_bool() == Some(true) {
-                rows.say("Its declaration has changed since you last agreed to it.");
-            }
-            rows.list("It fetches what it runs", &strings(&data["fetching"]));
-            (format!("start the MCP server {}", text("alias")), "execute")
-        }
-        "mcp-tools" => {
-            rows.field("Server", text("alias"));
-            if data["changed"].as_bool() == Some(true) {
-                rows.say("This list differs from the one you agreed to before.");
-            }
-            if let Some(left_out) = data["refused"].as_u64().filter(|n| *n > 0) {
-                rows.say(&format!(
-                    "{left_out} more were not drawn, because they cannot be offered."
-                ));
-            }
-            rows.checked(&data["vetting"]);
-            let tools = data["tools"]
-                .as_array()
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            for tool in tools.iter().take(bravebot_approval::MOST_CONTENT_LINES) {
-                rows.say(tool["name"].as_str().unwrap_or_default());
-                rows.list("  Arguments", &strings(&tool["arguments"]));
-                if let Some(description) = tool["description"].as_str() {
-                    rows.quarantined(description);
-                }
-            }
-            if tools.len() > bravebot_approval::MOST_CONTENT_LINES {
-                rows.say(&format!(
-                    "{} more tools",
-                    tools.len() - bravebot_approval::MOST_CONTENT_LINES
-                ));
-            }
-            (
-                format!("offer the tools of {} to the model", text("alias")),
-                "other",
-            )
-        }
-        "mcp-call" => {
-            rows.field("Tool", text("name"));
-            for argument in data["arguments"].as_array().into_iter().flatten() {
-                let name = argument["name"].as_str().unwrap_or_default();
-                rows.say(&format!(
-                    "  {name} = {}",
-                    clipped(&argument["value"].to_string())
-                ));
-            }
-            if let Some(description) = data["description"].as_str() {
-                rows.say("What the server says it does:");
-                rows.quarantined(description);
-            }
-            (format!("call {}", text("name")), "other")
-        }
-        "mcp-move" => {
-            rows.field("Server", text("alias"));
-            rows.field("Declared at", text("declared"));
-            rows.field("Its reply points to", text("destination"));
-            rows.field("Host it reaches", text("authority"));
-            (
-                format!("follow {} to {}", text("alias"), text("authority")),
-                "other",
-            )
-        }
+            .join("\n"),
+        ),
+        "output" => (
+            format!("read the output of {}", text("command")),
+            "read",
+            bravebot_approval::output_lines(text("summary"), check_of(data), text("output"))
+                .join("\n"),
+        ),
+        "vouch" => (
+            format!("trust {}", text("path")),
+            "read",
+            bravebot_approval::vouch_lines(text("path"), check_of(data), text("preview"))
+                .join("\n"),
+        ),
+        "vet" => (format!("read {}", text("origin")), "read", vet_text(data)),
+        "manifest" => (
+            format!("run the plan for {}", text("task")),
+            "execute",
+            bravebot_approval::manifest_lines(text("task"), &strings(&data["steps"])).join("\n"),
+        ),
+        "exposure" => (
+            format!("read {}, which holds a credential", text("path")),
+            "read",
+            bravebot_approval::exposure_lines(text("path"), &strings(&data["credentials"]))
+                .join("\n"),
+        ),
+        "server" => (
+            format!("start the {} language server", text("language")),
+            "execute",
+            bravebot_approval::server_lines(&bravebot_approval::Server {
+                summary: text("summary"),
+                program: text("program"),
+                workspace: text("workspace"),
+                runs_build_tooling: data["runsBuildTooling"].as_bool() == Some(true),
+            })
+            .join("\n"),
+        ),
+        "mcp-server" => (
+            format!("start the MCP server {}", text("alias")),
+            "execute",
+            strings(&data["lines"])
+                .iter()
+                .map(|line| pictured(line))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        "mcp-tools" => (
+            format!("offer the tools of {} to the model", text("alias")),
+            "other",
+            tools_text(data),
+        ),
+        "mcp-call" => (format!("call {}", text("name")), "other", call_text(data)),
+        "mcp-move" => (
+            format!("follow {} to {}", text("alias"), text("authority")),
+            "other",
+            bravebot_approval::move_lines(&bravebot_approval::Move {
+                alias: text("alias"),
+                declared: text("declared"),
+                destination: text("destination"),
+                authority: text("authority"),
+                may_record: data["mayRecord"].as_bool() == Some(true),
+            })
+            .join("\n"),
+        ),
         _ => return None,
     };
-    Some((plain(&title), kind, rows.text()))
+    Some((plain(&title), kind, lines))
 }
 
 #[cfg(test)]
@@ -1254,6 +1178,121 @@ mod tests {
         assert!(expected.contains("\u{241b}[2J") && !expected.contains('\u{1b}'));
     }
 
+    /// Run, fetch, server, call and move read to the editor as `bravebot_approval` words them from
+    /// the same typed requests the terminal holds, so a field the wire drops shows as a difference.
+    #[test]
+    fn the_other_questions_read_to_the_editor_as_they_read_in_the_terminal() {
+        use bravebot_agent::confirm::{
+            FetchRequest, McpCallRequest, MoveRequest, RunRequest, ServerRequest,
+        };
+        use bravebot_core::command::{Pipeline, Stage};
+
+        let pipeline = Pipeline::new(vec![Stage::new("docker", vec!["ps".into()])]);
+        let run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/docker".into()], "/w");
+        let steps: Vec<_> = run
+            .plan
+            .steps()
+            .iter()
+            .map(|stage| bravebot_approval::RunStep {
+                written: stage.as_written(),
+                binary: stage.binary(),
+            })
+            .collect();
+        let ambient: Vec<String> = run
+            .ambient_authority()
+            .iter()
+            .map(|spent| bravebot_agent::confirm::authority_sentence(spent.authority, spent.named))
+            .collect();
+        assert!(
+            !ambient.is_empty(),
+            "the fixture reaches no ambient authority"
+        );
+        let expected = bravebot_approval::run_lines(&bravebot_approval::Run {
+            summary: "",
+            steps: &steps,
+            writes: &[],
+            confinement: None,
+            ambient: &ambient,
+            releases_private: run.releases_private(),
+        })
+        .join("\n");
+        let mut data = crate::wire::run_request(1, &run);
+        data["summary"] = json!("");
+        assert_eq!(run_text(&data).as_deref(), Some(expected.as_str()));
+
+        let mut unknown = data.clone();
+        unknown["ambient"][0]["authority"] = json!("something-new");
+        assert!(describe("run", &unknown).is_none());
+
+        let fetch = FetchRequest {
+            url: "http://169.254.169.254/latest".into(),
+            host: "169.254.169.254".into(),
+        };
+        let metadata = fetch.ambient_authority().is_some();
+        assert!(metadata, "the fixture is not a metadata service");
+        let (_, _, text) = shown("fetch", crate::wire::fetch_request(2, &fetch));
+        assert_eq!(
+            text,
+            bravebot_approval::fetch_lines(&fetch.host, &fetch.url, metadata).join("\n")
+        );
+
+        let server = ServerRequest {
+            language: "rust",
+            program: "/bin/rust-analyzer".into(),
+            workspace: "/w".into(),
+            runs_build_tooling: true,
+        };
+        let (_, _, text) = shown("server", crate::wire::server_request(3, &server));
+        assert_eq!(
+            text,
+            bravebot_approval::server_lines(&bravebot_approval::Server {
+                summary: &server.summary(),
+                program: &server.program,
+                workspace: &server.workspace,
+                runs_build_tooling: true,
+            })
+            .join("\n")
+        );
+
+        let call = McpCallRequest {
+            alias: "a".into(),
+            tool: "t".into(),
+            arguments: vec![("q".into(), "\"v\"".into())],
+            description: Some("does it".into()),
+            may_stand: false,
+        };
+        let (_, _, text) = shown("mcp-call", crate::wire::mcp_call_request(4, &call));
+        assert_eq!(
+            text,
+            bravebot_approval::call_lines(&bravebot_approval::Call {
+                name: &call.name(),
+                arguments: &call.arguments,
+                description: call.description.as_deref(),
+            })
+            .join("\n")
+        );
+
+        let moved = MoveRequest {
+            alias: "a".into(),
+            declared: "https://a.test/".into(),
+            destination: "https://b.test/".into(),
+            authority: "b.test".into(),
+            may_record: true,
+        };
+        let (_, _, text) = shown("mcp-move", crate::wire::mcp_move_request(5, &moved));
+        assert_eq!(
+            text,
+            bravebot_approval::move_lines(&bravebot_approval::Move {
+                alias: &moved.alias,
+                declared: &moved.declared,
+                destination: &moved.destination,
+                authority: &moved.authority,
+                may_record: true,
+            })
+            .join("\n")
+        );
+    }
+
     fn shown(stem: &str, data: Value) -> (String, &'static str, String) {
         describe(stem, &data).unwrap_or_else(|| panic!("`{stem}` has nothing to show"))
     }
@@ -1270,9 +1309,11 @@ mod tests {
             (
                 "run",
                 json!({"plan": "ls", "directory": "/w", "summary": "list", "stages": [
-                    {"display": "ls", "resolved": "/bin/ls"}], "writes": ["out"],
-                    "stdin": "file", "releasesPrivate": true, "requestedScopes": ["aws"],
-                    "ambient": [{"authority": "docker", "named": "docker"}]}),
+                    {"display": "ls", "resolved": "/bin/ls", "binary": "/bin/ls"}],
+                    "writes": ["out"], "stdin": "file", "releasesPrivate": true,
+                    "requestedScopes": ["aws"], "confinement": {"heading": "confined",
+                    "directories": ["/w"], "sentences": ["it reads /w"]},
+                    "ambient": [{"authority": "container-daemon", "named": "docker"}]}),
             ),
             (
                 "fetch",
@@ -1288,7 +1329,8 @@ mod tests {
             ),
             (
                 "vet",
-                json!({"origin": "o", "expects": "text", "content": "x", "vetting": vetting}),
+                json!({"origin": "o", "summary": "read o", "expects": "text", "content": "x",
+                    "vetting": vetting}),
             ),
             (
                 "exposure",
@@ -1304,7 +1346,7 @@ mod tests {
                 json!({"alias": "a", "transport": "stdio", "command": ["npx", "x y"],
                     "variables": [{"name": "TOKEN", "stored": true}], "reads": ["/r"],
                     "digest": "abc", "requestedBy": ".mcp.json", "changed": true,
-                    "fetching": ["npx fetches x"]}),
+                    "fetching": ["npx fetches x"], "lines": ["a runs npx", "it fetches x"]}),
             ),
             (
                 "mcp-tools",
@@ -1320,7 +1362,7 @@ mod tests {
             (
                 "mcp-move",
                 json!({"alias": "a", "declared": "https://a.test/", "destination": "https://b.test/",
-                    "authority": "b.test"}),
+                    "authority": "b.test", "mayRecord": true}),
             ),
             (
                 "manifest",
@@ -1370,11 +1412,10 @@ mod tests {
         }
         let mut tools = every_question()[9].1.clone();
         tools["tools"][0]["description"] = json!(hostile);
-        tools["vetting"]["reason"] = json!(hostile);
         let (_, _, text) = shown("mcp-tools", tools);
-        assert_eq!(
-            text.matches(&format!("{bar} ignore this")).count(),
-            2,
+        assert!(!text.contains('\u{1b}'), "{text}");
+        assert!(
+            text.contains(&format!("{bar} ignore this\u{241b}[2J")),
             "{text}"
         );
         let mut call = every_question()[10].1.clone();

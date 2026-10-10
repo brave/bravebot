@@ -335,7 +335,7 @@ export interface Vetting { verdict: string; reason?: string | null; detail?: str
  */
 export interface VetPicture { path: string; media: string; bytes: number }
 
-export interface VetRequest { request: number; origin: string; expects: string; content: string; lines: number; picture?: VetPicture | null; vetting: Vetting }
+export interface VetRequest { request: number; origin: string; summary?: string; expects: string; content: string; lines: number; picture?: VetPicture | null; vetting: Vetting }
 
 export interface ConfirmRequest {
   remark?: { preview: string[]; lines: number; label: string } | null
@@ -447,6 +447,8 @@ export interface Stage {
   resolved: string | null
   /** The path the program is started by, which is `resolved` unless the name reached it through a link. */
   startedAs?: string
+  /** The file the step runs, which is what the terminal shows under the step. */
+  binary?: string
   args: string[]
   /** The agent's own rendering of the argv, so both front-ends show the same characters. */
   display: string
@@ -617,6 +619,8 @@ export interface McpServerRequest {
   requestedBy: string
   changed: boolean
   fetching: string[]
+  /** The question as the agent words it, one string per line. */
+  lines?: string[]
 }
 
 /** One tool on an MCP server's list, as the client drew it. `description` is the server's text. */
@@ -693,6 +697,8 @@ export interface RunRequest {
    * governing.
    */
   releasesPrivate: boolean
+  /** What the stages are confined to, or `null` where the turn does not confine them. */
+  confinement?: { heading: string; directories: string[]; sentences: string[] } | null
   /**
    * Credential scopes and toolchain lists the planner asked this line to be lent, by name.
    *
