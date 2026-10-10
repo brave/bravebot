@@ -149,7 +149,12 @@ narrow for it.
    where more was left. Below it the directory, written from `~` as `/status` writes it, and the
    branch, as the resume list shows it: read when the session starts, resumes or moves to another
    directory, so a checkout made during a turn shows from the next of those. Each is one row, cut
-   from the left with an ellipsis where it is longer, since the end is what tells two apart. A new
+   from the left with an ellipsis where it is longer, since the end is what tells two apart. Last
+   comes the session's id, the one `--resume`, `--fork` and `/resume` take, drawn whole over two
+   rows split after its last hyphen, since a lookup reads the whole id and a fragment finds
+   nothing. It is there once the session has a record on disk, as the line printed when the
+   session ends is ([SESSION-8](sessions.md#SESSION-8)), and follows a resume, `/branch` and
+   `/clear`. A new
    name reaches an open panel on the next frame, not at the next key.
 2. **Model.** The model the person chose, one row cut from the left with an ellipsis where it is
    longer, and the effort level in force below it, as `effort high`. The model is the person's
@@ -174,6 +179,9 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::a_long_name_takes_three_rows_and_ends_in_an_ellipsis`
 `verified-by: bravebot_tui::panel::control_characters_in_the_session_section_are_drawn_as_pictures`
 `verified-by: bravebot_tui::panel::a_long_directory_and_branch_keep_their_ends`
+`verified-by: bravebot_tui::panel::the_session_id_is_drawn_whole_over_two_rows`
+`verified-by: bravebot_tui::panel::the_id_row_follows_whether_the_session_has_a_record`
+`verified-by: bravebot_tui::panel::the_id_rows_count_toward_where_the_context_section_fits`
 `verified-by: bravebot_tui::panel::the_model_section_shows_the_choice_and_the_effort_in_force_and_ignores_a_reply`
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
@@ -201,7 +209,8 @@ Every row the panel draws comes from text the person typed (the session's name, 
 prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, and the links given
 with `/issue` and `/pr`), the planner's own `todo_write` rows, the driver's own counters (the context
 reading, the cache figures and the token total), the chord in force, the directory and branch the
-session runs in, the programs of the language servers it started (PANEL-13), the aliases of its MCP
+session runs in, the session's id (made by the driver from the operating system's random source, so
+no reply, tool result or file supplies it), the programs of the language servers it started (PANEL-13), the aliases of its MCP
 servers (PANEL-14), or the model the person chose and the effort level in force. No row comes from a
 reply, a tool result, a file's contents, a language server's reply, an issue or
 pull request body, or anything a job printed.
