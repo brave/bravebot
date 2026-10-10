@@ -560,6 +560,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Whether this run holds `capability`, asked without recording anything.
+    ///
+    /// For a caller that wants to do something extra where a capability is held and nothing at all
+    /// where it is not: [`Policy::before_capability`] records a denial, which is right for an
+    /// action somebody asked for and noise for one the driver was only considering.
+    pub fn holds_capability(&self, capability: Capability) -> bool {
+        self.capabilities.contains(&capability)
+    }
+
     /// Check that a capability was granted before it is exercised.
     pub fn before_capability(&mut self, capability: Capability) -> Gated<()> {
         if !self.capabilities.contains(&capability) {

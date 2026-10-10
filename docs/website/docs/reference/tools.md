@@ -497,6 +497,12 @@ since you are the only one who sees which file it is.
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
 
+Where a language server for the file's language is **already running**, the result also says how many
+errors it found and on which lines, and how many warnings. A write never starts a server, and the
+server's own messages are never shown, only counts and line numbers. A server that has not finished
+indexing, or that did not answer in a few seconds, is reported as such rather than as "no errors". A
+file written from a `contents_ref` reports nothing.
+
 ## `edit_file`
 
 Replaces an exact passage in an existing file. **You approve every edit, as a diff.** The agent
