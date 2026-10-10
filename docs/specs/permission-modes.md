@@ -328,8 +328,8 @@ trail to the mode the question was put in, so a mode chosen over a prompt alread
 take credit for the answer given to it.
 
 **Why.** A person who presses the key while a turn runs is telling the session what they want from
-then on. A turn that kept the mode it began with left a person who had just stopped the writes
-watching them go on, and nothing on screen said the key had not yet applied. A question already on
+then on. A turn that kept the mode it began with would go on writing after the person pressed the
+key to stop it, and nothing on screen would say the key had not applied yet. A question already on
 screen is left as it is: the answer to it is the person's, and the mode they chose over it does not
 withdraw it.
 
@@ -361,6 +361,7 @@ made and whose filled-in verdict is read anyway: every release inside it refused
 said.
 
 `verified-by: bravebot_agent::turn::a_delegate_inherits_the_mode_of_the_turn_that_spawned_it`
+`verified-by: bravebot_agent::turn::a_mode_chosen_while_a_delegate_runs_applies_to_the_rest_of_its_work`
 `verified-by: bravebot_agent::turn::screening_reaches_a_delegate_of_an_unattended_run`
 `verified-by: bravebot_agent::turn::a_delegate_inherits_no_always_for_a_credential_write`
 

@@ -24983,6 +24983,67 @@ fn a_delegate_inherits_the_mode_of_the_turn_that_spawned_it() {
     );
 }
 
+/// MODE-9 with MODE-8: a mode chosen while a delegate runs governs the rest of the delegate's work.
+/// The person approves the delegate's first write and moves to plan mode over the prompt, so its
+/// second write is refused. A delegate handed a snapshot of the mode would write both.
+#[test]
+fn a_mode_chosen_while_a_delegate_runs_applies_to_the_rest_of_its_work() {
+    use bravebot_agent::PermissionMode;
+    let scratch = Scratch::new("delegate-follows-mode-change");
+    std::fs::write(scratch.path.join("notes.md"), "original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-WRITE-TWICE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WRITE-THE-NOTES-TWICE"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "WRITE-THE-NOTES-TWICE",
+            vec![
+                tool_request("write_file", r#"{"path":"notes.md","contents":"first"}"#),
+                tool_request("write_file", r#"{"path":"notes.md","contents":"second"}"#),
+                reply_with("tried"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let live = bravebot_agent::LiveMode::new(PermissionMode::Ask);
+    let task = Task::new("HAVE-A-DELEGATE-WRITE-TWICE").with_permission_mode(live.clone());
+    let mut recording =
+        RecordingConfirmer::approving_while_the_mode_changes(&live, PermissionMode::Plan);
+    let mut confirmer = bravebot_agent::Confining::new(&mut recording, live.clone(), false);
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "first",
+        "the delegate's write after the change to plan mode went through"
+    );
+    assert_eq!(
+        recording.seen.len(),
+        1,
+        "the delegate's first write was not put to the person, or its second was"
+    );
+}
+
 /// A delegate's programs are held to what the spawning turn's are. The regression it rejects is a
 /// delegate started with confinement off, which makes spawning one the way around the profile: the
 /// same `touch` that is refused in the turn would write outside the session from inside it. The
