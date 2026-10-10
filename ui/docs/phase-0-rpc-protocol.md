@@ -1427,6 +1427,15 @@ Still open:
 - `session.new`, `session.open` and `session.fork` carry `permissionMode`, which is always `ask`.
   A mode is not written to the record and a fork does not take its parent's (MODE-10).
 - `turn.started` and `manifest.started` carry `mode`, the mode the turn or run started in.
+- `session.sandbox` takes `session` and `mode`, one of `strict` or `standard`, and answers
+  `{ sandboxMode }`. `off`, and any other word, is `bad_request`: a window has no line that shows
+  its programs are unconfined (SANDBOX-22). A mode looser than the managed file's `sandbox.mode` pin
+  is `bad_request` with a sentence naming the file. The choice applies from the session's next turn
+  or manifest run, and the one in flight keeps the mode it started in.
+- `session.new`, `session.open` and `session.fork` carry `sandboxMode`, the mode a turn would run
+  under now: the settings and the pin, and `standard` where the settings say `off`. A choice is not
+  written to the record and a resume or fork does not take it.
+- `turn.started` and `manifest.started` also carry `sandbox`, the mode the turn or run started in.
 
 ## Shared session view, version 1
 

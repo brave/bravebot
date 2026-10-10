@@ -16,8 +16,8 @@
 //! the more restrictive variant, never the more permissive one, mirroring what
 //! `Snapshot` and `Record::trust_map` already do upstream. There is no error case for a
 //! decision, because refusing to parse an answer and refusing the write it answers are
-//! the same outcome and only one of them is honest about it. [`composed`] and
-//! [`permission_mode`] are the functions here that refuse, and each reads a claim a request
+//! the same outcome and only one of them is honest about it. [`composed`], [`permission_mode`] and
+//! [`sandbox_mode`] are the functions here that refuse, and each reads a claim a request
 //! makes rather than an answer to a question: there is no quieter reading of a client asking
 //! for a tag it may not have, and a turn that went out untagged instead would be drawn as a
 //! prompt nobody typed.
@@ -36,6 +36,7 @@ use bravebot_aichat::CutOff;
 use bravebot_config::mcp::Declaration;
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::todo::{Row, Status};
+use bravebot_sandbox::SandboxMode;
 use serde_json::{Value, json};
 
 use crate::protocol::Failure;
@@ -99,6 +100,11 @@ pub fn permission_mode_name(mode: PermissionMode) -> &'static str {
     }
 }
 
+/// The name a front end knows a sandbox mode by.
+pub fn sandbox_mode_name(mode: SandboxMode) -> &'static str {
+    mode.name()
+}
+
 // ---------------------------------------------------------------- inbound
 
 /// The permission mode a `session.mode` asks for.
@@ -114,6 +120,36 @@ pub fn permission_mode(value: &Value) -> Result<PermissionMode, Failure> {
         _ => Err(Failure::bad_request(format!(
             "`mode` may be `ask`, `acceptEdits` or `plan`, not {value}"
         ))),
+    }
+}
+
+/// The sandbox mode a `session.sandbox` asks for.
+///
+/// `strict` and `standard` only. `off` is refused, and so is any other word, because a window has no
+/// way to show that nothing confines a program (SANDBOX-22). Reading the word as `standard` instead
+/// would leave a client drawing a mode the session is not in.
+pub fn sandbox_mode(value: &Value) -> Result<SandboxMode, Failure> {
+    match value.as_str().and_then(SandboxMode::parse) {
+        Some(mode) if mode != SandboxMode::Off => Ok(mode),
+        _ => Err(Failure::bad_request(format!(
+            "`mode` may be `strict` or `standard`, not {value}"
+        ))),
+    }
+}
+
+/// The sentence for a mode the managed file does not allow, naming the file.
+pub fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
+    use bravebot_config::sandbox::Floor;
+    let file = refused.pinned_in.display();
+    let asked = refused.asked.name();
+    let pinned = refused.pinned.name();
+    match refused.because {
+        Floor::Mode => format!(
+            "The sandbox mode {asked} is refused: {file} sets sandbox.mode to {pinned}, and a session may be stricter than that but not looser."
+        ),
+        Floor::Network => format!(
+            "The sandbox mode {asked} is refused: {file} pins run.network to closed, so the mode must be {pinned} or stricter."
+        ),
     }
 }
 

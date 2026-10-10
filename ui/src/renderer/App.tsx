@@ -15,6 +15,7 @@ import type {
   KeptTrust,
   OpenedSession,
   PermissionMode,
+  SandboxMode,
   RewindPoint,
   RewoundSession,
   RunRecord,
@@ -130,6 +131,8 @@ interface Live {
   autoVetting: boolean
   /** What the session's next turn asks before it acts, as the bridge last reported it. */
   permissionMode: PermissionMode
+  /** What the session's next turn holds a program to, as the bridge last reported it. */
+  sandboxMode: SandboxMode
   /** The permission rules this session opened under. Null where the bridge reported none. */
   rules?: SettingsRules | null
   /**
@@ -528,6 +531,7 @@ export function App(): React.JSX.Element {
         archived: opened.archived,
         autoVetting: opened.autoVetting,
         permissionMode: opened.permissionMode,
+        sandboxMode: opened.sandboxMode,
         rules: opened.settingsRules ?? null,
         rewind: opened.rewind ?? [],
       })
@@ -555,6 +559,7 @@ export function App(): React.JSX.Element {
         model: string | null
         autoVetting: boolean
         permissionMode: PermissionMode
+        sandboxMode: SandboxMode
         settingsRules?: SettingsRules | null
         remembered?: KeptTrust | null
         keeping?: string | null
@@ -593,6 +598,7 @@ export function App(): React.JSX.Element {
         archived: 0,
         autoVetting: made.autoVetting,
         permissionMode: made.permissionMode,
+        sandboxMode: made.sandboxMode,
         rules: made.settingsRules ?? null,
       })
       setProblem(null)
@@ -948,6 +954,16 @@ export function App(): React.JSX.Element {
     } catch (error) { setProblem(String(error)) }
   }, [updateSession])
 
+  // Allowed while a turn runs: a turn holds the mode it began with, and the next one takes this. What the bridge answered is what is drawn.
+  const chooseSandbox = useCallback(async (mode: SandboxMode) => {
+    const handle = handleRef.current
+    if (!handle) return
+    try {
+      const { sandboxMode } = await call<{ sandboxMode: SandboxMode }>('session.sandbox', { session: handle, mode })
+      updateSession(handle, (old) => (old ? { ...old, sandboxMode } : old))
+    } catch (error) { setProblem(String(error)) }
+  }, [updateSession])
+
   /**
    * Take a bot away for good.
    *
@@ -1256,6 +1272,7 @@ export function App(): React.JSX.Element {
         archived: 0,
         autoVetting: forked.autoVetting,
         permissionMode: forked.permissionMode,
+        sandboxMode: forked.sandboxMode,
         rules: forked.settingsRules ?? null,
         // The parent's backups stay the parent's: nothing in the child has written anything yet.
         rewind: [],
@@ -1628,6 +1645,7 @@ export function App(): React.JSX.Element {
         onDraft={setDraft}
         onModel={(model) => void chooseModel(model)}
         onMode={(mode) => void chooseMode(mode)}
+        onSandbox={(mode) => void chooseSandbox(mode)}
         onSubmit={submit}
         onPlan={submitPlan}
         reading={reading}
@@ -1719,6 +1737,7 @@ export function apply(
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':
         return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, tokens: 0,
+          sandboxMode: message.data.sandbox ?? old.sandboxMode,
           entries: t.beginTurn(old.entries, message.data.turn) }
       case 'audit':
         return old
@@ -1787,7 +1806,8 @@ export function apply(
         return { ...old, phase: null, entries: [...old.entries, t.mcpStarted(message.data)] }
       // A run is not a turn, so it adds no turn marker and no reply to the conversation.
       case 'manifest.started':
-        return { ...old, running: true, phase: null, checking: null, hook: null, tokens: 0 }
+        return { ...old, running: true, phase: null, checking: null, hook: null, tokens: 0,
+          sandboxMode: message.data.sandbox ?? old.sandboxMode }
       case 'manifest.done':
         refresh()
         return { ...old, running: false, phase: null, checking: null, hook: null, outcome: 'complete',

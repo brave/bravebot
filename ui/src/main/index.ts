@@ -469,6 +469,7 @@ const ALLOWED = new Set([
   'session.delete',
   'session.close',
   'session.mode',
+  'session.sandbox',
   'session.rewind',
   'turn.send',
   'turn.cancel',

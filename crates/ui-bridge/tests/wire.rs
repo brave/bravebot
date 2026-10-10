@@ -1397,3 +1397,62 @@ fn accepted_composed_prompts_cross_without_their_text() {
         json!({"kind": "consolidation"})
     );
 }
+
+/// SANDBOX-22: a window may name `strict` or `standard` and nothing else. The failure this rejects
+/// is `off`, or a word that is almost a mode, read as one.
+#[test]
+fn a_window_may_name_strict_or_standard_and_no_other_sandbox_mode() {
+    use bravebot_sandbox::SandboxMode;
+    assert_eq!(
+        wire::sandbox_mode(&json!("strict")).unwrap(),
+        SandboxMode::Strict
+    );
+    assert_eq!(
+        wire::sandbox_mode(&json!("standard")).unwrap(),
+        SandboxMode::Standard
+    );
+    for refused in [
+        json!("off"),
+        json!("Strict"),
+        json!(""),
+        json!(null),
+        json!(true),
+    ] {
+        assert!(wire::sandbox_mode(&refused).is_err(), "{refused}");
+    }
+    assert_eq!(wire::sandbox_mode_name(SandboxMode::Strict), "strict");
+    assert_eq!(wire::sandbox_mode_name(SandboxMode::Standard), "standard");
+}
+
+/// SANDBOX-22: the refusal names the managed file and the mode it holds the session to, for each
+/// reason the file can be a floor.
+#[test]
+fn a_refused_sandbox_mode_names_the_file_and_the_floor() {
+    use bravebot_config::sandbox::{Floor, Refused};
+    use bravebot_sandbox::SandboxMode;
+    let refused = |asked, pinned, because| Refused {
+        asked,
+        asked_in: None,
+        pinned,
+        pinned_in: "/etc/bravebot/managed.json".into(),
+        because,
+    };
+    let by_mode = wire::sandbox_refusal(&refused(
+        SandboxMode::Standard,
+        SandboxMode::Strict,
+        Floor::Mode,
+    ));
+    assert!(by_mode.contains("/etc/bravebot/managed.json"), "{by_mode}");
+    assert!(by_mode.contains("sandbox.mode"), "{by_mode}");
+    assert!(by_mode.contains("strict"), "{by_mode}");
+    let by_network = wire::sandbox_refusal(&refused(
+        SandboxMode::Off,
+        SandboxMode::Standard,
+        Floor::Network,
+    ));
+    assert!(
+        by_network.contains("/etc/bravebot/managed.json"),
+        "{by_network}"
+    );
+    assert!(by_network.contains("run.network"), "{by_network}");
+}

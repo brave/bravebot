@@ -78,6 +78,11 @@ matter:
   Accepting edits writes with no card and still asks about a command, the control works while a
   turn runs, plan mode writes nothing and asks nothing, and the Chat menu item walks the
   modes. No paid inference.
+- `npm run drive:sandbox-mode`: the composer's sandbox mode, through the real app and bridge,
+  against a model service the script serves itself, in a directory nobody trusted. A session opens
+  in standard, the menu offers strict and standard and no way to turn the sandbox off, and where
+  the platform confines a program, a program the agent runs is held to the mode chosen for its turn.
+  The script writes two small files under the real home and removes them. No paid inference.
 - After building, `node scripts/drive-agent-rpc.mjs`: an actual automatic watch turn against
   a local fake gateway, real lifecycle hook subprocesses, context measurements and stop/close.
   Uses an isolated agent home; no paid inference or real credentials.
@@ -150,6 +155,7 @@ at, that a control keeps keyboard focus through an animation.
 | `npm run drive:shown` | That no decision card takes an approval before the rows it rests on have been on screen: every kind drawn too tall for a 900x560 window, shut until scrolled through, shut again on a change of width, deaf to a press while shut, and a refusal taken at once. Screenshots of a card waiting and read, light and dark |
 | `npm run drive:rules` | Permission rules from settings files: what is refused, what is not asked, and what is reported as not in force |
 | `npm run drive:permission-mode` | The composer's permission mode: accepting edits, plan mode, a change while a turn runs, and the menu shortcut |
+| `npm run drive:sandbox-mode` | The composer's sandbox mode: the menu offers strict and standard and no way to turn the sandbox off, and a program is held to the mode chosen for its turn |
 | `npm run drive:ask` | Answering a series of questions the planner asks, likewise live |
 | `npm run drive:menu` | The application menu: what it offers, what it greys, and what it refuses to offer |
 | `npm run drive:export` | Exporting a conversation to text, Markdown and PDF — with and without the tool calls, and what the file leaves out either way |

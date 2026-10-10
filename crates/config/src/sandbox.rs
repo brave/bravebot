@@ -202,6 +202,23 @@ pub fn for_a_window(settings: &crate::Settings, managed: &crate::Managed) -> San
     mode.min(SandboxMode::Standard)
 }
 
+/// The mode a window's turn runs under where the person has chosen one for the session.
+///
+/// A choice is a person's word, so it outranks the settings as `/sandbox` does, and it is held to
+/// the managed floor at the turn and not only when it was made: a pin written after the choice
+/// still binds the next turn, and the turn then runs at the pin. `off` is read as `standard`, as in
+/// [`for_a_window`].
+pub fn for_a_window_choosing(
+    chosen: Option<SandboxMode>,
+    settings: &crate::Settings,
+    managed: &crate::Managed,
+) -> SandboxMode {
+    match chosen {
+        Some(mode) if allowed_in_session(mode, managed).is_ok() => mode.min(SandboxMode::Standard),
+        _ => for_a_window(settings, managed),
+    }
+}
+
 /// The mode this process settled on at start-up.
 ///
 /// Process-wide for the reason [`crate::name_a_settings_file`] is: `--sandbox` configures this run,
