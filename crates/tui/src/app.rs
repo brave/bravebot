@@ -4103,6 +4103,8 @@ fn event_loop(
                 answers.rules.permissions.clone(),
             )
         });
+        // The same for the sessions an `@` offers after the files.
+        session.settle_sessions(|| past_sessions_offered(workspace.root(), stored.id()));
         // A picture decoded since the last pass is drawn on this one rather than at the next key.
         needs_draw |= session.settle_previews();
         // Before the frame rather than after it, so the first frame of an open panel names the
@@ -8155,6 +8157,7 @@ fn run_turn_animated(
     if let Some(kept) = kept_jobs {
         task = task.keeping_jobs(kept);
     }
+    task = with_named_sessions(task, session, workspace.root(), prompt, wrote);
     task = with_submitted_attachments(task, session);
     task = with_session_advisor(task, session);
     task = with_session_style(task, session);
@@ -8976,6 +8979,63 @@ fn files_named_in(prompt: &str, wrote: Wrote) -> Vec<String> {
         Wrote::ThePerson => bravebot_mentions::referenced(prompt),
         Wrote::TheDriver => Vec::new(),
     }
+}
+
+/// A row of the `@` list for each earlier session of this directory but the open one, newest first.
+///
+/// A manifest run and a session with no conversation yet are left out: neither has words to quote
+/// (NAME-10). What the row says is what the person chooses by, and the bound is what naming it
+/// would add at most.
+fn past_sessions_offered(root: &Path, current: &str) -> Vec<bravebot_mentions::Entry> {
+    bravebot_session::sessions::list(root)
+        .into_iter()
+        .filter(|listed| listed.id != current && !listed.manifest)
+        .map(|listed| {
+            bravebot_mentions::session_entry(
+                &listed.id,
+                &listed.title,
+                t!(
+                    session_mention_row,
+                    title = listed.title.as_str(),
+                    when = bravebot_session::sessions::how_long_ago(listed.updated),
+                    chars = bravebot_session::excerpt::BOUND
+                ),
+            )
+        })
+        .collect()
+}
+
+/// Add what each past session a prompt names with `@session:<id>` said, and tell the person what
+/// was and was not added.
+///
+/// From a line the person wrote and from no other, for the reason [`files_named_in`] is: the
+/// keystroke is what vouches for it. A session that cannot be quoted is said so in the transcript
+/// and the turn goes on without it, since the line is still a question worth answering.
+fn with_named_sessions(
+    mut task: Task,
+    session: &mut Session,
+    root: &Path,
+    prompt: &str,
+    wrote: Wrote,
+) -> Task {
+    if wrote == Wrote::TheDriver {
+        return task;
+    }
+    for id in bravebot_mentions::referenced_sessions(prompt) {
+        match bravebot_session::excerpt::of(root, &id) {
+            Ok(excerpt) => {
+                let chars = excerpt.chars;
+                session.note(if excerpt.cut {
+                    t!(session_mention_added_cut, id = id.as_str(), chars = chars)
+                } else {
+                    t!(session_mention_added, id = id.as_str(), chars = chars)
+                });
+                task = task.with_session_excerpt(id, excerpt.text);
+            }
+            Err(refused) => session.note(refused.said(&id)),
+        }
+    }
+    task
 }
 
 /// What the last turn asked its backend for, for comparing against what answered.
@@ -25278,6 +25338,75 @@ mod tests {
         assert!(answers.servers.is_some(), "a refusal dropped the servers");
         assert_eq!(answers.asked_about, asked_about);
         assert_eq!(answers.exposed, exposed);
+    }
+
+    /// NAME-10: a line the person wrote that names a past session brings its words, and says how
+    /// many; a name that is no session brings nothing and says so; a line the driver wrote brings
+    /// nothing whatever it holds, because no keystroke vouched for it.
+    #[test]
+    fn naming_a_past_session_adds_its_words_only_from_a_line_the_person_wrote() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-name-a-session");
+        std::fs::create_dir_all(&root).expect("create");
+        let (_, mut session, stored, _, _) = a_session_to_branch(&root);
+        let named = format!("carry on from @session:{}", stored.id());
+
+        let task = with_named_sessions(
+            Task::new(named.as_str()),
+            &mut session,
+            &root,
+            &named,
+            Wrote::ThePerson,
+        );
+        assert_eq!(task.session_excerpts.len(), 1);
+        assert!(task.session_excerpts[0].1.contains("hello into notes.txt"));
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(said.contains(stored.id()), "{said}");
+
+        let by_the_driver = with_named_sessions(
+            Task::new(named.as_str()),
+            &mut session,
+            &root,
+            &named,
+            Wrote::TheDriver,
+        );
+        assert!(by_the_driver.session_excerpts.is_empty());
+
+        let unknown = with_named_sessions(
+            Task::new("x"),
+            &mut session,
+            &root,
+            "carry on from @session:no-such-id",
+            Wrote::ThePerson,
+        );
+        assert!(unknown.session_excerpts.is_empty());
+        let said = session.transcript.last().expect("a note").text.clone();
+        assert!(said.contains("no session no-such-id"), "{said}");
+    }
+
+    /// NAME-10: the `@` list offers the sessions that are not the open one, and none that is a
+    /// manifest run.
+    #[test]
+    fn the_sessions_an_at_offers_leave_out_the_open_one() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-offer-sessions");
+        std::fs::create_dir_all(&root).expect("create");
+        let (_, _, stored, _, _) = a_session_to_branch(&root);
+        assert!(past_sessions_offered(&root, stored.id()).is_empty());
+        let rows = past_sessions_offered(&root, "another-session");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, format!("session:{}", stored.id()));
+        let note = rows[0].note.clone().expect("a note");
+        assert!(note.contains("write a line saying hello"), "{note}");
+        assert!(note.contains("up to 8000 characters"), "{note}");
+        assert_eq!(
+            rows[0].title.as_deref(),
+            Some("write a line saying hello into notes.txt")
+        );
     }
 
     /// SESSION-31, GOAL-12: a goal is not written down, so the copy has none. The setup starts a

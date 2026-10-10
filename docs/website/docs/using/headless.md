@@ -294,6 +294,7 @@ the wrong thing to search for.
 | Flag | What it does |
 |---|---|
 | `--file <path>` | include a workspace file as trusted context; repeatable |
+| `--session-ref <id>` | add the newest 8,000 characters of an earlier session of this directory to the task; repeatable |
 | `--add-dir <path>` | make another directory reachable, trusting nothing in it; repeatable |
 | `--trust-workspace` | trust the working directory for this run, as answering yes to the startup question does |
 | `-p`, `--print` | non-interactive; reads piped stdin as quarantined context |

@@ -49,7 +49,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 39] = [
+const FLAGS: [Flag; 40] = [
     flag("plain", None, false),
     flag("bg", None, false),
     flag("resume", Some('r'), false),
@@ -57,6 +57,7 @@ const FLAGS: [Flag; 39] = [
     flag("fork", Some('f'), false),
     flag("from-pr", None, true),
     flag("file", None, true),
+    flag("session-ref", None, true),
     flag("add-dir", None, true),
     flag("trust-workspace", None, false),
     flag("settings", None, true),

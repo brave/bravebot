@@ -125,6 +125,7 @@ mode-bypass = ⏵⏵ bypass permissions on
 
 cli-options-heading = Options:
 cli-option-file = Include a workspace file as context (repeatable)
+cli-option-session-ref = Add the newest part of an earlier session of this directory to the task (repeatable)
 cli-option-add-dir = Reach into a directory outside the working one (repeatable)
 cli-option-trust-workspace = Trust the working directory for this run, as answering yes to the startup question does
 cli-option-settings = Read this settings file for this run, above the ones found on disk
@@ -187,6 +188,7 @@ cli-update-takes-nothing-else = update takes no arguments
 bug-report-no-state-directory = bug-report writes nothing in an incognito session or where there is no home directory
 bug-report-not-written = the bug report was not written: { $problem }
 cli-file-needs-a-path = --file requires a path
+cli-session-ref-needs-an-id = --session-ref requires a session id
 cli-resume-needs-an-id = --resume requires the id of a session when it goes with a task
 # The flag is --resume or --continue, as typed.
 cli-resume-not-with-a-manifest =
@@ -2477,6 +2479,16 @@ session-resume-already-here = that is the session already open
 session-resume-no-such = no session with that id in this directory
 # Left in the transcript when /resume names a session a running background session holds.
 session-resume-held-by-background = that session is held by a running background session, so it cannot be resumed here
+# Left in the transcript when a prompt named a session with @session:<id> and part of it was added.
+session-mention-added = added { $chars } characters of session { $id } to the message
+session-mention-added-cut = added the newest { $chars } characters of session { $id } to the message, and left out older turns
+session-mention-no-such = no session { $id } in this directory, so nothing was added for it
+session-mention-manifest = session { $id } is a manifest run with no conversation to quote, so nothing was added for it
+session-mention-not-ours = session { $id } holds words this build cannot vouch for, so nothing was added for it
+session-mention-private = session { $id } had been shown private content, so nothing was added for it
+session-mention-empty = session { $id } has nothing to quote, so nothing was added for it
+# A row of the @ list for an earlier session: when it was last written, the most a mention adds, and its title.
+session-mention-row = { $when } · up to { $chars } characters · { $title }
 session-branch-nothing-written = nothing to branch yet: the session has no record until its first turn ends
 # Left in the transcript when /branch is typed where session records are not written.
 session-branch-unwritable = /branch needs a session record to copy, and this session does not write one

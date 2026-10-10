@@ -2045,6 +2045,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a past session was named with `@session:<id>` and part of it added to the prompt.
+    ///
+    /// The trail holds the id and how many characters were taken and none of the content, as it
+    /// does for an interjection. The excerpt reaches the planner as words in the person's own
+    /// message: the record it was read from holds only what a planner could hold (SESSION-2), and
+    /// the person chose the session by typing its name. Nothing is routed by it.
+    ///
+    /// This must only ever be reached from a mention in a line a human typed. Never point it at an
+    /// id found in model output or in anything a tool read.
+    pub fn admit_session_excerpt(&mut self, id: &str, characters: usize) {
+        self.allow(
+            "provenance",
+            format!("{characters} characters of session {id}, named by the user with @"),
+        );
+    }
+
     /// Record a prompt the user typed while the turn was already running.
     ///
     /// On the footing of [`Policy::admit_pasted_image`], and for the same reason: a keystroke is

@@ -3639,10 +3639,15 @@ fn entry_lines(session: &Session, offered: &[bravebot_mentions::Entry]) -> Vec<L
                 colour
             };
 
-            Line::from(vec![
+            let mut spans = vec![
                 Span::styled(if chosen { "  ❯ " } else { "    " }, style),
                 Span::styled(entry.path.clone(), style),
-            ])
+            ];
+            // A session says what it is, since its name is an id nobody chooses by.
+            if let Some(note) = &entry.note {
+                spans.push(Span::styled(format!("  {note}"), dim()));
+            }
+            Line::from(spans)
         })
         .collect()
 }
@@ -11078,6 +11083,40 @@ mod tests {
         assert!(
             !output.contains("History"),
             "the border was labelled: {output}"
+        );
+    }
+
+    /// NAME-10: a session row says what the session is beside its reference, because an id is
+    /// nothing a person chooses by, and a file row says nothing beside its path.
+    #[test]
+    fn a_session_row_carries_its_title_and_a_file_row_does_not() {
+        let session = Session::new("none");
+        let rows = [
+            bravebot_mentions::Entry {
+                path: "README.md".to_string(),
+                is_directory: false,
+                note: None,
+                title: None,
+            },
+            bravebot_mentions::session_entry(
+                "abc-123",
+                "fix the build",
+                "2 days ago · up to 8000 characters · fix the build".to_string(),
+            ),
+        ];
+        let drawn: Vec<String> = entry_lines(&session, &rows)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(drawn[0].trim(), "README.md");
+        assert_eq!(
+            drawn[1].trim(),
+            "session:abc-123  2 days ago · up to 8000 characters · fix the build"
         );
     }
 }

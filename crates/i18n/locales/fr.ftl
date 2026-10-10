@@ -129,6 +129,7 @@ mode-bypass = ⏵⏵ permissions contournées
 
 cli-options-heading = Options :
 cli-option-file = Inclure un fichier de l'espace de travail comme contexte (répétable)
+cli-option-session-ref = Ajouter la partie la plus récente d'une session antérieure de ce répertoire à la tâche (répétable)
 cli-option-add-dir = Accéder à un répertoire hors de celui de travail (répétable)
 cli-option-trust-workspace = Approuver le répertoire de travail pour cette exécution, comme le fait un oui à la question du démarrage
 cli-option-settings = Lire ce fichier de réglages pour cette exécution, au-dessus de ceux trouvés sur le disque
@@ -189,6 +190,7 @@ cli-update-takes-nothing-else = update n'accepte aucun argument
 bug-report-no-state-directory = bug-report n'écrit rien dans une session incognito ou sans répertoire personnel
 bug-report-not-written = le rapport de bogue n'a pas été écrit : { $problem }
 cli-file-needs-a-path = --file demande un chemin
+cli-session-ref-needs-an-id = --session-ref demande un identifiant de session
 cli-resume-needs-an-id = --resume demande l'identifiant d'une session lorsqu'il accompagne une tâche
 # Le drapeau est --resume ou --continue, tel qu'il a été tapé.
 cli-resume-not-with-a-manifest =
@@ -1875,6 +1877,14 @@ session-resume-nothing-else = aucune autre session à reprendre dans ce réperto
 session-resume-already-here = c'est la session déjà ouverte
 session-resume-no-such = aucune session avec cet identifiant dans ce répertoire
 session-resume-held-by-background = cette session est tenue par une session d'arrière-plan en cours, elle ne peut donc pas être reprise ici
+session-mention-added = { $chars } caractères de la session { $id } ajoutés au message
+session-mention-added-cut = les { $chars } derniers caractères de la session { $id } ajoutés au message, les tours plus anciens sont laissés de côté
+session-mention-no-such = aucune session { $id } dans ce répertoire, rien n'a donc été ajouté pour elle
+session-mention-manifest = la session { $id } est une exécution de manifeste sans conversation à citer, rien n'a donc été ajouté pour elle
+session-mention-not-ours = la session { $id } contient des mots dont cette version ne peut pas répondre, rien n'a donc été ajouté pour elle
+session-mention-private = la session { $id } avait vu du contenu privé, rien n'a donc été ajouté pour elle
+session-mention-empty = la session { $id } n'a rien à citer, rien n'a donc été ajouté pour elle
+session-mention-row = { $when } · jusqu'à { $chars } caractères · { $title }
 session-branch-nothing-written = rien à dupliquer pour l'instant : la session n'a aucun enregistrement avant la fin de son premier tour
 # Laissé dans la transcription quand /branch est tapé là où les enregistrements de session ne sont pas écrits.
 session-branch-unwritable = /branch a besoin d'un enregistrement de session à copier, et cette session n'en écrit pas

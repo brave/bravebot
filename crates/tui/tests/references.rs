@@ -402,3 +402,111 @@ fn enter_completes_a_half_typed_reference_past_an_escaped_space() {
     );
     assert_eq!(session.input(), "explain @my\\ notes.md ");
 }
+
+fn two_sessions() -> Vec<bravebot_mentions::Entry> {
+    vec![
+        bravebot_mentions::session_entry("aaa-111", "fix the build", "2 days ago".to_string()),
+        bravebot_mentions::session_entry("bbb-222", "rename the parser", "3 days ago".to_string()),
+    ]
+}
+
+fn offered_paths(session: &Session) -> Vec<String> {
+    match session.offered() {
+        bravebot_tui::state::Offered::Files(entries) => {
+            entries.into_iter().map(|e| e.path).collect()
+        }
+        other => panic!("files were not offered: {other:?}"),
+    }
+}
+
+/// NAME-10: an `@` offers the past sessions after the files, and a title or an id narrows them.
+#[test]
+fn an_at_sign_offers_past_sessions_after_the_files() {
+    let scratch = Scratch::new("sessions-offered");
+    let mut session = session(&scratch);
+    typing(&mut session, "carry on from @");
+    session.settle_sessions(two_sessions);
+
+    assert_eq!(
+        offered_paths(&session),
+        [
+            "src/",
+            "Cargo.toml",
+            "README.md",
+            "session:aaa-111",
+            "session:bbb-222"
+        ]
+    );
+
+    typing(&mut session, "pars");
+    session.settle_sessions(|| panic!("the sessions were read again for one more letter"));
+    assert_eq!(offered_paths(&session), ["session:bbb-222"]);
+}
+
+/// NAME-10: a word narrows the sessions by their title and not by the age and bound drawn beside
+/// them, which every row shares.
+#[test]
+fn a_word_narrows_sessions_by_title_and_not_by_what_is_drawn_beside_them() {
+    let scratch = Scratch::new("sessions-title-only");
+    let mut session = session(&scratch);
+    typing(&mut session, "@days");
+    session.settle_sessions(two_sessions);
+    assert!(
+        !session.is_completing(),
+        "the age beside a row narrowed the list: {:?}",
+        session.offered()
+    );
+}
+
+/// NAME-10: the sessions are not read until a reference is typed and are let go once it is done,
+/// so a line with no `@` costs no directory scan per frame.
+#[test]
+fn the_sessions_are_read_only_while_a_reference_is_typed() {
+    let scratch = Scratch::new("sessions-lazy");
+    let mut session = session(&scratch);
+    typing(&mut session, "no reference here");
+    session.settle_sessions(|| panic!("read for a line with no reference"));
+    typing(&mut session, " @");
+    session.settle_sessions(two_sessions);
+    assert!(offered_paths(&session).contains(&"session:aaa-111".to_string()));
+    typing(&mut session, "README.md ");
+    session.settle_sessions(|| panic!("a finished reference reads nothing"));
+    typing(&mut session, "@");
+    let mut reads = 0;
+    session.settle_sessions(|| {
+        reads += 1;
+        Vec::new()
+    });
+    assert_eq!(
+        reads, 1,
+        "the held list was not let go when the reference ended"
+    );
+}
+
+/// NAME-10: Tab completes a session to the reference that names it, with the space a finished
+/// reference gets, and Enter sends a line ending in a finished one rather than completing it away.
+#[test]
+fn tab_completes_a_session_and_enter_sends_it_finished() {
+    let scratch = Scratch::new("sessions-complete");
+    let mut session = session(&scratch);
+    typing(&mut session, "carry on from @session:bb");
+    session.settle_sessions(two_sessions);
+    assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
+    assert_eq!(session.input(), "carry on from @session:bbb-222 ");
+    assert!(bravebot_mentions::referenced(session.input()).is_empty());
+    assert_eq!(
+        bravebot_mentions::referenced_sessions(session.input()),
+        ["bbb-222"]
+    );
+
+    let mut session = self::session(&scratch);
+    typing(&mut session, "carry on from @session:aaa-111");
+    session.settle_sessions(two_sessions);
+    assert!(
+        matches!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit(_)
+        ),
+        "Enter completed a finished session reference instead of sending it"
+    );
+}
