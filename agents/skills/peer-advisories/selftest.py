@@ -302,6 +302,70 @@ class Work(unittest.TestCase):
         advisories = json.loads((self.work / "manifest.json").read_text())["advisories"]
         self.assertEqual(sorted(a["ghsa_id"] for a in pa.select(advisories, entries, [], 10)), [A, B, C])
 
+    def gh_calls(self, listed=(), fail_on=None):
+        """A stand-in for pa.gh answering as user `me`; `listed` is [(id, login, body)] on the run-record issue."""
+        calls = []
+
+        def gh(args):
+            calls.append(args)
+            if fail_on and fail_on in args:
+                raise RuntimeError("HTTP 502")
+            if args[:2] == ["api", "user"]:
+                return "me\n"
+            if "--paginate" in args:
+                return "".join(json.dumps({"id": i, "login": login, "body": body}) + "\n" for i, login, body in listed)
+            return "{}"
+
+        return calls, gh
+
+    def ran(self, listed=(), fail_on=None, **extra):
+        calls, gh = self.gh_calls(listed, fail_on)
+        with mock.patch.object(pa, "gh", gh):
+            code, _ = quiet(pa.ran, self.args(repo="brave/bravebot", **extra), today="2026-10-09")
+        return code, [c for c in calls if "--method" in c]
+
+    def test_a_run_that_decided_nothing_still_records_its_date_and_commit(self):
+        """The ledger changes only when a verdict is decided, so the date of a run that decided none has to be kept elsewhere."""
+        code, writes = self.ran()
+        self.assertEqual(code, 0)
+        self.assertEqual(writes, [["api", "--method", "POST", f"repos/brave/bravebot/issues/{pa.RUN_ISSUE}/comments",
+                                   "-f", "body=peer-advisories ran 2026-10-09 against 0123456789ab"]])
+        self.assertFalse((self.root / pa.LEDGER).exists())
+
+    def test_a_later_run_edits_its_own_last_run_comment_and_leaves_every_other_comment_alone(self):
+        older = "peer-advisories ran 2026-09-01 against aaaaaaaaaaaa"
+        listed = [
+            (41, "me", older),
+            (50, "me", "peer-advisories ran 2026-09-20 against bbbbbbbbbbbb"),
+            (60, "someone-else", older),
+            (70, "me", "a comment of mine that is not a run"),
+        ]
+        code, writes = self.ran(listed)
+        self.assertEqual(code, 0)
+        self.assertEqual(writes, [["api", "--method", "PATCH", "repos/brave/bravebot/issues/comments/50",
+                                   "-f", "body=peer-advisories ran 2026-10-09 against 0123456789ab"]])
+        self.assertEqual(self.ran([(60, "someone-else", older)])[1][0][2], "POST")
+
+    def test_a_dry_run_records_no_run_and_a_gh_failure_is_reported(self):
+        calls, gh = self.gh_calls()
+        with mock.patch.object(pa, "gh", gh):
+            code, out = quiet(pa.ran, self.args(repo="brave/bravebot", dry_run=True), today="2026-10-09")
+        self.assertEqual((code, calls), (0, []))
+        self.assertIn("would record", out)
+        for failing in ("POST", "PATCH"):
+            listed = [(5, "me", "peer-advisories ran 2026-09-01 against aaaaaaaaaaaa")] if failing == "PATCH" else []
+            code, writes = self.ran(listed, fail_on=failing)
+            self.assertEqual(code, 1, failing)
+
+    def test_the_comment_is_the_line_release_preflight_reads_back(self):
+        preflight_spec = importlib.util.spec_from_file_location("release_preflight", HERE.parents[2] / "contrib" / "release-preflight.py")
+        preflight = importlib.util.module_from_spec(preflight_spec)
+        preflight_spec.loader.exec_module(preflight)
+        self.assertEqual(pa.RUN_ISSUE, preflight.ADVISORY_ISSUE)
+        self.assertEqual(pa.RUN_COMMENT.pattern, preflight.ADVISORY_RUN.pattern)
+        body = next(w for w in self.ran()[1])[-1].removeprefix("body=")
+        self.assertEqual(preflight.ADVISORY_RUN.fullmatch(body).groups(), ("2026-10-09", "0123456789ab"))
+
     def poster(self, cited=(), duplicate=None, labels=None):
         calls = []
 

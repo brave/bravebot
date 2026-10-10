@@ -30,6 +30,11 @@ again on every run; the other verdicts are final until somebody names the id.
   how an `absent` verdict gets revisited after bravebot grows the surface it lacked.
 - **`dry-run`**: vet and draft, post nothing and record nothing.
 
+The ledger changes only when a run decides something, so it cannot say when the check last ran.
+Every other run records its date and the main commit in a comment on
+[#1901](https://github.com/brave/bravebot/issues/1901) (step 9), and `make bump-version` reads that
+comment to warn when the check is overdue.
+
 The sources are the repository advisories of the tools in `REPOSITORIES` and the global advisory
 database entries for the packages in `PACKAGES`, both in `peer-advisories.py`. Adding a tool is an
 edit there.
@@ -38,8 +43,8 @@ edit there.
 
 ## Three things a run must not do
 
-**A run never posts by hand.** `peer-advisories.py post` is the only thing here that writes to the
-tracker. It skips an advisory an issue body already cites and a title the tracker already holds,
+**A run never posts by hand.** `peer-advisories.py post` and `peer-advisories.py ran` are the only
+things here that write to the tracker. It skips an advisory an issue body already cites and a title the tracker already holds,
 posts one issue every ten seconds or so, stops after 100 issues, and refuses before posting
 anything when a label is missing. `gh` is absent from this skill's `allowed-tools` so that a
 `gh issue create` typed here asks first. An issue filed outside this script goes through the
@@ -66,7 +71,7 @@ refuses a tree that differs from `upstream/main` anywhere but the ledger, since 
 branch is no verdict about main; the refusal names the worktree to run from instead.
 
 Stdout is `{"work_dir": ..., "vet": [{"id": ..., "prompt_file": ...}]}`. Where `vet` is empty,
-say nothing new has been published and stop.
+run step 9, say nothing new has been published and stop.
 
 ### Step 2: vet each one
 
@@ -157,7 +162,21 @@ git commit -m "Record <n> peer advisories vetted against <commit>"
 
 Pushing it and opening the pull request are the user's steps.
 
-### Step 9: say what happened
+### Step 9: record that the run happened (zero model tokens)
+
+Skip this on a `dry-run` run, or pass `--dry-run` to see the line. Otherwise run it at the end of
+every run, including one that vetted nothing, filed nothing, or left every advisory undecided:
+
+```bash
+python3 agents/skills/peer-advisories/peer-advisories.py ran --work-dir "$WORK_DIR"
+```
+
+It adds one comment to #1901 reading `peer-advisories ran <date> against <commit>`, or edits the
+last such comment you wrote. Print its output. Where it fails, say so in step 10: the next
+`make bump-version` falls back to the ledger's last commit date and may report the check as
+overdue.
+
+### Step 10: say what happened
 
 In two or three lines: how many advisories were vetted, how many bravebot has, the issues filed and
 the ones the tracker already held, and anything left undecided.

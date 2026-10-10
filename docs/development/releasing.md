@@ -24,13 +24,16 @@ Before it changes anything, `bump-version` warns and asks whether to go on when 
 
 - open issues carry the `release-blocking` label, which it lists with their links;
 - a translation is missing messages, counted per locale from `contrib/untranslated-messages.txt`;
-- the last commit to `docs/peer-advisories-vetted` is more than seven days old, which is when the
-  peer-advisories skill last recorded a check.
+- the peer-advisories skill last ran more than seven days ago. The date is the newest run the
+  skill recorded in a comment on [#1901](https://github.com/brave/bravebot/issues/1901), written by
+  a person with write access, and the warning says it came from there. Where there is no such
+  comment yet or `gh` cannot read it, the date is the last commit to `docs/peer-advisories-vetted`
+  and the warning says so.
 
 The checks are in `contrib/release-preflight.py` and use no model. Answering `n`, or running without a
 terminal, stops the bump, and `make bump-version BUMP=bugfix YES=1` goes on without asking. The
-commit date is only a lower bound on when the advisory check last ran, because a run that finds
-nothing new commits nothing. [#1901](https://github.com/brave/bravebot/issues/1901) records the date of every run.
+ledger's commit date is only a lower bound on when the advisory check last ran, because a run that
+finds nothing new commits nothing, which is why the comment is preferred.
 
 `bump-version` rewrites the version in `Cargo.toml`, `Cargo.lock`, `package.json`,
 `package-lock.json`, `ui/package.json`, and `ui/package-lock.json`, commits exactly those six as

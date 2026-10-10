@@ -5,14 +5,16 @@ Three things are checked, none of them with a model:
 
 - open issues labelled release-blocking, listed with their links;
 - messages a translation is missing, from contrib/untranslated-messages.txt;
-- whether the peer advisory check has been recorded in the last seven days, taken from the last
-  commit to docs/peer-advisories-vetted.
+- whether the peer advisory check has run in the last seven days, taken from the newest run
+  recorded in a comment on issue #1901, or from the last commit to docs/peer-advisories-vetted
+  where there is no such comment or gh cannot read it.
 
 Any of them prints a warning and asks whether to go on. Declining exits 1, which stops the bump
 before it changes a file. A run with nothing to warn about prints nothing.
 
-The commit date is a lower bound on when the advisory check last ran: a run that found nothing
-new commits nothing. The date of the last run itself is not recorded anywhere yet.
+The commit date is only a lower bound on when the advisory check last ran, because a run that finds
+nothing new commits nothing. The peer-advisories skill records every run in the issue comment, so
+the comment is the date used when it can be read.
 
 Standard library only, like the other checks CI runs without a toolchain.
 """
@@ -24,7 +26,7 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +34,12 @@ ROOT = Path(__file__).resolve().parent.parent
 REPO = "brave/bravebot"
 BLOCKER_LABEL = "release-blocking"
 ADVISORY_LEDGER = "docs/peer-advisories-vetted"
+ADVISORY_ISSUE = 1901
+# The line agents/skills/peer-advisories/peer-advisories.py writes for each run; its selftest holds
+# the two to the same format.
+ADVISORY_RUN = re.compile(r"peer-advisories ran (\d{4}-\d{2}-\d{2}) against ([0-9a-f]{12})")
+# Only a comment from someone with write access counts as a run.
+TRUSTED_AUTHORS = ("OWNER", "MEMBER", "COLLABORATOR")
 UNTRANSLATED = "contrib/untranslated-messages.txt"
 MAX_ADVISORY_AGE = timedelta(days=7)
 
@@ -88,18 +96,57 @@ def untranslated(record):
              + [f"see {UNTRANSLATED}, or run make locales"])]
 
 
+def recorded_run(run, today):
+    """The newest run recorded on ADVISORY_ISSUE as ((date, commit), None), or (None, why not)."""
+    code, out, err = run("gh", "issue", "view", str(ADVISORY_ISSUE), "-R", REPO, "--json", "comments")
+    if code:
+        return None, f"gh could not read issue #{ADVISORY_ISSUE}: {plain(err.strip() or 'gh failed')}"
+    try:
+        comments = json.loads(out)["comments"]
+    except (ValueError, KeyError, TypeError):
+        return None, f"gh gave no comments for issue #{ADVISORY_ISSUE}"
+    runs = []
+    for comment in comments:
+        if not isinstance(comment, dict) or comment.get("authorAssociation") not in TRUSTED_AUTHORS:
+            continue
+        found = ADVISORY_RUN.fullmatch(str(comment.get("body", "")).strip())
+        if not found:
+            continue
+        try:
+            when = date.fromisoformat(found.group(1))
+        except ValueError:
+            continue
+        # The skill writes the date where it runs, which can be a day ahead of UTC; anything later
+        # than that would keep the warning quiet until its date arrived.
+        if when <= today + timedelta(days=1):
+            runs.append((when, found.group(2)))
+    if not runs:
+        return None, f"issue #{ADVISORY_ISSUE} has no recorded run yet"
+    return max(runs), None
+
+
 def advisories(run, now):
-    """Whether the peer advisory check was recorded within MAX_ADVISORY_AGE."""
+    """Whether the peer advisory check ran within MAX_ADVISORY_AGE, and which record says so."""
+    found, why_not = recorded_run(run, now.date())
+    if found:
+        when, commit = found
+        age = now.date() - when
+        if age <= MAX_ADVISORY_AGE:
+            return []
+        return [(f"the peer advisory check last ran {age.days} days ago ({when}, against {commit})",
+                 [f"from the newest run recorded on issue #{ADVISORY_ISSUE}",
+                  "run the peer-advisories skill"])]
     code, out, _ = run("git", "log", "-1", "--format=%H%x09%cI", "--", ADVISORY_LEDGER)
     if code or "\t" not in out:
         return [(f"no commit has recorded a peer advisory check ({ADVISORY_LEDGER} has no history here)",
-                 ["run the peer-advisories skill"])]
+                 [why_not, "run the peer-advisories skill"])]
     sha, when = out.strip().split("\t")
     age = now - datetime.fromisoformat(when)
     if age <= MAX_ADVISORY_AGE:
         return []
     return [(f"the peer advisory check was last recorded {age.days} days ago, in {sha[:12]} ({when[:10]})",
-             ["run the peer-advisories skill"])]
+             [f"from the last commit to {ADVISORY_LEDGER}, which a run that finds nothing does not make; {why_not}",
+              "run the peer-advisories skill"])]
 
 
 def read_record():
@@ -178,11 +225,59 @@ def selftest():
     none = advisories(fake([(("git", "log"), (0, "", ""))]), now)
     checks.append(("a ledger with no history warns", len(none) == 1, none))
 
-    both = preflight(fake([labels, (("gh", "issue"), (0, "[]", "")),
+    def runs(*comments):
+        return (("gh", "issue", "view"), (0, json.dumps({"comments": [
+            {"authorAssociation": assoc, "body": f"peer-advisories ran {(now - days).date()} against {'b' * 12}"
+             if isinstance(days, timedelta) else days}
+            for assoc, days in comments]}), ""))
+
+    old_ledger = (("git", "log"), (0, f"{'a' * 40}\t{(now - timedelta(days=30)).isoformat()}\n", ""))
+    fresh = advisories(fake([runs(("MEMBER", timedelta(days=1))), old_ledger]), now)
+    checks.append(("a run a day ago passes though the ledger was last committed a month ago", fresh == [], fresh))
+    edge = advisories(fake([runs(("MEMBER", timedelta(days=7))), old_ledger]), now)
+    checks.append(("a run seven days ago passes", edge == [], edge))
+    late = advisories(fake([runs(("COLLABORATOR", timedelta(days=8))), old_ledger]), now)
+    checks.append(("a run eight days ago warns, naming the comment, its date and its commit",
+                   len(late) == 1 and "8 days ago" in repr(late) and str((now - timedelta(days=8)).date()) in repr(late)
+                   and "b" * 12 in repr(late) and f"issue #{ADVISORY_ISSUE}" in repr(late) and "aaaaaaaaaaaa" not in repr(late),
+                   late))
+    new_ledger = (("git", "log"), (0, f"{'a' * 40}\t{now.isoformat()}\n", ""))
+    over = advisories(fake([runs(("OWNER", timedelta(days=9))), new_ledger]), now)
+    checks.append(("the comment is used in place of a newer ledger commit", len(over) == 1 and "9 days ago" in repr(over), over))
+    newest = advisories(fake([runs(("MEMBER", timedelta(days=20)), ("MEMBER", timedelta(days=2)),
+                                   ("MEMBER", timedelta(days=12))), old_ledger]), now)
+    checks.append(("the newest of several runs is the one used", newest == [], newest))
+    forged = advisories(fake([runs(("NONE", timedelta(days=0)), ("CONTRIBUTOR", timedelta(days=0))), old_ledger]), now)
+    checks.append(("a run recorded by someone without write access is ignored, so the ledger date is used",
+                   len(forged) == 1 and "30 days ago" in repr(forged) and "aaaaaaaaaaaa" in repr(forged), forged))
+    other = advisories(fake([runs(("MEMBER", f"peer-advisories ran {now.date()} against {'b' * 12}\nand more"),
+                                  ("MEMBER", f"peer-advisories ran 2026-13-45 against {'b' * 12}"),
+                                  ("MEMBER", "thanks, this is done")), old_ledger]), now)
+    checks.append(("a comment that is not exactly one run line is ignored",
+                   len(other) == 1 and "30 days ago" in repr(other) and "no recorded run yet" in repr(other), other))
+    ahead = advisories(fake([runs(("MEMBER", -timedelta(days=30))), old_ledger]), now)
+    checks.append(("a run dated a month ahead is ignored, so the ledger date is used",
+                   len(ahead) == 1 and "30 days ago" in repr(ahead), ahead))
+    tomorrow = advisories(fake([runs(("MEMBER", -timedelta(days=1))), old_ledger]), now)
+    checks.append(("a run dated tomorrow, from a clock ahead of UTC, counts", tomorrow == [], tomorrow))
+    nothing = advisories(fake([runs(), old_ledger]), now)
+    checks.append(("no comment yet falls back to the ledger and says which source it used",
+                   len(nothing) == 1 and "last commit to docs/peer-advisories-vetted" in repr(nothing)
+                   and "no recorded run yet" in repr(nothing), nothing))
+    unread = advisories(fake([(("gh", "issue", "view"), (1, "", "boom")), old_ledger]), now)
+    checks.append(("a gh failure falls back to the ledger and says why",
+                   len(unread) == 1 and "last commit to docs/peer-advisories-vetted" in repr(unread)
+                   and "boom" in repr(unread), unread))
+    garbled = advisories(fake([(("gh", "issue", "view"), (0, "not json", "")), old_ledger]), now)
+    checks.append(("an unreadable reply falls back to the ledger", len(garbled) == 1 and "30 days ago" in repr(garbled), garbled))
+    fresh_ledger = advisories(fake([runs(), new_ledger]), now)
+    checks.append(("with no comment a fresh ledger commit still passes", fresh_ledger == [], fresh_ledger))
+
+    both = preflight(fake([labels, (("gh", "issue", "list"), (0, "[]", "")),
                            (("git", "log"), (0, f"{'a' * 40}\t{now.isoformat()}\n", ""))]),
                      now, "fr:a\n")
     checks.append(("a clean run apart from one gap gives one warning", len(both) == 1, both))
-    unreadable = preflight(fake([labels, (("gh", "issue"), (0, "[]", "")),
+    unreadable = preflight(fake([labels, (("gh", "issue", "list"), (0, "[]", "")),
                                  (("git", "log"), (0, f"{'a' * 40}\t{now.isoformat()}\n", ""))]),
                            now, None)
     checks.append(("an unreadable record is a warning", len(unreadable) == 1, unreadable))
