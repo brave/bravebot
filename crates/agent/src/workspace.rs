@@ -2011,7 +2011,9 @@ impl Workspace {
     ///
     /// `None` for a path with no `..`, for one whose `..` leaves a link (where the kernel would
     /// follow the link and the text would not), for one that climbs off the top of the file
-    /// system, and for one that lands inside the root, which the relative spelling reaches.
+    /// system, for one that lands inside the root, which the relative spelling reaches, and for
+    /// one that lands on a name that is not UTF-8. The key, the rules and the result carry the
+    /// absolute spelling as text, and a lossy one would name a different file.
     fn climb_lands(&self, candidate: &Path) -> Option<PathBuf> {
         if !candidate
             .components()
@@ -2034,7 +2036,7 @@ impl Workspace {
                 other => lands.push(other.as_os_str()),
             }
         }
-        (!lands.starts_with(&self.root)).then_some(lands)
+        (!lands.starts_with(&self.root) && lands.to_str().is_some()).then_some(lands)
     }
 
     /// The refusal of a path with a `..` that [`Workspace::climb_lands`] does not take out.
@@ -6539,6 +6541,51 @@ mod tests {
         assert_eq!(holding.climbed_to("../project/x.txt"), None);
         assert!(holding.resolve("../project/x.txt").is_err());
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A `..` that lands under a directory whose name is not text is refused. The directory its
+    /// lossy rendering spells is open beside it, so an implementation that rendered the landing
+    /// with replacement characters would report, key and open that one instead.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_climb_onto_a_name_that_is_not_text_is_not_taken_as_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let base = crate::testutil::scratch_dir("climb-not-text");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("base");
+        let base = base.canonicalize().expect("canonical base");
+        let mut bytes = base.as_os_str().as_bytes().to_vec();
+        bytes.extend_from_slice(b"/x-\xff");
+        let real = PathBuf::from(OsStr::from_bytes(&bytes));
+        assert!(real.to_str().is_none());
+        let lookalike = base.join("x-\u{FFFD}");
+        std::fs::create_dir_all(real.join("project")).expect("project");
+        std::fs::create_dir_all(&lookalike).expect("lookalike");
+        std::fs::write(real.join("x.txt"), "real").expect("file");
+        std::fs::write(lookalike.join("x.txt"), "lookalike").expect("file");
+
+        let mut workspace = Workspace::new(real.join("project")).expect("workspace");
+        workspace
+            .add_directory(base.to_str().expect("utf-8"))
+            .expect("the base is opened");
+        let lookalike_file = lookalike.join("x.txt");
+        assert_eq!(
+            workspace
+                .resolve(lookalike_file.to_str().expect("utf-8"))
+                .expect("the lookalike is reachable"),
+            lookalike_file
+        );
+
+        assert_eq!(workspace.climbed_to("../x.txt"), None);
+        assert_eq!(workspace.expanded("../x.txt"), "../x.txt");
+        assert_ne!(
+            workspace.keyed("../x.txt", false, None),
+            workspace.keyed(lookalike_file.to_str().expect("utf-8"), false, None)
+        );
+        assert!(workspace.resolve("../x.txt").is_err());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// A missing relative file says where it was looked for, so a path that is merely absent reads
