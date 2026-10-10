@@ -2789,10 +2789,14 @@ fn argument_hint(session: &Session) -> Option<String> {
 ///
 /// One place, because the invitation is drawn behind the same opening as the line it stands in
 /// for, and two copies of it are how the two came to sit in different columns.
-fn lead_for(index: usize, shell: bool) -> &'static str {
+fn lead_for(index: usize, shell: bool, private: bool) -> &'static str {
     // Only the first row carries the prompt; continuations are indented to line up beneath it.
     if index != 0 {
         "  "
+    } else if shell && private {
+        // As wide as the others, which the wrap and the caret are measured against, so the second
+        // marker takes the place of the space.
+        "!!"
     } else if shell {
         "! "
     } else {
@@ -2945,7 +2949,7 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
         .map(|(offset, row)| {
             let index = first + offset;
             let mut spans = vec![Span::styled(
-                lead_for(index, session.shell),
+                lead_for(index, session.shell, session.shell_private()),
                 Style::default().fg(colour),
             )];
             // A selection is drawn before the caret is, and instead of it: the whole marked stretch is
@@ -2997,7 +3001,7 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
     // first one typed will land and nothing on the row moves when it does.
     let lines = if session.input().is_empty() && !session.shell {
         let mut spans = vec![Span::styled(
-            lead_for(0, session.shell),
+            lead_for(0, session.shell, session.shell_private()),
             Style::default().fg(colour),
         )];
         spans.extend(placeholder_spans(colour));
@@ -3825,9 +3829,17 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         // the line goes before the things that are spending something unwatched. The way into the
         // view is a thing learned once, so it is given up right after the sentences about the line.
         let parts = [
-            format!("! {}", bravebot_agent::shell::shell()),
+            format!(
+                "{} {}",
+                if session.shell_private() { "!!" } else { "!" },
+                bravebot_agent::shell::shell()
+            ),
             "esc to cancel".to_string(),
-            "output goes to the model".to_string(),
+            match session.shell_private() {
+                true => "output stays here, not sent to the model",
+                false => "output goes to the model",
+            }
+            .to_string(),
             movable,
             looping,
             jobs,

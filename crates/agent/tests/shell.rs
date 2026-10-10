@@ -207,6 +207,29 @@ fn what_a_command_printed_reaches_the_planners_context() {
     );
 }
 
+/// A private command is shown without being recorded: the gate still releases the bytes the screen
+/// draws, and the trail still says what labelled them, while `show` has no conversation to push into.
+#[test]
+fn a_private_command_is_released_for_the_screen_and_the_trail() {
+    let scratch = Scratch::new("private");
+    let mut sink = RecordingSink::new();
+
+    let ran = run("echo for-my-eyes", &scratch.path).expect("it runs");
+    let shown = shell::show("echo for-my-eyes", &ran, &mut sink).expect("it is shown");
+
+    assert!(shown.text.contains("for-my-eyes"), "nothing was drawn");
+    assert!(shown.succeeded);
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "provenance", detail }
+                if detail.contains("echo for-my-eyes") && detail.contains("the user typed")
+        )),
+        "the decision left no trace: {:?}",
+        sink.events()
+    );
+}
+
 /// Said as the user's own message rather than a tool result, because that is what happened: the
 /// planner did not call anything, and describing it as a call would credit it with an action it
 /// could not have taken.

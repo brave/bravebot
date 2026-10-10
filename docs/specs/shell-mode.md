@@ -54,7 +54,7 @@ simply runs.
 `verified-by: bravebot_agent::shell::a_command_line_is_run_and_recorded_without_any_way_to_ask`
 
 <a id="SHELL-3"></a>
-### SHELL-3: the output is `(T,priv)` and reaches the planner in full
+### SHELL-3: the output is `(T,priv)` and reaches the planner in full, unless the line was typed `!!`
 
 Not as a reference. This is the difference from a program the planner ran itself: after
 `! cargo test` the user can say "fix the first failure" and the planner has already read the
@@ -72,6 +72,29 @@ responsibility, and nothing inspected anything.
 `verified-by: bravebot_agent::shell::what_is_shown_is_what_the_gate_released`
 `verified-by: bravebot_tui::shell_mode::output_is_not_drawn_as_quarantined`
 `verified-by: bravebot_tui::shell_mode::output_cannot_draw_its_own_escapes`
+
+<a id="SHELL-6"></a>
+### SHELL-6: a line typed `!!` runs, and its output is drawn and never recorded
+
+A second `!` typed before anything else on an armed line makes that one command private. Like the
+first it is a mode and not a character, so the line that runs is what follows both. The command runs
+exactly as in [SHELL-1](#SHELL-1) and nothing asks ([SHELL-2](#SHELL-2)). What it printed passes the
+same gate and is drawn, with a line saying it was not sent, and nothing is pushed into the
+conversation, so the next request carries neither the line nor its output. The prompt shows `!!` and
+the hint says the output stays on the screen. Backspace on the empty line removes the second marker
+first. A line queued behind a turn keeps its form. Only a keystroke makes a line private, so a paste
+cannot (SHELL-4). This opts out of what SHELL-3 delivers and does not change the default: a plain `!`
+still records.
+
+`verified-by: bravebot_tui::app::a_second_bang_makes_the_command_private`
+`verified-by: bravebot_tui::app::a_plain_command_after_a_private_one_is_recorded_again`
+`verified-by: bravebot_tui::app::a_pasted_bang_does_not_make_the_command_private`
+`verified-by: bravebot_tui::app::backspace_leaves_the_private_form_before_shell_mode`
+`verified-by: bravebot_tui::app::a_private_command_leaves_the_conversation_unchanged`
+`verified-by: bravebot_tui::state::a_queued_private_line_is_taken_as_private_only`
+`verified-by: bravebot_tui::shell_mode::the_private_form_is_drawn_with_a_doubled_marker_and_says_where_the_output_goes`
+`verified-by: bravebot_tui::shell_mode::private_output_is_drawn_and_says_it_went_no_further`
+`verified-by: bravebot_agent::shell::a_private_command_is_released_for_the_screen_and_the_trail`
 
 <a id="SHELL-4"></a>
 ### SHELL-4: only a line a human typed
