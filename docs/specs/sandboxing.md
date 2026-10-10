@@ -730,7 +730,8 @@ repository's configuration and the second its state, and a linked worktree is ma
 where it is relative, is read only where it resolves to a regular file inside the home, outside every
 credential location other than `~/.ssh`, and outside every directory the session may write, which
 are its directories and its scratch directory, since the plan can write those and the key would then
-be one the plan chose. An included file's own `[includeIf]` is not followed. The repository's own
+be one the plan chose. A directory the person lets the session write later, by approving a path or a
+grant, is not counted. An included file's own `[includeIf]` is not followed. The repository's own
 configuration is still not read, whatever it holds: a plan can write it, and the file it names is
 read on the strength of it. The profile line of a stage that carries the signing scope, or was asked
 to carry it, always says that the key comes from `~/.gitconfig` or `~/.config/git/config` or a file
