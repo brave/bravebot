@@ -10,8 +10,9 @@ use std::io::Write;
 pub(crate) const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 
 /// The subcommands, as the usage table lists them.
-pub(crate) const COMMANDS: [&str; 11] = [
+pub(crate) const COMMANDS: [&str; 12] = [
     "doctor",
+    "update",
     "bug-report",
     "auth",
     "mcp",

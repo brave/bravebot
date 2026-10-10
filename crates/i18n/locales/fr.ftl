@@ -43,6 +43,7 @@ cli-usage-resume-task = Envoyer une tâche unique comme tour suivant d'une sessi
 cli-usage-continue-task = Envoyer une tâche unique comme tour suivant de la session la plus récente
 cli-usage-fork = Dupliquer une session pour explorer une autre voie
 cli-usage-doctor = Vérifier la configuration et le confinement
+cli-usage-update = Afficher la commande qui met à jour cette copie
 cli-usage-bug-report = Écrire la version, le rapport de doctor et le nom du journal le plus récent dans un fichier à joindre à un rapport de bogue
 cli-usage-import = Importer un abonnement Leo Premium
 cli-usage-import-providers = Importer un service de modèle configuré par Claude Code ou opencode
@@ -173,6 +174,7 @@ cli-unknown-option = option inconnue : { $flag }
 cli-completion-needs-a-shell = completion attend l'un de bash, zsh ou fish
 cli-shell-init-needs-a-shell = shell-init attend l'un de bash, zsh ou fish
 cli-bug-report-takes-nothing-else = bug-report n'accepte aucun argument
+cli-update-takes-nothing-else = update n'accepte aucun argument
 bug-report-no-state-directory = bug-report n'écrit rien dans une session incognito ou sans répertoire personnel
 bug-report-not-written = le rapport de bogue n'a pas été écrit : { $problem }
 cli-file-needs-a-path = --file demande un chemin
@@ -2179,6 +2181,11 @@ session-vetting-in-force =
 update-available =
     une version plus récente de bravebot est disponible (celle-ci est { $running }) ; pour la
     mettre à jour : { $command }
+update-how = pour mettre à jour : { $command }
+update-not-installed-by-us =
+    cette copie n'a été installée ni par le paquet npm ni par le script d'installation ; il n'y a
+    donc pas de commande de mise à jour pour elle. Une version compilée depuis les sources se met
+    à jour en récupérant les sources et en recompilant.
 session-started-server = serveur de langage { $language } actif pour cette session ({ $program })
 session-offered-tools =
     { $count ->

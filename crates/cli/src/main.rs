@@ -18,6 +18,7 @@ mod sandbox_check;
 mod session_import;
 mod session_search;
 mod shell_init;
+mod update;
 use bravebot_agent::servers;
 
 use crate::exit::{Ending, fail};
@@ -379,6 +380,7 @@ fn main() -> ExitCode {
             }
         }
         Some("doctor") => doctor(),
+        Some("update") => update::command(&args[1..]),
         Some("bug-report") => bug_report::command(&args[1..]),
         Some("auth") => auth::command(&args[1..]),
         Some("sessions") => background::sessions(&args[1..]),
@@ -501,10 +503,9 @@ fn continues_with_a_task(args: &[String]) -> bool {
 /// refused instead of ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_definition(first: Option<&str>) -> Option<String> {
     match first? {
-        command @ ("doctor" | "bug-report" | "auth" | "mcp" | "sessions" | "attach" | "reply"
-        | "import-leo-creds" | "import-providers" | "completion" | "shell-init") => {
-            Some(t!(cli_agent_not_for_a_command, command = command).to_string())
-        }
+        command @ ("doctor" | "update" | "bug-report" | "auth" | "mcp" | "sessions" | "attach"
+        | "reply" | "import-leo-creds" | "import-providers" | "completion"
+        | "shell-init") => Some(t!(cli_agent_not_for_a_command, command = command).to_string()),
         _ => None,
     }
 }
@@ -564,8 +565,9 @@ fn flag_named(prompts: &SystemPrompts) -> Option<&'static str> {
 /// rather than ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
     match first? {
-        command @ ("doctor" | "bug-report" | "auth" | "mcp" | "sessions" | "attach" | "reply"
-        | "import-leo-creds" | "import-providers" | "completion" | "shell-init") => Some(
+        command @ ("doctor" | "update" | "bug-report" | "auth" | "mcp" | "sessions" | "attach"
+        | "reply" | "import-leo-creds" | "import-providers" | "completion"
+        | "shell-init") => Some(
             t!(
                 cli_system_prompt_not_for_a_command,
                 flag = flag,
@@ -773,6 +775,7 @@ fn starts_no_program(first: Option<&str>) -> bool {
         Some(
             "doctor"
                 | "bug-report"
+                | "update"
                 | "--help"
                 | "-h"
                 | "--version"
@@ -936,6 +939,7 @@ fn print_help() {
             t!(cli_usage_doctor_sandbox),
         ),
         ("bravebot bug-report", t!(cli_usage_bug_report)),
+        ("bravebot update", t!(cli_usage_update)),
         ("bravebot sessions [--json]", t!(cli_usage_sessions)),
         ("bravebot sessions stop <id>", t!(cli_usage_sessions_stop)),
         (
@@ -1225,7 +1229,7 @@ fn take_tool_limit(args: &mut Vec<String>) -> Result<bravebot_core::tool_set::Li
 /// nothing. Refused rather than ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_tool_set_to_limit(first: &str) -> Option<String> {
     match first {
-        command @ ("doctor" | "auth" | "mcp" | "sessions" | "attach" | "reply"
+        command @ ("doctor" | "update" | "auth" | "mcp" | "sessions" | "attach" | "reply"
         | "import-leo-creds" | "import-providers" | "completion" | "shell-init") => {
             Some(t!(cli_tools_not_for_a_command, command = command).to_string())
         }
@@ -7287,6 +7291,7 @@ mod tests {
     fn a_definition_is_refused_where_nothing_would_work_under_it() {
         for first in [
             "doctor",
+            "update",
             "bug-report",
             "auth",
             "mcp",
@@ -7411,6 +7416,7 @@ mod tests {
     fn the_system_prompt_flags_are_refused_where_nothing_would_use_them() {
         for first in [
             "doctor",
+            "update",
             "bug-report",
             "auth",
             "mcp",
@@ -8090,6 +8096,7 @@ mod tests {
     fn a_refused_mode_stops_what_runs_programs_and_not_what_does_not() {
         for first in [
             "doctor",
+            "update",
             "--help",
             "--version",
             "auth",

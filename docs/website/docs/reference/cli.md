@@ -23,6 +23,7 @@ Usage:
   bravebot doctor                        Check configuration and confinement
   bravebot doctor --sandbox-check              Run everyday workflows under the sandbox and report which work
   bravebot bug-report                    Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
+  bravebot update                        Print the command that updates this copy
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
   bravebot auth logout <way>             Forget an imported Leo Premium subscription or a stored gateway key
   bravebot auth status [way]             Say whether a sign-in is usable, exiting 0 only if it is
@@ -50,6 +51,7 @@ Usage:
 | `bravebot doctor` | report configuration and confinement, changing nothing |
 | `bravebot doctor --sandbox-check` | run `git`, `cargo`, `npm` and the other everyday programs under the sandbox and report which work |
 | `bravebot bug-report` | write a text file to attach to a bug report ([below](#bug-report)) |
+| `bravebot update` | print the command that updates this copy, and run nothing ([below](#update)) |
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
 | `bravebot auth logout leo` | forget an imported Leo Premium subscription |
 | `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
@@ -535,6 +537,29 @@ environment value or file of the directory holds a place in it.
 Nothing reads the file back. An [`--incognito`](../using/sessions.md) session, or a machine with no
 home directory, writes no report, and the command exits with status 1. Any argument is refused with
 status 2.
+
+## `update`
+
+```sh
+bravebot update
+```
+
+Prints the command that updates this copy, and runs nothing. Two installations have a command it
+can name:
+
+| How this copy was installed | What it prints |
+|---|---|
+| the npm package `@brave/bravebot` | `npm install -g @brave/bravebot@latest` |
+| `install.sh` | the same `curl` line that installed it, piped to `sh` |
+
+A copy neither of those put here, a build from source above all, is told there is no update command
+for it; that is a success, since nothing on the machine is wrong. The two lines are not
+interchangeable: the npm one installs a package manager's copy, which leaves a script install's
+binary untouched, and the script's one writes over the path the script recorded.
+
+It asks nothing of any registry, so the command is the same whether or not a newer version has been
+published and no version is named. Whether one is out is said once at the top of an interface
+session instead. Any argument is refused with status 2.
 
 ## `--vet`
 
