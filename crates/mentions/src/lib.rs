@@ -323,13 +323,33 @@ fn words_after_at(line: &str) -> impl Iterator<Item = String> + '_ {
 ///
 /// Every other name comes back as it was. A name with `..` in it is left for the read to refuse,
 /// the way NAME-5 refuses it everywhere else.
-pub fn resolved(root: &Path, name: &str, sources: &Sources) -> String {
+///
+/// The result is text, because a turn is handed its files as text. A reference directory whose path
+/// is not valid UTF-8 has no spelling that names it, and a lossy one would name a different
+/// directory, so a name under it is refused with [`NotText`] and nothing is resolved.
+pub fn resolved(root: &Path, name: &str, sources: &Sources) -> Result<String, NotText> {
     let (base, rest, tag) = anchored(root, name, sources);
     if tag.is_empty() || rest.is_empty() || name.contains("..") {
-        return name.to_string();
+        return Ok(name.to_string());
     }
-    base.join(rest).display().to_string()
+    base.join(rest)
+        .into_os_string()
+        .into_string()
+        .map_err(|_| NotText)
 }
+
+/// A reference directory whose path is not valid UTF-8, so a name under it cannot be written as the
+/// text a turn takes its files in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotText;
+
+impl std::fmt::Display for NotText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the reference directory's path is not valid UTF-8")
+    }
+}
+
+impl std::error::Error for NotText {}
 
 /// Whether Enter on a half-typed reference completes it rather than sending the line.
 ///
@@ -735,9 +755,31 @@ mod tests {
             vec!["parser/own.rs"]
         );
         assert_eq!(
-            resolved(&workspace.path, "parser/own.rs", &sources),
-            "parser/own.rs"
+            resolved(&workspace.path, "parser/own.rs", &sources).as_deref(),
+            Ok("parser/own.rs")
         );
+    }
+
+    /// REFER-6: a reference directory whose path is not UTF-8 is refused, and the directory whose
+    /// name is its U+FFFD rendering is a different one that still resolves. A lossy rendering would
+    /// resolve both to the second path.
+    #[cfg(unix)]
+    #[test]
+    fn a_reference_directory_that_is_not_text_is_refused_not_rewritten() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let workspace = Scratch::new("alias-not-text");
+        let beside = Scratch::new("alias-not-text-beside");
+        let invalid = beside.path.join(OsStr::from_bytes(b"lib-\xff"));
+        let lookalike = beside.path.join(OsStr::new("lib-\u{FFFD}"));
+        let under = |directory: &PathBuf| vec![("parser".to_string(), directory.clone())];
+
+        let refused = resolved(&workspace.path, "parser/a.rs", &under(&invalid));
+        let named = resolved(&workspace.path, "parser/a.rs", &under(&lookalike));
+        assert_eq!(refused, Err(NotText));
+        assert_eq!(named, Ok(lookalike.join("a.rs").display().to_string()));
+        assert_ne!(refused, named);
     }
 
     /// REFER-6: a name under an alias is the file in the directory, `..` leaves the reference, and
@@ -747,16 +789,16 @@ mod tests {
         let (workspace, library, sources) = with_a_reference("alias-resolved");
         assert_eq!(
             resolved(&workspace.path, "parser/src/lexer.rs", &sources),
-            library.path.join("src/lexer.rs").display().to_string()
+            Ok(library.path.join("src/lexer.rs").display().to_string())
         );
         assert_eq!(
-            resolved(&workspace.path, "parser/../x", &sources),
-            "parser/../x"
+            resolved(&workspace.path, "parser/../x", &sources).as_deref(),
+            Ok("parser/../x")
         );
         assert!(matching(&workspace.path, "parser/../", &sources).is_empty());
         assert_eq!(
-            resolved(&workspace.path, "other/a.rs", &sources),
-            "other/a.rs"
+            resolved(&workspace.path, "other/a.rs", &sources).as_deref(),
+            Ok("other/a.rs")
         );
         assert!(names_a_file(&workspace.path, "parser/README.md", &sources));
         assert!(!names_a_file(&workspace.path, "parser/src", &sources));

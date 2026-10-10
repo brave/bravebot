@@ -9164,7 +9164,12 @@ fn files_named_in(
         // A name under a reference's alias is the file in that directory (REFER-6).
         Wrote::ThePerson => bravebot_mentions::referenced(prompt)
             .into_iter()
-            .map(|name| bravebot_mentions::resolved(root, &name, sources))
+            .map(|name| {
+                // A reference directory with no text spelling leaves the name as typed. Nothing
+                // in the workspace has that name, so the turn's read refuses it by name, and no
+                // other directory is read in its place.
+                bravebot_mentions::resolved(root, &name, sources).unwrap_or(name)
+            })
             .collect(),
         Wrote::TheDriver => Vec::new(),
     }
@@ -24782,6 +24787,93 @@ mod tests {
             "the refusal did not name the key that made it: {}",
             session.transcript[0].text
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// REFER-6: the alias a person is offered after `@` follows what the workspace has open. The
+    /// session is told again after `/add-dir close`, `/add-dir` and `/cd`, so an alias disappears
+    /// when its directory is closed or left behind and returns when the directory is opened again.
+    ///
+    /// The regression this rejects is a session that keeps the list it was given at startup, which
+    /// offers a name the file tools refuse after a close and misses one after the directory is
+    /// opened again.
+    #[test]
+    fn the_alias_offered_follows_add_dir_close_add_dir_and_cd() {
+        fn alias_offered(session: &Session) -> bool {
+            match session.offered() {
+                crate::state::Offered::Files(entries) => {
+                    entries.iter().any(|entry| entry.path == "lib/")
+                }
+                _ => false,
+            }
+        }
+
+        let root = crate::testutil::scratch_dir("bravebot-alias-follows-open-test");
+        let project = root.join("project");
+        let library = root.join("library");
+        for directory in [&project, &library] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let mut workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_references(
+                &[bravebot_config::Reference {
+                    alias: "lib".to_string(),
+                    path: library.display().to_string(),
+                    description: None,
+                }],
+                &[],
+            );
+        let mut trust = TrustStore::new(workspace.root());
+        let mut session = Session::new("none").in_workspace(workspace.root());
+        session.set_reference_sources(workspace.reference_sources());
+        for c in "@li".chars() {
+            session.type_char(c);
+        }
+        assert!(alias_offered(&session), "an open reference was not offered");
+
+        assert!(close_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &library.display().to_string(),
+        ));
+        assert!(
+            !alias_offered(&session),
+            "`/add-dir close` left the alias offered"
+        );
+
+        add_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &library.display().to_string(),
+        );
+        assert!(
+            alias_offered(&session),
+            "`/add-dir` of the reference's directory did not offer the alias again"
+        );
+
+        // A `/cd` to a directory that holds the reference closes it, which is the other way an
+        // open directory goes.
+        let rules_state = root.join("state");
+        let rules = starting_rules(&mut session, &rules_state, workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+        let moved = change_directory(
+            &mut session,
+            &mut workspace,
+            &mut answers,
+            "a-session",
+            &root.display().to_string(),
+            |_, _| Some(true),
+        );
+        assert_eq!(moved, Changed::Moved);
+        assert!(
+            workspace.reference_sources().is_empty(),
+            "the `/cd` did not close the reference it overlaps"
+        );
+        assert!(!alias_offered(&session), "`/cd` left the alias offered");
 
         std::fs::remove_dir_all(&root).ok();
     }

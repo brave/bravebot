@@ -46,8 +46,15 @@ pub fn named(workspace: &Workspace, prompt: &str) -> Result<Vec<String>, Failure
         // A name under a reference's alias is the file in that directory (REFER-6).
         .map(|name| {
             bravebot_mentions::resolved(workspace.root(), &name, &workspace.reference_sources())
+                .map_err(|_| {
+                    Failure::bad_request(format!(
+                        "@{name} is under a reference directory whose path is not text, so it \
+                         cannot be sent. Remove the @ to send it as text."
+                    ))
+                })
         })
-        .map(|name| match workspace.survey(&name) {
+        .map(|name| {
+            name.and_then(|name| match workspace.survey(&name) {
             Ok(_) => Ok(name),
             Err(WorkspaceError::Binary { .. }) => Err(Failure::bad_request(format!(
                 "@{name} is not a text file, so it cannot be sent. Remove the @ to send it as text."
@@ -55,6 +62,7 @@ pub fn named(workspace: &Workspace, prompt: &str) -> Result<Vec<String>, Failure
             Err(_) => Err(Failure::bad_request(format!(
                 "@{name} is not a file in this project. Remove the @ to send it as text."
             ))),
+        })
         })
         .collect()
 }
