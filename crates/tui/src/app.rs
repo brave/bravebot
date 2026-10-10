@@ -3856,13 +3856,17 @@ fn idle_action(session: &mut Session, taken: TermEvent) -> Action {
         // rather than a clipboard tool spawned on a timer for the whole life of the
         // session.
         TermEvent::FocusGained => {
+            session.away.focus(true);
             session.image_on_clipboard = crate::clipboard::holds_an_image();
             Action::Redraw
+        }
+        TermEvent::FocusLost => {
+            session.away.focus(false);
+            Action::None
         }
         // Nothing else draws while the box is idle, so a frame laid out for the old size
         // would stay until the next key (INPUT-41).
         TermEvent::Resize(..) => Action::Redraw,
-        _ => Action::None,
     }
 }
 
@@ -4070,6 +4074,7 @@ fn event_loop(
     session.adopt_wheel_rows(settings.wheel_rows());
     session.adopt_panel();
     session.adopt_caffeinate();
+    session.away.adopt(settings.away_summary_enabled());
     // A background job belongs to the session here and ends with it, except where nothing may
     // outlive the process that wrote it (RUN-15).
     if !bravebot_core::incognito::engaged() {
@@ -4231,6 +4236,11 @@ fn event_loop(
                 // the reason a tick is looked at here.
                 None => match queued_next(&mut session) {
                     Some(action) => action,
+                    // Nothing queued and the person away: the recap is owed (CMD-20), and comes
+                    // after the queue so a line somebody typed is never held back by it. Looked at
+                    // in the same pass as the rest for the same reason, since nobody presses a key
+                    // for it.
+                    None if session.away.due(Instant::now(), session.turns) => Action::Recap,
                     None => {
                         if a_countdown_is_owed_a_frame(
                             session.looping().is_some(),
@@ -4682,6 +4692,9 @@ fn event_loop(
             }
             action @ (Action::Aside(..) | Action::Recap) => {
                 let recap = action == Action::Recap;
+                if recap {
+                    session.away.recapped();
+                }
                 let (question, pasted, attached) = match action {
                     Action::Aside(question, pasted, attached) => (question, pasted, attached),
                     _ => (String::new(), Vec::new(), Vec::new()),
@@ -13749,6 +13762,34 @@ mod tests {
                 "{taken:?} left the offer standing"
             );
         }
+    }
+
+    /// The recap on return needs to know the terminal was left and when a turn last finished, and
+    /// both are read off events the loop already takes: a terminal that reports focus changes and a
+    /// completed turn make a recap due, and coming back withdraws it.
+    #[test]
+    fn leaving_the_terminal_after_a_completed_turn_makes_a_recap_due() {
+        let mut session = Session::new("none");
+        let turns = crate::away::FEWEST_TURNS;
+
+        session.complete("done", Vec::new(), 0);
+        let later = std::time::Instant::now() + crate::away::IDLE;
+        assert!(
+            !session.away.due(later, turns),
+            "the terminal was never left"
+        );
+
+        assert_eq!(
+            idle_action(&mut session, TermEvent::FocusLost),
+            Action::None
+        );
+        assert!(session.away.due(later, turns), "left, and a turn is done");
+
+        idle_action(&mut session, TermEvent::FocusGained);
+        assert!(
+            !session.away.due(later, turns),
+            "coming back withdrew nothing"
+        );
     }
 
     /// Nothing else draws while the box is idle, so a resize that maps to no action leaves the

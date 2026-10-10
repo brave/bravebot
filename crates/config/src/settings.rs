@@ -138,6 +138,7 @@ const READ_KEYS: &[&str] = &[
     "advisorModel",
     "agent",
     "attribution",
+    "awaySummaryEnabled",
     "deferMcpToolsAbove",
     "editorMode",
     "effort",
@@ -286,6 +287,8 @@ pub struct Settings {
     terminal_title: Option<bool>,
     /// What the top-level `updateCheck` key said, if it said a boolean.
     update_check: Option<bool>,
+    /// What the top-level `awaySummaryEnabled` key said, if it said a boolean.
+    away_summary_enabled: Option<bool>,
     /// What `vetting.auto` said, where the layer that said it was entitled to.
     ///
     /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
@@ -1064,6 +1067,10 @@ impl Settings {
                 Some(serde_json::Value::Bool(on)) => Some(*on),
                 _ => None,
             },
+            away_summary_enabled: match root.get("awaySummaryEnabled") {
+                Some(serde_json::Value::Bool(on)) => Some(*on),
+                _ => None,
+            },
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
             // from and so the only one entitled to answer.
@@ -1265,6 +1272,15 @@ impl Settings {
     /// comes from the person's own configuration and never from a response.
     pub fn update_check(&self) -> Option<bool> {
         self.update_check
+    }
+
+    /// Whether the settings in force let the interface recap a session by itself when a person has
+    /// been away, if they said.
+    ///
+    /// A boolean and nothing else, for the reason [`Settings::terminal_title`] gives: the key exists
+    /// to turn the recap off, so a quoted `"false"` is absence and the recap stays on.
+    pub fn away_summary_enabled(&self) -> Option<bool> {
+        self.away_summary_enabled
     }
 
     /// What `vetting.auto` said in the home layer, if it said anything.
@@ -1553,6 +1569,7 @@ impl Settings {
             && self.defer_mcp_tools_above.is_none()
             && self.terminal_title.is_none()
             && self.update_check.is_none()
+            && self.away_summary_enabled.is_none()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
             // A key named as something other than a boolean said something too, and `doctor` names
@@ -1718,6 +1735,11 @@ impl Settings {
             )
             .chain(self.terminal_title.is_some().then_some("terminalTitle"))
             .chain(self.update_check.is_some().then_some("updateCheck"))
+            .chain(
+                self.away_summary_enabled
+                    .is_some()
+                    .then_some("awaySummaryEnabled"),
+            )
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
             .chain(
@@ -5622,6 +5644,40 @@ mod tests {
                 "{written}"
             );
         }
+    }
+
+    /// The key exists to turn the automatic recap off, so only a real `false` may do it, for the
+    /// reason the terminal title's is read the same way.
+    #[test]
+    fn only_a_boolean_turns_the_away_recap_off() {
+        for (written, expected) in [
+            (r#"{"awaySummaryEnabled": false}"#, Some(false)),
+            (r#"{"awaySummaryEnabled": true}"#, Some(true)),
+            (r#"{"awaySummaryEnabled": "false"}"#, None),
+            (r#"{"awaySummaryEnabled": 0}"#, None),
+            (r#"{"model": "m"}"#, None),
+        ] {
+            assert_eq!(
+                Settings::parse(written).away_summary_enabled(),
+                expected,
+                "{written}"
+            );
+        }
+    }
+
+    /// A file that sets only this is not a file that set nothing, and the key is one this build
+    /// reads, so it is never reported as one nothing reads.
+    #[test]
+    fn the_away_recap_switch_is_among_the_names_reported() {
+        let settings = Settings::parse(r#"{"awaySummaryEnabled": false}"#);
+        let reported: Vec<&str> = settings.names().collect();
+        assert_eq!(reported, ["awaySummaryEnabled"]);
+        assert!(!settings.is_empty());
+
+        let settings = Layers::new("away-read")
+            .global(r#"{"awaySummaryEnabled": false}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
     }
 
     #[test]

@@ -875,6 +875,11 @@ conversation goes out, no tools are offered, and neither the question nor the an
 conversation. The answer is cut to 400 characters if the model writes more, and it opens in the same
 mode as a `/btw` answer. `/recap` takes no argument: a line with words after it is a prompt.
 
+A session also recaps itself once when you come back to it: the terminal has been unfocused for five
+minutes since the last turn finished, and the session has had three turns. It does not recap again until
+another turn finishes. The [`awaySummaryEnabled`](../customize/configuration.md#awaysummaryenabled)
+setting turns that off.
+
 ## `/btw <question>`
 
 Asks something beside the work. A copy of the conversation goes out with your question on the end of
