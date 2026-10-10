@@ -6099,7 +6099,7 @@ mod tests {
             .expect("workspace")
             .with_home(Some(home.clone()));
 
-        let mut refused = vec![
+        let refused = vec![
             ".ssh",
             ".ssh/keys",
             ".bravebot",
@@ -6114,11 +6114,13 @@ mod tests {
         .map(|row| home.join(row))
         .collect::<Vec<_>>();
         #[cfg(unix)]
-        {
+        let refused = {
+            let mut refused = refused;
             let link = project.join("innocent");
             std::os::unix::fs::symlink(home.join(".ssh"), &link).expect("a link");
             refused.push(link);
-        }
+            refused
+        };
         for named in &refused {
             let named = named.to_str().expect("utf-8 path");
             for error in [
