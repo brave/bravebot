@@ -1591,6 +1591,7 @@ run-confined = its files are confined to these directories, the system temporary
 run-confined-machine = it can read this machine except the places that hold a credential, and write only these directories, the system temporary directory and the toolchain caches:
 run-carries-known-hosts = { $program } also adds to your ssh known hosts and can reach your ssh agent
 run-carries-toolchain = { $program } also reaches the install and the cache of the { $toolchain } toolchain
+run-carries-loopback = { $program } can also listen on, and connect to, ports of this machine, and reaches no other machine
 run-carries-remote = { $program } also reads your git and gh logins, your ssh configuration and public keys, never a private key, and adds to your ssh known hosts
 run-carries-aws = { $program } also reads your aws credentials in ~/.aws
 run-carries-kubernetes = { $program } also reads your kubernetes credentials in ~/.kube
@@ -1656,7 +1657,7 @@ run-unconfined = the planner asked for this one line to run with no sandbox: no 
 run-unconfined-not-remembered =
     a line the planner asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered
 run-scopes-not-remembered =
-    a line the planner asked to carry a credential scope or a toolchain list is asked about every time, so the line itself cannot be remembered
+    a line the planner asked to carry a credential scope, toolchain list or loopback is asked every time, so it cannot be remembered
 # Said only where the plan asked for a credential scope and a record of reach can be written. The
 # lines under it are the programs, each with its operation word, as `/reach` lists them.
 run-keep-reach-explained = m: also remember the requested reach for these commands, so the next plan for them carries it

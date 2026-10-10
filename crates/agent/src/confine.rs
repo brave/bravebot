@@ -675,6 +675,7 @@ impl Confinement {
             // wrapping `gh` is not `gh` and there is no program to key them on.
             for request in self.requested_for(step) {
                 policy = match *request {
+                    Requested::Loopback => policy.allow_loopback(),
                     Requested::Toolchain(toolchain) => toolchain.grant(policy, self.prelude, home),
                     Requested::Scope(scope) => {
                         let mut policy = scope.grant(policy, home);
@@ -784,6 +785,7 @@ impl Confinement {
         let mut toolchains = std::collections::BTreeSet::new();
         let mut scopes = std::collections::BTreeSet::new();
         let mut reaching = std::collections::BTreeSet::new();
+        let mut loopback = false;
         for step in steps {
             let (toolchain, scope) = self.carries(step);
             toolchains.extend(toolchain.map(Toolchain::name));
@@ -800,6 +802,7 @@ impl Confinement {
                 match request {
                     Requested::Scope(scope) => scopes.insert(scope.name()),
                     Requested::Toolchain(toolchain) => toolchains.insert(toolchain.name()),
+                    Requested::Loopback => !std::mem::replace(&mut loopback, true),
                 };
             }
         }
@@ -818,6 +821,13 @@ impl Confinement {
                  to them"
             ),
             None => network,
+        };
+        let network = match loopback {
+            true => format!(
+                "{network}; a step that asked for `loopback` could listen on and connect to this \
+                 machine's own ports"
+            ),
+            false => network,
         };
         // The count of each list and never an entry: a path a person wrote is not text this line
         // has any use for repeating to the planner, and a glob's matches are the machine's.
@@ -1228,6 +1238,14 @@ fn stated(
     if prelude.is_some() {
         said.push(' ');
         said.push_str(&requests_menu_sentence());
+    }
+    if prelude == Some(Prelude::MacOs) {
+        said.push_str(
+            " On macOS a program cannot listen on a port of this machine, or connect to one, \
+             unless its line asks for `loopback`: `cargo test` on a crate whose tests bind \
+             `127.0.0.1:0`, and any build through `sccache`, fail with `Operation not permitted` \
+             without it.",
+        );
     }
     if prelude.is_some() && network.is_closed() {
         said.push_str(
@@ -2126,6 +2144,88 @@ mod tests {
             .with_requested(&[Requested::Toolchain(Toolchain::Cargo)])
             .policy(&script, Path::new("/work/project"), &[]);
         assert!(writes(&asked, &registry));
+    }
+
+    /// SANDBOX-3, SANDBOX-26: a requested `loopback` lends loopback to a stage and nothing else:
+    /// not the network, which a closed session keeps from it, and not to a stage with a
+    /// `NAME=value` in front of it. The controls are the same stage with no request, which has
+    /// none of it.
+    #[test]
+    fn a_requested_loopback_lends_loopback_and_no_network() {
+        let plain = step("/bin/sh", &["-c", "cargo test"]);
+        let mut assigned = step("/bin/sh", &["-c", "cargo test"]);
+        assigned.environment = vec![("A".to_string(), "b".to_string())];
+        let closed = confinement(&["/work/project"])
+            .with_mode(SandboxMode::Strict)
+            .with_network(Network::Closed);
+        let work = Path::new("/work/project");
+
+        let none = closed.policy(&plain, work, &[]);
+        assert!(!none.allow_loopback && !none.allow_network);
+
+        let asked = closed.with_requested(&[Requested::Loopback]);
+        let lent = asked.policy(&plain, work, &[]);
+        assert!(lent.allow_loopback);
+        assert!(!lent.allow_network, "loopback opened the network");
+        assert!(!asked.egress(&plain), "loopback is not a reason for egress");
+        assert!(!asked.policy(&assigned, work, &[]).allow_loopback);
+        assert_eq!(
+            asked.network_for_the_trail(&[&plain]),
+            Some("the network was closed for every stage of this run".to_string())
+        );
+        assert_eq!(
+            asked.requested_for_the_trail(&[&plain]),
+            Some(
+                "the planner asked for loopback for this run, added to stage 1 (loopback)"
+                    .to_string()
+            )
+        );
+    }
+
+    /// SANDBOX-26: `loopback` is on the menu after the toolchains, so it sorts last, and the
+    /// prompt names the stage it is for.
+    #[test]
+    fn a_requested_loopback_sorts_last_and_the_prompt_names_its_stage() {
+        let asked = confinement(&["/work/project"])
+            .with_mode(SandboxMode::Strict)
+            .with_requested(&[
+                Requested::Loopback,
+                Requested::Toolchain(Toolchain::Gradle),
+                Requested::Scope(Scope::Aws),
+            ]);
+        let names: Vec<_> = asked.requested().iter().map(|r| r.name()).collect();
+        assert_eq!(names, ["aws", "gradle", "loopback"]);
+
+        let script = step("/bin/sh", &["-c", "cargo test"]);
+        let described = confinement(&["/work/project"])
+            .with_mode(SandboxMode::Strict)
+            .with_requested(&[Requested::Loopback])
+            .describe(&[&script]);
+        assert_eq!(
+            described.requested,
+            [("sh".to_string(), Requested::Loopback)]
+        );
+        assert!(
+            described
+                .sentences()
+                .iter()
+                .any(|sentence| sentence.contains("sh")
+                    && sentence.contains("ports of this machine")),
+            "{:?}",
+            described.sentences()
+        );
+    }
+
+    /// SANDBOX-3: the planner is told on macOS, where the profile refuses a listening socket, that
+    /// a line needs `loopback` for one, and is not told it elsewhere, where nothing is refused.
+    #[test]
+    fn the_planner_is_told_on_macos_that_listening_needs_loopback() {
+        let on = |prelude| {
+            stated(true, Some(prelude), Network::Open, SandboxMode::Standard)
+                .expect("says something")
+        };
+        assert!(on(Prelude::MacOs).contains("unless its line asks for `loopback`"));
+        assert!(!on(Prelude::Linux).contains("unless its line asks for `loopback`"));
     }
 
     /// SANDBOX-26: a stage with a `NAME=value` in front of it gets no requested scope, as it gets

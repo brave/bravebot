@@ -134,6 +134,13 @@ namespace, which has no path, is reachable whatever the policy names. A backend 
 enforce the network denial refuses the policy instead, so the guarantee never degrades into one
 that is not in force. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
 
+On macOS the profile also refuses binding a port and accepting on it, so a confined stage cannot
+listen on the loopback interface, and a server it starts, such as the one `sccache` runs, or a test
+that binds `127.0.0.1:0`, fails with `Operation not permitted`. A stage the plan lends loopback
+([SANDBOX-26](#SANDBOX-26)) may bind and accept on this machine's own addresses and connect to
+them, and reaches no other address and no resolver. That grant is separate from egress: a closed
+network stays closed for it, and a stage that is granted egress is not given more by it.
+
 **Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
 that reaches a Docker daemon's socket can start a container with the home directory mounted, which
 is every file the profile withheld. Landlock counts the connect as a write, so both backends apply
@@ -141,6 +148,9 @@ one rule to a connect.
 
 `verified-by: bravebot_sandbox::macos::network_is_only_allowed_when_requested`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_reach_the_network`
+`verified-by: bravebot_sandbox::macos::loopback_is_granted_by_its_own_rows_and_opens_no_other_address`
+`verified-by: bravebot_sandbox::macos::a_process_granted_loopback_connects_to_a_local_port_and_one_without_it_cannot`
+`verified-by: bravebot_sandbox::macos::a_process_granted_loopback_can_listen_and_one_without_it_cannot`
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_cannot_reach_a_socket_outside_its_grants`
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_can_reach_the_resolver`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_write_outside_its_grants`
@@ -1732,13 +1742,16 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_ui_bridge::rules::the_filesystem_lists_are_reported_with_the_file_and_what_became_of_each`
 
 <a id="SANDBOX-26"></a>
-### SANDBOX-26: a `run` call may ask for a credential scope or a toolchain list by name, and the person is asked every time
+### SANDBOX-26: a `run` call may ask for a credential scope, a toolchain list or loopback by name, and the person is asked every time
 
 `run` takes an optional `scopes`: an array of names from the fixed menu `remote`, `signing`, `aws`,
-`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven` and `gradle`. It is for the line
-whose argv shows no operation to key a scope on ([SANDBOX-16](#SANDBOX-16)), a script that runs
-`gh` or `cargo` inside it, or `git rebase` that signs what it rewrites. Each name is the scope or
-toolchain list of the same name, with the rows, the egress under a closed network
+`kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven`, `gradle` and `loopback`. It is
+for the line whose argv shows no operation to key a scope on ([SANDBOX-16](#SANDBOX-16)), a script
+that runs `gh` or `cargo` inside it, or `git rebase` that signs what it rewrites, and for a line
+that listens on a port of this machine ([SANDBOX-3](#SANDBOX-3)), `cargo test` over tests that
+bind one or a build through `sccache`. `loopback` is the loopback grant and nothing else: it reads
+no path, and a closed network ([SANDBOX-20](#SANDBOX-20)) stays closed for it. Every other name is
+the scope or toolchain list of the same name, with the rows, the egress under a closed network
 ([SANDBOX-20](#SANDBOX-20)) and the ssh agent socket that scope has when a stage's argv names it
 (`remote` and `signing` both have one), and the places the environment moves its tool's configuration to
 ([SANDBOX-16](#SANDBOX-16)), each named in the prompt with its variable. It is added to every stage
@@ -1784,6 +1797,9 @@ for a different line.
 `verified-by: bravebot_agent::confine::a_requested_toolchain_brings_its_caches`
 `verified-by: bravebot_agent::confine::a_stage_with_an_assignment_gets_no_requested_scope`
 `verified-by: bravebot_agent::confine::a_requested_scope_or_toolchain_keeps_a_closed_network_for_its_stage`
+`verified-by: bravebot_agent::confine::a_requested_loopback_lends_loopback_and_no_network`
+`verified-by: bravebot_agent::confine::a_requested_loopback_sorts_last_and_the_prompt_names_its_stage`
+`verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_listening_needs_loopback`
 `verified-by: bravebot_agent::confine::a_request_is_kept_once_in_the_menus_order`
 `verified-by: bravebot_agent::confine::the_description_names_each_requested_scope_and_the_stage_it_is_for`
 `verified-by: bravebot_agent::confine::a_strict_stage_that_asked_for_a_scope_reads_that_credential_only`
@@ -1815,8 +1831,8 @@ person reads, and a session that asks for nothing is not asked about it.
   starts with an option has no operation to key on, so the line is offered neither key. The keys are
   unbound where they are not drawn, and the acting layer works the shapes out again from the plan and
   the closed scope table rather than from what was drawn.
-- A toolchain list is never remembered, whether it was asked for alone or beside a scope, and nor
-  is the `signing` scope, which `/reach` has no name for. The prompt says so.
+- A toolchain list and loopback are never remembered, whether asked for alone or beside a scope,
+  and nor is the `signing` scope, which `/reach` has no name for. The prompt says so.
 - The line that asked is still asked about every time, with the remembered scope shown on it, and
   neither key vouches for a program, records the line or stops the asking; what it prints is
   quarantined as it was ([SANDBOX-26](#SANDBOX-26)).

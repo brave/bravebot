@@ -38,16 +38,19 @@ pub enum Scope {
 }
 
 /// What the planner may ask a `run` to add to every stage of one line: a name from a fixed menu of
-/// the credential scopes and the toolchain lists, and never a path.
+/// the credential scopes, the toolchain lists and the loopback interface, and never a path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Requested {
     Scope(Scope),
     Toolchain(Toolchain),
+    /// Listening on, and connecting to, a port of this machine's own loopback interface. It
+    /// reaches no other host and no file.
+    Loopback,
 }
 
 impl Requested {
     /// Every name the planner may use, in the order it is told them.
-    pub const MENU: [&'static str; 11] = [
+    pub const MENU: [&'static str; 12] = [
         "remote",
         "signing",
         "aws",
@@ -59,12 +62,16 @@ impl Requested {
         "go",
         "maven",
         "gradle",
+        Self::LOOPBACK,
     ];
+
+    const LOOPBACK: &'static str = "loopback";
 
     /// The request a word names, compared exactly: `Remote`, ` aws` and the empty string name none.
     pub fn named(word: &str) -> Option<Self> {
         match word {
             "signing" => Some(Self::Scope(Scope::Signing)),
+            Self::LOOPBACK => Some(Self::Loopback),
             _ => Scope::named(word)
                 .map(Self::Scope)
                 .or_else(|| Toolchain::named(word).map(Self::Toolchain)),
@@ -76,6 +83,7 @@ impl Requested {
         match self {
             Self::Scope(scope) => scope.name(),
             Self::Toolchain(toolchain) => toolchain.name(),
+            Self::Loopback => Self::LOOPBACK,
         }
     }
 }
@@ -755,8 +763,9 @@ mod tests {
         }
     }
 
-    /// SANDBOX-26: the menu is every scope and every toolchain, so a name the prompt offers cannot
-    /// fail to parse and a scope cannot exist that the planner has no word for.
+    /// SANDBOX-26: the menu is every scope, every toolchain and the loopback interface, so a name
+    /// the prompt offers cannot fail to parse and a scope cannot exist that the planner has no word
+    /// for.
     #[test]
     fn the_menu_is_every_scope_and_every_toolchain() {
         let scopes = EVERY_SCOPE.map(Scope::name);
@@ -772,7 +781,8 @@ mod tests {
         ] {
             assert!(Requested::MENU.contains(&toolchain.name()));
         }
-        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 6);
+        assert_eq!(Requested::named("loopback"), Some(Requested::Loopback));
+        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 6 + 1);
     }
 
     const GIT: &str = "/usr/bin/git";

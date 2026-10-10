@@ -57,6 +57,14 @@ pub struct SandboxPolicy {
     ///
     /// [SANDBOX-14]: ../../../docs/specs/sandboxing.md
     pub git_directories_writable: bool,
+    /// Whether the process may listen on a port of the loopback interface and connect to one,
+    /// where `allow_network` is false.
+    ///
+    /// Only the macOS backend acts on it: its profile starts from a refusal of everything, so a
+    /// server such as the one `sccache` starts, or a test that binds `127.0.0.1:0`, is refused
+    /// there. Linux and Windows hold loopback by other rules and this field changes nothing for
+    /// them. No address other than this machine's own is reached.
+    pub allow_loopback: bool,
 }
 
 impl SandboxPolicy {
@@ -72,6 +80,7 @@ impl SandboxPolicy {
             allow_subprocesses: false,
             starting_in: None,
             git_directories_writable: false,
+            allow_loopback: false,
         }
     }
 
@@ -152,6 +161,13 @@ impl SandboxPolicy {
         self
     }
 
+    /// Permit listening on and connecting to a port of the loopback interface, and nothing
+    /// that is not this machine. See [`SandboxPolicy::allow_loopback`].
+    pub fn allow_loopback(mut self) -> Self {
+        self.allow_loopback = true;
+        self
+    }
+
     /// Take the network back from a policy that granted it, for a stage a closed session gives
     /// none. Whatever resolver or socket the backend ties to egress goes with it.
     pub fn without_network_egress(mut self) -> Self {
@@ -223,6 +239,7 @@ impl SandboxPolicy {
                 allow_subprocesses: self.allow_subprocesses,
                 starting_in: self.starting_in.clone(),
                 git_directories_writable: self.git_directories_writable,
+                allow_loopback: self.allow_loopback,
             },
             omitted,
         }

@@ -183,6 +183,14 @@ impl SeatbeltSandbox {
             }
         }
 
+        // Listening is `network-inbound`, which covers binding the port as well as accepting on
+        // it. Each row names this machine's loopback address, so a stage that listens is reached
+        // from this machine and a stage that connects goes to this machine.
+        if policy.allow_loopback {
+            out.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
+            out.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
+        }
+
         if policy.allow_subprocesses {
             out.push_str("(allow process-fork)\n");
         }
@@ -909,6 +917,32 @@ int main(void) {
         );
     }
 
+    /// SANDBOX-3: loopback is its own grant. Its rows name this machine's address, so a policy
+    /// that asks for it gets no rule for any address and no resolver, and a policy that does not
+    /// gets no network row at all.
+    #[test]
+    fn loopback_is_granted_by_its_own_rows_and_opens_no_other_address() {
+        let without = SeatbeltSandbox::profile(&SandboxPolicy::strict().allow_write("/w"));
+        for operation in ["network-bind", "network-inbound", "network-outbound"] {
+            assert!(!without.contains(operation), "{operation}: {without}");
+        }
+
+        let with = SeatbeltSandbox::profile(&SandboxPolicy::strict().allow_loopback());
+        assert!(
+            with.contains("(allow network-inbound (local ip \"localhost:*\"))\n"),
+            "{with}"
+        );
+        assert!(
+            with.contains("(allow network-outbound (remote ip \"localhost:*\"))\n"),
+            "{with}"
+        );
+        assert!(
+            !with.contains("(remote ip))"),
+            "an open egress rule: {with}"
+        );
+        assert!(!with.contains(RESOLVER), "the resolver is reached: {with}");
+    }
+
     /// Egress limited to a port names that port on the loopback address and leaves out the rule
     /// for any address and the resolver's socket, while a write row still reaches its socket.
     #[test]
@@ -1302,6 +1336,105 @@ int main(void) {
             refused.wait().expect("should wait").code(),
             Some(CURL_COULDNT_CONNECT),
             "the connection was not what failed, so this says nothing about network denial"
+        );
+    }
+
+    /// The policy a program that only reads the system needs to start, with no network.
+    fn reads_the_system_only() -> SandboxPolicy {
+        SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read("/private/etc")
+            .allow_read("/System")
+            .allow_read("/Library")
+    }
+
+    /// SANDBOX-3: a process granted loopback and no network connects to a port of this machine,
+    /// and one granted neither is refused that same connection. The parent answers, so the
+    /// refused half is a connection that did not arrive and not a listener that was absent.
+    #[test]
+    fn a_process_granted_loopback_connects_to_a_local_port_and_one_without_it_cannot() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port to connect to");
+        let port = listener.local_addr().expect("the bound address").port();
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let curl = |policy: &SandboxPolicy| {
+            let args: Vec<OsString> = [
+                "-s",
+                "--noproxy",
+                "*",
+                "-m",
+                "5",
+                &format!("http://127.0.0.1:{port}/"),
+            ]
+            .iter()
+            .map(OsString::from)
+            .collect();
+            sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/curl"),
+                    &args,
+                    policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+        };
+
+        let mut reaching = curl(&reads_the_system_only().allow_loopback());
+        answer_one(&listener);
+        assert_eq!(
+            reaching.wait().expect("should wait").code(),
+            Some(0),
+            "a process granted loopback could not reach the listener"
+        );
+
+        let mut refused = curl(&reads_the_system_only());
+        assert_eq!(
+            refused.wait().expect("should wait").code(),
+            Some(CURL_COULDNT_CONNECT),
+            "the connection was not what failed, so this says nothing about the missing grant"
+        );
+    }
+
+    /// SANDBOX-3: a process granted loopback listens on a port of this machine, which is what an
+    /// `sccache` server and a test that binds `127.0.0.1:0` do, and one without the grant cannot
+    /// bind it. The parent is the client: a connection arrives only where `nc` is bound.
+    #[test]
+    fn a_process_granted_loopback_can_listen_and_one_without_it_cannot() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let listens_on = |policy: &SandboxPolicy| -> bool {
+            let port = {
+                let probe = TcpListener::bind("127.0.0.1:0").expect("a free loopback port");
+                probe.local_addr().expect("the bound address").port()
+            };
+            let args: Vec<OsString> = ["-l", "-w", "4", "127.0.0.1", &port.to_string()]
+                .iter()
+                .map(OsString::from)
+                .collect();
+            let mut child = sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/nc"),
+                    &args,
+                    policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn");
+            let reached = (0..30).any(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+            });
+            let _ = child.wait();
+            reached
+        };
+
+        assert!(
+            listens_on(&reads_the_system_only().allow_loopback()),
+            "nothing listened, so the refusal below says nothing"
+        );
+        assert!(
+            !listens_on(&reads_the_system_only()),
+            "a process without the grant bound a port"
         );
     }
 

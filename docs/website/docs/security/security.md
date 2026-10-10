@@ -49,7 +49,9 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   was opened on, its scratch directory, the system temporary directory and the toolchain caches. A
   command that names `aws`, `kubectl` or `docker` is lent that tool's directory, and a `git push` the
   agent socket, never a private key. The files a tool reads by name to do its job, such as the `gh`
-  login, `~/.npmrc` and `~/.netrc`, are readable. On Windows programs are not confined and run
+  login, `~/.npmrc` and `~/.netrc`, are readable. On macOS a program cannot listen on a port of the
+  machine, or connect to one, unless the planner asks for `loopback` on that line and you approve
+  it. On Windows programs are not confined and run
   with the access your own shell would give them. Their own network requests do not go through the
   one way out described below, so an approved `curl`, `git push` or package install can read what its
   profile reaches and send it with nothing here routing or inspecting the traffic.
