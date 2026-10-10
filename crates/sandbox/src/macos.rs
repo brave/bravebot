@@ -185,10 +185,14 @@ impl SeatbeltSandbox {
 
         // Listening is `network-inbound`, which covers binding the port as well as accepting on
         // it. Each row names this machine's loopback address, so a stage that listens is reached
-        // from this machine and a stage that connects goes to this machine.
+        // from this machine and a stage that connects goes to this machine. A stage held to the
+        // proxy's port keeps that one port: another local port could be a service that carries it
+        // past the host list.
         if policy.allow_loopback {
             out.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
-            out.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
+            if policy.egress_only_to.is_none() {
+                out.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
+            }
         }
 
         if policy.allow_subprocesses {
@@ -943,6 +947,29 @@ int main(void) {
         assert!(!with.contains(RESOLVER), "the resolver is reached: {with}");
     }
 
+    /// SANDBOX-3: a stage held to the proxy's port and granted loopback may listen, and connects
+    /// to that one port still, so loopback does not let it around the host list.
+    #[test]
+    fn loopback_leaves_a_stage_held_to_a_port_with_that_port_alone() {
+        let held = SeatbeltSandbox::profile(
+            &SandboxPolicy::strict()
+                .allow_network_egress_only_to(8123)
+                .allow_loopback(),
+        );
+        assert!(
+            held.contains("(allow network-inbound (local ip \"localhost:*\"))\n"),
+            "{held}"
+        );
+        assert!(
+            held.contains("(allow network-outbound (remote ip \"localhost:8123\"))\n"),
+            "{held}"
+        );
+        assert!(
+            !held.contains("(remote ip \"localhost:*\")"),
+            "a held stage connects to every local port: {held}"
+        );
+    }
+
     /// Egress limited to a port names that port on the loopback address and leaves out the rule
     /// for any address and the resolver's socket, while a write row still reaches its socket.
     #[test]
@@ -1029,6 +1056,70 @@ int main(void) {
             refused.wait().expect("should wait").code(),
             Some(CURL_COULDNT_CONNECT),
             "the connection was not what failed"
+        );
+        assert!(
+            matches!(
+                other.accept(),
+                Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock
+            ),
+            "a connection arrived at a port the policy did not name"
+        );
+    }
+
+    /// SANDBOX-3: loopback does not let a process held to the proxy's port connect to another
+    /// port of this machine, where a local service could carry it past the host list. The held
+    /// port answering is what makes the refusal mean the rule was applied.
+    #[test]
+    fn a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port() {
+        let named = TcpListener::bind("127.0.0.1:0").expect("a loopback port to connect to");
+        let other = TcpListener::bind("127.0.0.1:0").expect("a second loopback port");
+        let (named_port, other_port) = (
+            named.local_addr().expect("the bound address").port(),
+            other.local_addr().expect("the bound address").port(),
+        );
+        other
+            .set_nonblocking(true)
+            .expect("the listener can be polled");
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = reads_the_system_only()
+            .allow_network_egress_only_to(named_port)
+            .allow_loopback();
+        let curl = |port: u16| {
+            let args: Vec<OsString> = [
+                "-s",
+                "--noproxy",
+                "*",
+                "-m",
+                "5",
+                &format!("http://127.0.0.1:{port}/"),
+            ]
+            .iter()
+            .map(OsString::from)
+            .collect();
+            sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/curl"),
+                    &args,
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+        };
+
+        let mut reaching = curl(named_port);
+        answer_one(&named);
+        assert_eq!(
+            reaching.wait().expect("should wait").code(),
+            Some(0),
+            "the held port was refused, so nothing below means anything"
+        );
+
+        let mut refused = curl(other_port);
+        assert_eq!(
+            refused.wait().expect("should wait").code(),
+            Some(CURL_COULDNT_CONNECT),
+            "loopback let a held process connect to another local port"
         );
         assert!(
             matches!(

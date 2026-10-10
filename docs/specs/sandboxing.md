@@ -140,7 +140,8 @@ that binds `127.0.0.1:0`, fails with `Operation not permitted`. A stage the plan
 ([SANDBOX-26](#SANDBOX-26)) may bind and accept on this machine's own addresses and connect to
 them, and reaches no other address and no resolver. That grant is separate from egress: a closed
 network stays closed for it, and to a stage that has egress, which connects anywhere, it adds only
-listening.
+listening. A stage held to a proxy's port ([SANDBOX-24](#SANDBOX-24)) may listen and still connects
+to that port alone, since another local port could be a service that carries it past the host list.
 
 **Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
 that reaches a Docker daemon's socket can start a container with the home directory mounted, which
@@ -152,6 +153,8 @@ one rule to a connect.
 `verified-by: bravebot_sandbox::macos::loopback_is_granted_by_its_own_rows_and_opens_no_other_address`
 `verified-by: bravebot_sandbox::macos::a_process_granted_loopback_connects_to_a_local_port_and_one_without_it_cannot`
 `verified-by: bravebot_sandbox::macos::a_process_granted_loopback_can_listen_and_one_without_it_cannot`
+`verified-by: bravebot_sandbox::macos::loopback_leaves_a_stage_held_to_a_port_with_that_port_alone`
+`verified-by: bravebot_sandbox::macos::a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port`
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_cannot_reach_a_socket_outside_its_grants`
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_can_reach_the_resolver`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_write_outside_its_grants`
@@ -1510,7 +1513,8 @@ never started without the filter its list asks for.
 A stage held to a proxy has a policy that allows outbound TCP to that proxy's loopback port and to
 no other address, and reaches no name resolver, since the proxy resolves the name it tunnels to. A
 program that ignores the variables and connects to a host, or to another loopback port, is refused
-by the operating system. That costs a stage the loopback services of its own, a local database or
+by the operating system, and so is one whose line asked for loopback ([SANDBOX-3](#SANDBOX-3)),
+which lets it listen and adds no port to connect to. That costs a stage the loopback services of its own, a local database or
 a test server, and a program that does not send its connections through the variables: `ssh`
 reads none of them, so a remote reached over ssh cannot connect while a list is set; an HTTPS
 remote can. A unix socket a write row already names is still reached. macOS applies
@@ -1543,6 +1547,7 @@ an unlisted host is refused whichever word is set.
 `verified-by: bravebot_sandbox::policy::the_port_egress_is_limited_to_is_carried_and_goes_with_the_network`
 `verified-by: bravebot_sandbox::macos::egress_limited_to_a_port_names_the_port_and_no_other_address`
 `verified-by: bravebot_sandbox::macos::a_process_limited_to_a_port_reaches_that_port_and_not_another`
+`verified-by: bravebot_sandbox::macos::a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port`
 `verified-by: bravebot_sandbox::windows::a_policy_limiting_egress_to_one_port_is_refused`
 `verified-by: bravebot_sandbox::linux::a_policy_limiting_egress_to_one_port_is_refused`
 `verified-by: bravebot_agent::confine::a_platform_that_cannot_hold_a_program_to_the_proxy_is_refused_naming_the_setting`
