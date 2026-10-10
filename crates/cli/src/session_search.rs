@@ -144,6 +144,7 @@ mod tests {
             branch: None,
             issue: None,
             pull_request: None,
+            handed_off_from: None,
             updated,
             bytes: 0,
             manifest: false,

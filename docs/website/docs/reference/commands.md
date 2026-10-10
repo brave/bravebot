@@ -28,6 +28,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/recap` | | Recap where this session stands, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
+| `/handoff` | `<next goal>` | Start a new session from a brief you can edit, written for the next goal |
 | `/branch` | `[<name>]` | Copy this session and carry on in the copy, keeping the original to return to |
 | `/resume` | `[<id>]` | Pick up another session of this directory, by id or from a list |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
@@ -906,6 +907,21 @@ It needs a record to copy, so it says there is nothing to branch until the first
 is refused in an incognito session, which writes none, and while the session keeps a checkout, which
 a copy does not carry: remove it with `/checkouts remove` first. Typed while a turn runs it waits
 for the turn to end.
+
+## `/handoff <next goal>`
+
+Starts a new session for the next piece of work, from a short brief instead of the whole
+conversation. The planner writes the brief from this session, and it appears in the input box
+followed by a sentence saying what did not come across, and the goal. Read it and change what you
+like. Enter starts a new session whose first prompt is the box as it stands. Escape drops it.
+
+Only the brief crosses. The files and folders you trusted, the programs you vouched for and the
+other permissions you gave do not, so the new session asks again. The old session is left as it
+was, and the new one's row in the `bravebot --resume` list says which session it came from.
+
+It needs a record to link back to, so it says there is nothing to hand off until the first turn has
+ended. A conversation that has met something untrusted offers no brief. Typed while a turn runs it
+waits for the turn to end.
 
 ## `/resume [id]`
 

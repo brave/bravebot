@@ -1474,6 +1474,7 @@ resume-heading = Resume session
 resume-search-placeholder = Search titles and what was said… (since:7d for recent)
 resume-keys = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc for a new session
 resume-from-pr = for pull request { $pull_request }
+resume-handed-off = from { $id }
 resume-keys-within = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc to stay in this session
 resume-nothing-matches = nothing matches that
 resume-manifest-run = that was a manifest run, which cannot be continued; start a new session
@@ -2401,6 +2402,7 @@ command-reach = Remember a directory or credential for a command, or list and re
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
 command-branch = Copy this session and carry on in the copy, keeping the original to return to
+command-handoff = Start a new session from a brief you can edit, written for the next goal
 command-resume = Pick up another session of this directory, by id or from a list
 command-issue = Say which issue this session is for, show it, or clear it
 command-pr = Say which pull request this session is for, show it, or clear it
@@ -2995,6 +2997,13 @@ btw-needs-a-question = /btw takes the question to ask, which the conversation wi
 btw-uninterruptible = the question cannot be interrupted; it takes one request
 btw-ended-unexpectedly = the question ended unexpectedly
 btw-failed = the question could not be answered: { $problem }
+
+handoff-needs-a-goal = /handoff takes the next piece of work, which the brief is written for
+handoff-nothing-to-hand-off = nothing to hand off yet: the session has no record until its first turn ends
+handoff-ready = the brief is in the box. Edit it, then Enter starts a new session from it, or Esc drops it. The file decisions and permissions given here do not carry over
+handoff-untrusted = the brief was not offered: this conversation has met something untrusted, so the new session would not be starting from what the planner could have held
+handoff-failed = the brief could not be written: { $problem }
+handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
 # What the session says about a manifest run started from it. The plan, each step and the reply are
 # shown as they happen, so what is left to say is that a run is starting, where it was written down,

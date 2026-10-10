@@ -87,6 +87,43 @@ we are trying to do, where the work stands, and what is next.";
 /// The most a recap shows or keeps, in characters.
 pub const RECAP_LIMIT: usize = 400;
 
+/// What `/handoff` asks, in the driver's own words, ahead of the goal the person typed.
+///
+/// The exchange it is asked over is the planner's own context, so the brief is written from what
+/// the planner has read and from nothing else. It is a message to a planner that has read none of
+/// the exchange, which is why it is asked to be self-contained.
+pub const HANDOFF_QUESTION: &str = "\
+I am starting a new session to carry this work on, and the agent in it will not have read any of \
+this exchange. Write the brief it starts from, in plain text and as short as it can be while still \
+being enough: what we are trying to do, what has been decided and why, what has been done and what \
+state it is in, and the files and commands that matter. Leave out anything the next piece of work \
+does not need. Write the brief only: do not carry the work on, and do not address me. The next \
+piece of work is:";
+
+/// The most a handoff brief shows or keeps, in characters.
+pub const HANDOFF_LIMIT: usize = 4000;
+
+/// What the new session is told about what did not cross, written by the driver after the brief.
+///
+/// A brief cannot say this itself: the model that writes it knows what the old session held, and
+/// not what a new one is asked again.
+pub const HANDOFF_NOTICE: &str = "\
+This session was started from a handoff. Only the brief above came from the earlier session. Its \
+file decisions and permissions did not come with it, so ask before reading a file or running \
+something that the brief says was allowed there.";
+
+/// The first prompt of a handed-off session: the brief, what did not cross, and what is next.
+///
+/// Built by the driver from the brief and the goal, both of which the person has read. They edit
+/// it in the box before it is sent, and it is sent as a line they typed.
+pub fn handoff_prompt(brief: &str, goal: &str) -> String {
+    format!(
+        "{}\n\n{HANDOFF_NOTICE}\n\nNext: {}",
+        brief.trim(),
+        goal.trim()
+    )
+}
+
 /// Cut `text` to at most `limit` characters, ending in an ellipsis where something was cut.
 fn capped(text: &str, limit: usize) -> String {
     let text = text.trim();
@@ -153,6 +190,21 @@ impl Question {
         Self {
             limit: Some(RECAP_LIMIT),
             ..Self::about(conversation, RECAP_QUESTION, Vec::new())
+        }
+    }
+
+    /// The brief a new session starts from, for the work `goal` names.
+    ///
+    /// A question the driver writes, over the exchange as it stands. The answer is cut to
+    /// [`HANDOFF_LIMIT`] whatever the model made of the instruction.
+    pub fn handoff(conversation: &Conversation, goal: &str) -> Self {
+        Self {
+            limit: Some(HANDOFF_LIMIT),
+            ..Self::about(
+                conversation,
+                &format!("{HANDOFF_QUESTION} {}", goal.trim()),
+                Vec::new(),
+            )
         }
     }
 
@@ -487,5 +539,54 @@ mod tests {
                 .any(|message| message.content.text().contains("add the feature")),
             "the recap was asked without the exchange"
         );
+    }
+
+    /// The brief is asked for over the whole exchange, with the goal in the question, and leaves
+    /// the exchange as it was.
+    #[test]
+    fn a_handoff_asks_for_a_brief_for_the_goal_over_the_exchange() {
+        let conversation = an_exchange();
+        let before = conversation.len();
+
+        let asking = Question::handoff(&conversation, "  port the parser to the new lexer ");
+
+        assert_eq!(asking.limit, Some(HANDOFF_LIMIT));
+        assert_eq!(conversation.len(), before);
+        let request = asking.into_request();
+        let last = request.last().expect("the question closes the request");
+        let text = last.content.text();
+        assert!(
+            text.contains(HANDOFF_QUESTION),
+            "no brief was asked for: {text}"
+        );
+        assert!(
+            text.ends_with("port the parser to the new lexer"),
+            "the goal did not reach the question: {text}"
+        );
+        assert!(
+            request
+                .iter()
+                .any(|message| message.content.text().contains("add the feature")),
+            "the brief was asked for without the exchange"
+        );
+    }
+
+    /// What crosses is the brief, then the sentence saying what did not, then the goal: a prompt
+    /// missing the notice would let the new session assume the old one's permissions.
+    #[test]
+    fn the_handed_off_prompt_holds_the_brief_the_notice_and_the_goal_in_that_order() {
+        let prompt = handoff_prompt("  We are porting the parser.\n", " write the tests ");
+
+        let brief = prompt
+            .find("We are porting the parser.")
+            .expect("the brief");
+        let notice = prompt.find(HANDOFF_NOTICE).expect("the notice");
+        let goal = prompt.find("Next: write the tests").expect("the goal");
+        assert!(brief < notice && notice < goal, "out of order: {prompt}");
+        assert!(
+            prompt.starts_with("We are porting"),
+            "untrimmed: {prompt:?}"
+        );
+        assert!(prompt.ends_with("write the tests"), "untrimmed: {prompt:?}");
     }
 }

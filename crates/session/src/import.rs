@@ -155,6 +155,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         branch: None,
         issue: None,
         pull_request: None,
+        handed_off_from: None,
         title: found.title.clone(),
         started: if found.started == 0 {
             now

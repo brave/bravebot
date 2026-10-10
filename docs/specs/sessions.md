@@ -1257,6 +1257,44 @@ same reason: the driver may carry text it did not write but does not decide from
 `verified-by: bravebot_cli::session_search::a_row_is_the_id_and_a_title_with_nothing_a_terminal_would_act_on`
 `verified-by: bravebot_cli::running::sessions_search_prints_the_ids_and_titles_of_the_sessions_that_said_it`
 
+<a id="SESSION-34"></a>
+### SESSION-34: `/handoff` starts a new session from a brief the person has read
+
+`/handoff <next goal>` has one request made from the planner's own context, with the goal on the end
+and no tools, as `/recap` is ([CMD-16](commands.md#CMD-16)). The conversation is not changed by it.
+The brief that comes back is cut to 4000 characters and put in the input box with a sentence the
+driver adds saying that the file decisions and permissions of this session did not come with it,
+and the goal. A line already in the box is kept as the draft Up brings back. The person reads and
+edits it. Enter then starts a new session, as `/clear` does, whose first prompt is what the box held
+then; Escape, or emptying the box, drops it, and a prompt typed afterwards is an ordinary prompt.
+The prompt is sent as a line the person typed, because they read and approved it.
+
+The new record holds the id of the session it came from, which the resume picker shows on the
+row; the source's record is not touched and is still resumable. Only the brief crosses. File
+decisions, standing permissions, the trust map, the directories opened and the quarantine are not
+carried, so the new session asks again as after `/clear`. The command is refused, with a line
+saying why and nothing requested, with no goal, and before a turn has ended, because there is no
+record to link back to. A brief is not offered where the exchange has met something untrusted
+([SESSION-20](#SESSION-20)): the planner could not have held it.
+
+**Why.** A long session is worth leaving for the next piece of work without carrying all of it
+([COMPACT](compaction.md)). Writing the brief from the planner's own context adds nothing the
+planner had not been shown, and the person's reading of it is what makes it a prompt. The permissions
+stay behind because they were given for work that the brief describes only in words.
+
+`verified-by: bravebot_agent::aside::a_handoff_asks_for_a_brief_for_the_goal_over_the_exchange`
+`verified-by: bravebot_agent::aside::the_handed_off_prompt_holds_the_brief_the_notice_and_the_goal_in_that_order`
+`verified-by: bravebot_tui::app::the_handoff_command_carries_its_goal_and_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::enter_on_a_proposed_brief_starts_a_session_from_the_edited_text`
+`verified-by: bravebot_tui::app::a_prompt_typed_after_the_brief_was_wiped_out_is_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief`
+`verified-by: bravebot_tui::app::a_handoff_with_no_goal_or_no_ended_turn_is_refused_with_a_line_saying_why`
+`verified-by: bravebot_tui::app::a_brief_from_an_exchange_that_met_something_untrusted_is_not_offered`
+`verified-by: bravebot_tui::app::a_brief_the_planner_could_have_held_is_offered_and_a_failed_request_offers_nothing`
+`verified-by: bravebot_session::sessions::the_list_carries_the_session_a_handoff_came_from_and_only_where_it_is_an_id`
+`verified-by: bravebot_session::sessions::a_handed_off_session_keeps_its_source_across_a_resume`
+`verified-by: bravebot_tui::resume::a_handed_off_session_names_its_source_on_its_row`
+
 ## Known costs
 
 - **The first character typed reads every record.** Each record in the directory is parsed in full

@@ -169,6 +169,9 @@ const COMPACT_COMMAND: &str = "/compact";
 /// The line that starts a new session in place of this one.
 const CLEAR_COMMAND: &str = "/clear";
 
+/// The line that has a brief written for the next piece of work, to start a new session from.
+const HANDOFF_COMMAND: &str = "/handoff";
+
 /// The line that copies this session and moves onto the copy, taking its name as an option.
 const BRANCH_COMMAND: &str = "/branch";
 
@@ -318,7 +321,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 42] {
+pub fn commands() -> [Command; 43] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -420,6 +423,12 @@ pub fn commands() -> [Command; 42] {
             name: CLEAR_COMMAND,
             argument: "",
             description: t!(command_clear),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: HANDOFF_COMMAND,
+            argument: "<next goal>",
+            description: t!(command_handoff),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -761,6 +770,13 @@ pub enum Action {
     ),
     /// Start a new session here. Needs the conversation and the session record, which the loop owns.
     Clear,
+    /// Have a brief written for the goal typed, from this session's conversation, and put it in the
+    /// box. Needs the conversation and the network, which the loop owns.
+    Handoff(String),
+    /// Start a new session whose first prompt is this, the brief as the person left it, and record
+    /// which session it came from. Needs the conversation and the session record, which the loop
+    /// owns.
+    HandOver(String),
     /// Call this session something else. Needs the session record, which the loop owns.
     Rename(String),
     /// Copy this session and carry on in the copy, named as given or marked as a fork. Needs the
@@ -1620,6 +1636,8 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
 ///
 /// Separated from the loop so it can be tested without a terminal.
 pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
+    // Before the key edits anything: a brief whose box was emptied is no longer being edited.
+    session.drop_a_wiped_handoff();
     // Before everything, including the keys that edit the line: while a delegate is being watched
     // there is no line being edited, and every key belongs to the mode.
     if session.watching().is_some() {
@@ -1823,6 +1841,15 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         KeyCode::Enter if !session.key_arrived_alone => {
             session.note(t!(return_not_pressed));
             Action::Redraw
+        }
+        // The brief `/handoff` wrote, as the person left it. Before the command arm, since a brief
+        // that happens to begin with a slash is still the brief, and after the arm that refuses a
+        // return that arrived with other keys. Shell mode is off whenever the brief is in the box.
+        KeyCode::Enter if !session.shell && session.handoff_pending() => {
+            match session.take_handoff() {
+                Some(brief) => Action::HandOver(brief),
+                None => Action::None,
+            }
         }
         // Before every command arm, because in shell mode the line is a command and nothing else.
         // `/status` is a path to a program somebody might have, and `!` is how they said so.
@@ -2061,6 +2088,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(name) = argument_to(line, BRANCH_COMMAND) {
         return Action::Branch(name.to_string());
     }
+    // The goal is typed by the person and is the one thing that goes into the request beside the
+    // conversation, so it is never a prompt: nothing about it joins the exchange.
+    if let Some(goal) = argument_to(line, HANDOFF_COMMAND) {
+        return Action::Handoff(goal.to_string());
+    }
     // Only names which record to pick up: nothing typed here is sent, and the record is read and
     // restored by the path `--resume` takes (CMD-14).
     if let Some(id) = argument_to(line, RESUME_COMMAND) {
@@ -2226,6 +2258,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
 /// turn ends and stops at a command, so without this the line behind one would wait for a key press
 /// that nobody is going to make.
 fn queued_next(session: &mut Session) -> Option<Action> {
+    // The first prompt of a session a handoff has just begun, which nobody will press anything to
+    // send: Enter on the brief already did.
+    if let Some(prompt) = session.start_handed_over() {
+        return Some(Action::Submit(prompt));
+    }
     if let Some(commanded) = session.take_queued_command() {
         return Some(dispatch_command(session, commanded));
     }
@@ -2934,6 +2971,7 @@ fn queued(session: &mut Session, key: KeyEvent) -> Action {
 /// Said once per session and then not again, because a user who has been told which key carries a
 /// picture does not need telling every time they use the other one.
 pub fn handle_paste(session: &mut Session, text: &str) -> Action {
+    session.drop_a_wiped_handoff();
     // The line is the scroller's to leave alone, and the delegate view's: a paste is not a key, so
     // it arrives from the terminal whatever mode is open and the guard that holds the box still for
     // a keystroke never sees it. Before the empty case as much as the rest, because that one spends
@@ -4717,14 +4755,27 @@ fn event_loop(
                 }
                 needs_draw = true;
             }
-            Action::Clear => {
+            action @ (Action::Clear | Action::HandOver(_)) => {
+                // What a handoff adds to a clear is the link back to the session it came from and a
+                // first prompt, and what it takes away is nothing: the file decisions, the
+                // permissions and the quarantine are asked about again below, as after `/clear`.
+                let (brief, source) = match action {
+                    Action::HandOver(brief) => (Some(brief), stored.to_resume().map(|r| r.id)),
+                    _ => (None, None),
+                };
                 // A new handle means a new id, so the session so far keeps its own files and stays
                 // resumable. Nothing is deleted: what the user asked for is a clean context, and
                 // throwing away the record would be answering a question they did not ask.
                 session.clear();
                 conversation = Conversation::new();
                 stored = handle_after_clear(workspace.root(), &session);
-                session.note(t!(session_cleared));
+                match (&brief, &source) {
+                    (Some(_), Some(from)) => {
+                        stored.hand_off_from(from);
+                        session.note(t!(handoff_started, id = from));
+                    }
+                    _ => session.note(t!(session_cleared)),
+                }
 
                 // A new session, so it is asked what a new session is asked. The map goes with the
                 // context and the directories opened under it go too, since opening one is a grant
@@ -4766,6 +4817,38 @@ fn event_loop(
                 // so dropping the set shuts them down and the session beginning here is asked
                 // again before one starts.
                 answers.servers = None;
+                // Last, once everything the new session is asked has been answered: the next pass
+                // of the loop sends it as the person's own line.
+                if let Some(brief) = brief {
+                    session.hand_over(brief);
+                }
+                needs_draw = true;
+            }
+            Action::Handoff(goal) => {
+                if let Some(refusal) =
+                    handoff_refusal(&goal, session.turns, stored.to_resume().is_some())
+                {
+                    session.note(refusal);
+                } else {
+                    // Closed for the reason an aside closes it: the request is charged to a turn
+                    // the snapshot predates.
+                    session.rewind.close();
+                    let (done, events) = ask_animated(
+                        terminal,
+                        &mut session,
+                        config,
+                        &conversation,
+                        &mut answers.trust,
+                        "",
+                        false,
+                        Some(&goal),
+                        &[],
+                        &[],
+                        &workspace,
+                    )?;
+                    stored.append_audit(session.turns, &events);
+                    handoff_answered(&mut session, &goal, done);
+                }
                 needs_draw = true;
             }
             Action::Submit(prompt) => {
@@ -7184,6 +7267,56 @@ fn aside_animated(
     attached: &[crate::state::Attached],
     workspace: &Workspace,
 ) -> io::Result<Vec<Stamped>> {
+    let asked = if recap {
+        RECAP_LABEL.to_string()
+    } else {
+        question.to_string()
+    };
+    let (done, events) = ask_animated(
+        terminal,
+        session,
+        config,
+        conversation,
+        trust,
+        question,
+        recap,
+        None,
+        pasted,
+        attached,
+        workspace,
+    )?;
+    match done {
+        Ok(answered) => aside_answered(session, asked, answered),
+        Err(message) => {
+            session.end_aside(0);
+            session.note(t!(btw_failed, problem = message));
+        }
+    }
+    Ok(events)
+}
+
+/// The request an aside and a handoff's brief share, drawn while it is answered.
+///
+/// Hands back what came of it and leaves what that means to the caller: a question's answer is a
+/// row beside the transcript, and a brief goes into the box. `handoff` is the goal the brief is for,
+/// which makes the request the brief's and not a question or a recap.
+#[allow(clippy::too_many_arguments)]
+fn ask_animated(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    config: &Config,
+    conversation: &Conversation,
+    trust: &mut TrustStore,
+    question: &str,
+    recap: bool,
+    handoff: Option<&str>,
+    pasted: &[crate::state::AttachedImage],
+    attached: &[crate::state::Attached],
+    workspace: &Workspace,
+) -> io::Result<(
+    Result<bravebot_agent::aside::Answered, String>,
+    Vec<Stamped>,
+)> {
     // For the reason a turn and a summary both do it: this is one request to the same backend,
     // and a sign-in is not something a worker thread can ask for.
     sign_in_if_needed(terminal, session, config)?;
@@ -7201,7 +7334,9 @@ fn aside_animated(
     // The pictures go with the question, in the order the markers in it number them, the way they go
     // with a prompt: somebody asking about a screenshot beside the work is asking about the thing
     // they pasted, and pasting.md PASTE-2 is the whole of why it may be looked at.
-    let asking = if recap {
+    let asking = if let Some(goal) = handoff {
+        bravebot_agent::aside::Question::handoff(conversation, goal)
+    } else if recap {
         bravebot_agent::aside::Question::recap(conversation)
     } else {
         bravebot_agent::aside::Question::about(
@@ -7230,12 +7365,6 @@ fn aside_animated(
             crate::dropped::Kind::Text => None,
         })
         .collect();
-    let asked = if recap {
-        RECAP_LABEL.to_string()
-    } else {
-        question.to_string()
-    };
-
     session.begin_aside();
 
     let worker = thread::spawn(move || {
@@ -7335,15 +7464,55 @@ fn aside_animated(
         *trust = vouched;
     }
 
+    Ok((done, sink.events().to_vec()))
+}
+
+/// Why `/handoff` asks for nothing, as the line to tell the person, where it does not.
+///
+/// SESSION-34: with no goal there is nothing for the brief to be written for, and before a turn
+/// has ended the session has no record for the new one to link back to. `recorded` is whether the
+/// session has one. Nothing here reads the conversation, so a refusal is decided before any
+/// request is made.
+fn handoff_refusal(goal: &str, turns: usize, recorded: bool) -> Option<&'static str> {
+    if goal.is_empty() {
+        Some(t!(handoff_needs_a_goal))
+    } else if turns == 0 || !recorded {
+        Some(t!(handoff_nothing_to_hand_off))
+    } else {
+        None
+    }
+}
+
+/// Take what the request for a `/handoff` brief came back with.
+///
+/// SESSION-34: only a brief the planner could have held is offered. Where the exchange has met
+/// something untrusted the answer is on no screen but a note, and a person reading it is not a
+/// gate. Whether it could have been held is [`bravebot_agent::aside::Answered::kept`] being
+/// present, which the aside's own policy decided from the labels; the brief's bytes are not
+/// looked at here. Apart from [`ask_animated`] so a test can call it without a backend.
+fn handoff_answered(
+    session: &mut Session,
+    goal: &str,
+    done: Result<bravebot_agent::aside::Answered, String>,
+) {
     match done {
-        Ok(answered) => aside_answered(session, asked, answered),
+        Ok(answered) if answered.kept.is_some() => {
+            session.end_aside(answered.usage.total());
+            session.propose_handoff(&bravebot_agent::aside::handoff_prompt(
+                &answered.shown,
+                goal,
+            ));
+            session.note(t!(handoff_ready));
+        }
+        Ok(answered) => {
+            session.end_aside(answered.usage.total());
+            session.note(t!(handoff_untrusted));
+        }
         Err(message) => {
             session.end_aside(0);
-            session.note(t!(btw_failed, problem = message));
+            session.note(t!(handoff_failed, problem = message));
         }
     }
-
-    Ok(sink.events().to_vec())
 }
 
 /// Take what a question asked beside the work came back with.
@@ -16683,6 +16852,199 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Enter)),
             Action::Submit("how does /compact work".to_string())
         );
+    }
+
+    /// The goal is the person's, goes to the request beside the conversation and is never sent as a
+    /// prompt. A word that merely starts with the command's is still a prompt.
+    #[test]
+    fn the_handoff_command_carries_its_goal_and_is_not_sent_as_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/handoff  port the parser, then  the tests".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Handoff("port the parser, then  the tests".to_string())
+        );
+        assert!(
+            session.transcript.is_empty(),
+            "the goal was sent as a prompt"
+        );
+
+        for c in "/handoffs the parser".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/handoffs the parser".to_string())
+        );
+    }
+
+    /// Enter on the brief starts a new session from what is in the box now, edits included, and
+    /// does not send it into this one.
+    #[test]
+    fn enter_on_a_proposed_brief_starts_a_session_from_the_edited_text() {
+        let mut session = Session::new("none");
+        session.propose_handoff("the brief");
+        for c in " and an edit".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::HandOver("the brief and an edit".to_string())
+        );
+        assert!(session.input().is_empty(), "the brief stayed in the box");
+        assert!(
+            session.transcript.is_empty(),
+            "the brief joined this session"
+        );
+    }
+
+    /// The box emptied and typed into again is a new line. A flag that outlived the brief would make
+    /// the next prompt somebody wrote start a session they did not ask for.
+    #[test]
+    fn a_prompt_typed_after_the_brief_was_wiped_out_is_sent_as_a_prompt() {
+        let mut session = Session::new("none");
+        // Wiped by backspacing, which edits the line in place, and by Escape, which replaces it.
+        session.propose_handoff("the brief");
+        for _ in 0.."the brief".len() {
+            handle_key(&mut session, key(KeyCode::Backspace));
+        }
+        assert!(session.input().is_empty());
+        for c in "something else".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("something else".to_string())
+        );
+
+        let mut session = Session::new("none");
+        session.propose_handoff("the brief");
+        handle_key(&mut session, key(KeyCode::Esc));
+        for c in "and another".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("and another".to_string())
+        );
+    }
+
+    /// The brief arriving over a line already being typed keeps that line as the draft Up brings
+    /// back, and the first prompt of the new session is sent as the person's own line.
+    #[test]
+    fn a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief() {
+        let mut session = Session::new("none");
+        for c in "half a thought".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        session.propose_handoff("the brief");
+        assert_eq!(session.input(), "the brief");
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "half a thought", "the typed line was lost");
+
+        let mut next = Session::new("none");
+        next.hand_over("the brief".to_string());
+        assert_eq!(
+            queued_next(&mut next),
+            Some(Action::Submit("the brief".to_string()))
+        );
+        assert_eq!(queued_next(&mut next), None, "it was sent twice");
+    }
+
+    /// Each way `/handoff` is refused says so and asks for nothing. Dropping the goal check, the
+    /// turn check or the record check would send a request for a brief that has nothing to link
+    /// back to, or nothing to be written for.
+    #[test]
+    fn a_handoff_with_no_goal_or_no_ended_turn_is_refused_with_a_line_saying_why() {
+        assert_eq!(
+            handoff_refusal("", 3, true),
+            Some(t!(handoff_needs_a_goal)),
+            "no goal was not refused as such"
+        );
+        assert_eq!(
+            handoff_refusal("port the parser", 0, true),
+            Some(t!(handoff_nothing_to_hand_off)),
+            "a session whose first turn has not ended was not refused"
+        );
+        assert_eq!(
+            handoff_refusal("port the parser", 3, false),
+            Some(t!(handoff_nothing_to_hand_off)),
+            "a session with no record to link back to was not refused"
+        );
+        assert_eq!(
+            handoff_refusal("", 0, false),
+            Some(t!(handoff_needs_a_goal)),
+            "the missing goal is the first thing said"
+        );
+        assert_eq!(
+            handoff_refusal("port the parser", 3, true),
+            None,
+            "a goal, an ended turn and a record were refused"
+        );
+    }
+
+    /// A brief the planner could not have held (`kept` is `None`) is never put in the box, however
+    /// readable it is, because the person reading it is not a gate. Removing the `kept` guard would
+    /// offer text the exchange's untrusted content may have shaped.
+    #[test]
+    fn a_brief_from_an_exchange_that_met_something_untrusted_is_not_offered() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        handoff_answered(
+            &mut session,
+            "port the parser",
+            Ok(bravebot_agent::aside::Answered {
+                shown: "a brief an attacker may have shaped".to_string(),
+                kept: None,
+                usage: Default::default(),
+            }),
+        );
+
+        assert!(
+            session.input().is_empty(),
+            "the brief was put in the box: {:?}",
+            session.input()
+        );
+        assert!(!session.handoff_pending(), "Enter would start a session");
+        assert_eq!(last_note(&session), t!(handoff_untrusted));
+        assert!(
+            session
+                .transcript
+                .iter()
+                .all(|entry| !entry.text.contains("an attacker may have shaped")),
+            "the withheld brief was written to the transcript"
+        );
+    }
+
+    /// The same request over an exchange that held nothing untrusted does put the brief in the box,
+    /// so the refusal above is the labels' doing and not a brief that is never offered. A failed
+    /// request offers nothing and says it failed.
+    #[test]
+    fn a_brief_the_planner_could_have_held_is_offered_and_a_failed_request_offers_nothing() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        handoff_answered(
+            &mut session,
+            "port the parser",
+            Ok(bravebot_agent::aside::Answered {
+                shown: "where things stand".to_string(),
+                kept: Some("where things stand".to_string()),
+                usage: Default::default(),
+            }),
+        );
+        assert!(session.handoff_pending(), "the brief was not offered");
+        assert!(session.input().contains("where things stand"));
+        assert_eq!(last_note(&session), t!(handoff_ready));
+
+        let mut session = Session::new("none");
+        session.begin_aside();
+        handoff_answered(&mut session, "port the parser", Err("offline".to_string()));
+        assert!(!session.handoff_pending());
+        assert!(session.input().is_empty());
+        assert_eq!(last_note(&session), t!(handoff_failed, problem = "offline"));
     }
 
     /// The focus is what the person wants the summary to keep, so the whole of it has to arrive,
