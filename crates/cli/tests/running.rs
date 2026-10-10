@@ -2741,7 +2741,10 @@ fn a_gateway_asking_to_run(command: &'static str) -> Gateway {
 #[cfg(unix)]
 #[test]
 fn an_allowed_hosts_list_points_the_programs_a_run_starts_at_the_proxy() {
-    if !bravebot_sandbox::confinement_works_here() {
+    // A platform that cannot hold a program to the proxy refuses the stage under a list.
+    let holds_to_a_port = bravebot_sandbox::for_current_platform()
+        .is_ok_and(|sandbox| sandbox.capabilities().egress_limited_to_a_port);
+    if !bravebot_sandbox::confinement_works_here() || !holds_to_a_port {
         return;
     }
     let run_in = |name: &str, hosts: Option<&str>| {
