@@ -6575,4 +6575,47 @@ mod tests {
             SandboxMode::Strict
         );
     }
+
+    /// SANDBOX-22: a window's choice outranks the settings, is held to the pin at each turn, and is
+    /// never `off`. The regression it rejects is the choice ignored, a choice that goes under the
+    /// pin, or one that leaves a program with no profile.
+    #[test]
+    fn a_windows_choice_outranks_the_settings_and_meets_the_pin() {
+        use crate::sandbox::for_a_window_choosing;
+        let none = crate::Managed::default();
+        let strict_file = Layers::new("sandbox-chosen-strict")
+            .global(r#"{"sandbox": {"mode": "strict"}}"#)
+            .read();
+        assert_eq!(
+            for_a_window_choosing(None, &strict_file, &none),
+            SandboxMode::Strict
+        );
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Standard), &strict_file, &none),
+            SandboxMode::Standard
+        );
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Strict), &Settings::default(), &none),
+            SandboxMode::Strict
+        );
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Off), &Settings::default(), &none),
+            SandboxMode::Standard
+        );
+
+        let pin = pinned("chosen", r#"{"sandbox": {"mode": "strict"}}"#);
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Standard), &Settings::default(), &pin),
+            SandboxMode::Strict
+        );
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Strict), &Settings::default(), &pin),
+            SandboxMode::Strict
+        );
+        let closed = pinned("chosen-closed", r#"{"run": {"network": "closed"}}"#);
+        assert_eq!(
+            for_a_window_choosing(Some(SandboxMode::Strict), &Settings::default(), &closed),
+            SandboxMode::Strict
+        );
+    }
 }

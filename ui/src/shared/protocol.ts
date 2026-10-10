@@ -231,6 +231,8 @@ export interface OpenedSession {
   autoVetting: boolean
   /** Always `ask`: a mode is not read from the record (MODE-10). */
   permissionMode: PermissionMode
+  /** What the settings give a session before its window has chosen: never `off` (SANDBOX-22). */
+  sandboxMode: SandboxMode
   /** Absent from an older bridge, which read no rules. */
   settingsRules?: SettingsRules | null
 }
@@ -245,6 +247,17 @@ export type PermissionMode = 'ask' | 'acceptEdits' | 'plan'
 
 /** The order the mode shortcut walks, ending back at the first. */
 export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'acceptEdits', 'plan']
+
+/**
+ * What a program the agent runs is held to, as `session.sandbox` names it.
+ *
+ * Two of the agent's three. `off` starts a program with no profile, which a window has no way to
+ * show, so the bridge refuses it from a window (SANDBOX-22).
+ */
+export type SandboxMode = 'standard' | 'strict'
+
+/** The order the sandbox menu lists them. */
+export const SANDBOX_MODES: readonly SandboxMode[] = ['standard', 'strict']
 
 export function nextPermissionMode(mode: PermissionMode): PermissionMode {
   return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length]!
@@ -316,6 +329,8 @@ export interface ForkedSession {
   autoVetting: boolean
   /** Always `ask`, whatever the parent was in: a fork opens as any session does (MODE-11). */
   permissionMode: PermissionMode
+  /** What the settings give, whatever the parent chose: a fork opens as any session does. */
+  sandboxMode: SandboxMode
   /** Absent from an older bridge, which read no rules. */
   settingsRules?: SettingsRules | null
   parent: {
@@ -814,7 +829,7 @@ export type AskAnswer = { chosen?: number[]; typed?: string }
 export interface EventMap {
   'agent.ready': { build: string; version: string; home: string | null }
   'trust.request': { directory: string; keeping?: string | null }
-  'turn.started': { turn: number }
+  'turn.started': { turn: number; sandbox?: SandboxMode }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   phase: { phase: Phase }
@@ -848,7 +863,7 @@ export interface EventMap {
   /** Sent as a session's first turn starts the MCP servers its project requests. */
   'mcp.starting': { servers: string[] }
   'mcp.started': McpStarted
-  'manifest.started': { run: number }
+  'manifest.started': { run: number; sandbox?: SandboxMode }
   'manifest.done': ManifestDone
   'manifest.error': ManifestError
   'ask.request': AskRequest

@@ -26,6 +26,7 @@ use bravebot_config::{Config, Settings};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::trust::TrustStore;
 use bravebot_net::Egress;
+use bravebot_sandbox::SandboxMode;
 use bravebot_session::sessions::{Handle, Record, Standing};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -69,6 +70,11 @@ struct Open {
     /// Held here rather than sent with each `turn.send`, because a watch fires a turn that no
     /// request asked for, and that turn must run in the mode the window shows.
     permission_mode: LiveMode,
+    /// The sandbox mode the window chose for this session's programs, or `None` while it has not
+    /// chosen and the settings decide. Like the permission mode it is never read from a record
+    /// (SANDBOX-22), so a resume and a fork start with none. Read when a turn or a run is accepted
+    /// and copied into it, so a choice applies from the next turn.
+    sandbox: Option<SandboxMode>,
 }
 
 /// Drives the agent for a front-end.
@@ -137,6 +143,7 @@ impl Bridge {
             "session.delete" => self.delete_session(request),
             "session.close" => self.close_session(request),
             "session.mode" => self.set_permission_mode(request),
+            "session.sandbox" => self.set_sandbox_mode(request),
             "session.rewind" => self.rewind_session(request),
             "turn.send" => self.send_turn(request),
             "mentions.offer" => {
@@ -328,6 +335,7 @@ impl Bridge {
             auto_vetting,
             definition: None,
             permission_mode: LiveMode::default(),
+            sandbox: None,
         });
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
@@ -470,6 +478,7 @@ impl Bridge {
             ),
             "autoVetting": auto_vetting,
             "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(directory, None)),
         })
     }
 
@@ -524,6 +533,7 @@ impl Bridge {
             auto_vetting,
             definition: None,
             permission_mode: LiveMode::default(),
+            sandbox: None,
         });
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
@@ -540,6 +550,7 @@ impl Bridge {
             "autoVetting": auto_vetting,
             "scratch": self.scratch_report(&handle),
             "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&directory, None)),
         });
         merge(&mut made, reported);
         Ok(made)
@@ -683,6 +694,7 @@ impl Bridge {
             definition: None,
             // Not the parent's. A fork is a session opened again, and opens asking as one does.
             permission_mode: LiveMode::default(),
+            sandbox: None,
         });
         self.ask_about_trust(&child);
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
@@ -709,6 +721,7 @@ impl Bridge {
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
             "autoVetting": auto_vetting,
             "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&project, None)),
             "settingsRules": settings_rules,
             "scratch": self.scratch_report(&child),
             "parent": {
@@ -827,6 +840,37 @@ impl Bridge {
             .ok_or_else(Failure::no_such_session)?;
         open.permission_mode.set(mode);
         Ok(json!({ "permissionMode": wire::permission_mode_name(mode) }))
+    }
+
+    /// Choose the sandbox mode the session's next turn runs its programs under.
+    ///
+    /// `strict` or `standard`: a window has no way to show that nothing confines a program, so
+    /// `off` is refused here whatever the settings say (SANDBOX-22). The managed file is a floor, and
+    /// is read again when the turn starts. A turn already running keeps the mode it began with.
+    fn set_sandbox_mode(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let mode = wire::sandbox_mode(request.param("mode"))?;
+        if let Err(refused) =
+            bravebot_config::sandbox::allowed_in_session(mode, &bravebot_config::Managed::load())
+        {
+            return Err(Failure::bad_request(wire::sandbox_refusal(&refused)));
+        }
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        open.sandbox = Some(mode);
+        Ok(json!({ "sandboxMode": wire::sandbox_mode_name(mode) }))
+    }
+
+    /// The sandbox mode a turn in `project` runs under now.
+    fn sandbox_mode_in(&self, project: &Path, chosen: Option<SandboxMode>) -> SandboxMode {
+        let settings = crate::settings::layers(Some(project), self.settings.as_deref());
+        bravebot_config::sandbox::for_a_window_choosing(
+            chosen,
+            &settings,
+            &bravebot_config::Managed::load(),
+        )
     }
 
     // ------------------------------------------------------------ turns
@@ -951,8 +995,11 @@ impl Bridge {
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let auto_vetting = open.auto_vetting;
-        let sandbox =
-            bravebot_config::sandbox::for_a_window(&settings, &bravebot_config::Managed::load());
+        let sandbox = bravebot_config::sandbox::for_a_window_choosing(
+            open.sandbox,
+            &settings,
+            &bravebot_config::Managed::load(),
+        );
         // The session's own handle, carried to the worker: the planner, the tools and the prompts all
         // read what the window chose last, including a choice made while the turn runs (MODE-8).
         let permission_mode = open.permission_mode.clone();
@@ -1000,6 +1047,7 @@ impl Bridge {
             json!({
                 "turn": turn_number,
                 "mode": wire::permission_mode_name(permission_mode.get()),
+                "sandbox": wire::sandbox_mode_name(sandbox),
             }),
         ));
 
@@ -1110,8 +1158,11 @@ impl Bridge {
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
-        let sandbox =
-            bravebot_config::sandbox::for_a_window(&settings, &bravebot_config::Managed::load());
+        let sandbox = bravebot_config::sandbox::for_a_window_choosing(
+            open.sandbox,
+            &settings,
+            &bravebot_config::Managed::load(),
+        );
         // The session's own handle, as a turn holds it (MODE-8).
         let permission_mode = open.permission_mode.clone();
         let workspace = session_workspace(open, &settings)?;
@@ -1145,7 +1196,11 @@ impl Bridge {
         self.emitter.send(Event::new(
             "manifest.started",
             &handle,
-            json!({ "run": run, "mode": wire::permission_mode_name(permission_mode.get()) }),
+            json!({
+                "run": run,
+                "mode": wire::permission_mode_name(permission_mode.get()),
+                "sandbox": wire::sandbox_mode_name(sandbox),
+            }),
         ));
 
         if let Some(open) = self.open.get_mut(&handle) {
@@ -2787,6 +2842,7 @@ mod coverage_tests {
             auto_vetting: false,
             definition: None,
             permission_mode: LiveMode::default(),
+            sandbox: None,
         });
         let call = |bridge: &mut Bridge, method: &str, params: Value| {
             let line = json!({"id": 1, "method": method, "params": params}).to_string();
@@ -2883,6 +2939,7 @@ mod coverage_tests {
             auto_vetting: false,
             definition: None,
             permission_mode: LiveMode::default(),
+            sandbox: None,
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "session.fork", "params": {
@@ -2966,6 +3023,7 @@ mod permissions_tests {
             auto_vetting: false,
             definition: None,
             permission_mode: LiveMode::default(),
+            sandbox: None,
         });
         let revoke = Request::parse(
             &json!({"id": 1, "method": "permissions.revoke", "params": {
@@ -3007,6 +3065,7 @@ mod permissions_tests {
             auto_vetting: false,
             definition: None,
             permission_mode: LiveMode::default(),
+            sandbox: None,
         });
         let list = Request::parse(
             &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
@@ -3082,6 +3141,7 @@ mod watch_tests {
             auto_vetting: false,
             definition: None,
             permission_mode: LiveMode::default(),
+            sandbox: None,
         });
         std::fs::write(
             root.join("watched"),
@@ -3145,6 +3205,7 @@ mod watch_tests {
             auto_vetting: false,
             definition: None,
             permission_mode: LiveMode::default(),
+            sandbox: None,
         });
         change(&root);
         bridge.poll_watches_at(now + Duration::from_secs(6));
@@ -3232,6 +3293,7 @@ mod watch_tests {
             auto_vetting: false,
             definition: None,
             permission_mode: LiveMode::default(),
+            sandbox: None,
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "turn.cancel", "params": {"session": handle}}).to_string(),
@@ -3283,6 +3345,7 @@ mod watch_tests {
             auto_vetting: false,
             definition: None,
             permission_mode: LiveMode::default(),
+            sandbox: None,
         });
         bridge.poll_watches_at(now + Duration::from_secs(7 * 24 * 60 * 60));
         assert!(watches.lock().unwrap().is_empty());

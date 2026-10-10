@@ -6,7 +6,7 @@ import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
-import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
@@ -57,6 +57,7 @@ interface Live {
   focus: number | null
   autoVetting?: boolean
   permissionMode: PermissionMode
+  sandboxMode: SandboxMode
   trustRemembered?: KeptTrust | null
   rules?: SettingsRules | null
   /** The points this session can be put back to, newest first. */
@@ -116,6 +117,7 @@ interface Props {
   onDraft: (draft: string) => void
   onModel: (model: string) => void
   onMode: (mode: PermissionMode) => void
+  onSandbox: (mode: SandboxMode) => void
   onSubmit: () => void
   /** Start a manifest run from the draft. Absent where the window cannot start one. */
   onPlan?: () => void
@@ -286,6 +288,7 @@ export function Transcript({
   onDraft,
   onModel,
   onMode,
+  onSandbox,
   onSubmit,
   onPlan,
   reading,
@@ -434,6 +437,7 @@ export function Transcript({
   const draftChanged = useEvent(onDraft)
   const chooseModelFor = useEvent(onModel)
   const chooseMode = useEvent(onMode)
+  const chooseSandbox = useEvent(onSandbox)
   const attach = useEvent(onAttach)
   const removeAttachment = useEvent(onRemoveAttachment)
   const preview = useEvent((path: string) => setPreviewPath(path))
@@ -758,6 +762,8 @@ export function Transcript({
           onModel={chooseModelFor}
           permissionMode={live.permissionMode}
           onMode={chooseMode}
+          sandboxMode={live.sandboxMode}
+          onSandbox={chooseSandbox}
           attachments={attachments}
           onAttach={attach}
           onRemoveAttachment={removeAttachment}

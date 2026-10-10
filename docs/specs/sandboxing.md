@@ -1265,8 +1265,16 @@ file, before anything is asked. Otherwise the command ranks as `--sandbox` does,
 `/sandbox standard` replaces a checkout's `strict`. The mode is not in the session record, so a
 resumed session takes the mode its start-up chose, and the command's choice lasts until the process
 ends, across `/clear` and `/resume`. The opening screen, `/status` and the trace's `sandbox` gate
-name the mode in force after the command. The desktop has no such command: it offers none until it
-has a line that shows the mode.
+name the mode in force after the command.
+
+The desktop window has a control of its own in the composer, beside the permission mode. It shows
+the mode in force and offers `strict` and `standard`. It offers no `off`, and the bridge refuses a
+request for `off`, or for any word that is not one of the two, whatever the window sends. A choice is
+the session's own and applies from the next turn or manifest run; the one running keeps the mode it
+started in. The managed floor holds: a mode looser than the pin is refused with a sentence naming the
+file, and a choice is met with the floor again when a turn starts. A session that is opened, resumed
+or forked starts from the settings and the pin, not from the choice of the session it came from, and
+the settings' `off` is still read there as `standard`.
 
 The mode is chosen separately from the permission mode ([MODE-1](permission-modes.md#MODE-1))
 and from `--dangerously-skip-permissions`: neither widens it. One line may start with no profile
@@ -1322,6 +1330,14 @@ the command line prints it on its opening line.
 `verified-by: bravebot_core::policy::the_trail_says_which_sandbox_mode_the_programs_ran_in`
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_reads_off_as_standard`
 `verified-by: bravebot_config::settings::a_session_moving_its_mode_meets_the_floor_start_up_applies`
+`verified-by: bravebot_config::settings::a_windows_choice_outranks_the_settings_and_meets_the_pin`
+`verified-by: bravebot_ui_bridge::wire::a_window_may_name_strict_or_standard_and_no_other_sandbox_mode`
+`verified-by: bravebot_ui_bridge::wire::a_refused_sandbox_mode_names_the_file_and_the_floor`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_window_chooses_the_mode_the_next_turn_runs_under`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_window_cannot_choose_to_turn_the_sandbox_off`
+`verified-by: bravebot_ui_bridge::sandbox_mode::another_session_opens_under_the_settings_and_not_the_choice`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_choice_made_in_one_session_does_not_reach_another_open_beside_it`
+`verified-by: bravebot_ui_bridge::sandbox_mode::a_chosen_mode_is_what_the_next_turns_program_is_held_to`
 `verified-by: bravebot_tui::sandbox_command::a_named_mode_is_the_mode_the_next_turn_is_built_with`
 `verified-by: bravebot_tui::sandbox_command::a_session_started_from_the_held_choice_keeps_the_commands_mode`
 `verified-by: bravebot_tui::sandbox_command::a_move_to_off_asks_and_anything_but_a_yes_keeps_the_mode`

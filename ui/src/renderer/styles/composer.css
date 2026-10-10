@@ -132,8 +132,24 @@
   --leo-icon-color: var(--status-info);
   background: var(--status-info-bg);
 }
-.permission-option { width: min(320px, calc(100vw - 24px)); }
-.permission-option-text { display: flex; flex-direction: column; min-width: 0; white-space: normal; }
+.permission-option,
+.sandbox-option { width: min(320px, calc(100vw - 24px)); }
+.permission-option-text,
+.sandbox-option-text { display: flex; flex-direction: column; min-width: 0; white-space: normal; }
+/* Standard is the resting state and is drawn like the model beside it. Strict is tinted for as
+   long as it holds, and its name says the same where colour is not drawn. */
+.composer-toolbar .sandbox-menu { flex: none; }
+.composer .sandbox-trigger {
+  --leo-button-color: var(--ink-tertiary);
+  --leo-icon-color: currentColor;
+  border-radius: var(--radius-control);
+  white-space: nowrap;
+}
+.composer .sandbox-trigger.sandbox-strict {
+  --leo-button-color: var(--ink-primary);
+  --leo-icon-color: var(--status-success);
+  background: var(--status-success-bg);
+}
 /* The icon is 20px in a 28px target. */
 .composer .attach-files {
   --leo-button-color: var(--ink-secondary);
@@ -468,7 +484,8 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
   .attention-pill,
   .composer-box:focus-within { outline: 2px solid Highlight; }
   .composer .permission-trigger.permission-acceptEdits,
-  .composer .permission-trigger.permission-plan { outline: 1px solid CanvasText; }
+  .composer .permission-trigger.permission-plan,
+  .composer .sandbox-trigger.sandbox-strict { outline: 1px solid CanvasText; }
   .mention-list { border: 1px solid CanvasText; }
   .mention-option.active { outline: 2px solid Highlight; outline-offset: -2px; }
 }

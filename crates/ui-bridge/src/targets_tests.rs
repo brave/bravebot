@@ -70,6 +70,7 @@ fn session_running(target: u64) -> Session {
         auto_vetting: false,
         definition: None,
         permission_mode: PermissionMode::Ask.into(),
+        sandbox: None,
     });
     Session {
         bridge,

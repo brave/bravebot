@@ -9,7 +9,8 @@ import { IconButton } from './IconButton'
 import { MentionList } from './MentionList'
 import { ModelPicker } from './ModelPicker'
 import { PermissionModePicker } from './PermissionModePicker'
-import type { PermissionMode } from '../../shared/protocol'
+import { SandboxModePicker } from './SandboxModePicker'
+import type { PermissionMode, SandboxMode } from '../../shared/protocol'
 
 /** The bridge's offer for `line`, or nothing offered when it cannot answer or answers out of shape. */
 async function askOffer(session: string, line: string, cursor: number): Promise<MentionOffer> {
@@ -49,6 +50,8 @@ export interface ComposerProps {
   /** Absent where no session exists to hold a mode, as on a bot's first page. */
   permissionMode?: PermissionMode
   onMode?: (mode: PermissionMode) => void
+  sandboxMode?: SandboxMode
+  onSandbox?: (mode: SandboxMode) => void
   attachments: FileAttachment[]
   onAttach: () => void
   onRemoveAttachment: (id: string) => void
@@ -152,7 +155,7 @@ export interface ComposerFooterProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, attachments, onAttach, onRemoveAttachment, onPreview,
+    draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, onPreview,
     queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false,
   } = props
@@ -360,6 +363,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             <span className="toolbar-spacer" />
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
             {permissionMode && onMode && <PermissionModePicker key={`mode-${session}`} mode={permissionMode} onChoose={onMode} />}
+            {sandboxMode && onSandbox && <SandboxModePicker key={`sandbox-${session}`} mode={sandboxMode} onChoose={onSandbox} />}
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
             {onPlan && <ModeMenu mode={planBlocked ? 'agent' : mode} blocked={planBlocked} disabled={running} onMode={setMode} />}
             <IconButton icon={running ? 'stop-circle' : 'arrow-up'} label={running ? 'Stop' : 'Send'}
