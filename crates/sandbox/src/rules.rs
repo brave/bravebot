@@ -470,14 +470,8 @@ pub fn judged_request(
     if confines_nothing(&path, Some(&home)) {
         return Err(RequestRefusal::Rule(Reason::ConfinesNothing));
     }
-    let holds_credentials =
-        |location: &Path| path.starts_with(location) || location.starts_with(&path);
-    if crate::base::CREDENTIAL_DIRECTORIES
-        .iter()
-        .chain(crate::base::MACOS_CREDENTIAL_DIRECTORIES)
-        .chain(crate::base::LINUX_CREDENTIAL_DIRECTORIES)
-        .any(|row| holds_credentials(&home.join(row)))
-        || holds_credentials(Path::new(crate::base::MACOS_SYSTEM_KEYCHAINS))
+    if credential_rows(&home)
+        .any(|location| path.starts_with(&location) || location.starts_with(&path))
     {
         return Err(RequestRefusal::CredentialLocation);
     }
@@ -498,6 +492,32 @@ pub fn judged_request(
         true => Err(RequestRefusal::Denied),
         false => Ok(path),
     }
+}
+
+/// Every credential location the base refuses on any platform: the rows of the three tables under
+/// `home`, and the machine-wide keychain directory.
+fn credential_rows(home: &Path) -> impl Iterator<Item = PathBuf> + '_ {
+    crate::base::CREDENTIAL_DIRECTORIES
+        .iter()
+        .chain(crate::base::MACOS_CREDENTIAL_DIRECTORIES)
+        .chain(crate::base::LINUX_CREDENTIAL_DIRECTORIES)
+        .map(|row| home.join(row))
+        .chain(std::iter::once(PathBuf::from(
+            crate::base::MACOS_SYSTEM_KEYCHAINS,
+        )))
+}
+
+/// Whether `path` is a credential location the base refuses on any platform, or lies inside one.
+///
+/// A row granted at such a path lifts the refusal on macOS, where an allow at the depth of a deny
+/// follows it, so a directory a person adds is judged here before it becomes a row. The location
+/// is compared in the spelling it has under `home` and where its links lead, which includes a
+/// `home` that is itself a link; `path` is the form the caller resolved. A directory that holds a
+/// location, the home directory among them, is not inside one: the refusals beneath it still
+/// hold.
+pub fn inside_a_credential_location(path: &Path, home: &Path) -> bool {
+    credential_rows(home)
+        .any(|location| under(path, &location) || under(path, &resolved(&location)))
 }
 
 /// The entries another entry decides: an allow at a path a refusal names, and an allow at or
@@ -1316,6 +1336,95 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A directory added for a session is a read and write row, and on macOS a row at a refused
+    /// path lifts the refusal. Every location of the three tables is therefore inside one at the
+    /// directory and beneath it. The directory above a location, the home directory and a
+    /// directory whose name only begins like a location are not: the refusals beneath them hold.
+    #[test]
+    fn a_directory_at_or_inside_a_credential_location_is_inside_one_and_its_neighbours_are_not() {
+        let home = fresh("inside-credential-home");
+        for row in crate::base::CREDENTIAL_DIRECTORIES
+            .iter()
+            .chain(crate::base::MACOS_CREDENTIAL_DIRECTORIES)
+            .chain(crate::base::LINUX_CREDENTIAL_DIRECTORIES)
+        {
+            let at = home.join(row);
+            let inside = at.join("inner");
+            fs::create_dir_all(&inside).unwrap();
+            for named in [&at, &inside] {
+                assert!(
+                    inside_a_credential_location(&resolved(named), &home),
+                    "{} was not inside a credential location",
+                    named.display()
+                );
+            }
+            let beside = at.with_file_name(format!(
+                "{}-copy",
+                at.file_name().unwrap().to_string_lossy()
+            ));
+            fs::create_dir_all(&beside).unwrap();
+            assert!(
+                !inside_a_credential_location(&resolved(&beside), &home),
+                "{} was taken for a credential location",
+                beside.display()
+            );
+            if let Some(above) = at.parent().filter(|above| *above != home) {
+                assert!(
+                    !inside_a_credential_location(&resolved(above), &home),
+                    "{} holds a location and was taken for one",
+                    above.display()
+                );
+            }
+        }
+        assert!(!inside_a_credential_location(&resolved(&home), &home));
+        assert!(inside_a_credential_location(
+            Path::new("/Library/Keychains/System.keychain"),
+            &home
+        ));
+    }
+
+    /// The caller resolves the directory it was given, so a home reached through a link, and a
+    /// location that is itself a link, are compared where they lead.
+    #[cfg(unix)]
+    #[test]
+    fn a_credential_location_is_compared_where_it_and_the_home_lead() {
+        let base = fresh("inside-credential-links");
+        let real_home = base.join("real");
+        fs::create_dir_all(real_home.join(".ssh")).unwrap();
+        let linked_home = base.join("linked");
+        std::os::unix::fs::symlink(&real_home, &linked_home).unwrap();
+        assert!(inside_a_credential_location(
+            &resolved(&real_home.join(".ssh")),
+            &linked_home
+        ));
+
+        let elsewhere = base.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let home = base.join("home");
+        fs::create_dir_all(&home).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, home.join(".aws")).unwrap();
+        assert!(inside_a_credential_location(&resolved(&elsewhere), &home));
+        assert!(!inside_a_credential_location(
+            &resolved(&base.join("real")),
+            &home
+        ));
+    }
+
+    /// A home whose name is not UTF-8 is not taken for the home its replacement-character
+    /// rendering spells.
+    #[cfg(unix)]
+    #[test]
+    fn a_credential_location_under_a_home_that_is_not_text_is_not_matched_by_its_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = PathBuf::from(std::ffi::OsStr::from_bytes(b"/nowhere/per\xffson"));
+        let lookalike = PathBuf::from("/nowhere/per\u{FFFD}son");
+        assert!(inside_a_credential_location(&home.join(".ssh/id"), &home));
+        assert!(!inside_a_credential_location(
+            &lookalike.join(".ssh/id"),
+            &home
+        ));
     }
 
     /// A directory that exists, spelled absolute or from `~`, and a link into a credential

@@ -295,7 +295,7 @@ pub(crate) const LINUX_CREDENTIAL_DIRECTORIES: &[&str] = &[
 ];
 
 /// The machine-wide keychain directory on macOS.
-pub(crate) const MACOS_SYSTEM_KEYCHAINS: &str = "/Library/Keychains";
+pub const MACOS_SYSTEM_KEYCHAINS: &str = "/Library/Keychains";
 
 /// The one file in `~/Library/Keychains` that is read, under the home directory.
 ///

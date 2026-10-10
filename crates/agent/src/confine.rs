@@ -791,21 +791,36 @@ impl Confinement {
         }
     }
 
-    /// The first session directory that is, holds or lies inside a credential location, and that
-    /// location (SANDBOX-18). Only a Windows container is checked: the other platforms refuse the
-    /// location itself inside the grant, and a Windows container cannot be refused anything.
+    /// The first session directory that is or lies inside a credential location, or on Windows
+    /// holds one, and that location (SANDBOX-18).
+    ///
+    /// A Windows container cannot be refused a location inside a directory it is granted, so a
+    /// directory that holds one is refused there too. Elsewhere the location is refused inside the
+    /// grant, which holds for a directory above it but not for one at it: on macOS a row at a
+    /// refused path lifts the refusal. Names are compared without regard to case on Windows and
+    /// macOS, whose file systems fold it, and exactly on Linux.
     fn root_reaching_credentials(&self) -> Option<(&Path, PathBuf)> {
-        let home = self
-            .home
-            .as_deref()
-            .filter(|_| self.prelude == Prelude::Windows)?;
-        let locations = credential_locations(self.prelude, home);
+        let home = self.home.as_deref()?;
+        let mut locations = credential_locations(self.prelude, home);
+        if self.prelude == Prelude::MacOs {
+            locations.push(PathBuf::from(
+                bravebot_sandbox::base::MACOS_SYSTEM_KEYCHAINS,
+            ));
+        }
+        let reaches = |root: &Path, candidate: &Path| match self.prelude {
+            Prelude::Windows => overlaps(root, candidate),
+            Prelude::MacOs => {
+                overlaps(root, candidate)
+                    && root.components().count() >= candidate.components().count()
+            }
+            Prelude::Linux => root.starts_with(candidate),
+        };
         self.roots.iter().find_map(|root| {
             locations.iter().find_map(|location| {
                 let resolved = canonical(location);
                 [location, &resolved]
                     .into_iter()
-                    .any(|candidate| overlaps(root, candidate))
+                    .any(|candidate| reaches(root, candidate))
                     .then(|| (root.as_path(), location.clone()))
             })
         })
@@ -826,12 +841,21 @@ impl Confinement {
             detail,
         };
         if let Some((root, location)) = self.root_reaching_credentials() {
-            return Err(not_confined(format!(
-                "the session directory `{}` is or holds `{}`, which a Windows stage cannot be \
-                 kept out of; open the session on a project directory instead",
-                root.display(),
-                location.display()
-            )));
+            return Err(not_confined(match self.prelude {
+                Prelude::Windows => format!(
+                    "the session directory `{}` is or holds `{}`, which a Windows stage cannot be \
+                     kept out of; open the session on a project directory instead",
+                    root.display(),
+                    location.display()
+                ),
+                _ => format!(
+                    "the session directory `{}` is or lies inside `{}`, which a stage given that \
+                     directory to write is not kept out of; open the session on a project \
+                     directory instead",
+                    root.display(),
+                    location.display()
+                ),
+            }));
         }
         let proxy = self.host_proxy(step).map_err(not_confined)?;
         let proxied = proxy.as_deref().map(Proxy::environment).unwrap_or_default();
@@ -1419,6 +1443,86 @@ mod tests {
         refused_naming(&confinement(&["/home/person/.ssh/keys"]), ".ssh");
         refused_naming(&confinement(&["/home/person/.config/gcloud"]), "gcloud");
         refused_naming(&confinement(&["/home/person/.config"]), "gcloud");
+    }
+
+    /// A stage granted a credential location to read and write is not kept out of it on macOS,
+    /// where a row at a refused path lifts the refusal, so a session directory that is or lies
+    /// inside one is refused on every platform. The regression it rejects: the check running on
+    /// Windows alone, which let `~/.ssh` as a session directory hand every private key in it to a
+    /// confined program.
+    #[test]
+    fn a_session_inside_a_credential_location_is_refused_on_every_platform() {
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            for (root, location) in [
+                ("/home/person/.ssh", "/home/person/.ssh"),
+                ("/home/person/.ssh/keys", "/home/person/.ssh"),
+                ("/home/person/.bravebot", "/home/person/.bravebot"),
+                (
+                    "/home/person/.config/gcloud/inner",
+                    "/home/person/.config/gcloud",
+                ),
+            ] {
+                refused_naming(&reading_confinement(prelude, &[root]), location);
+            }
+        }
+    }
+
+    /// The system keychain directory is a refused location on macOS, so a session directory at or
+    /// inside it is refused there. The regression it rejects: leaving it out of the list the check
+    /// reads, which let `/Library/Keychains` as a session directory lift its refusal.
+    #[test]
+    fn a_macos_session_inside_the_system_keychains_is_refused() {
+        for root in ["/Library/Keychains", "/Library/Keychains/System.keychain"] {
+            refused_naming(
+                &reading_confinement(Prelude::MacOs, &[root]),
+                "/Library/Keychains",
+            );
+        }
+        assert!(
+            reading_confinement(Prelude::MacOs, &["/Library"])
+                .root_reaching_credentials()
+                .is_none()
+        );
+    }
+
+    /// A Linux file system tells `.SSH` from `.ssh`, so the directory named in capitals is a
+    /// project directory. The regression it rejects: folding case on Linux, which refuses it.
+    #[test]
+    fn a_linux_session_is_compared_to_the_credential_locations_with_case() {
+        for root in ["/home/person/.SSH", "/home/person/.Kube/inner"] {
+            assert!(
+                reading_confinement(Prelude::Linux, &[root])
+                    .root_reaching_credentials()
+                    .is_none(),
+                "{root}"
+            );
+        }
+        refused_naming(
+            &reading_confinement(Prelude::Linux, &["/home/person/.ssh"]),
+            "/home/person/.ssh",
+        );
+    }
+
+    /// A session directory that holds a credential location is granted, because the refusal of
+    /// the location beneath it holds outside Windows.
+    #[test]
+    fn a_session_beside_or_above_the_credential_locations_is_not_refused_outside_windows() {
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            for root in [
+                HOME,
+                "/",
+                "/home/person/project",
+                "/home/person/.sshfoo",
+                "/home/person/.config",
+            ] {
+                assert!(
+                    reading_confinement(prelude, &[root])
+                        .root_reaching_credentials()
+                        .is_none(),
+                    "{prelude:?} {root}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -936,8 +936,17 @@ shared table. The row would be a read and write grant, and a Windows container c
 path inside a grant, so the refusal is made before the policy is built and no grant is written. The
 paths are compared by component without regard to case, and a credential location is compared in
 the form it is named and in its resolved form. A session opened on a project directory is not
-affected. Linux and macOS grant such a directory and refuse the locations inside it, so the
-refusal does not apply there.
+affected.
+
+On Linux and macOS a stage is refused when a directory the session was opened on is or lies inside a
+credential location, and not when it holds one. On macOS a row at a refused path lifts the refusal,
+because an allow follows a deny at the same depth, so the directory `~/.ssh` as a session directory
+would let every program the stage starts read and write the keys. The refusal on those platforms
+covers the table of [SANDBOX-12](#SANDBOX-12) and, on macOS, `/Library/Keychains`. Names are
+compared without regard to case on macOS and exactly on Linux. A directory above a location, the
+home directory among them, is granted and the location inside it stays refused. `/add-dir`,
+`--add-dir` and `additionalDirectories` refuse the same directories before they are added, so a
+person is not shown a session directory the stage would be refused for.
 
 Every input is the compiled step a person read, the session's own directories or the process's own
 environment. Nothing a program printed, and no value the model supplied beyond the plan, reaches a
@@ -972,6 +981,14 @@ open the home.
 `verified-by: bravebot_agent::confine::a_windows_session_beside_the_credential_locations_is_not_refused`
 `verified-by: bravebot_agent::confine::a_windows_session_with_one_root_on_the_home_directory_is_refused_whatever_the_others_are`
 `verified-by: bravebot_sandbox::base::the_credential_locations_are_the_rows_the_run_base_refuses`
+`verified-by: bravebot_agent::confine::a_session_inside_a_credential_location_is_refused_on_every_platform`
+`verified-by: bravebot_agent::confine::a_session_beside_or_above_the_credential_locations_is_not_refused_outside_windows`
+`verified-by: bravebot_agent::confine::a_macos_session_inside_the_system_keychains_is_refused`
+`verified-by: bravebot_agent::confine::a_linux_session_is_compared_to_the_credential_locations_with_case`
+`verified-by: bravebot_agent::workspace::a_directory_at_or_inside_a_credential_location_is_refused`
+`verified-by: bravebot_sandbox::rules::a_directory_at_or_inside_a_credential_location_is_inside_one_and_its_neighbours_are_not`
+`verified-by: bravebot_sandbox::rules::a_credential_location_is_compared_where_it_and_the_home_lead`
+`verified-by: bravebot_sandbox::rules::a_credential_location_under_a_home_that_is_not_text_is_not_matched_by_its_lookalike`
 
 <a id="SANDBOX-19"></a>
 ### SANDBOX-19: the planner is told its programs are confined, and a failed step says what it ran under
@@ -1306,8 +1323,8 @@ process environment, and nothing else, except that the remote scope also reads t
 lines of the person's `~/.ssh/config` ([SANDBOX-16](#SANDBOX-16)). In particular:
 
 - A directory is judged as `--add-dir` judges one, when it is allowed and again when it is used:
-  absolute, no `..`, existing, not the home or above it, not `~/.ssh` or `~/.bravebot` or inside either, and a link by
-  where it leads. A directory later replaced by a link to `~/.ssh` is dropped from the profile and
+  absolute, no `..`, existing, not the home or above it, not a credential location of the table
+  ([SANDBOX-12](#SANDBOX-12)) or inside one, and a link by where it leads. A directory later replaced by a link to `~/.ssh` is dropped from the profile and
   from the plan.
 - Write is a directory's. A scope is never written by a grant, and `/reach` refuses one.
 - A stage with an assignment in front of it is covered by no grant, and a line with one is refused,
