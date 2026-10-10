@@ -10697,7 +10697,7 @@ fn permissions_check(scratch: &Scratch, checkout: &Path, call: &[&str]) -> Vec<S
     stdout.lines().map(str::to_string).collect()
 }
 
-/// CLI-29: the rule named is the one PERM-2's order picks, and the file is the layer that wrote it.
+/// CLI-30: the rule named is the one PERM-2's order picks, and the file is the layer that wrote it.
 ///
 /// `git push` matches the home's broad allow and its deny: the report names the deny. `git commit`
 /// matches the home's allow and the checkout's ask: the report names the ask and the checkout's
@@ -10750,7 +10750,7 @@ fn permissions_check_names_the_rule_and_the_file_that_decide() {
     );
 }
 
-/// CLI-29: a URL is decided on its host and a server's tool on its two names, and a call no rule
+/// CLI-30: a URL is decided on its host and a server's tool on its two names, and a call no rule
 /// covers says so and names no rule.
 #[test]
 fn permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names() {
@@ -10791,7 +10791,7 @@ fn permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names() {
     }
 }
 
-/// CLI-29: an `allow` rule a checkout wrote is not in force until it is granted, so the call is
+/// CLI-30: an `allow` rule a checkout wrote is not in force until it is granted, so the call is
 /// reported as decided by no rule and the checkout's rule is named as waiting. Reporting it as the
 /// deciding allow rule would tell a person the prompt they hit was a fault.
 #[test]
@@ -10814,7 +10814,7 @@ fn permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force() {
     );
 }
 
-/// CLI-29: the same rule once the person granted it at the question is in force, so it decides as
+/// CLI-30: the same rule once the person granted it at the question is in force, so it decides as
 /// the allow it is, names the grant as the place it came from, and is not also reported as waiting.
 ///
 /// The record is seeded rather than written by a session, because the answer is the person's and
@@ -10865,7 +10865,7 @@ fn permissions_check_counts_a_checkouts_allow_rule_the_person_granted() {
     );
 }
 
-/// CLI-29: a command line that names no call is refused with the status for an argument, and
+/// CLI-30: a command line that names no call is refused with the status for an argument, and
 /// nothing is printed on stdout for a script to take as an answer.
 #[test]
 fn permissions_check_refuses_a_command_line_that_names_no_call() {
