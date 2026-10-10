@@ -157,7 +157,12 @@ narrow for it.
    `/clear`. A new
    name reaches an open panel on the next frame, not at the next key.
 2. **Model.** The model the person chose, one row cut from the left with an ellipsis where it is
-   longer, and the effort level in force below it, as `effort high`. The model is the person's
+   longer, and the effort level in force below it, as `effort high`. A model the configuration
+   names is drawn by the name the `/model` picker gives its row, with the service after a tier's
+   name, as `Sonnet (Bedrock)`, and not by the request name, which for a tier is an inference-profile
+   ARN. `/status` draws it the same way and keeps the request name on the line beneath, since an
+   error from the service quotes that. A model the configuration does not name is drawn by its
+   request name. The model is the person's
    choice, never the name an endpoint replied with, so a reply
    that names another model changes nothing here. The effort row is left out where the model reads
    none. Both come from the session's settings, so the section is left out while the person has
@@ -183,6 +188,10 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::the_id_row_follows_whether_the_session_has_a_record`
 `verified-by: bravebot_tui::panel::the_id_rows_count_toward_where_the_context_section_fits`
 `verified-by: bravebot_tui::panel::the_model_section_shows_the_choice_and_the_effort_in_force_and_ignores_a_reply`
+`verified-by: bravebot_tui::panel::the_model_section_names_a_tier_rather_than_the_tail_of_its_arn`
+`verified-by: bravebot_tui::status::the_model_line_names_a_tier_and_keeps_its_arn_beneath`
+`verified-by: bravebot_tui::status::a_name_a_provider_block_chose_is_shown_without_a_service_added`
+`verified-by: bravebot_config::lib::a_request_name_finds_its_entry_in_either_kind_of_account`
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
 

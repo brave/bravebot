@@ -1883,6 +1883,9 @@ pub struct Session {
     /// Read from `~/.bravebot` at startup and rewritten when `/model` picks one, so the choice outlives
     /// the session that made it and applies in every directory.
     model: Option<String>,
+    /// The name the configuration gives each Bedrock model, by request name, for the panel to draw
+    /// `model` by. Empty where no account is configured.
+    model_labels: Vec<(String, String)>,
     /// How hard to think, or `None` to leave the service its own default.
     ///
     /// Read from `~/.bravebot` at startup and rewritten when `/effort` picks one, the same as the
@@ -2091,6 +2094,7 @@ impl Session {
             said: Vec::new(),
             started: None,
             model: None,
+            model_labels: Vec::new(),
             effort: None,
             model_reads_effort: true,
             advisor: None,
@@ -2257,6 +2261,21 @@ impl Session {
     /// The model to request, or `None` to use the configured default.
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    /// Draw the models this configuration names by those names, as [`crate::status::model_label`]
+    /// gives them.
+    pub fn with_model_labels(mut self, config: &bravebot_config::Config) -> Self {
+        self.model_labels = crate::status::model_labels(config);
+        self
+    }
+
+    /// What to call the chosen model on screen: the name the configuration gave it, or the request
+    /// name where it gave none.
+    pub fn model_label(&self) -> Option<&str> {
+        let model = self.model.as_deref()?;
+        let named = self.model_labels.iter().find(|(id, _)| id == model);
+        Some(named.map_or(model, |(_, label)| label.as_str()))
     }
 
     /// Record the model the user picked, keeping it for later sessions.

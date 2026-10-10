@@ -470,14 +470,20 @@ pub fn report(facts: &Facts<'_>) -> Report {
     let definitions = facts
         .agent
         .and_then(|agent| agent.model.as_deref().map(|model| (agent, model)));
-    lines.push(match (definitions, facts.model) {
-        (Some((agent, model)), _) => Line::new(t!(status_model), model)
-            .with_note(t!(status_model_definitions, definition = &agent.name)),
+    lines.extend(match (definitions, facts.model) {
+        (Some((agent, model)), _) => model_lines(
+            facts.config,
+            model,
+            t!(status_model_definitions, definition = &agent.name),
+        ),
         (None, Some(model)) => {
-            Line::new(t!(status_model), model).with_note(t!(status_model_chosen))
+            model_lines(facts.config, model, t!(status_model_chosen).to_string())
         }
-        (None, None) => Line::new(t!(status_model), &facts.config.default_model)
-            .with_note(t!(status_model_default)),
+        (None, None) => model_lines(
+            facts.config,
+            &facts.config.default_model,
+            t!(status_model_default).to_string(),
+        ),
     });
 
     // Nothing else on the screen shows that the session is not the planner's, since the input box
@@ -942,6 +948,45 @@ pub fn configured_tier(config: &Config) -> &'static str {
     match config.premium_endpoint {
         Some(_) => t!(status_premium_available),
         None => t!(status_no_subscription),
+    }
+}
+
+/// What the info panel and `/status` call the model whose request name is `model`, where the
+/// configuration names it.
+///
+/// The name the `/model` picker gives its row ([`bravebot_config::bedrock::Entry::display_name`]),
+/// so a person who chose "Sonnet" there is not shown an inference-profile ARN for it. A tier word
+/// gets the service after it, since no heading over it says whose account answers and the Brave
+/// roster has a Sonnet of its own; a name a `provider` block chose is the person's own words and
+/// stands alone. `None` for a model no configured account offers, or one the configuration gave no
+/// name other than its request name, which is drawn by that.
+pub fn model_label(config: &Config, model: &str) -> Option<String> {
+    let entry = config.bedrock_entry(model)?;
+    let label = match (&entry.name, entry.tier) {
+        (None, Some(_)) => t!(model_label_bedrock, name = entry.display_name()),
+        _ => entry.display_name().to_string(),
+    };
+    (label != model).then_some(label)
+}
+
+/// The request names and labels of every model a configured account offers, for a session to draw
+/// its chosen model by without holding the configuration.
+pub fn model_labels(config: &Config) -> Vec<(String, String)> {
+    config
+        .bedrock_entries()
+        .filter_map(|entry| Some((entry.id.clone(), model_label(config, &entry.id)?)))
+        .collect()
+}
+
+/// The `/status` lines for the model in force: its name, and under it the request name where the
+/// two differ, because that is what an error from the service quotes.
+fn model_lines(config: &Config, model: &str, note: String) -> Vec<Line> {
+    match model_label(config, model) {
+        Some(label) => vec![
+            Line::new(t!(status_model), label).with_note(note),
+            Line::new("", t!(status_model_id, id = model)),
+        ],
+        None => vec![Line::new(t!(status_model), model).with_note(note)],
     }
 }
 
@@ -1427,6 +1472,111 @@ mod tests {
             .find(|line| line.label.trim() == t!(status_goal))
             .expect("the goal is on the report");
         assert!(line.note.ends_with(" · 2.9k tokens"), "{:?}", line.note);
+    }
+
+    const SONNET_ARN: &str =
+        "arn:aws:bedrock:us-west-2:1:application-inference-profile/pzko74tz7aq5";
+    const HAIKU_ARN: &str = "arn:aws:bedrock:us-west-2:1:application-inference-profile/h4ik0";
+
+    fn bedrock_tiers() -> Config {
+        Config::from_lookup(|key| match key {
+            "BRAVEBOT_USE_BEDROCK" => Some("1".into()),
+            "AWS_REGION" => Some("us-west-2".into()),
+            "ANTHROPIC_DEFAULT_SONNET_MODEL" => Some(SONNET_ARN.into()),
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL" => Some(HAIKU_ARN.into()),
+            _ => None,
+        })
+        .expect("config")
+    }
+
+    /// PANEL-9. A tier set to an ARN is shown by the name the `/model` picker gave its row, with
+    /// the ARN kept under it because the service's errors quote that.
+    ///
+    /// Rejects: the ARN on the model line, the label of another tier, a label on a model no account
+    /// offers, and a second line under a model that is already shown by its own name.
+    #[test]
+    fn the_model_line_names_a_tier_and_keeps_its_arn_beneath() {
+        let config = bedrock_tiers();
+        let trust = trusting();
+        let model_rows = |model: Option<&str>| {
+            let mut facts = facts(&config, &trust);
+            facts.model = model;
+            let report = report(&facts);
+            let at = report
+                .lines
+                .iter()
+                .position(|line| line.label.trim() == t!(status_model))
+                .expect("a model line");
+            (
+                report.lines[at].value.clone(),
+                report.lines[at].note.clone(),
+                report.lines[at + 1].clone(),
+            )
+        };
+
+        let (value, note, below) = model_rows(Some(SONNET_ARN));
+        assert_eq!(value, "Sonnet (Bedrock)");
+        assert_eq!(note, t!(status_model_chosen));
+        assert_eq!(below.label, "");
+        assert_eq!(below.value, t!(status_model_id, id = SONNET_ARN));
+
+        let (value, _, below) = model_rows(Some(HAIKU_ARN));
+        assert_eq!(value, "Haiku (Bedrock)");
+        assert_eq!(below.value, t!(status_model_id, id = HAIKU_ARN));
+
+        // No model chosen: the configured default is the strongest tier set, here Sonnet.
+        let (value, note, below) = model_rows(None);
+        assert_eq!(value, "Sonnet (Bedrock)");
+        assert_eq!(note, t!(status_model_default));
+        assert_eq!(below.value, t!(status_model_id, id = SONNET_ARN));
+
+        let (value, _, below) = model_rows(Some("claude-3-sonnet"));
+        assert_eq!(value, "claude-3-sonnet");
+        assert_ne!(
+            below.value,
+            t!(status_model_id, id = "claude-3-sonnet"),
+            "a model no account offers has no second name to quote"
+        );
+    }
+
+    /// A model a `provider` block named is shown by the name the block gave it, as written: that
+    /// name is the person's own words and already says which service answers. One it gave no name
+    /// is drawn by its id, with no second line quoting the same id.
+    #[test]
+    fn a_name_a_provider_block_chose_is_shown_without_a_service_added() {
+        let mut config = config_for("http://127.0.0.1:1", None);
+        config.bedrock = Some(bravebot_config::bedrock::Bedrock::from_provider(
+            "us-west-2".to_string(),
+            None,
+            vec![bravebot_config::bedrock::Entry {
+                tier: None,
+                id: "openai.gpt-5.6-sol".to_string(),
+                name: Some("GPT-5.6 Sol (Bedrock)".to_string()),
+                context_window: None,
+                output_limit: None,
+            }],
+        ));
+        assert_eq!(
+            model_label(&config, "openai.gpt-5.6-sol").as_deref(),
+            Some("GPT-5.6 Sol (Bedrock)")
+        );
+
+        config.bedrock = Some(bravebot_config::bedrock::Bedrock::from_provider(
+            "us-west-2".to_string(),
+            None,
+            vec![bravebot_config::bedrock::Entry {
+                tier: None,
+                id: "openai.gpt-5.6-sol".to_string(),
+                name: None,
+                context_window: None,
+                output_limit: None,
+            }],
+        ));
+        assert_eq!(
+            model_label(&config, "openai.gpt-5.6-sol"),
+            None,
+            "a model with no name but its id has no label to put before the id"
+        );
     }
 
     /// CLI-17. The note saying a session works under a definition scrolls away, and the input box

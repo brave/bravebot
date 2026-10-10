@@ -206,7 +206,7 @@ fn head(session: &Session, text: usize) -> Vec<Line<'static>> {
     }
 
     let mut model = Vec::new();
-    if let Some(chosen) = session.model() {
+    if let Some(chosen) = session.model_label() {
         model.push(row(
             ending(&crate::render::printable(chosen), text),
             Style::default(),
@@ -863,6 +863,44 @@ mod tests {
             "an effort the model does not read was drawn: {unread:#?}"
         );
         assert!(unread.contains(&"claude-sonnet".to_string()), "{unread:#?}");
+    }
+
+    /// PANEL-9. A tier set to an inference-profile ARN is drawn by the name the `/model` picker
+    /// gave it.
+    ///
+    /// Rejects: the tail of the ARN (what cutting the id from the left leaves), one tier drawn by
+    /// another's name, and a model no account offers drawn by anything but its request name.
+    #[test]
+    fn the_model_section_names_a_tier_rather_than_the_tail_of_its_arn() {
+        let sonnet = "arn:aws:bedrock:us-west-2:1:application-inference-profile/pzko74tz7aq5";
+        let haiku = "arn:aws:bedrock:us-west-2:1:application-inference-profile/h4ik0";
+        let config = bravebot_config::Config::from_lookup(|key| match key {
+            "BRAVEBOT_USE_BEDROCK" => Some("1".into()),
+            "AWS_REGION" => Some("us-west-2".into()),
+            "ANTHROPIC_DEFAULT_SONNET_MODEL" => Some(sonnet.into()),
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL" => Some(haiku.into()),
+            _ => None,
+        })
+        .expect("config");
+        let heading = t!(panel_model).to_string();
+        let chosen = |session: &Session| {
+            let drawn = texts(&lines(session, WIDTH, 30));
+            let at = drawn.iter().position(|row| *row == heading);
+            at.map(|at| drawn[at + 1].clone())
+        };
+
+        let mut session = Session::new("none").with_model_labels(&config);
+        session.choose_model(sonnet.to_string(), &config);
+        assert_eq!(chosen(&session).as_deref(), Some("Sonnet (Bedrock)"));
+        session.choose_model(haiku.to_string(), &config);
+        assert_eq!(chosen(&session).as_deref(), Some("Haiku (Bedrock)"));
+        session.choose_model("claude-3-sonnet".to_string(), &config);
+        assert_eq!(chosen(&session).as_deref(), Some("claude-3-sonnet"));
+
+        // Without the labels a session draws the request name, as before.
+        let mut bare = Session::new("none");
+        bare.choose_model("claude-3-sonnet".to_string(), &config);
+        assert_eq!(chosen(&bare).as_deref(), Some("claude-3-sonnet"));
     }
 
     /// Rejects: a total that leaves out the turn in flight (which `/cost` counts), one drawn
