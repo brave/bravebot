@@ -1921,6 +1921,8 @@ pub struct Session {
     /// whatever happened to be in the process's working directory. The real session names it with
     /// [`Session::in_workspace`].
     workspace: std::path::PathBuf,
+    /// The open references, so `@` offers their aliases (REFER-6).
+    reference_sources: Vec<(String, std::path::PathBuf)>,
     /// The skills a turn would advertise, held while a slash word is being typed.
     ///
     /// Resolved as one starts and let go once it ends, so a skill written mid-session is offered
@@ -2096,6 +2098,7 @@ impl Session {
             style: None,
             completion: 0,
             workspace: std::path::PathBuf::new(),
+            reference_sources: Vec::new(),
             skills: None,
             past_sessions: None,
             attached: Vec::new(),
@@ -2111,6 +2114,12 @@ impl Session {
     pub fn in_workspace(mut self, root: impl Into<std::path::PathBuf>) -> Self {
         self.workspace = root.into();
         self
+    }
+
+    /// Offer the aliases of these references after an `@`, and complete inside their directories
+    /// (REFER-6). Said again whenever the workspace's open directories change.
+    pub fn set_reference_sources(&mut self, sources: Vec<(String, std::path::PathBuf)>) {
+        self.reference_sources = sources;
     }
 
     /// Complete against somewhere else from now on, the working directory having moved.
@@ -6261,7 +6270,8 @@ impl Session {
         }
         match bravebot_mentions::typed_reference(&self.input) {
             Some(typed) => {
-                let mut entries = bravebot_mentions::matching(&self.workspace, &typed);
+                let mut entries =
+                    bravebot_mentions::matching(&self.workspace, &typed, &self.reference_sources);
                 // After the files: a session is named by a title or an id rather than walked
                 // into, and a path being typed towards is what a person most often means.
                 entries.extend(self.sessions_matching(&typed));
@@ -6382,6 +6392,7 @@ impl Session {
                     &typed,
                     &entries,
                     self.completion,
+                    &self.reference_sources,
                 )
             }
         }

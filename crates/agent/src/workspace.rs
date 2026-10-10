@@ -1566,6 +1566,14 @@ impl Workspace {
             .filter(move |reference| added.contains(&reference.path))
     }
 
+    /// Each open reference as the alias it is written under after an `@` and its directory
+    /// (REFER-6).
+    pub fn reference_sources(&self) -> Vec<(String, PathBuf)> {
+        self.references()
+            .map(|reference| (reference.alias.clone(), reference.path.clone()))
+            .collect()
+    }
+
     /// The entries that did not open, with the alias each was written under (REFER-3).
     pub fn reference_problems(&self) -> &[(String, ReferenceProblem)] {
         &self.reference_problems
