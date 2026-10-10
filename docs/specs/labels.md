@@ -38,7 +38,7 @@ guards:
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
-      - crates/agent/tests/workspace.rs: 53
+      - crates/agent/tests/workspace.rs: 54
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 63
@@ -57,7 +57,7 @@ guards:
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
-      - crates/agent/tests/workspace.rs: 236
+      - crates/agent/tests/workspace.rs: 240
       - crates/core/src/policy.rs: 24
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2

@@ -20,12 +20,12 @@ pushes over only the head it fetched. Spend tokens on conflicts, failures and co
 Edit only inside the worktree it prints, never the checkout this was started from.
 
 The worktree is beside the working directory, outside the workspace, so the file tools refuse it
-until the person opens it with `/add-dir <worktree>`. Once it is open, name each file by its
-absolute path: a path with `..` never reaches it, and `request_path` does not either, since a
-person's yes to it reaches programs and not the file tools. In bypass mode there is no person to
-ask, and a granted `request_path` for the worktree opens it for the file tools too, so use it there
-instead of waiting for `/add-dir`. If a file tool refuses the worktree, ask the person to run
-`/add-dir` on it and say which directory.
+until the person opens it with `/add-dir <worktree>`. Once it is open, a file in it is reached
+by its absolute path or by a `../<worktree>/...` path, which is taken as the absolute one.
+`request_path` does not open it, since a person's yes to it reaches programs and not the file
+tools. In bypass mode there is no person to ask, and a granted `request_path` for the worktree
+opens it for the file tools too, so use it there instead of waiting for `/add-dir`. If a file tool
+refuses the worktree, ask the person to run `/add-dir` on it and say which directory.
 
 `<pr>` is a number or a pull request URL. Several can be given, separated by commas or spaces
 (`12,13 https://github.com/brave/bravebot/pull/14`), and `all` stands for every open
