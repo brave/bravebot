@@ -9175,6 +9175,55 @@ fn a_one_shot_run_is_written_down_and_names_its_session() {
     assert!(written, "no record named {id} under {records:?}");
 }
 
+/// NAME-10: `--session-ref <id>` puts the newest part of that earlier session in front of the
+/// planner in a run of its own, a run without the flag sees none of it, and an id that names no
+/// session is refused before anything is sent.
+#[test]
+fn a_session_ref_brings_an_earlier_session_into_a_new_run() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-session-ref").with_settings(&settings_for(&gateway));
+    let (output, stdout, stderr) =
+        a_recorded_run(&scratch, &["-p", "EARLIER-QUESTION-ABOUT-PARSERS"]);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let id = session_of(&stdout).expect("the first run named its session");
+    let _ = requests(&gateway);
+
+    let (output, _, stderr) = a_recorded_run(&scratch, &["-p", "plain follow-up"]);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let sent = requests(&gateway);
+    assert!(
+        sent.iter()
+            .all(|body| !body.contains("EARLIER-QUESTION-ABOUT-PARSERS")),
+        "a run with no flag was given the earlier session"
+    );
+
+    let (output, _, stderr) = a_recorded_run(
+        &scratch,
+        &["-p", "carry on", "--session-ref", &id, "--session-ref", &id],
+    );
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let sent = requests(&gateway);
+    let sent = sent.last().expect("the run reached the gateway");
+    assert!(
+        sent.contains("EARLIER-QUESTION-ABOUT-PARSERS") && sent.contains("carry on"),
+        "the earlier session did not reach the planner: {sent}"
+    );
+    assert_eq!(
+        sent.matches("You: EARLIER-QUESTION-ABOUT-PARSERS").count(),
+        1,
+        "naming one session twice quoted it twice"
+    );
+
+    let (output, stdout, _) =
+        a_recorded_run(&scratch, &["-p", "carry on", "--session-ref", "no-such-id"]);
+    assert_eq!(output.status.code(), Some(2), "{stdout}");
+    assert!(stdout.contains("no session no-such-id"), "{stdout}");
+    assert!(
+        requests(&gateway).is_empty(),
+        "a run naming no session was sent"
+    );
+}
+
 /// CLI-25: `--continue` carries the most recent session, and `--resume <id>` the one it names. The
 /// second request has to hold the first run's question and reply, which is what separates a
 /// continued conversation from a follow-up sent into an empty one, and the session the id names

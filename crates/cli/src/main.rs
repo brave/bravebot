@@ -371,8 +371,8 @@ fn main() -> ExitCode {
         // would otherwise be caught below as unknown options.
         Some(
             "-p" | "--print" | "--mode" | "--model" | "--advisor" | "--effort" | "--file"
-            | "--add-dir" | "--trust-workspace" | "--trace" | "--json" | "--json-stream"
-            | "--output-schema",
+            | "--session-ref" | "--add-dir" | "--trust-workspace" | "--trace" | "--json"
+            | "--json-stream" | "--output-schema",
         ) => run_task(&args, skip_permissions, agent, prompts),
         Some("doctor") if args.get(1).map(String::as_str) == Some("--sandbox-check") => {
             match args.len() {
@@ -1010,6 +1010,7 @@ fn print_help() {
     println!("{}", t!(cli_options_heading));
     for (flags, description) in [
         ("--file <path>", t!(cli_option_file)),
+        ("--session-ref <id>", t!(cli_option_session_ref)),
         ("--add-dir <path>", t!(cli_option_add_dir)),
         ("--trust-workspace", t!(cli_option_trust_workspace)),
         ("--settings <path>", t!(cli_option_settings)),
@@ -1273,6 +1274,8 @@ fn take_vet(args: &mut Vec<String>) -> bool {
 struct Invocation {
     prompt: String,
     files: Vec<String>,
+    /// The past sessions of this directory named with `--session-ref`, by id (NAME-10).
+    session_refs: Vec<String>,
     mode: Mode,
     /// The model the command line named. `None` leaves the configured one in force rather than
     /// standing for a model of its own.
@@ -1306,6 +1309,7 @@ struct Invocation {
 fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut prompt = String::new();
     let mut files = Vec::new();
+    let mut session_refs: Vec<String> = Vec::new();
     let mut mode = Mode::default();
     let mut model = None;
     let mut advisor = None;
@@ -1378,6 +1382,16 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 }
                 None => return Err(t!(cli_file_needs_a_path).to_string()),
             },
+            "--session-ref" => match args.get(index + 1).map(|id| id.trim()) {
+                Some(id) if !id.is_empty() => {
+                    // Naming one twice is naming it once, as on a line with the mention twice.
+                    if !session_refs.iter().any(|seen| seen == id) {
+                        session_refs.push(id.to_string());
+                    }
+                    index += 2;
+                }
+                _ => return Err(t!(cli_session_ref_needs_an_id).to_string()),
+            },
             // Repeatable, since reaching one sibling checkout is no more natural than reaching
             // two, and a flag that could only be given once would be a rule about typing.
             "--add-dir" => match args.get(index + 1).map(|path| path.trim()) {
@@ -1445,6 +1459,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     Ok(Invocation {
         prompt,
         files,
+        session_refs,
         mode,
         model,
         advisor,
@@ -1476,6 +1491,7 @@ fn run_task(
     let Invocation {
         prompt,
         files,
+        session_refs,
         mode,
         model,
         advisor,
@@ -1775,6 +1791,17 @@ fn run_task(
         ),
         bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => {}
     }
+    // Read before anything is sent, so an id that names nothing quotable is a refused argument and
+    // not a run that quietly went without the session it was told to carry (NAME-10).
+    let mut excerpts = Vec::new();
+    for id in &session_refs {
+        match bravebot_session::excerpt::of(workspace.root(), id) {
+            Ok(excerpt) => excerpts.push(excerpt),
+            Err(refused) => {
+                return stopped_before_the_turn(as_json, Ending::Argument, refused.said(id));
+            }
+        }
+    }
     let mut task = Task::new(prompt)
         .with_home(bravebot_agent::home::directory())
         .with_profile(bravebot_agent::home::profile())
@@ -1819,6 +1846,9 @@ fn run_task(
         .model_outranks_a_definition(named_on_the_command_line);
     for file in files {
         task = task.with_file(file);
+    }
+    for excerpt in excerpts {
+        task = task.with_session_excerpt(excerpt.id, excerpt.text);
     }
     if let Some(text) = piped {
         task = task.with_piped_input(text);
@@ -7802,6 +7832,30 @@ mod tests {
         // Not a failure here, so nothing claims the identifier of one.
         assert!(!beside.contains("BB1"), "{beside}");
         assert!(ending_of_a_turn(true, false, true).ok());
+    }
+
+    /// NAME-10: `--session-ref` takes an id, once however often it is written, and refuses a
+    /// missing or blank one.
+    #[test]
+    fn a_session_ref_flag_names_a_session_once() {
+        let invocation = parse_invocation(&args(&[
+            "--session-ref",
+            "abc-123",
+            "do a thing",
+            "--session-ref",
+            " abc-123 ",
+            "--session-ref",
+            "def-456",
+        ]))
+        .expect("parses");
+        assert_eq!(invocation.session_refs, ["abc-123", "def-456"]);
+        for typed in [
+            args(&["--session-ref"]),
+            args(&["--session-ref", "  ", "x"]),
+        ] {
+            let err = parse_invocation(&typed).expect_err("refused");
+            assert!(err.contains("--session-ref"), "{typed:?}: {err}");
+        }
     }
 
     #[test]

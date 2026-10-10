@@ -75,6 +75,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | Option | What it does |
 |---|---|
 | `--file <path>` | include a workspace file as **trusted** context; repeatable |
+| `--session-ref <id>` | add the newest part of an earlier session of this directory to the task; repeatable |
 | `--add-dir <path>` | make a directory outside the working one reachable for this run; repeatable ([below](#--add-dir-path)) |
 | `--trust-workspace` | trust the working directory for this run, writing no record ([below](#--trust-workspace)) |
 | `-p`, `--print` | non-interactive; reads piped stdin as quarantined context |

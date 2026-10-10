@@ -733,6 +733,13 @@ pub struct Task {
     /// gesture rather than from anything a model said. Nothing else in the directory it came from
     /// becomes reachable.
     pub dropped_text: Vec<String>,
+    /// Parts of past sessions the person named with `@session:<id>`, as `(id, text)`.
+    ///
+    /// Part of the person's own message, which is what the person did: they typed the name and
+    /// sent the line. The text is read out of a stored record by the caller, and a record holds
+    /// only what a planner could hold (SESSION-2), so no untrusted byte comes in this way. The
+    /// driver carries it and branches on none of it.
+    pub session_excerpts: Vec<(String, String)>,
     /// Input piped into the process on stdin.
     ///
     /// Untrusted, unlike [`Task::files`]. Naming a file says which bytes the user meant; a pipe
@@ -1071,6 +1078,7 @@ impl Task {
             files: Vec::new(),
             attachments: Vec::new(),
             dropped_text: Vec::new(),
+            session_excerpts: Vec::new(),
             images: Vec::new(),
             piped: None,
             home: None,
@@ -1169,6 +1177,12 @@ impl Task {
     /// Include a text file the user dropped, which may sit anywhere on the disk.
     pub fn with_dropped_text(mut self, path: impl Into<String>) -> Self {
         self.dropped_text.push(path.into());
+        self
+    }
+
+    /// Add what a past session said to the message, as the person named it.
+    pub fn with_session_excerpt(mut self, id: impl Into<String>, text: impl Into<String>) -> Self {
+        self.session_excerpts.push((id.into(), text.into()));
         self
     }
 
@@ -3765,12 +3779,18 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // the picture somewhere other than the sentence asking about it.
         let prompt_at = conversation.recounted().len();
         let has_attachments = !task.attachments.is_empty();
+        // The line and what its `@session:` mentions bring are one message, as a pasted picture
+        // is, and recorded the way an interjection is: the id and the count, never the words.
+        let mut said = task.prompt.clone();
+        for (id, text) in &task.session_excerpts {
+            policy.admit_session_excerpt(id, text.chars().count());
+            said.push_str("\n\n");
+            said.push_str(text);
+        }
         let submitted = if task.attachments.is_empty() && task.images.is_empty() {
-            Message::user(task.prompt.clone())
+            Message::user(said)
         } else {
-            let mut parts = vec![Part::Text {
-                text: task.prompt.clone(),
-            }];
+            let mut parts = vec![Part::Text { text: said }];
 
             for index in 0..task.attachments.len() {
                 let key = format!("attachment_{index}");

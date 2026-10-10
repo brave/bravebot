@@ -39,6 +39,27 @@ pub struct Entry {
     pub path: String,
     /// Whether it is a directory, which completes to a path that can be typed further.
     pub is_directory: bool,
+    /// What to show beside the path where it is not a file: a past session's age and the most a
+    /// mention adds, then its title.
+    pub note: Option<String>,
+    /// What a typed word is looked for in besides the reference itself: a past session's title.
+    pub title: Option<String>,
+}
+
+/// What follows the `@` of a reference to a past session, in place of a path: `@session:<id>`.
+pub const SESSION_PREFIX: &str = "session:";
+
+/// A row offering a past session of this directory, which completes to `@session:<id>`.
+///
+/// Not a file and not a directory, so completing it leaves a space after it and nothing here ever
+/// reads it as a path ([`referenced`] leaves it out). `note` is what the person chooses it by.
+pub fn session_entry(id: &str, title: &str, note: String) -> Entry {
+    Entry {
+        path: format!("{SESSION_PREFIX}{id}"),
+        is_directory: false,
+        note: Some(note),
+        title: Some(title.to_string()),
+    }
 }
 
 /// Entries matching a half-typed reference, directories first and then files, each alphabetical.
@@ -108,6 +129,8 @@ pub fn matching(root: &Path, typed: &str) -> Vec<Entry> {
                     path
                 },
                 is_directory,
+                note: None,
+                title: None,
             })
         })
         .collect();
@@ -203,6 +226,11 @@ pub fn names_a_file(root: &Path, typed: &str) -> bool {
     if typed.contains("..") || typed.starts_with('/') {
         return false;
     }
+    // A session is named by its id and is no file, even where a file of that name exists: the
+    // prefix is what the list offers it under, so it is what Enter reads it by.
+    if typed.starts_with(SESSION_PREFIX) {
+        return false;
+    }
     root.join(typed)
         .symlink_metadata()
         .is_ok_and(|named| !named.is_dir())
@@ -213,12 +241,39 @@ pub fn names_a_file(root: &Path, typed: &str) -> bool {
 /// This is what becomes a turn's context. A trailing slash is dropped, since a directory is a place
 /// to type through rather than a file to read, and one named anyway is not a file to include.
 pub fn referenced(line: &str) -> Vec<String> {
+    words_after_at(line)
+        .filter(|path| !path.is_empty() && !path.ends_with('/') && !is_a_session(path))
+        .collect()
+}
+
+/// Every past session named with `@session:<id>` in a line, by id, in the order written and
+/// without repeats.
+///
+/// Only the shape is decided here: whether the id names a record of this directory is for the
+/// reader of the record to say, and a name that is none refuses the send rather than dropping out.
+pub fn referenced_sessions(line: &str) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for word in words_after_at(line) {
+        if let Some(id) = word
+            .strip_prefix(SESSION_PREFIX)
+            .filter(|id| !id.is_empty())
+            && !ids.iter().any(|seen| seen == id)
+        {
+            ids.push(id.to_string());
+        }
+    }
+    ids
+}
+
+fn is_a_session(word: &str) -> bool {
+    word.starts_with(SESSION_PREFIX)
+}
+
+fn words_after_at(line: &str) -> impl Iterator<Item = String> + '_ {
     word_spans(line)
         .into_iter()
         .filter_map(|(start, end)| line[start..end].strip_prefix('@'))
         .map(unescape)
-        .filter(|path| !path.is_empty() && !path.ends_with('/'))
-        .collect()
 }
 
 /// Whether Enter on a half-typed reference completes it rather than sending the line.
@@ -417,6 +472,8 @@ mod tests {
             vec![Entry {
                 path: "notes".to_string(),
                 is_directory: false,
+                note: None,
+                title: None,
             }],
             "the list offers a symlink as a file, following nothing"
         );
@@ -528,5 +585,35 @@ mod tests {
             !enter_completes(&scratch.path, "zz", &[], 0),
             "nothing offered"
         );
+    }
+
+    /// A session is named beside the files and read back as a session, never as a path: a file
+    /// whose name looked like one would otherwise be read from disk by a line that meant a record.
+    #[test]
+    fn a_session_reference_is_not_a_file_and_is_read_back_by_its_id() {
+        let line = "carry on from @session:abc-123 and @Cargo.toml @session:abc-123 again";
+        assert_eq!(referenced(line), vec!["Cargo.toml"]);
+        assert_eq!(referenced_sessions(line), vec!["abc-123"]);
+        assert!(referenced_sessions("see @session: and @src/session:x").is_empty());
+        assert!(referenced_sessions("mail me at a@session:abc").is_empty());
+    }
+
+    /// A finished session reference is a finished sentence even where a file of that name exists,
+    /// and the row offered for a session completes to the form that names it.
+    #[test]
+    fn a_session_row_completes_to_its_reference_and_enter_sends_it_finished() {
+        let scratch = Scratch::new("session-row");
+        std::fs::write(scratch.path.join("session:abc"), "").expect("write");
+        assert!(!names_a_file(&scratch.path, "session:abc"));
+        let row = session_entry("abc", "fix the build", "2 days ago".to_string());
+        assert_eq!(row.path, "session:abc");
+        assert!(!row.is_directory);
+        assert!(!enter_completes(
+            &scratch.path,
+            "session:abc",
+            std::slice::from_ref(&row),
+            0
+        ));
+        assert!(enter_completes(&scratch.path, "session:a", &[row], 0));
     }
 }

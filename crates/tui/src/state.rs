@@ -1899,6 +1899,11 @@ pub struct Session {
     /// Resolved as one starts and let go once it ends, so a skill written mid-session is offered
     /// the next time, and constructing a session reads no directory.
     skills: Option<Vec<crate::skills::Skill>>,
+    /// The past sessions of this directory an `@` could name, held while a reference is typed.
+    ///
+    /// Held and let go as [`Session::skills`] are, so that offering the list reads no directory
+    /// per frame and constructing a session reads none at all.
+    past_sessions: Option<Vec<bravebot_mentions::Entry>>,
     /// Files dropped on the box, by the marker standing for each in the line.
     ///
     /// Kept until the line is sent, and read back out of the line at that point rather than sent
@@ -2061,6 +2066,7 @@ impl Session {
             completion: 0,
             workspace: std::path::PathBuf::new(),
             skills: None,
+            past_sessions: None,
             attached: Vec::new(),
             sent: Vec::new(),
             attachments_made: 0,
@@ -6111,6 +6117,22 @@ impl Session {
         }
     }
 
+    /// Hold the past sessions an `@` could name while the line ends in a reference, and let them go
+    /// once it does not.
+    ///
+    /// `resolve` returns a row for each session of the directory, newest first, and is called once
+    /// per reference rather than once per key.
+    pub fn settle_sessions(&mut self, resolve: impl FnOnce() -> Vec<bravebot_mentions::Entry>) {
+        let typing = !self.shell
+            && self.status != Status::Working
+            && bravebot_mentions::typed_reference(&self.input).is_some();
+        match (typing, self.past_sessions.is_some()) {
+            (true, false) => self.past_sessions = Some(resolve()),
+            (false, true) => self.past_sessions = None,
+            _ => {}
+        }
+    }
+
     /// The skills held while a slash word is being typed, and none otherwise.
     ///
     /// None while work runs, even if the line that started it was holding some: the loop that
@@ -6172,7 +6194,10 @@ impl Session {
         }
         match bravebot_mentions::typed_reference(&self.input) {
             Some(typed) => {
-                let entries = bravebot_mentions::matching(&self.workspace, &typed);
+                let mut entries = bravebot_mentions::matching(&self.workspace, &typed);
+                // After the files: a session is named by a title or an id rather than walked
+                // into, and a path being typed towards is what a person most often means.
+                entries.extend(self.sessions_matching(&typed));
                 if entries.is_empty() {
                     Offered::Nothing
                 } else {
@@ -6181,6 +6206,29 @@ impl Session {
             }
             None => Offered::Nothing,
         }
+    }
+
+    /// The past sessions a half-typed reference could still become: those whose reference starts
+    /// with it, and, for words that are no path, those whose title holds them.
+    fn sessions_matching(&self, typed: &str) -> Vec<bravebot_mentions::Entry> {
+        const MOST: usize = 10;
+        let Some(held) = &self.past_sessions else {
+            return Vec::new();
+        };
+        let wanted = typed.to_lowercase();
+        held.iter()
+            .filter(|row| {
+                typed.is_empty()
+                    || row.path.starts_with(typed)
+                    || (!typed.contains('/')
+                        && row
+                            .title
+                            .as_deref()
+                            .is_some_and(|title| title.to_lowercase().contains(&wanted)))
+            })
+            .take(MOST)
+            .cloned()
+            .collect()
     }
 
     /// The commands the half-typed line could still become.

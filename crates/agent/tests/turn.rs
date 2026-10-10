@@ -393,6 +393,47 @@ fn a_turn_includes_requested_file_contents() {
     assert!(body.contains("explain this file"));
 }
 
+/// A session named with `@session:<id>` reaches the planner inside the person's own message, and
+/// the trail records the id and the count and none of the words.
+#[test]
+fn a_named_session_is_added_to_the_message_and_the_trail_holds_only_its_size() {
+    let scratch = Scratch::new("with-session");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("noted"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let excerpt = "Excerpt of an earlier session.\n\nYou: the earlier secret-free question";
+    let task = Task::new("carry on from @session:abc-123").with_session_excerpt("abc-123", excerpt);
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(body.contains("carry on from @session:abc-123"));
+    assert!(body.contains("the earlier secret-free question"), "{body}");
+    let count = excerpt.chars().count();
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "provenance", detail }
+                if detail.contains("abc-123")
+                    && detail.contains(&format!("{count} characters"))
+                    && !detail.contains("earlier secret-free")
+        )),
+        "no record of the session: {:?}",
+        sink.events()
+    );
+}
+
 /// The tag an interface draws that file from is written where the message is composed, because that
 /// is the only place that knows the sentence in front of the body is the agent's own. An interface
 /// left to recognise the file by its first line would be reading the file's own bytes to decide
