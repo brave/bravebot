@@ -201,6 +201,7 @@ impl Sandbox for LandlockSandbox {
             // A rule is a right attached to an open descriptor, so a path nothing can
             // open cannot be named in one and a policy naming one is refused.
             grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
         }
     }
 

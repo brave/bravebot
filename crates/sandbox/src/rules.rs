@@ -255,6 +255,25 @@ impl Rules {
             .find(|item| item.list.is_a_denial())
     }
 
+    /// The denials in force that name a path beneath `directory`, which every stage is granted.
+    ///
+    /// A backend that cannot subtract from a grant starts no stage whose policy holds one of
+    /// these, so each is a path the person meant to hold back and a stage there is refused. A
+    /// denial of `directory` itself is not among them: it removes the row instead of cutting a
+    /// path out of it.
+    pub fn denials_inside(&self, directory: &Path) -> Vec<&Item> {
+        let directory = resolved(directory);
+        self.in_force()
+            .filter(|item| item.list.is_a_denial())
+            .filter(|item| match &item.state {
+                State::InForce(paths) => paths
+                    .iter()
+                    .any(|path| under(path, &directory) && !same_path(path, &directory)),
+                State::Refused(_) => false,
+            })
+            .collect()
+    }
+
     /// `policy` with these rules in it.
     ///
     /// A refusal of a person's beats the rows a stage brings of its own at or beneath it, scope and
@@ -1516,6 +1535,46 @@ mod tests {
                 let held = denial(list, denied).apply(policy.clone());
                 assert!(refusal_for(&held).is_some(), "{grant} {denied}");
             }
+        }
+    }
+
+    /// A denial beneath the directory every stage is granted is one a backend that cannot subtract
+    /// from a grant refuses a stage for, so it is found however the directory and the denial are
+    /// each spelled. Neither the directory itself, a path beside it, nor an entry that adds reach
+    /// is one.
+    #[test]
+    fn a_denial_beneath_the_session_directory_is_found_whichever_way_each_is_spelled() {
+        for (directory, denied) in [
+            (GRANT, SECRET),
+            (GRANT, SECRET_VERBATIM),
+            (GRANT_VERBATIM, SECRET),
+            (GRANT_VERBATIM, SECRET_VERBATIM),
+        ] {
+            for list in [List::DenyRead, List::DenyWrite] {
+                let rules = denial(list, denied);
+                let found = rules.denials_inside(Path::new(directory));
+                assert_eq!(found.len(), 1, "{list:?} {directory} {denied}");
+                assert_eq!(found[0].entry.path, denied);
+            }
+            for list in [List::AllowRead, List::AllowWrite] {
+                let rules = denial(list, denied);
+                assert!(
+                    rules.denials_inside(Path::new(directory)).is_empty(),
+                    "{list:?} {directory} {denied}"
+                );
+            }
+        }
+        for (directory, denied) in [
+            (GRANT, GRANT_VERBATIM),
+            (GRANT_VERBATIM, GRANT),
+            (GRANT, r"C:\workshop/secret.env"),
+            (GRANT_VERBATIM, r"\\?\C:\elsewhere/secret.env"),
+        ] {
+            let rules = denial(List::DenyWrite, denied);
+            assert!(
+                rules.denials_inside(Path::new(directory)).is_empty(),
+                "{directory} {denied}"
+            );
         }
     }
 

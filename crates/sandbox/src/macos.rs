@@ -289,6 +289,7 @@ impl Sandbox for SeatbeltSandbox {
             // A profile is text the kernel reads as the process starts, so a path that is
             // not there yet is named in one and the file can be created afterwards.
             grants_paths_that_do_not_exist: true,
+            subtracts_from_a_grant: true,
         }
     }
 
