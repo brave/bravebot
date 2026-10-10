@@ -757,9 +757,28 @@ int main(void) {
     }
 
     /// Answer one request, so a curl that was permitted a socket gets a reply and exits rather
-    /// than waiting out its own timeout. Called only where a connection is expected to arrive.
+    /// than waiting out its own timeout. Called only where a connection is expected to arrive, so
+    /// one that has not arrived in ten seconds fails the test rather than leaving it waiting.
     fn answer_one(listener: &TcpListener) {
-        let (mut stream, _) = listener.accept().expect("the connection arrives");
+        listener
+            .set_nonblocking(true)
+            .expect("the listener can be polled");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(error) => panic!("the connection did not arrive: {error}"),
+            }
+        };
+        stream
+            .set_nonblocking(false)
+            .expect("the connection can be read in turn");
         let _ = stream.read(&mut [0u8; 1024]);
         let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
     }
