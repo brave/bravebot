@@ -1510,10 +1510,24 @@ capability or does not), so a stage is refused there while a list is set, with
 ([SANDBOX-20](#SANDBOX-20)). The stage is not started with the variables alone. The sentence the
 planner reads under SANDBOX-19 says the network is limited by that setting and names no host.
 
+After a foreground `run` has stopped, the trail records what the list decided for the hosts its
+programs asked each proxy for, under `hosts`: the host, `allowed` or `refused`, the entry that
+decided it or `not listed` or `port not carried`, and the stages that proxy serves in that line.
+Repeats are counted. A program chooses the name it asks for, so the record carries a name only
+where it is a host name or an IP address, and a request for anything else is recorded as a name
+that is not a host name, with none of its bytes. A proxy keeps at most 256 decisions until they are
+taken and counts the rest, which the record states. A proxy is shared by every stage with the same
+list, so a decision taken for a job left running is recorded with the next foreground line that
+shares its proxy, and a decision taken after a line was moved to the background is recorded the
+same way. `/status` shows a line with how many entries the allowed and denied lists hold and the
+files that wrote them, and no entry, for a session with an `allowedHosts` list that is not run
+with the sandbox off.
+
 Half built. The list, its defaults, the proxy, the settings that carry the list through the
-layers, the managed pin, the environment injection and the port-limited policy on macOS are
-written and tested. Unbuilt: a backend on Linux and Windows that limits egress to the port, the
-prompt for an unlisted host, the trace record and the `/status` line.
+layers, the managed pin, the environment injection, the port-limited policy on macOS, the trace
+record and the `/status` line are written and tested. Unbuilt: a backend on Linux and Windows that
+limits egress to the port, and the prompt for an unlisted host, so `onUnlisted: ask` is read and
+an unlisted host is refused whichever word is set.
 
 `verified-by: bravebot_sandbox::policy::the_port_egress_is_limited_to_is_carried_and_goes_with_the_network`
 `verified-by: bravebot_sandbox::macos::egress_limited_to_a_port_names_the_port_and_no_other_address`
@@ -1539,6 +1553,15 @@ prompt for an unlisted host, the trace record and the `/status` line.
 `verified-by: bravebot_sandbox::proxy::the_host_is_read_from_the_request_line_and_not_from_a_header`
 `verified-by: bravebot_sandbox::proxy::a_request_that_is_not_a_connect_is_refused_without_a_decision`
 `verified-by: bravebot_sandbox::proxy::every_decision_is_recorded_with_the_host_and_the_rule_that_decided_it`
+`verified-by: bravebot_sandbox::hosts::only_a_host_name_or_an_address_may_be_recorded`
+`verified-by: bravebot_sandbox::proxy::a_decision_is_handed_over_once`
+`verified-by: bravebot_sandbox::proxy::decisions_beyond_the_cap_are_counted_and_not_kept`
+`verified-by: bravebot_sandbox::proxy::a_request_for_something_that_is_not_a_host_name_is_recorded_without_it`
+`verified-by: bravebot_agent::confine::the_trail_names_the_hosts_asked_for_and_what_the_list_decided`
+`verified-by: bravebot_agent::confine::the_trail_carries_no_byte_of_a_name_that_is_not_a_host`
+`verified-by: bravebot_agent::confine::the_trail_names_the_entry_that_decided_and_a_session_without_a_list_records_nothing`
+`verified-by: bravebot_cli::running::a_host_a_run_asked_for_is_recorded_with_what_the_list_decided`
+`verified-by: bravebot_tui::status::host_lists_are_reported_by_count_and_file_and_never_by_host`
 `verified-by: bravebot_sandbox::proxy::the_environment_points_every_proxy_variable_at_the_loopback_port`
 `verified-by: bravebot_sandbox::proxy::dropping_the_proxy_stops_it_listening`
 `verified-by: bravebot_agent::host_proxy::a_stage_holds_the_defaults_its_own_reasons_bring_and_no_others`

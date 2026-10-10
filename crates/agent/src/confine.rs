@@ -19,6 +19,7 @@ use bravebot_core::command::Step;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base, credential_locations, run_base, with_security_cache};
+use bravebot_sandbox::hosts::{Refusal, Verdict};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::proxy::Proxy;
@@ -296,6 +297,81 @@ impl Confinement {
                 kept.join(", ")
             ),
         })
+    }
+
+    /// What the trail records of the hosts the programs of one foreground run asked for: what the
+    /// host list decided and by which entry, from the proxies that serve its stages. `None` where
+    /// the session has no list or nothing was asked for.
+    ///
+    /// Takes the decisions, so each is recorded once. A proxy is shared by every stage with the
+    /// same list, so a decision is named by the stages that proxy serves in this line, and one a
+    /// job left running took is recorded with the next line that shares its proxy. A host a
+    /// program asked for is carried as [`bravebot_sandbox::hosts::recordable`] allows and by no
+    /// other bytes; the entries are the person's own and the defaults.
+    pub fn hosts_for_the_trail(&self, steps: &[&Step]) -> Option<String> {
+        let mut served: Vec<(Arc<Proxy>, Vec<usize>)> = Vec::new();
+        for (at, step) in steps.iter().enumerate() {
+            let Ok(Some(proxy)) = self.host_proxy(step) else {
+                continue;
+            };
+            match served
+                .iter_mut()
+                .find(|(known, _)| Arc::ptr_eq(known, &proxy))
+            {
+                Some((_, stages)) => stages.push(at + 1),
+                None => served.push((proxy, vec![at + 1])),
+            }
+        }
+        let said: Vec<String> = served
+            .iter()
+            .filter_map(|(proxy, stages)| {
+                let taken = proxy.take_decisions();
+                if taken.decisions.is_empty() && taken.dropped == 0 {
+                    return None;
+                }
+                let mut counted: Vec<(String, usize)> = Vec::new();
+                for decision in &taken.decisions {
+                    let said = format!(
+                        "{} {}",
+                        decision
+                            .host
+                            .as_deref()
+                            .unwrap_or("a name that is not a host name"),
+                        match &decision.verdict {
+                            Verdict::Allowed(rule) => format!("allowed by {}", rule.spelling()),
+                            Verdict::Refused(Refusal::Denied(rule)) =>
+                                format!("refused, denied by {}", rule.spelling()),
+                            Verdict::Refused(Refusal::NotListed) => "refused, not listed".into(),
+                            Verdict::Refused(Refusal::Port) => "refused, port not carried".into(),
+                        }
+                    );
+                    match counted.iter_mut().find(|(known, _)| *known == said) {
+                        Some((_, times)) => *times += 1,
+                        None => counted.push((said, 1)),
+                    }
+                }
+                let mut parts: Vec<String> = counted
+                    .into_iter()
+                    .map(|(said, times)| match times {
+                        1 => said,
+                        times => format!("{said} x{times}"),
+                    })
+                    .collect();
+                if taken.dropped > 0 {
+                    parts.push(format!("{} more not kept", taken.dropped));
+                }
+                Some(format!(
+                    "the host list decided for the proxy of {}: {}",
+                    stages
+                        .iter()
+                        .map(|stage| format!("stage {stage}"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    parts.join("; ")
+                ))
+            })
+            .collect();
+        (!said.is_empty()).then(|| said.join("; "))
     }
 
     /// This confinement held to `mode`.
@@ -3740,6 +3816,94 @@ mod tests {
         assert!(closed.host_proxy(&kept).unwrap().is_none());
         let no_list = closed.with_hosts(Some(&hosts_listing(None)));
         assert!(no_list.host_proxy(&kept).unwrap().is_none());
+    }
+
+    /// Sends one `CONNECT` to `proxy` and waits for its refusal or its failure to connect, so the
+    /// decision is taken by the time this returns.
+    fn ask_the_proxy(proxy: &Proxy, target: &str) {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(proxy.addr()).unwrap();
+        write!(stream, "CONNECT {target} HTTP/1.1\r\n\r\n").unwrap();
+        let mut reply = Vec::new();
+        let _ = stream.read_to_end(&mut reply);
+    }
+
+    /// The trail says which hosts a run's programs asked for and what the list decided, by stage and
+    /// entry, once. The regression it rejects is a list that refuses a host and leaves no record of
+    /// it, and a record that repeats the same refusal on every later line.
+    #[test]
+    fn the_trail_names_the_hosts_asked_for_and_what_the_list_decided() {
+        let listed = confinement(&["/work/project"])
+            .with_network(Network::Closed)
+            .with_hosts(Some(&hosts_listing(Some(&["trail-listed.example"]))));
+        let fetch = step("/usr/bin/curl", &["https://trail-listed.example"]);
+        let cat = step("/bin/cat", &["a"]);
+        let proxy = listed.host_proxy(&fetch).unwrap().expect("a proxy");
+
+        assert_eq!(listed.hosts_for_the_trail(&[&cat, &fetch]), None);
+        ask_the_proxy(&proxy, "other.example:443");
+        ask_the_proxy(&proxy, "other.example:443");
+        ask_the_proxy(&proxy, "trail-listed.example:8080");
+
+        let said = listed
+            .hosts_for_the_trail(&[&cat, &fetch])
+            .expect("the refusals are recorded");
+        assert_eq!(
+            said,
+            "the host list decided for the proxy of stage 2: \
+             other.example refused, not listed x2; \
+             trail-listed.example refused, port not carried"
+        );
+        assert_eq!(listed.hosts_for_the_trail(&[&cat, &fetch]), None);
+    }
+
+    /// A name a program asked for that is not a host name is recorded as no name, with the bytes
+    /// left out. The regression it rejects is a program writing an escape sequence or a line
+    /// break into the trail through the host it asks for.
+    #[test]
+    fn the_trail_carries_no_byte_of_a_name_that_is_not_a_host() {
+        let listed = confinement(&["/work/project"])
+            .with_network(Network::Closed)
+            .with_hosts(Some(&hosts_listing(Some(&["trail-bytes.example"]))));
+        let fetch = step("/usr/bin/curl", &["https://trail-bytes.example"]);
+        let proxy = listed.host_proxy(&fetch).unwrap().expect("a proxy");
+
+        ask_the_proxy(&proxy, "evil\u{1b}[2J.example:443");
+        let said = listed.hosts_for_the_trail(&[&fetch]).unwrap();
+        assert_eq!(
+            said,
+            "the host list decided for the proxy of stage 1: \
+             a name that is not a host name refused, not listed"
+        );
+        assert!(!said.contains("evil") && !said.contains('\u{1b}'), "{said}");
+    }
+
+    /// A refusal by a denied entry names the entry, and a session with no list records nothing.
+    #[test]
+    fn the_trail_names_the_entry_that_decided_and_a_session_without_a_list_records_nothing() {
+        let hosts = Hosts {
+            denied: vec![bravebot_config::sandbox_network::HostEntry {
+                entry: "*.trail-denied.example".to_string(),
+                by: None,
+            }],
+            ..hosts_listing(Some(&["*.trail-denied.example", "trail-ok.example"]))
+        };
+        let listed = confinement(&["/work/project"])
+            .with_network(Network::Closed)
+            .with_hosts(Some(&hosts));
+        let fetch = step("/usr/bin/curl", &["https://trail-ok.example"]);
+        let proxy = listed.host_proxy(&fetch).unwrap().expect("a proxy");
+        ask_the_proxy(&proxy, "a.trail-denied.example:443");
+        assert_eq!(
+            listed.hosts_for_the_trail(&[&fetch]).as_deref(),
+            Some(
+                "the host list decided for the proxy of stage 1: \
+                 a.trail-denied.example refused, denied by *.trail-denied.example"
+            )
+        );
+
+        let unlisted = confinement(&["/work/project"]).with_network(Network::Closed);
+        assert_eq!(unlisted.hosts_for_the_trail(&[&fetch]), None);
     }
 
     /// A policy limited to the proxy's port is refused where the platform cannot hold a program to

@@ -61,6 +61,14 @@ pub fn normalise(host: &str) -> String {
     host.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
+/// `host` as a record may carry it: the normalised name where it is a host name or an IP address,
+/// and `None` for anything else. A program chooses the name it asks a proxy for, so a record that
+/// held it verbatim would let a program put any bytes, a newline included, into a trail.
+pub fn recordable(host: &str) -> Option<String> {
+    let name = normalise(host);
+    (valid_name(&name) || name.parse::<std::net::IpAddr>().is_ok()).then_some(name)
+}
+
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 253
@@ -176,6 +184,25 @@ pub fn registry_hosts(toolchain: Toolchain) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A record carries a host name or an address, normalised, and nothing else. The regression
+    /// it rejects is a name with a control character, a space or a bracket reaching a trail.
+    #[test]
+    fn only_a_host_name_or_an_address_may_be_recorded() {
+        assert_eq!(recordable("GitHub.com."), Some("github.com".to_string()));
+        assert_eq!(recordable("127.0.0.1"), Some("127.0.0.1".to_string()));
+        assert_eq!(recordable("::1"), Some("::1".to_string()));
+        for bad in [
+            "",
+            "a b.example",
+            "a\nb.example",
+            "x\u{1b}[2J.example",
+            "a..b",
+            "-.é",
+        ] {
+            assert_eq!(recordable(bad), None, "{bad:?}");
+        }
+    }
 
     fn list(allowed: &[&str], denied: &[&str]) -> HostList {
         let (list, invalid) = HostList::parse(allowed.iter().copied(), denied.iter().copied());

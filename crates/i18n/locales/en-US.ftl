@@ -2011,6 +2011,11 @@ status-sandbox-filesystem = Filesystem rules
 status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 status-sandbox-filesystem-files = from { $files }
 status-sandbox-filesystem-flags = the command line
+status-hosts = Allowed hosts
+status-hosts-counts = { $allowed } allowed, { $denied } denied
+status-hosts-files = from { $files }; a host no entry covers is refused
+status-hosts-managed = the managed settings
+status-hosts-refused = a host no entry covers is refused
 status-this-session = This session
 # Where a session's wall clock went. Four figures, because the whole is unactionable: a session
 # that took an hour on the model, an hour on subprocesses, and an hour waiting for its user to

@@ -6345,6 +6345,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("run_network", detail);
     }
 
+    /// Record the hosts the programs of one `run` asked its allowed-hosts proxies for and what the
+    /// host list decided for each (SANDBOX-24).
+    ///
+    /// `detail` holds a host only as the sandbox crate lets a record carry one, a valid name or
+    /// an address and nothing else, with the entry that decided it and stage numbers. A refusal
+    /// is recorded here as a decision taken, not as a gate that blocked the turn, since the
+    /// program was refused and the run went on.
+    pub fn record_hosts(&mut self, detail: String) {
+        self.allow("hosts", detail);
+    }
+
     /// Record the credential scopes and toolchain lists the planner asked one `run` to add, and
     /// the stages each was added to.
     ///
