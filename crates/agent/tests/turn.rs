@@ -47498,6 +47498,7 @@ fn path_turn<C: bravebot_agent::Confirmer + Send>(
         trust,
         permissions,
         confirmer,
+        false,
         |_| {},
     )
 }
@@ -47514,11 +47515,14 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
     trust: bravebot_core::trust::TrustStore,
     permissions: Option<bravebot_core::permissions::Permissions>,
     confirmer: &mut C,
+    reads_kept_inside: bool,
     prepare: impl FnOnce(&std::path::Path),
 ) -> PathTurn {
     let scratch = Scratch::new(name);
     prepare(&scratch.path);
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_reads_kept_inside(reads_kept_inside);
     let mut replies: Vec<String> = calls
         .iter()
         .map(|(tool, arguments)| tool_request_with_usage(tool, &arguments.to_string(), 1, 1))
@@ -47923,6 +47927,7 @@ fn under_bypass_a_directory_inside_the_project_is_not_opened() {
         trusting_the_workspace(),
         None,
         &mut bypassing(&mut asked),
+        false,
         |project| std::fs::create_dir_all(project.join("sub")).expect("a directory in the project"),
     );
     let said = path_result(&turn.results[0]);
@@ -47937,6 +47942,55 @@ fn under_bypass_a_directory_inside_the_project_is_not_opened() {
         turn.workspace.added_directories().is_empty(),
         "a directory inside the project was opened"
     );
+}
+
+/// PATHREQ-7: bypass opens neither a file nor, where `permissions.readsStayInWorkspace` keeps the
+/// file tools inside the project, a directory. Each leaves the grant for programs standing, opens
+/// nothing, and tells the planner the file tools do not reach it.
+#[test]
+fn under_bypass_a_file_or_a_kept_in_workspace_is_not_opened() {
+    if cannot_confine_here() {
+        return;
+    }
+    for (kept_inside, file, reason) in [
+        (false, true, "must be a directory"),
+        (true, false, "readsStayInWorkspace"),
+    ] {
+        let places = PathPlaces::new("bypass-not-opened");
+        let target = places.beside.join("notes.txt");
+        std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
+        let named = if file { &target } else { &places.beside };
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let turn = path_turn_in(
+            "path-bypass-not-opened",
+            &places,
+            &[asking_for(named, false)],
+            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_agent::PermissionMode::Bypass,
+            trusting_the_workspace(),
+            None,
+            &mut bypassing(&mut asked),
+            kept_inside,
+            |_| {},
+        );
+        let said = path_result(&turn.results[0]);
+        assert!(said.starts_with("approved"), "{reason}: {said}");
+        assert!(
+            said.contains("The file tools do not reach it") && said.contains(reason),
+            "{reason}: {said}"
+        );
+        assert!(!said.contains("do not ask the person"), "{reason}: {said}");
+        assert_eq!(
+            turn.workspace.path_reach().len(),
+            1,
+            "{reason}: the grant stands"
+        );
+        assert!(
+            turn.workspace.added_directories().is_empty(),
+            "{reason}: a directory was opened"
+        );
+    }
 }
 
 /// CHECKOUT-7: a directory that holds the project ends checkouts while it is open, bypass or not,
@@ -47959,6 +48013,7 @@ fn under_bypass_a_directory_holding_the_project_says_it_ends_checkouts() {
         trusting_the_workspace(),
         None,
         &mut bypassing(&mut asked),
+        false,
         |_| {},
     );
     let _ = std::fs::remove_dir_all(&holder);

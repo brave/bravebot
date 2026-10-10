@@ -7284,13 +7284,15 @@ fn open_for_the_file_tools<S: Sink>(
     path: &std::path::Path,
     mode: &'static str,
 ) -> Result<bool, &'static str> {
-    let opened =
-        workspace
-            .open_directory(&path.to_string_lossy())
-            .map_err(|error| match error {
-                crate::WorkspaceError::Invalid { reason, .. } => reason,
-                _ => "cannot be opened",
-            })?;
+    // A lossy rendering of a path that is not text would name a different directory than the one
+    // the grant gave programs (PATH-001).
+    let text = path.to_str().ok_or("is not text")?;
+    let opened = workspace
+        .open_directory(text)
+        .map_err(|error| match error {
+            crate::WorkspaceError::Invalid { reason, .. } => reason,
+            _ => "cannot be opened",
+        })?;
     policy.vouch_for_opened_directory(&crate::workspace::key_of(&opened), mode);
     Ok(workspace.ends_checkouts(&opened))
 }

@@ -57,9 +57,11 @@ program should not have put.
 `verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
 
 <a id="PATHREQ-4"></a>
-### PATHREQ-4: a yes is reach and not trust, and it is recorded
+### PATHREQ-4: a person's yes is reach and not trust, and it is recorded
 
-A yes marks nothing trusted ([TRUST-9](../trust-map.md#TRUST-9)) and writes no file. The trace
+A person's yes marks nothing trusted ([TRUST-9](../trust-map.md#TRUST-9)) and writes no file;
+where the mode that answers every question grants the request, it opens the directory
+and trusts it as [PATHREQ-7](#PATHREQ-7) says. The trace
 carries one `path_reach` record for it, and `/status` lists it. The record says who answered: that
 the user let programs reach the path, or, where the mode that answers every question did, the name
 of that mode and that nobody was asked. A record that credited a person with an answer the mode gave
@@ -119,5 +121,6 @@ the first file tool.
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing`
 `verified-by: bravebot_agent::turn::under_bypass_a_directory_inside_the_project_is_not_opened`
+`verified-by: bravebot_agent::turn::under_bypass_a_file_or_a_kept_in_workspace_is_not_opened`
 `verified-by: bravebot_agent::turn::under_bypass_a_directory_holding_the_project_says_it_ends_checkouts`
 `verified-by: bravebot_agent::workspace::a_directory_opened_through_a_clone_is_open_in_the_workspace_it_came_from`
