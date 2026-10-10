@@ -779,13 +779,16 @@ fn print_proxy(assignment: &str) -> String {
     }
 }
 
-/// The value a [`print_proxy`] line printed, without the `HTTPS_PROXY=` that `set` puts before it.
+/// The value a [`print_proxy`] line printed, without the name that `set` puts before it. A stage is
+/// given `HTTPS_PROXY` and `https_proxy`, which Windows holds as one variable, so `set` may print
+/// either spelling.
 fn proxy_variable(places: &Places, line: &str, confinement: Option<&Confinement>) -> String {
     let printed = places.run(line, confinement).stdout;
     let printed = printed.trim();
     printed
-        .strip_prefix("HTTPS_PROXY=")
-        .unwrap_or(printed)
+        .split_once('=')
+        .filter(|(name, _)| name.eq_ignore_ascii_case("HTTPS_PROXY"))
+        .map_or(printed, |(_, value)| value)
         .to_string()
 }
 
