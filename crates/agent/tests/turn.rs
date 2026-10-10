@@ -47993,6 +47993,52 @@ fn under_bypass_a_file_or_a_kept_in_workspace_is_not_opened() {
     }
 }
 
+/// PATHREQ-7, PATH-003: bypass does not open a directory whose name is not text. A lossy rendering
+/// of `dir-\xff` is the sibling `dir-\u{FFFD}`, which exists here, so an implementation that opened
+/// the rendering would open the wrong directory instead of refusing.
+#[cfg(target_os = "linux")]
+#[test]
+fn under_bypass_a_directory_whose_name_is_not_text_is_not_opened() {
+    use std::os::unix::ffi::OsStrExt;
+
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("bypass-not-text");
+    let named = places.beside.join(std::ffi::OsStr::from_bytes(b"dir-\xff"));
+    let lookalike = places.beside.join("dir-\u{FFFD}");
+    std::fs::create_dir(&named).expect("a directory whose name is not text");
+    std::fs::create_dir(&lookalike).expect("its lossy lookalike");
+    let link = places.beside.join("link");
+    std::os::unix::fs::symlink(&named, &link).expect("a link to it");
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let turn = path_turn_in(
+        "path-bypass-not-text",
+        &places,
+        &[asking_for(&link, false)],
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypassing(&mut asked),
+        false,
+        |_| {},
+    );
+    let said = path_result(&turn.results[0]);
+    assert!(said.starts_with("approved"), "{said}");
+    assert!(
+        said.contains("The file tools do not reach it") && said.contains("is not text"),
+        "{said}"
+    );
+    assert!(!said.contains("do not ask the person"), "{said}");
+    assert_eq!(turn.workspace.path_reach().len(), 1, "the grant stands");
+    assert!(
+        turn.workspace.added_directories().is_empty(),
+        "a directory was opened"
+    );
+}
+
 /// CHECKOUT-7: a directory that holds the project ends checkouts while it is open, bypass or not,
 /// and the result says so as `/add-dir` does.
 #[test]

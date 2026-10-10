@@ -104,7 +104,8 @@ and none is asked, so the grant also opens the directory as `/add-dir` does: rea
 tools, trusted, closed by `/add-dir close` and `/clear`, and carried by `--resume`
 ([TRUST-9](../trust-map.md#TRUST-9)). It is opened only where `/add-dir` would open it. A path
 refused unasked ([PATHREQ-3](#PATHREQ-3)) is refused here too, and a directory inside the project,
-a file, or one `permissions.readsStayInWorkspace` keeps the tools out of is not opened, with the
+a file, a directory whose name is not text, or one `permissions.readsStayInWorkspace` keeps the
+tools out of is not opened, with the
 grant for programs left standing and the result saying the file tools were not given it. A directory
 that holds the project is opened, and the result says that no delegate is given a checkout while it
 is open ([CHECKOUT-7](../checkouts.md#CHECKOUT-7)). The result tells the planner which tools now
@@ -122,5 +123,6 @@ the first file tool.
 `verified-by: bravebot_agent::turn::under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing`
 `verified-by: bravebot_agent::turn::under_bypass_a_directory_inside_the_project_is_not_opened`
 `verified-by: bravebot_agent::turn::under_bypass_a_file_or_a_kept_in_workspace_is_not_opened`
+`verified-by: bravebot_agent::turn::under_bypass_a_directory_whose_name_is_not_text_is_not_opened`
 `verified-by: bravebot_agent::turn::under_bypass_a_directory_holding_the_project_says_it_ends_checkouts`
 `verified-by: bravebot_agent::workspace::a_directory_opened_through_a_clone_is_open_in_the_workspace_it_came_from`
