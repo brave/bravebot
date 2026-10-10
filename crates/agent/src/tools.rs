@@ -11704,10 +11704,8 @@ mod tests {
         );
     }
 
-    /// The kernel narrows a definition's capabilities by asking
-    /// [`bravebot_core::delegate::gating_capability`] what each named tool needs, and this list
-    /// is built by asking the same question. Two answers to it would be a delegate holding a
-    /// capability for a tool it is not offered, or offered a tool no gate would let it use.
+    /// A server's `Content-Type` header is shown on the person's screen, so what it carries must
+    /// not reach the terminal as escape sequences or control characters, and a long one is cut.
     #[test]
     fn a_content_type_is_shown_without_anything_a_terminal_would_obey() {
         assert_eq!(shown_content_type(Some("image/png")), "image/png");
@@ -11719,6 +11717,10 @@ mod tests {
         assert_eq!(shown_content_type(Some(&"a".repeat(500))).len(), 100);
     }
 
+    /// The kernel narrows a definition's capabilities by asking
+    /// [`bravebot_core::delegate::gating_capability`] what each named tool needs, and this list
+    /// is built by asking the same question. Two answers to it would be a delegate holding a
+    /// capability for a tool it is not offered, or offered a tool no gate would let it use.
     #[test]
     fn the_capability_that_gates_a_tool_here_is_the_one_the_kernel_reads() {
         use bravebot_core::capability::CapabilitySet;

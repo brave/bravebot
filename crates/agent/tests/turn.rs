@@ -49931,17 +49931,16 @@ fn a_download_from_a_denied_host_is_refused_without_asking() {
 }
 
 /// FETCH-4 for a download: a redirect onto a host nobody approved is refused and nothing is saved.
+/// The hop goes to a name that resolves nowhere, so the only thing that can refuse it is the host
+/// check, and the refusal is the one the fetch tool gives.
 #[test]
 fn a_download_redirected_to_another_host_saves_nothing() {
     let scratch = Scratch::new("download-redirect");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (other, other_count) = serve_raw(raw_reply("application/octet-stream", b"elsewhere"));
-    let elsewhere = other.replace("127.0.0.1", "127.0.0.2");
-    let moved = format!(
-        "HTTP/1.1 302 Found\r\nLocation: {elsewhere}/data\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    );
-    let (site, _count) = serve_raw(moved.into_bytes());
+    // Never reached: the gate refuses the hop before anything is sent to it.
+    let moved = "HTTP/1.1 302 Found\r\nLocation: https://sentinel-redirect.test/data\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let (site, _count) = serve_raw(moved.as_bytes().to_vec());
     let (endpoint, received) = serve_sequence(vec![
         tool_request_2(
             "download_url",
@@ -49963,15 +49962,21 @@ fn a_download_redirected_to_another_host_saves_nothing() {
     )
     .expect("turn runs");
 
-    assert_eq!(
-        other_count.load(Ordering::SeqCst),
-        0,
-        "the other host was reached"
-    );
     assert!(!scratch.path.join("data.bin").exists());
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
-    assert!(second.contains("error"), "{second}");
+    assert!(
+        second.contains(&format!("error: downloading {site}/data failed")),
+        "the planner was not told which download was refused: {second}"
+    );
+    assert!(
+        second.contains("approved for 127.0.0.1"),
+        "the refusal did not say which host the download was for: {second}"
+    );
+    assert!(
+        !second.contains("sentinel-redirect"),
+        "the host the server chose reached the planner's context: {second}"
+    );
 }
 
 /// Plan mode refuses a write whatever anybody would have said, and a download is one.
