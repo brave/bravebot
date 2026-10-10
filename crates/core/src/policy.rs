@@ -254,7 +254,7 @@ pub enum AfterCeilingStop {
 /// What a turn did when the session had spent its limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AfterSpendLimit {
-    /// The person gave a new limit, in tokens.
+    /// The person gave a new limit, in the unit the old one counted.
     Raised(u64),
     /// The person asked to go on without one.
     Lifted,
@@ -2401,18 +2401,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Record that the session had spent its limit, what the person was asked, and what came of it
     /// (TURN-8).
     ///
-    /// Counts and the person's own choice, so the line carries no content. A turn that went on past
-    /// the limit leaves nothing else saying it was allowed to, and by whom.
+    /// Counts, a fixed word for what they count and the person's own choice, so the line carries no
+    /// content. A turn that went on past the limit leaves nothing else saying it was allowed to,
+    /// and by whom.
     pub fn record_spend_limit(
         &mut self,
         round: usize,
         spent: u64,
         limit: u64,
+        unit: &'static str,
         then: AfterSpendLimit,
     ) {
         let then = match then {
             AfterSpendLimit::Raised(raised) => {
-                format!("the person set a new limit of {raised} tokens and the turn went on")
+                format!("the person set a new limit of {raised} {unit} and the turn went on")
             }
             AfterSpendLimit::Lifted => {
                 "the person went on without a limit and the turn went on".to_string()
@@ -2423,7 +2425,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow(
             "spend_limit",
             format!(
-                "round {round}: {spent} tokens spent against a limit of {limit}; the person was \
+                "round {round}: {spent} {unit} spent against a limit of {limit}; the person was \
                  asked and {then}"
             ),
         );

@@ -3877,11 +3877,19 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // Lent for the same reason the confirmer, the reporter and the trail above are, and it is the
         // one of the four whose copies would be spending the user's money twice.
         let opened = discovered.as_mut().map(crate::shared::Lent::new);
+        // Counted only where it was opened: a delegate is lent the turn's wallet, spends from it
+        // through the turn's own count, and would count each credential twice if it wrapped it.
+        let counted = opened.as_ref().map(|lent| {
+            crate::shared::Counted::new(
+                lent as &dyn crate::shared::Spends,
+                task.spend_limit.clone(),
+            )
+        });
         let wallet: Option<&dyn crate::shared::Spends> = match lent_wallet {
             Some(lent) => Some(lent),
-            None => opened
+            None => counted
                 .as_ref()
-                .map(|lent| lent as &dyn crate::shared::Spends),
+                .map(|counted| counted as &dyn crate::shared::Spends),
         };
         let mut subscription = wallet.map(crate::shared::Spending::new);
 

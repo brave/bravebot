@@ -276,8 +276,8 @@ pub struct Settings {
     /// not recognise has to reach the interface to be reported there rather than be dropped here as
     /// though the file had said nothing.
     editor_mode: Option<String>,
-    /// The session spend limit the top-level `limit` key named, in tokens, if it named a usable one.
-    limit: Option<u64>,
+    /// The session spend limit the top-level `limit` key named, if it named a usable one.
+    limit: Option<crate::limit::Limit>,
     /// What the top-level `terminalTitle` key said, if it said a boolean.
     terminal_title: Option<bool>,
     /// What the top-level `updateCheck` key said, if it said a boolean.
@@ -996,10 +996,13 @@ impl Settings {
             effort_outranks_a_pick: false,
             editor_mode: word(root, "editorMode"),
             limit: match root.get("limit") {
-                Some(serde_json::Value::Number(count)) => {
-                    count.as_u64().filter(|tokens| *tokens > 0)
+                Some(serde_json::Value::Number(count)) => count
+                    .as_u64()
+                    .filter(|tokens| *tokens > 0)
+                    .map(crate::limit::Limit::tokens),
+                Some(serde_json::Value::String(text)) => {
+                    crate::limit::parse(text, crate::limit::Unit::Tokens)
                 }
-                Some(serde_json::Value::String(text)) => crate::limit::parse_tokens(text),
                 _ => None,
             },
             terminal_title: match root.get("terminalTitle") {
@@ -1177,11 +1180,11 @@ impl Settings {
         self.editor_mode.as_deref()
     }
 
-    /// The most tokens a session may spend before it asks, if the settings in force name one.
+    /// The most a session may spend before it asks, if the settings in force name one.
     ///
-    /// A whole number, or a string such as `"500k"`. Anything else, and zero, is absence: a
-    /// misspelt limit leaves the session unbounded, as it was without the key.
-    pub fn limit(&self) -> Option<u64> {
+    /// A whole number of tokens, or a string such as `"500k"` or `"40 credits"`. Anything else, and
+    /// zero, is absence: a misspelt limit leaves the session unbounded, as it was without the key.
+    pub fn limit(&self) -> Option<crate::limit::Limit> {
         self.limit
     }
 
@@ -5416,10 +5419,14 @@ mod tests {
     /// guess, so only a positive whole number or a count string such as `"500k"` is a limit.
     #[test]
     fn only_a_positive_count_is_a_session_limit() {
+        use crate::limit::Limit;
         for (written, expected) in [
-            (r#"{"limit": 250000}"#, Some(250_000)),
-            (r#"{"limit": "500k"}"#, Some(500_000)),
-            (r#"{"limit": "2m"}"#, Some(2_000_000)),
+            (r#"{"limit": 250000}"#, Some(Limit::tokens(250_000))),
+            (r#"{"limit": "500k"}"#, Some(Limit::tokens(500_000))),
+            (r#"{"limit": "2m"}"#, Some(Limit::tokens(2_000_000))),
+            (r#"{"limit": "40 credits"}"#, Some(Limit::credits(40))),
+            (r#"{"limit": "0 credits"}"#, None),
+            (r#"{"limit": "credits"}"#, None),
             (r#"{"limit": 0}"#, None),
             (r#"{"limit": -5}"#, None),
             (r#"{"limit": 1.5}"#, None),
@@ -5439,7 +5446,7 @@ mod tests {
             .global(r#"{"limit": "1m"}"#)
             .project(r#"{"limit": "200k"}"#)
             .read();
-        assert_eq!(settings.limit(), Some(200_000));
+        assert_eq!(settings.limit(), Some(crate::limit::Limit::tokens(200_000)));
         assert_eq!(settings.unread_keys().count(), 0);
         assert_eq!(settings.names().collect::<Vec<_>>(), ["limit"]);
     }
