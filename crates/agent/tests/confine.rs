@@ -762,6 +762,23 @@ fn hosts(allowed: Option<&[&str]>, denied: &[&str]) -> bravebot_config::sandbox_
     }
 }
 
+/// A line that prints `HTTPS_PROXY`, behind `assignment` when it is not empty. Windows runs
+/// `cmd.exe`, a native program: Git's `printenv` is an MSYS program, which a container cannot start,
+/// so the variable would be read as empty. A variable that is not set prints as `%HTTPS_PROXY%`,
+/// which is the same for a control and a confined run.
+fn print_proxy(assignment: &str) -> String {
+    let program = if cfg!(windows) {
+        "cmd /c echo %HTTPS_PROXY%"
+    } else {
+        "printenv HTTPS_PROXY"
+    };
+    if assignment.is_empty() {
+        program.to_string()
+    } else {
+        format!("{assignment} {program}")
+    }
+}
+
 /// What a confined `printenv HTTPS_PROXY` printed.
 fn proxy_variable(places: &Places, line: &str, confinement: Option<&Confinement>) -> String {
     places.run(line, confinement).stdout.trim().to_string()
@@ -795,7 +812,7 @@ fn a_stage_with_a_host_list_is_pointed_at_the_proxy_that_applies_it() {
     let list = hosts(Some(&["mine.example"]), &[]);
     let listed = places.confinement().with_hosts(Some(&list));
 
-    let told = proxy_variable(&places, "printenv HTTPS_PROXY", Some(&listed));
+    let told = proxy_variable(&places, &print_proxy(""), Some(&listed));
     let address = told.strip_prefix("http://").expect("a proxy url");
     assert!(address.starts_with("127.0.0.1:"), "{told}");
     assert!(connect_through(address, "evil.example").contains("403"));
@@ -813,10 +830,10 @@ fn an_assignment_in_the_line_cannot_point_a_stage_elsewhere() {
     let list = hosts(Some(&["mine.example"]), &[]);
     let listed = places.confinement().with_hosts(Some(&list));
 
-    let plain = proxy_variable(&places, "printenv HTTPS_PROXY", Some(&listed));
+    let plain = proxy_variable(&places, &print_proxy(""), Some(&listed));
     let assigned = proxy_variable(
         &places,
-        "HTTPS_PROXY=http://elsewhere.example:3128 printenv HTTPS_PROXY",
+        &print_proxy("HTTPS_PROXY=http://elsewhere.example:3128"),
         Some(&listed),
     );
     assert!(plain.starts_with("http://127.0.0.1:"), "{plain}");
@@ -833,11 +850,11 @@ fn no_allowed_list_means_no_proxy() {
         return;
     }
     let places = Places::new("hosts-absent");
-    let control = proxy_variable(&places, "printenv HTTPS_PROXY", None);
+    let control = proxy_variable(&places, &print_proxy(""), None);
     for list in [None, Some(hosts(None, &["bad.example"]))] {
         let confinement = places.confinement().with_hosts(list.as_ref());
         assert_eq!(
-            proxy_variable(&places, "printenv HTTPS_PROXY", Some(&confinement)),
+            proxy_variable(&places, &print_proxy(""), Some(&confinement)),
             control
         );
     }
@@ -851,14 +868,14 @@ fn a_stage_with_no_egress_is_given_no_proxy() {
         return;
     }
     let places = Places::new("hosts-closed");
-    let control = proxy_variable(&places, "printenv HTTPS_PROXY", None);
+    let control = proxy_variable(&places, &print_proxy(""), None);
     let list = hosts(Some(&["mine.example"]), &[]);
     let closed = places
         .confinement()
         .with_network(Network::Closed)
         .with_hosts(Some(&list));
     assert_eq!(
-        proxy_variable(&places, "printenv HTTPS_PROXY", Some(&closed)),
+        proxy_variable(&places, &print_proxy(""), Some(&closed)),
         control
     );
 }
