@@ -496,20 +496,44 @@ mod tests {
         );
     }
 
+    /// SANDBOX-28: a program under a row a stage holds is still found where the account cannot
+    /// write it, its directory, or the directory holding that. The regression it rejects is every
+    /// program under such a row left out, which drops `/usr/bin` from the lookup.
     #[cfg(unix)]
     #[test]
     fn a_program_in_a_row_the_account_cannot_write_is_still_found() {
-        let system = Path::new("/bin");
-        if the_account_can_write(system) {
+        use std::os::unix::fs::PermissionsExt;
+        let set = |path: &Path, mode| {
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+        };
+        let row = crate::testutil::scratch_dir("programs-where-it-cannot");
+        let held = row.join("held");
+        let bin = held.join("bin");
+        // A run that stopped before restoring these would leave the scratch directory unremovable.
+        set(&held, 0o755);
+        set(&bin, 0o755);
+        let row = scratch_dir("programs-where-it-cannot");
+        let tool = executable(&bin, "tool");
+        for path in [&tool, &bin, &held] {
+            set(path, 0o555);
+        }
+        let read_only = [&tool, &bin, &held]
+            .iter()
+            .all(|path| !the_account_can_write(path));
+
+        let found = find_in_with(
+            OsStr::new("tool"),
+            &path_of(&[&bin]),
+            &[],
+            std::slice::from_ref(&row),
+        );
+        set(&bin, 0o755);
+        set(&held, 0o755);
+
+        // Root writes a directory whatever its mode, so there is no directory to test with.
+        if !read_only {
             return;
         }
-        let found = find_in_with(
-            OsStr::new("sh"),
-            &path_of(&[system]),
-            &[],
-            &[PathBuf::from("/")],
-        );
-
-        assert_eq!(found, Some(system.join("sh")));
+        assert_eq!(found, Some(tool));
     }
 }
