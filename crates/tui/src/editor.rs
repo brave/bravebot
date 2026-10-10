@@ -938,6 +938,27 @@ mod tests {
         );
     }
 
+    /// Someone who wrote arguments for their editor chose how it runs, and a flag added behind
+    /// theirs can contradict them or repeat what they already wrote.
+    #[test]
+    fn a_gui_editor_is_told_to_wait_only_where_the_user_wrote_no_arguments_of_their_own() {
+        let find = |name: &str| (name == "code").then(|| PathBuf::from("/usr/local/bin/code"));
+
+        let (_, bare) = split("code", find).expect("the editor is found");
+        assert_eq!(bare, ["--wait"]);
+
+        for written in ["code --new-window", "code --wait"] {
+            let (program, arguments) = split(written, find).expect("the editor is found");
+            assert_eq!(program, PathBuf::from("/usr/local/bin/code"));
+            let own: Vec<String> = written
+                .split_whitespace()
+                .skip(1)
+                .map(String::from)
+                .collect();
+            assert_eq!(arguments, own, "the user's arguments were added to");
+        }
+    }
+
     /// A terminal editor already waits, and an argument it did not ask for is one it may refuse
     /// to start over.
     #[test]

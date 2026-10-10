@@ -560,6 +560,7 @@ was no part of, which reads as though it went with one of them, and the row for 
 person had just dropped moved further from the box with every prompt they queued.
 
 `verified-by: bravebot_tui::render::what_is_attached_is_drawn_above_what_is_waiting`
+`verified-by: bravebot_tui::render::what_is_waiting_is_drawn_above_what_the_half_typed_line_could_become`
 `verified-by: bravebot_tui::render::an_attached_file_is_named_under_the_box`
 `verified-by: bravebot_tui::render::a_waiting_prompt_is_shown_as_waiting`
 
@@ -744,6 +745,7 @@ unchanged with nothing anywhere saying why, which is neither a failure nor an ed
 `verified-by: bravebot_tui::editor::the_fallback_list_is_the_same_on_every_platform`
 `verified-by: bravebot_tui::editor::a_configured_editor_that_will_not_start_ends_the_search`
 `verified-by: bravebot_tui::editor::a_gui_editor_is_told_to_wait`
+`verified-by: bravebot_tui::editor::a_gui_editor_is_told_to_wait_only_where_the_user_wrote_no_arguments_of_their_own`
 `verified-by: bravebot_tui::editor::the_flag_follows_the_program_through_a_path`
 `verified-by: bravebot_tui::editor::a_terminal_editor_is_given_no_extra_flag`
 

@@ -45210,6 +45210,63 @@ fn a_skill_loaded_by_a_delegate_keeps_its_definitions_model() {
     );
 }
 
+/// A delegate spawned after a skill switched the turn's model is asked of the model in force when
+/// it started, not the one the turn began on. Lending it the turn's starting model would send
+/// the work the skill moved to a cheaper model back to the dearer one.
+#[test]
+fn a_delegate_spawned_after_a_skill_switched_the_model_is_asked_of_that_model() {
+    let scratch = Scratch::new("skill-then-delegate");
+    write_project_skill_declaring(&scratch.path, "cheap", "model: haiku\n");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "SWITCH-THEN-DELEGATE",
+            vec![
+                tool_request("load_skill", r#"{"name":"cheap"}"#),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"CHECK-AFTER-THE-SWITCH"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        ("CHECK-AFTER-THE-SWITCH", vec![reply_with("clear")]),
+    ]);
+    let config = config_for(&endpoint);
+    let haiku = config.model_named("haiku");
+
+    turn::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("SWITCH-THEN-DELEGATE").with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let delegate: Vec<String> = received
+        .try_iter()
+        .filter(|body| {
+            body.contains("CHECK-AFTER-THE-SWITCH") && !body.contains("SWITCH-THEN-DELEGATE")
+        })
+        .collect();
+    assert_eq!(delegate.len(), 1, "the delegate did not make its request");
+    assert!(
+        delegate[0].contains(&format!(r#""model":"{haiku}""#)),
+        "the delegate was not asked of the model the skill moved the turn to: {}",
+        delegate[0]
+    );
+    assert!(
+        !delegate[0].contains("custom-parent-model"),
+        "the delegate was lent the model the turn began on: {}",
+        delegate[0]
+    );
+}
+
 /// A turn a skill moved onto its own model and answered by that model reports no substitution,
 /// and the front ends are told not to compare the answer with the session's model, which was not
 /// what the last rounds asked for.
