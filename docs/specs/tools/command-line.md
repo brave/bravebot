@@ -214,7 +214,14 @@ approval covers without the text changing at all.
 
 Expansion happens against the workspace at compile time, so the person sees the file list rather
 than the pattern. A pattern matching nothing is a compile error and not an argument passed through
-literally, which is what a shell would do and is never what anyone meant.
+literally, which is what a shell would do. A plan that showed the pattern would read as a list of
+files.
+
+**An option carrying a value is not a file pattern.** A word that starts with a dash and names the
+option before an `=` that comes ahead of any pattern, such as `--include=*.md`, stands for itself.
+It is never looked up, so it is passed as written whether or not anything matches it, and a file
+named like it cannot change what the program receives. A dash with no name before the `=`, a
+pattern ahead of the `=`, and a dash with no `=` are still patterns.
 
 Expansion is bounded. Past the bound the compile fails and says the count, rather than putting a
 thousand paths in front of a reader who will approve them unread.
@@ -237,6 +244,10 @@ everything and asks nothing.
 `verified-by: bravebot_agent::cmdline::a_pattern_becomes_the_files_it_matches`
 `verified-by: bravebot_agent::cmdline::a_pattern_matches_within_one_segment_and_a_tree_across_them`
 `verified-by: bravebot_agent::cmdline::a_pattern_matching_nothing_is_refused_rather_than_passed_through`
+`verified-by: bravebot_agent::cmdline::an_option_value_pattern_is_passed_through_as_written`
+`verified-by: bravebot_agent::cmdline::an_option_value_pattern_is_not_replaced_by_a_file_named_like_it`
+`verified-by: bravebot_agent::cmdline::an_option_value_with_braces_is_passed_through_for_each_spelling`
+`verified-by: bravebot_agent::cmdline::only_an_option_carrying_a_value_is_passed_through`
 `verified-by: bravebot_agent::cmdline::expansion_is_bounded_and_the_refusal_says_the_count`
 `verified-by: bravebot_agent::cmdline::a_tree_pattern_does_not_descend_into_an_ignored_directory`
 `verified-by: bravebot_agent::cmdline::a_dot_file_is_matched_only_by_a_pattern_that_writes_the_dot`
