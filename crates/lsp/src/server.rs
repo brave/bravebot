@@ -3323,7 +3323,9 @@ done
     /// A server that publishes diagnostics when told about a document: one error on opening it,
     /// none on a change. `$SILENT` makes it say nothing at all, and `$QUIET_ON_CHANGE` says nothing on
     /// a change, and `$LATE_NOTICE` publishes an error after answering a definition, which leaves a
-    /// notice queued once the question is over.
+    /// notice queued once the question is over. The answer and that notice go out in one write, so
+    /// the notice has arrived by the time the answer is read rather than whenever the shell is next
+    /// scheduled.
     ///
     /// The two differ so that what a test reads says which message the client sent, and whether it
     /// read a notice from before the file changed.
@@ -3347,8 +3349,13 @@ while IFS= read -r header; do
       reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"rustAnalyzer/cachePriming","value":{"kind":"end"}}}'
       ;;
     *'"textDocument/definition"'*)
-      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[]}"
-      [ -z "$LATE_NOTICE" ] || reply "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"$uri\",\"diagnostics\":[{\"severity\":1,\"range\":{\"start\":{\"line\":6,\"character\":0}},\"message\":\"late\"}]}}"
+      answer="{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[]}"
+      if [ -z "$LATE_NOTICE" ]; then
+        reply "$answer"
+      else
+        late="{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"$uri\",\"diagnostics\":[{\"severity\":1,\"range\":{\"start\":{\"line\":6,\"character\":0}},\"message\":\"late\"}]}}"
+        printf 'Content-Length: %s\r\n\r\n%sContent-Length: %s\r\n\r\n%s' "${#answer}" "$answer" "${#late}" "$late"
+      fi
       ;;
     *'"textDocument/didOpen"'*)
       [ -n "$SILENT" ] || reply "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"$uri\",\"diagnostics\":[{\"severity\":1,\"range\":{\"start\":{\"line\":6,\"character\":0}},\"message\":\"opened\"}]}}"
