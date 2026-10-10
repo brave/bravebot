@@ -4415,6 +4415,36 @@ fn an_unset_variable_for_another_entry_is_said_and_the_session_opens() {
     );
 }
 
+/// IMPORT-9: an import that names no default model leaves a service configured and no model on it,
+/// so the session does not open: the refusal for that case is shown, after the line saying what was
+/// written.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_import_that_leaves_no_model_to_run_ends_with_the_refusal_for_that_case() {
+    let scratch = Scratch::new("cli-running-import-no-model").with_file(
+        ".config/opencode/opencode.json",
+        r#"{"provider": {"openrouter": {"env": ["OPENROUTER_API_KEY"], "models": {"z-ai/glm-4.6": {}}}}}"#,
+    );
+    let environment = [NOTHING_CONFIGURED, &[("OPENROUTER_API_KEY", "a-token")]].concat();
+
+    let output = in_a_terminal_answering(&scratch.path, &environment, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    let said_written = transcript
+        .find("imported what opencode configured into")
+        .unwrap_or_else(|| panic!("the write was not said: {transcript}"));
+    let refusal = transcript
+        .find("name one of your own with the `model` key")
+        .unwrap_or_else(|| panic!("the refusal for a missing model was not shown: {transcript}"));
+    assert!(said_written < refusal, "{transcript}");
+    assert!(
+        !transcript.contains("trust this directory?"),
+        "the session opened: {transcript}"
+    );
+    assert!(scratch.settings().exists(), "the import was not written");
+}
+
 /// IMPORT-1: the questions are put on stderr, so where stderr is a file nobody would see them,
 /// and the start refuses naming the command that asks.
 #[cfg(target_os = "linux")]
@@ -4449,6 +4479,42 @@ fn nothing_is_asked_where_stderr_is_not_a_terminal() {
             }
         }
         assert!(!scratch.settings().exists(), "{arguments:?} wrote settings");
+    }
+}
+
+/// IMPORT-1: the question is answered on stdin and the session it leads to draws on stdout, so
+/// where either is a file the start is refused as before and nothing is asked, whatever stderr is.
+#[cfg(target_os = "linux")]
+#[test]
+fn nothing_is_asked_where_stdin_or_stdout_is_not_a_terminal() {
+    let scratch = Scratch::new("cli-running-import-stdin-stdout")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+    let captured = scratch.path.join("stdout.txt");
+    let stdout = format!(">'{}'", captured.display());
+
+    // The interface that draws is the one whose stdin and stdout both matter; a session in lines
+    // refuses a stdin that is a file before the import is reached, so only its stdout is varied.
+    for (which, arguments) in [
+        ("stdin", vec!["</dev/null"]),
+        ("stdout", vec![stdout.as_str()]),
+        (
+            "stdout of a session in lines",
+            vec!["--plain", stdout.as_str()],
+        ),
+    ] {
+        let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &arguments);
+
+        let (transcript, _) = said(&output);
+        assert_eq!(output.status.code(), Some(3), "{which}: {transcript}");
+        assert!(
+            !transcript.contains("Import this"),
+            "{which} was a file and the start asked: {transcript}"
+        );
+        assert!(
+            transcript.contains("bravebot auth login import"),
+            "{which}: the refusal did not name the command that asks: {transcript}"
+        );
+        assert!(!scratch.settings().exists(), "{which}: wrote settings");
     }
 }
 
