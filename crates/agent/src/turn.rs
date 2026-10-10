@@ -4037,6 +4037,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         let mut refused: Option<crate::backend::BackendError> = None;
         // Whether the last request went out because the one before it came back empty (TURN-6).
         let mut asked_after_an_empty_reply = false;
+        // The calls the planner has made this turn, as far as the last one goes (TURN-9).
+        let mut repeats = crate::repeated_call::Repeats::default();
         // Whether it went out because the one before it reached the output ceiling (TURN-7).
         let mut asked_after_a_ceiling_stop = false;
         // A delegate and a turn on a definition's model do not move to the fallback model
@@ -4721,56 +4723,97 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // taken off the tool figure below.
                         let mut asking = crate::confirm::Timed::new(&mut confirmer);
                         let ran_at = Instant::now();
+                        let refused = if repeats.is_held(call) {
+                            match crate::repeated_call::hold(
+                                call,
+                                repeats.count(),
+                                steps,
+                                task.delegate.is_none(),
+                                &mut policy,
+                                &mut asking,
+                                &mut reporter,
+                            ) {
+                                crate::repeated_call::Held::Run => {
+                                    repeats.clear();
+                                    None
+                                }
+                                crate::repeated_call::Held::Refuse => {
+                                    Some(tools::refused_without_running(
+                                        &mut reporter,
+                                        call,
+                                        crate::repeated_call::refusal(
+                                            &call.function.name,
+                                            repeats.count(),
+                                        ),
+                                    ))
+                                }
+                                crate::repeated_call::Held::Stop => {
+                                    attach_vetted_pictures(
+                                        &mut policy,
+                                        conversation,
+                                        &mut attached,
+                                    );
+                                    return Err(TurnError::Cancelled { attempts: Some(0) });
+                                }
+                            }
+                        } else {
+                            None
+                        };
                         let (quarantine, reads) = conversation.for_a_tool();
-                        let mut output = tools::dispatch(
-                            &mut policy,
-                            &mut tools::Tools {
-                                workspace,
-                                output_cap: task.output_cap.unwrap_or(tools::OUTPUT_CAP),
-                                deadlines: task.deadlines,
-                                skills: &catalogue,
-                                slots: quarantine,
-                                reads,
-                                chat: crate::processor::Chat {
-                                    config,
-                                    egress,
-                                    subscription: subscription
-                                        .as_mut()
-                                        .map(|s| s as &mut dyn bravebot_aichat::Subscription),
-                                    model: turn_model.as_deref(),
-                                    cancel: Some(cancel),
+                        let mut output = match refused {
+                            Some(refused) => refused,
+                            None => tools::dispatch(
+                                &mut policy,
+                                &mut tools::Tools {
+                                    workspace,
+                                    output_cap: task.output_cap.unwrap_or(tools::OUTPUT_CAP),
+                                    deadlines: task.deadlines,
+                                    skills: &catalogue,
+                                    slots: quarantine,
+                                    reads,
+                                    chat: crate::processor::Chat {
+                                        config,
+                                        egress,
+                                        subscription: subscription
+                                            .as_mut()
+                                            .map(|s| s as &mut dyn bravebot_aichat::Subscription),
+                                        model: turn_model.as_deref(),
+                                        cancel: Some(cancel),
+                                    },
+                                    cancel,
+                                    scheduling,
+                                    arming,
+                                    running,
+                                    armed: &mut armed,
+                                    home: task.home.as_deref(),
+                                    profile: task.profile.as_deref(),
+                                    cache: task.cache.as_deref(),
+                                    remembering: task.remembering.as_deref(),
+                                    advising: advisor.as_deref().map(|model| {
+                                        crate::advisor::Advising {
+                                            model,
+                                            context: &request.messages,
+                                            asked: &mut advice_asked,
+                                        }
+                                    }),
+                                    delegated: task.delegate.is_some(),
+                                    confined_to: addressed
+                                        .as_ref()
+                                        .map(|addressed| addressed.tools()),
+                                    servers: servers.as_deref_mut(),
+                                    mcp: mcp.as_ref().map(|(offer, _)| offer),
+                                    jobs: &mut *jobs,
+                                    permission_mode: task.permission_mode.clone(),
+                                    auto_vetting: task.auto_vetting,
+                                    run_directory: &mut run_directory,
+                                    confine_runs: task.confine_runs,
+                                    sandbox: task.sandbox,
                                 },
-                                cancel,
-                                scheduling,
-                                arming,
-                                running,
-                                armed: &mut armed,
-                                home: task.home.as_deref(),
-                                profile: task.profile.as_deref(),
-                                cache: task.cache.as_deref(),
-                                remembering: task.remembering.as_deref(),
-                                advising: advisor.as_deref().map(|model| {
-                                    crate::advisor::Advising {
-                                        model,
-                                        context: &request.messages,
-                                        asked: &mut advice_asked,
-                                    }
-                                }),
-                                delegated: task.delegate.is_some(),
-                                confined_to: addressed.as_ref().map(|addressed| addressed.tools()),
-                                servers: servers.as_deref_mut(),
-                                mcp: mcp.as_ref().map(|(offer, _)| offer),
-                                jobs: &mut *jobs,
-                                permission_mode: task.permission_mode.clone(),
-                                auto_vetting: task.auto_vetting,
-                                run_directory: &mut run_directory,
-                                confine_runs: task.confine_runs,
-                                sandbox: task.sandbox,
-                            },
-                            &mut asking,
-                            &mut reporter,
-                            call,
-                        );
+                                &mut asking,
+                                &mut reporter,
+                                call,
+                            ),
+                        };
                         let took = ran_at.elapsed();
                         let cancellation = output.cancelled;
 

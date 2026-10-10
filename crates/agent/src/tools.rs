@@ -3201,41 +3201,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                     .of_tool(&name)
                     .failed(produced.note.clone()),
             );
-            return Output {
-                cancelled: produced.cancelled,
-                call_id: call.id.clone(),
-                tool: name,
-                text: produced.text,
-                origin: produced.origin,
-                deferred: produced.deferred,
-                entries: produced.entries,
-                incomplete: produced.incomplete,
-                paging: produced.paging,
-                whole: produced.whole,
-                answers_for: produced.answers_for,
-                said: produced.said,
-                glimpsed: produced.glimpsed,
-                window: produced.window,
-                task_list: produced.task_list,
-                content: produced.content,
-                changed_a_file: produced.changed_a_file,
-                ran_a_program: produced.ran_a_program,
-                started_a_program: produced.started_a_program,
-                ran_git: produced.ran_git,
-                usage: produced.usage,
-                inference_interval: produced.inference_interval,
-                printed_by: produced.printed_by,
-                covered_by_record: produced.covered_by_record,
-                read_asked: produced.read_asked,
-                picture: produced.picture,
-                attached: produced.attached,
-                wakeup: produced.wakeup,
-                watch: produced.watch,
-                delegate: produced.delegate,
-                loaded: produced.loaded,
-                skill: produced.skill,
-                tool_loaded: produced.tool_loaded,
-            };
+            return output_of(produced, call.id.clone(), name);
         }
     };
 
@@ -3264,7 +3230,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             .saying_why(why.clone()),
     );
 
-    let produced = match name.as_str() {
+    let mut produced = match name.as_str() {
         // A server's tool is not one of this program's, so no definition's `tools:` line names
         // it, and it was offered only where the run holds its server.
         unoffered
@@ -3395,23 +3361,29 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     let finished = Activity::running(verb, target)
         .of_tool(&name)
         .saying_why(why)
-        .with_changes(produced.changes)
+        .with_changes(std::mem::take(&mut produced.changes))
         .marked_untrusted(produced.untrusted)
         .after_waiting(
             produced
                 .inference_interval
                 .map(crate::timing::Interval::duration),
         );
+    let note = std::mem::take(&mut produced.note);
     reporter.tool_finished(if produced.failed {
-        finished.failed(produced.note)
+        finished.failed(note)
     } else {
-        finished.done(produced.note)
+        finished.done(note)
     });
 
+    output_of(produced, call.id.clone(), name)
+}
+
+/// A finished call's [`Output`], from what the tool produced.
+fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Output {
     Output {
         cancelled: produced.cancelled,
-        call_id: call.id.clone(),
-        tool: name,
+        call_id,
+        tool,
         text: produced.text,
         origin: produced.origin,
         deferred: produced.deferred,
@@ -3443,6 +3415,25 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         skill: produced.skill,
         tool_loaded: produced.tool_loaded,
     }
+}
+
+/// The answer to a call that was held and not run (TURN-9): the driver's sentence in place of a
+/// result, shown to the person as a failed call.
+pub fn refused_without_running<R: Reporter>(
+    reporter: &mut R,
+    call: &ToolCall,
+    text: String,
+) -> Output {
+    let name = strip_namespace(&call.function.name).to_string();
+    let verb = crate::report::verb_for(&name);
+    let produced = Produced::problem(text);
+    reporter.tool_started(Activity::running(verb, "").of_tool(&name));
+    reporter.tool_finished(
+        Activity::running(verb, "")
+            .of_tool(&name)
+            .failed(produced.note.clone()),
+    );
+    output_of(produced, call.id.clone(), name)
 }
 
 /// What a write is refused with, and what the person watching is told about why.

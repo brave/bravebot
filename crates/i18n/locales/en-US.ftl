@@ -772,6 +772,13 @@ spend-limit-without-a-limit = Go on without a limit
 spend-limit-raised = the session limit is now { $limit } { $unit }
 spend-limit-lifted = the session has no limit
 spend-limit-stopped = stopped at the session limit: { $spent } { $unit } spent against a limit of { $limit }
+repeated-call-header = Repeated call
+repeated-call-reached = The planner has made the same { $tool } call { $count } times in a row. It was not run. Run it again, or choose another way forward.
+repeated-call-refuse = Do not run it, and tell the planner to try another approach
+repeated-call-run-it = Run it this once
+repeated-call-stop = Stop the turn
+repeated-call-refused = { $tool } was not run: the same call { $count } times in a row
+repeated-call-stopped = stopped at a repeated call: { $tool } made { $count } times in a row
 # Said when a turn's model kept failing and the person's fallbackModel takes over for the rest of it.
 fallback-model-in-use = { $from } failed as { $category }; this turn moves to { $to }
 # Said instead where the turn has no tools left, so the model is asked for an answer rather than
