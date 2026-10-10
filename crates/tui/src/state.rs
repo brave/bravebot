@@ -1907,7 +1907,7 @@ pub struct Session {
     /// The built-in output style `/style` chose, which opens the system prompt of each turn.
     ///
     /// Kept for the session only, as `advisor` is.
-    style: Option<&'static bravebot_agent::styles::Style>,
+    style: Option<bravebot_agent::styles::Style>,
     /// Which offered command is under the cursor while one is being typed.
     ///
     /// An index into what [`Session::offered`] returns for the current input rather than a copy of
@@ -2288,12 +2288,12 @@ impl Session {
     }
 
     /// The output style `/style` chose, or `None` where it chose none.
-    pub fn style(&self) -> Option<&'static bravebot_agent::styles::Style> {
-        self.style
+    pub fn style(&self) -> Option<&bravebot_agent::styles::Style> {
+        self.style.as_ref()
     }
 
     /// Open every later turn's system prompt with this style, or `None` to clear the pick.
-    pub fn choose_style(&mut self, style: Option<&'static bravebot_agent::styles::Style>) {
+    pub fn choose_style(&mut self, style: Option<bravebot_agent::styles::Style>) {
         self.style = style;
     }
 

@@ -46064,11 +46064,11 @@ fn a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt() {
     ]);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
-    let concise = bravebot_agent::styles::named("concise");
+    let concise = bravebot_agent::styles::named("concise").cloned();
 
     for (style, words, label) in [
         (None, None, "control"),
-        (concise, None, "styled"),
+        (concise.clone(), None, "styled"),
         (concise, Some("You are REPLACEMENT-PERSONA."), "both"),
     ] {
         let task = Task::new("go")
@@ -46110,6 +46110,50 @@ fn a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt() {
             request.contains("REPLACEMENT-PERSONA"),
             label == "both",
             "{label}"
+        );
+    }
+}
+
+/// INSTR-12. A style read from the person's own file stands where a built-in one does: it opens the
+/// prompt in place of the opening, `--system-prompt` still wins over it, and what follows the
+/// opening is unchanged.
+#[test]
+fn a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt() {
+    let scratch = Scratch::new("style-file-opens");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join("styles")).unwrap();
+    std::fs::write(home.join("styles/terse.md"), "FILE-STYLE-WORDS").unwrap();
+    let style = bravebot_agent::styles::find(Some(&home), "terse");
+    assert!(style.is_some());
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("done"), reply_with("done")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    for (words, label) in [
+        (None, "styled"),
+        (Some("You are REPLACEMENT-PERSONA."), "both"),
+    ] {
+        let task = Task::new("go")
+            .with_permission_mode(bravebot_agent::PermissionMode::Plan)
+            .with_style(style.clone())
+            .with_system_prompts(prompts(words, None));
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut RecordingSink::new(),
+        )
+        .expect("turn runs");
+        let request = received.recv().expect("the request");
+        assert!(request.contains(PLANNING_MARKER), "{label}: {request}");
+        assert!(!request.contains(OPENING_MARKER), "{label}: {request}");
+        assert_eq!(
+            request.contains("FILE-STYLE-WORDS"),
+            label == "styled",
+            "{label}: {request}"
         );
     }
 }

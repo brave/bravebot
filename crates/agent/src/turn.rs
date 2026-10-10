@@ -905,7 +905,7 @@ pub struct Task {
     pub system_prompts: SystemPrompts,
     /// The built-in style `/style` chose, which stands in for the opening where `--system-prompt`
     /// did not (CLI-19). A person's own words win over it. Not given to a delegate.
-    pub style: Option<&'static crate::styles::Style>,
+    pub style: Option<crate::styles::Style>,
     /// How much this turn asks before it acts.
     ///
     /// Carried by the task because the planner has to be told about one of them: plan mode refuses
@@ -1395,7 +1395,7 @@ impl Task {
     }
 
     /// Open the system prompt with this style's words, unless `--system-prompt` named its own.
-    pub fn with_style(mut self, style: Option<&'static crate::styles::Style>) -> Self {
+    pub fn with_style(mut self, style: Option<crate::styles::Style>) -> Self {
         self.style = style;
         self
     }
@@ -3688,11 +3688,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             // `--system-prompt` stands in for the opening alone (CLI-19): what follows it is what
             // the quarantine, the goal and the modes rest on.
             None => {
-                match (task.system_prompts.replacing.as_deref(), task.style) {
+                match (task.system_prompts.replacing.as_deref(), &task.style) {
                     (Some(replacing), _) => {
                         system.push(Provenance::Trusted("command line"), replacing.trim())
                     }
-                    (None, Some(style)) => system.push(Provenance::Driver, style.words),
+                    // A file's words are the person's own configuration, trusted for sitting in
+                    // `~/.bravebot`; a built-in style's are this program's.
+                    (None, Some(style)) if style.from_file => {
+                        system.push(Provenance::Trusted("output style"), style.words.as_ref())
+                    }
+                    (None, Some(style)) => system.push(Provenance::Driver, style.words.as_ref()),
                     (None, None) => system.push(Provenance::Driver, OPENING),
                 }
                 system.push(Provenance::Driver, PLANNING);
