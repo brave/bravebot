@@ -1439,6 +1439,10 @@ picker-premium = premium
 # The heading over the models Brave's own endpoint serves. Named rather than left blank, because a
 # list whose other sections name a service reads as though the unlabelled rows came from nowhere.
 picker-service-brave = Brave
+# What a tier set to an inference-profile ARN is called where no section heading says whose account
+# answers: the info panel and /status. The tier word alone would read as the Brave roster's model of
+# that name.
+model-label-bedrock = { $name } (Bedrock)
 # Both rosters are offered at once, and a tier name alone does not say which of the two it is: the
 # same model is reachable through either, billed and reached differently. Not "Bedrock" alone, which
 # the Brave roster already says of the models it serves through its own account.
@@ -1930,6 +1934,9 @@ status-model = Model
 status-model-chosen = chosen with /model
 status-model-default = the configured default
 status-model-definitions = the one { $definition } asks for
+# Under the model line when the line gives the name the configuration chose and not what a request
+# names, since an error from the service quotes the latter.
+status-model-id = sent to the service as { $id }
 status-agent = Agent
 status-agent-every-turn = every turn is addressed to it, named with --agent
 status-agent-by-setting = every turn is addressed to it, chosen by the agent setting

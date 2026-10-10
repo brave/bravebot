@@ -3898,7 +3898,8 @@ fn event_loop(
         .with_sandbox(sandbox)
         .with_stored_history()
         .in_workspace(workspace.root())
-        .on_tier(config);
+        .on_tier(config)
+        .with_model_labels(config);
     // The saved pick where a checkout's settings do not outrank it (BACKEND-11), before the window
     // below is asked for, which is the window of whichever model this settles on.
     session.adopt_model(&settings, config);
