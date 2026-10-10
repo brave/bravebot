@@ -1241,10 +1241,10 @@ fn stated(
     }
     if prelude == Some(Prelude::MacOs) {
         said.push_str(
-            " On macOS a program cannot listen on a port of this machine, or connect to one, \
-             unless its line asks for `loopback`: `cargo test` on a crate whose tests bind \
-             `127.0.0.1:0`, and any build through `sccache`, fail with `Operation not permitted` \
-             without it.",
+            " On macOS a program cannot listen on a port of this machine unless its line asks for \
+             `loopback`, so `cargo test` on a crate whose tests bind `127.0.0.1:0`, and any build \
+             through `sccache`, fail with `Operation not permitted` without it. Where the network \
+             is closed, `loopback` is also what lets a program connect to a port of this machine.",
         );
     }
     if prelude.is_some() && network.is_closed() {

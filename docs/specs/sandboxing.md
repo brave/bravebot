@@ -139,7 +139,8 @@ listen on the loopback interface, and a server it starts, such as the one `sccac
 that binds `127.0.0.1:0`, fails with `Operation not permitted`. A stage the plan lends loopback
 ([SANDBOX-26](#SANDBOX-26)) may bind and accept on this machine's own addresses and connect to
 them, and reaches no other address and no resolver. That grant is separate from egress: a closed
-network stays closed for it, and a stage that is granted egress is not given more by it.
+network stays closed for it, and to a stage that has egress, which connects anywhere, it adds only
+listening.
 
 **Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
 that reaches a Docker daemon's socket can start a container with the home directory mounted, which

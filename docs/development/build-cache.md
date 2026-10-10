@@ -31,7 +31,7 @@ sccache serves builds from a process listening on `127.0.0.1:4226`. When bravebo
 under its macOS sandbox, the sandbox refuses that listener and the build fails with
 `sccache: error: Operation not permitted`. The `run` call asks for `scopes: ["loopback"]`, which
 the person approves each time; that lets the line listen on and connect to ports of this machine and
-reaches nothing else ([SANDBOX-3](../specs/sandboxing.md#SANDBOX-3)). A `cargo test` whose tests
+opens nothing else ([SANDBOX-3](../specs/sandboxing.md#SANDBOX-3)). A `cargo test` whose tests
 bind `127.0.0.1:0` needs the same.
 
 `sccache --show-stats` prints the hit counts and the cap. Leave incremental compilation on: cargo

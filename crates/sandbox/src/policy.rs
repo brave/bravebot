@@ -57,8 +57,8 @@ pub struct SandboxPolicy {
     ///
     /// [SANDBOX-14]: ../../../docs/specs/sandboxing.md
     pub git_directories_writable: bool,
-    /// Whether the process may listen on a port of the loopback interface and connect to one,
-    /// where `allow_network` is false.
+    /// Whether the process may listen on a port of the loopback interface and connect to one. A
+    /// process with `allow_network` connects to one already, so for it this adds listening.
     ///
     /// Only the macOS backend acts on it: its profile starts from a refusal of everything, so a
     /// server such as the one `sccache` starts, or a test that binds `127.0.0.1:0`, is refused
