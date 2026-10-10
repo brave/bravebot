@@ -1,7 +1,7 @@
 import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
-import { memo, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
@@ -34,6 +34,7 @@ import type { Turns, TurnDisclosure } from '../turn-details'
 import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
 import { middleTruncate } from '../truncate'
 import { pointForPrompt, undoRow } from '../rewind'
+import { ShownContext, leftWords, mayAnswer, useShown, type OnScreen } from '../shown'
 
 interface Live {
   model: string | null
@@ -716,7 +717,7 @@ export function Transcript({
         <div ref={bottom} />
       </div>
 
-      <div className="composer-dock">
+      <div className="composer-dock" data-veil="before">
         <div className="dock-float">
           {/* Kept in the tree while empty, so what arrives in it is announced. */}
           <div className="attention-pills" aria-live="polite">
@@ -1391,6 +1392,76 @@ function Unanswered(): React.JSX.Element {
 }
 
 /**
+ * The row a waiting question's answers sit in. It counts the rows the card marks as deciding that
+ * have not been on screen yet, says how many are left, and the approving buttons in it wait until
+ * none are (PROMPT-4). A refusal never waits.
+ */
+function Answers({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const row = useRef<HTMLDivElement>(null)
+  const counted = useShown(row)
+  const note = useId()
+  const shown = useMemo<OnScreen>(() => ({ ...counted, note }), [counted, note])
+  const words = leftWords(shown)
+  return (
+    <div className="confirm-actions" ref={row}>
+      {words && <span className="shown-left" id={note}>{words}</span>}
+      <ShownContext.Provider value={shown}>{children}</ShownContext.Provider>
+    </div>
+  )
+}
+
+/**
+ * Whether an approving button is open, the note saying why not and its id, and `press`, which
+ * measures once more before it answers, so a row scrolled away since the last count stops it.
+ */
+function useApproval(standing: boolean, onClick: () => void): {
+  open: boolean
+  words: string | undefined
+  reason: string | undefined
+  press: () => void
+} {
+  const shown = useContext(ShownContext)
+  const open = mayAnswer(shown, standing)
+  const words = open ? undefined : leftWords(shown) ?? undefined
+  return { open, words, reason: words && shown.note, press: () => { if (open && shown.now(standing)) onClick() } }
+}
+
+/** A card's approving Leo button. `standing` is an answer that also covers later questions. */
+function Approve({ kind = 'filled', className = 'approve', standing = false, tooltip, onClick, children }: {
+  kind?: 'filled' | 'outline'
+  className?: string
+  standing?: boolean
+  tooltip?: string
+  onClick: () => void
+  children: React.ReactNode
+}): React.JSX.Element {
+  const { open, words, press } = useApproval(standing, onClick)
+  // The note's id would not resolve inside the button's shadow root, so its words go across instead.
+  return (
+    <Button kind={kind} size="small" className={className} data-tooltip={tooltip} isDisabled={!open} aria-disabled={!open}
+      aria-description={words} onClick={press}>
+      {children}
+    </Button>
+  )
+}
+
+/** The same, as the plain button the yes-or-no cards draw. */
+function ApproveButton({ className = 'approve', standing = false, tooltip, onClick, children }: {
+  className?: string
+  standing?: boolean
+  tooltip?: string
+  onClick: () => void
+  children: React.ReactNode
+}): React.JSX.Element {
+  const { open, reason, press } = useApproval(standing, onClick)
+  return (
+    <button className={className} data-tooltip={tooltip} disabled={!open} aria-describedby={reason} onClick={press}>
+      {children}
+    </button>
+  )
+}
+
+/**
  * The foot of a question answered with a yes or a no: the two buttons while it waits, what was
  * answered once it has been, and that nobody answered where its turn ended first.
  *
@@ -1430,14 +1501,14 @@ function YesOrNo({
     return <div className={`decided ${decision}`}>{decision === 'approve' ? approved : rejected}</div>
   }
   return (
-    <div className="confirm-actions">
+    <Answers>
       <button className="reject" onClick={() => onDecide(kind, request, false)}>
         {reject}
       </button>
-      <button className="approve" onClick={() => onDecide(kind, request, true)}>
+      <ApproveButton onClick={() => onDecide(kind, request, true)}>
         {approve}
-      </button>
-    </div>
+      </ApproveButton>
+    </Answers>
   )
 }
 
@@ -1486,19 +1557,19 @@ function ThreeAnswers({
     )
   }
   return (
-    <div className="confirm-actions">
+    <Answers>
       <button className="reject" onClick={() => onDecide(kind, request, false)}>
         {reject}
       </button>
       {always && (
-        <button className="approve always" data-tooltip={alwaysTooltip} onClick={() => onDecide(kind, request, true, true)}>
+        <ApproveButton className="approve always" standing tooltip={alwaysTooltip} onClick={() => onDecide(kind, request, true, true)}>
           {always}
-        </button>
+        </ApproveButton>
       )}
-      <button className="approve" onClick={() => onDecide(kind, request, true)}>
+      <ApproveButton onClick={() => onDecide(kind, request, true)}>
         {approve}
-      </button>
-    </div>
+      </ApproveButton>
+    </Answers>
   )
 }
 
@@ -1558,9 +1629,9 @@ function PlanEnded({ ended }: { ended: ManifestError }): React.JSX.Element {
  * metadata service reached by a command and one reached by a fetch read as the same grant.
  * Nothing is drawn for a request that reaches none, which is nearly every one.
  */
-function AmbientNotice({ ambient }: { ambient?: Ambient[] }): React.JSX.Element | null {
+function AmbientNotice({ ambient, deciding = false }: { ambient?: Ambient[]; deciding?: boolean }): React.JSX.Element | null {
   if (!ambient?.length) return null
-  return (
+  const notice = (
     <Alert type="warning" className="card-alert warn">
       <Icon name="shield-alert" slot="icon" />
       This spends access that is yours elsewhere. Nobody is asked for it at the moment it
@@ -1574,6 +1645,7 @@ function AmbientNotice({ ambient }: { ambient?: Ambient[] }): React.JSX.Element 
       </ul>
     </Alert>
   )
+  return deciding ? <div data-deciding="all">{notice}</div> : notice
 }
 
 /** What somebody answered, in words, for the record left in the transcript. */
@@ -1806,7 +1878,7 @@ function Card({
           answerable={answerable}
           subject={request.path}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You approved this write' : 'You refused this write' }}
-          head={<CardHead icon="edit-box" intent={INTENT_WORD[request.intent]}
+          head={<CardHead icon="edit-box" intent={INTENT_WORD[request.intent]} deciding
             subject={<code className="path" data-tooltip={request.path}>{request.path}</code>}
             counts={<span className="counts" aria-label={`${stats.added} added, ${stats.removed} removed`}><span className="stat added">+{stats.added}</span><span className="stat removed">−{stats.removed}</span></span>}
             trust={request.untrusted && <Label mode="loud" color="yellow" className="trust-label"><Icon name="warning-triangle-filled" slot="icon-before" />Untrusted source</Label>} />}
@@ -1814,47 +1886,48 @@ function Card({
             <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('confirm', request.request, false)}>
               Don’t write
             </Button>
-            <Button kind="filled" size="small" className="approve" onClick={() => onDecide('confirm', request.request, true)}>
+            <Approve onClick={() => onDecide('confirm', request.request, true)}>
               {request.existing ? 'Apply this change' : 'Create this file'}
-            </Button>
+            </Approve>
           </>}
         >
           {request.untrusted && (
-            <p className="warn">
+            <p className="warn" data-deciding="all">
               <Icon name="warning-triangle-filled" />
               <span>This came from somewhere nobody vouched for. The agent never read it — an
               isolated processor wrote it. Read it as you would a stranger’s patch.</span>
             </p>
           )}
           {!request.exact && (
-            <p className="warn">
+            <p className="warn" data-deciding="all">
               <Icon name="warning-triangle-filled" />
               <span>The files were too dissimilar to diff exactly. This is an approximation of
               the change.</span>
             </p>
           )}
           {request.writtenSinceCheckout && (
-            <p className="warn">
+            <p className="warn" data-deciding="all">
               <Icon name="warning-triangle-filled" />
               <span>This session wrote to this file in the working directory after the checkout was
               made, so it may hold changes the checkout’s copy does not. Read the difference before
               approving.</span>
             </p>
           )}
-          {request.lineEndings && <p className="permission-scope" data-test="line-endings">{request.lineEndings}</p>}
+          {request.lineEndings && <p className="permission-scope" data-test="line-endings" data-deciding="all">{request.lineEndings}</p>}
           {request.credentials && request.credentials.length > 0 && <Alert type="warning" className="card-alert credential-finding">
             <Icon name="shield-alert" slot="icon" />
-            <span slot="title">This looks like it would put a secret in the tree</span>
-            <ul>{request.credentials.map((found) => <li key={found}>{found}</li>)}</ul>
+            <span slot="title" data-deciding="all">This looks like it would put a secret in the tree</span>
+            <ul data-deciding="all">{request.credentials.map((found) => <li key={found}>{found}</li>)}</ul>
             <small>Going by the name beside the value and how the value reads. Nothing recognised it as a particular provider’s key, so it is a guess and yours to settle.</small>
           </Alert>}
-          <Diff changes={request.changes} path={request.path} untrusted={request.untrusted} />
+          {/* Outside the fold and above the diff, as the terminal draws it: the answer waits on it. */}
+          {request.remark && <div className="processor-remark" data-deciding="all"><strong>Processor’s remark · untrusted</strong>
+            <pre>{request.remark.preview.join('\n')}</pre>
+            <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
+          </div>}
+          <Diff changes={request.changes} path={request.path} untrusted={request.untrusted} deciding />
           <Collapse className="card-details" title="Details" isOpen={undefined}>
             <p className="permission-scope">{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown above.</p>
-            {request.remark && <div className="processor-remark"><strong>Processor’s remark · untrusted</strong>
-              <pre>{request.remark.preview.join('\n')}</pre>
-              <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
-            </div>}
           </Collapse>
         </DecisionCard>
       )
@@ -1873,7 +1946,7 @@ function Card({
             tone: decision,
             text: decision === 'reject' ? 'You refused this command' : remember ? 'You ran this and vouched for the programs' : 'You ran this once',
           }}
-          head={<CardHead icon="window-console" intent={commands === 1 ? 'Run a command' : `Run ${commands} commands`}
+          head={<CardHead icon="window-console" intent={commands === 1 ? 'Run a command' : `Run ${commands} commands`} deciding
             subject={<code className="path" data-tooltip={request.directory}>{request.directory}</code>} />}
           actions={<>
             <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('run', request.request, false)}>
@@ -1883,33 +1956,33 @@ function Card({
                 answers every later question about these programs, so it should take its
                 own deliberate press. The tooltip says exactly what it would cover. */}
             {request.canBeRemembered && (
-              <Button
-                kind="outline" size="small" className="approve always"
-                data-tooltip={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}`}
+              <Approve
+                kind="outline" className="approve always" standing
+                tooltip={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}`}
                 onClick={() => onDecide('run', request.request, true, true)}
               >
                 Trust command and output
-              </Button>
+              </Approve>
             )}
-            <Button kind="filled" size="small" className="approve" onClick={() => onDecide('run', request.request, true)}>
+            <Approve onClick={() => onDecide('run', request.request, true)}>
               Run once
-            </Button>
+            </Approve>
           </>}
         >
           {/* The line the planner wrote, above the plan and as context. It is not what the
               answer binds to: two spellings that compile alike are one thing to agree to, and
               the plan below is the one being agreed to. Drawn all the same, because a reader
               comparing the two is what would catch a compiler that got the line wrong. */}
-          {request.line && <p className="permission-scope"><strong>The model wrote:</strong> <code>{request.line}</code></p>}
+          {request.line && <p className="permission-scope" data-deciding="all"><strong>The model wrote:</strong> <code>{request.line}</code></p>}
 
           {/* The argv, one stage per line, with what each name resolved to underneath.
               Both are shown because they are two different claims: $PATH decides what
               `grep` means, and a person vouching for a program should be looking at the
               binary rather than the word. */}
-          {request.plan && <p className="permission-scope"><strong>Execution plan:</strong> <code>{request.plan}</code></p>}
-          {request.stdin && <p className="permission-scope"><strong>Standard input:</strong> <code>{request.stdin}</code></p>}
-          {!!request.writes?.length && <div className="permission-scope"><strong>Files created or modified:</strong><ul>{request.writes.map(path => <li key={path}><code>{path}</code></li>)}</ul></div>}
-          <ol className="stages">
+          {request.plan && <p className="permission-scope" data-deciding="all"><strong>Execution plan:</strong> <code>{request.plan}</code></p>}
+          {request.stdin && <p className="permission-scope" data-deciding="all"><strong>Standard input:</strong> <code>{request.stdin}</code></p>}
+          {!!request.writes?.length && <div className="permission-scope" data-deciding="all"><strong>Files created or modified:</strong><ul>{request.writes.map(path => <li key={path}><code>{path}</code></li>)}</ul></div>}
+          <ol className="stages" data-deciding="all">
             {request.stages.map((stage, index) => (
               <li key={index}>
                 <code className="argv">{stage.display}</code>
@@ -1921,25 +1994,29 @@ function Card({
             ))}
           </ol>
 
-          <AmbientNotice ambient={request.ambient} />
+          <AmbientNotice ambient={request.ambient} deciding />
           {!!lent.length && (
-            <Alert type="warning" className="card-alert warn">
-              <Icon name="shield-alert" slot="icon" />
-              The model asked for <strong>{lent.join(', ')}</strong> to be added to every
-              command in this line. Each lets a program use credentials or caches it would
-              otherwise be refused. You are asked every time, and no answer is remembered.
-            </Alert>
+            <div data-deciding="all">
+              <Alert type="warning" className="card-alert warn">
+                <Icon name="shield-alert" slot="icon" />
+                The model asked for <strong>{lent.join(', ')}</strong> to be added to every
+                command in this line. Each lets a program use credentials or caches it would
+                otherwise be refused. You are asked every time, and no answer is remembered.
+              </Alert>
+            </div>
           )}
           {request.releasesPrivate && (
-            <Alert type="warning" className="card-alert warn">
-              <Icon name="shield-alert" slot="icon" />
-              This hands your own data to the program. Whatever it does with those bytes
-              happens somewhere the agent stops governing them.
-            </Alert>
+            <div data-deciding="all">
+              <Alert type="warning" className="card-alert warn">
+                <Icon name="shield-alert" slot="icon" />
+                This hands your own data to the program. Whatever it does with those bytes
+                happens somewhere the agent stops governing them.
+              </Alert>
+            </div>
           )}
           {/* Outside the fold: "Trust command and output" is a standing grant, and what it covers
               has to be readable at the moment it can be pressed, not only on hover or after a click. */}
-          {answerable && decision === null && request.canBeRemembered && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
+          {answerable && decision === null && request.canBeRemembered && <p className="permission-scope" data-deciding="standing"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
           <Collapse className="card-details" title="Details" isOpen={undefined}>
             <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
           </Collapse>
@@ -1955,7 +2032,7 @@ function Card({
           answerable={answerable}
           subject={request.command}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You let the planner read this' : 'You kept this out of the planner’s context' }}
-          head={<CardHead icon="eye-on" intent="Read output"
+          head={<CardHead icon="eye-on" intent="Read output" deciding
             subject={<code className="path" data-tooltip={request.command}>{request.command}</code>}
             counts={<span className="counts">{request.lines} line{request.lines === 1 ? '' : 's'}</span>}
             trust={<VettingVerdict vetting={request.vetting} />} />}
@@ -1966,16 +2043,13 @@ function Card({
             >
               Keep it out
             </Button>
-            <Button
-              kind="filled" size="small" className="approve"
-              onClick={() => onDecide('output', request.request, true)}
-            >
+            <Approve onClick={() => onDecide('output', request.request, true)}>
               Let the planner read it
-            </Button>
+            </Approve>
           </>}
         >
           <VettingReason vetting={request.vetting} />
-          <p className="warn">
+          <p className="warn" data-deciding="all">
             <Icon name="warning-triangle-filled" />
             <span>The planner has not seen this. Read it yourself before deciding: approving is
             what puts it into the model’s context, and anything in here that reads like an
@@ -1984,7 +2058,7 @@ function Card({
 
           {/* In full, never truncated. The answer to this question rests on the bytes, so
               a preview would be asking for an approval of what nobody saw. */}
-          <pre className="preview">{request.output}</pre>
+          <pre className="preview" data-deciding="first">{request.output}</pre>
           <Collapse className="card-details" title="Details" isOpen={undefined}>
             <VettingNotice vetting={request.vetting} />
           </Collapse>
@@ -1998,18 +2072,18 @@ function Card({
         const picture = request.picture
         return <DecisionCard className="confirm vetted-read" answerable={answerable} subject={request.origin}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed this file once' : 'You kept this file out' }}
-          head={<CardHead icon="eye-on" intent="See once" subject={<code className="path" data-tooltip={request.origin}>{request.origin}</code>}
+          head={<CardHead icon="eye-on" intent="See once" deciding subject={<code className="path" data-tooltip={request.origin}>{request.origin}</code>}
             counts={<span className="counts">{picture.media}, {picture.bytes} bytes</span>} trust={<VettingVerdict vetting={request.vetting} />} />}
           actions={<>
             <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
-            <Button kind="filled" size="small" className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner see it once</Button>
+            <Approve onClick={() => onDecide('vet', request.request, true)}>Let the planner see it once</Approve>
           </>}>
           <VettingReason vetting={request.vetting} />
-          <p className="permission-scope">Expected contents: {request.expects}</p>
-          <p className="warn"><Icon name="warning-triangle-filled" /><span>A model reads words in a picture that a person can miss: small, faint, or nearly the colour of what is behind them. Look for writing before letting it through.</span></p>
-          {picture.media === 'application/pdf' && <p className="warn"><Icon name="warning-triangle-filled" /><span>A PDF can also hold text that no page draws, and the planner is given that text too.</span></p>}
-          <p>Open this copy to see what the planner would be shown. It is deleted when you answer:</p>
-          <pre className="preview">{picture.path}</pre>
+          <p className="permission-scope" data-deciding="all">Expected contents: {request.expects}</p>
+          <p className="warn" data-deciding="all"><Icon name="warning-triangle-filled" /><span>A model reads words in a picture that a person can miss: small, faint, or nearly the colour of what is behind them. Look for writing before letting it through.</span></p>
+          {picture.media === 'application/pdf' && <p className="warn" data-deciding="all"><Icon name="warning-triangle-filled" /><span>A PDF can also hold text that no page draws, and the planner is given that text too.</span></p>}
+          <p data-deciding="all">Open this copy to see what the planner would be shown. It is deleted when you answer:</p>
+          <pre className="preview" data-deciding="all">{picture.path}</pre>
           <Collapse className="card-details" title="Details" isOpen={undefined}>
             <p className="permission-scope">Approval shows the planner only this file. It does not trust this file for future reads.</p>
             <VettingNotice vetting={request.vetting} />
@@ -2018,15 +2092,15 @@ function Card({
       }
       return <DecisionCard className="confirm vetted-read" answerable={answerable} subject={request.origin}
         decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed this content once' : 'You kept this content out' }}
-        head={<CardHead icon="eye-on" intent="Read once" subject={<code className="path" data-tooltip={request.origin}>{request.origin}</code>}
+        head={<CardHead icon="eye-on" intent="Read once" deciding subject={<code className="path" data-tooltip={request.origin}>{request.origin}</code>}
           counts={<span className="counts">{request.lines} lines</span>} trust={<VettingVerdict vetting={request.vetting} />} />}
         actions={<>
           <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
-          <Button kind="filled" size="small" className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner read once</Button>
+          <Approve onClick={() => onDecide('vet', request.request, true)}>Let the planner read once</Approve>
         </>}>
         <VettingReason vetting={request.vetting} />
-        <p className="permission-scope">Expected contents: {request.expects}</p>
-        <pre className="preview">{request.content}</pre>
+        <p className="permission-scope" data-deciding="all">Expected contents: {request.expects}</p>
+        <pre className="preview" data-deciding="first">{request.content}</pre>
         <Collapse className="card-details" title="Details" isOpen={undefined}>
           <p className="permission-scope">Approval lets the planner read only this content. It does not trust this file for future reads.</p>
           <VettingNotice vetting={request.vetting} />
@@ -2041,17 +2115,17 @@ function Card({
               in a question may be something a click follows. */}
           <div className="confirm-head">
             <span className="intent">fetch</span>
-            <code className="path">{request.url}</code>
+            <code className="path" data-deciding="first">{request.url}</code>
           </div>
 
           {/* The host on a line of its own, as the agent read it out of the address. An
               address can be written so that a reader takes one name from it and the request
               goes to another, and the host is what a yes agrees to talk to. */}
-          <p className="permission-scope fetch-host">
+          <p className="permission-scope fetch-host" data-deciding="all">
             <strong>Talking to:</strong> <code>{request.host}</code>
           </p>
 
-          <AmbientNotice ambient={request.ambient} />
+          <AmbientNotice ambient={request.ambient} deciding />
 
           <p className="permission-scope">
             What comes back stays confined however you answer: the model can pass it to a
@@ -2079,46 +2153,46 @@ function Card({
       const { request, decision } = entry
       return (
         <div className={`confirm server ${request.runsBuildTooling ? 'builds' : ''}`}>
-          <div className="confirm-head">
+          <div className="confirm-head" data-deciding="all">
             <span className="intent">start server</span>
             <span className="path server-language">{request.language} language server</span>
           </div>
 
           {/* The resolved path is shown because `$PATH` decides what the name runs. */}
-          <p className="permission-scope">
+          <p className="permission-scope" data-deciding="all">
             <strong>Program:</strong> <code>{request.program}</code>
           </p>
           {request.args.length > 0 && (
-            <p className="permission-scope">
+            <p className="permission-scope" data-deciding="all">
               <strong>Arguments:</strong> <code>{request.argumentsLine}</code>
             </p>
           )}
-          <p className="permission-scope">
+          <p className="permission-scope" data-deciding="all">
             <strong>Indexes:</strong> <code>{request.workspace}</code>
           </p>
 
           {/* A server a person declared runs a program this code did not choose (LSP-11). */}
           {/* A server that runs build tooling executes code from dependencies (LSP-5). */}
           {request.declared ? (
-            <p className="warn">
+            <p className="warn" data-deciding="all">
               You declared this server yourself, so what starting it runs is not known. It may
               run code from your project and its dependencies. It runs with your own access
               and is not confined.
             </p>
           ) : request.runsBuildTooling ? (
-            <p className="warn">
+            <p className="warn" data-deciding="all">
               Starting it runs the build tooling of its ecosystem, so code from your
               dependencies runs with your own access, the way a build or a test run does. It
               is not confined. Files it writes are not tracked, so undoing a turn in the
               terminal may not put them back.
             </p>
           ) : (
-            <p className="permission-scope">
+            <p className="permission-scope" data-deciding="all">
               It reads the project with your own access. Nothing is written to your project.
             </p>
           )}
 
-          <p className="permission-scope">
+          <p className="permission-scope" data-deciding="all">
             It stays running for this conversation and stops when the conversation closes.
             What it reports stays on the same footing however you answer: a place in a file
             is shown to the model, and the text at that place stays confined unless you
@@ -2144,20 +2218,20 @@ function Card({
       const { request, decision } = entry
       return (
         <div className="confirm manifest">
-          <div className="confirm-head">
+          <div className="confirm-head" data-deciding="all">
             <span className="intent">run plan</span>
             <span className="path manifest-count">
               {request.steps.length} step{request.steps.length === 1 ? '' : 's'}
             </span>
           </div>
 
-          <p className="permission-scope">
+          <p className="permission-scope" data-deciding="all">
             <strong>You asked:</strong> {request.task}
           </p>
 
           {/* Every step, in order and unshortened. The answer covers the whole plan. The agent
               numbers each line, so the list draws no numbers of its own. */}
-          <ol className="manifest-steps">
+          <ol className="manifest-steps" data-deciding="all">
             {request.steps.map((step, index) => (
               <li key={index}>
                 <code>{step}</code>
@@ -2165,14 +2239,14 @@ function Card({
             ))}
           </ol>
 
-          <p className="permission-scope">
+          <p className="permission-scope" data-deciding="all">
             These steps run in this order, and nothing re-plans once the run starts. Approving
             the plan does not approve its writes: each write is still put to you when its step
             is reached. This answer covers this plan only.
           </p>
 
           {!!entry.unheld?.length && (
-            <div className="warn">
+            <div className="warn" data-deciding="all">
               Permission rules are not applied to a plan run. Check the steps against the
               rules this conversation refuses or asks about:
               <ul>
@@ -2205,7 +2279,7 @@ function Card({
       const found = request.credentials.length
       return (
         <div className="confirm exposure">
-          <div className="confirm-head">
+          <div className="confirm-head" data-deciding="all">
             <span className="intent">send file</span>
             <code className="path">{request.path}</code>
             <span className="counts">
@@ -2213,7 +2287,7 @@ function Card({
             </span>
           </div>
 
-          <p className="warn">
+          <p className="warn" data-deciding="all">
             The model asked to read this file, and what it reads goes to whoever performs
             inference. The scan found something in it that looks like a credential. Sending
             the file discloses that value.
@@ -2221,7 +2295,7 @@ function Card({
 
           {/* Each finding as the agent wrote it: a kind, a place and a mask. The value is
               not sent to this window, so there is none here to draw. */}
-          <div className="permission-scope">
+          <div className="permission-scope" data-deciding="all">
             <strong>What the scan found, without any of the value:</strong>
             <ul className="exposure-findings">
               {request.credentials.map((finding, index) => (
@@ -2232,7 +2306,7 @@ function Card({
             </ul>
           </div>
 
-          <p className="permission-scope">
+          <p className="permission-scope" data-deciding="all">
             Keeping it back keeps this file’s text from the model and changes nothing else.
             Your answer covers this file until this conversation closes. It is not saved, and
             it does not change whether the file is trusted.
@@ -2258,35 +2332,35 @@ function Card({
       const local = request.transport === 'stdio'
       return (
         <div className={`confirm mcp-server ${request.fetching.length || request.changed ? 'fetches' : ''}`}>
-          <div className="confirm-head">
+          <div className="confirm-head" data-deciding="all">
             <span className="intent">use MCP server</span>
             <code className="path">{request.alias}</code>
             <span className="counts">{local ? 'runs on this computer' : 'remote'}</span>
           </div>
 
-          <p className="permission-scope">
+          <p className="permission-scope" data-deciding="all">
             <strong>Requested by:</strong> <code>{request.requestedBy}</code>
           </p>
 
           {/* What the declaration runs or reaches, word by word as it was declared. A word is
               drawn as itself, so two that differ only in a space are told apart. */}
           {local ? (
-            <p className="permission-scope">
+            <p className="permission-scope" data-deciding="all">
               <strong>Runs:</strong>{' '}
               <code className="mcp-command">{drawCommand(request.command)}</code>
             </p>
           ) : (
-            <p className="permission-scope">
+            <p className="permission-scope" data-deciding="all">
               <strong>Reaches:</strong> <code className="mcp-url">{request.url}</code>
             </p>
           )}
           {request.program && (
-            <p className="permission-scope">
+            <p className="permission-scope" data-deciding="all">
               <strong>Program:</strong> <code>{request.program}</code>
             </p>
           )}
           {request.variables.length > 0 && (
-            <p className="permission-scope">
+            <p className="permission-scope" data-deciding="all">
               <strong>Receives:</strong>{' '}
               {request.variables.map((variable, index) => (
                 <span key={variable.name}>
@@ -2298,7 +2372,7 @@ function Card({
             </p>
           )}
           {request.reads.length > 0 && (
-            <div className="permission-scope">
+            <div className="permission-scope" data-deciding="all">
               <strong>May read:</strong>
               <ul className="mcp-list">
                 {request.reads.map((path) => (
@@ -2310,22 +2384,22 @@ function Card({
             </div>
           )}
           {request.directory && (
-            <p className="permission-scope">
+            <p className="permission-scope" data-deciding="all">
               <strong>Runs in, and may write:</strong> <code>{request.directory}</code>
             </p>
           )}
-          <p className="permission-scope mcp-digest">
+          <p className="permission-scope mcp-digest" data-deciding="all">
             <strong>Declaration:</strong> <code>{request.digest}</code>
           </p>
 
           {request.changed && (
-            <p className="warn">
+            <p className="warn" data-deciding="all">
               This server’s declaration changed since you approved it. What it runs or reaches
               may not be what you said yes to.
             </p>
           )}
           {request.fetching.length > 0 && (
-            <div className="warn">
+            <div className="warn" data-deciding="all">
               <ul className="mcp-list">
                 {request.fetching.map((line, index) => (
                   <li key={index}>{line}</li>
@@ -2368,7 +2442,7 @@ function Card({
       const count = request.tools.length
       return (
         <div className={`confirm mcp-tools ${request.vetting.verdict === 'unsafe' ? 'unsafe' : ''}`}>
-          <div className="confirm-head">
+          <div className="confirm-head" data-deciding="all">
             <span className="intent">offer tools</span>
             <code className="path">{request.alias}</code>
             <span className="counts">
@@ -2378,10 +2452,10 @@ function Card({
           </div>
 
           {request.changed && (
-            <p className="warn">This is not the list you approved before: the tools it offers have changed.</p>
+            <p className="warn" data-deciding="all">This is not the list you approved before: the tools it offers have changed.</p>
           )}
 
-          <p className="permission-scope">
+          <p className="permission-scope" data-deciding="all">
             The model will read each tool’s name, its arguments and what the server says about
             it, exactly as shown here. The descriptions are the server’s own text. Say no if one
             gives instructions.
@@ -2389,7 +2463,7 @@ function Card({
 
           {/* Each description is the server's text, drawn as text in a marked block, so it never
               reads as this app's own words (SERVERS-8). */}
-          <ul className="mcp-tools-list">
+          <ul className="mcp-tools-list" data-deciding="all">
             {request.tools.map((tool) => (
               <li key={tool.name}>
                 <code className="mcp-tool-name">{tool.name}</code>
@@ -2411,13 +2485,13 @@ function Card({
             ))}
           </ul>
           {request.refused > 0 && (
-            <p className="permission-scope">
+            <p className="permission-scope" data-deciding="all">
               {request.refused} more tool{request.refused === 1 ? ' is' : 's are'} not listed:
               {request.refused === 1 ? ' its' : ' their'} name or arguments cannot be offered.
             </p>
           )}
 
-          <p className="permission-scope">
+          <p className="permission-scope" data-deciding="all">
             Every call to one of these tools is still put to you. Your answer is remembered for
             this exact list, so the same list is not asked about again.
           </p>
@@ -2441,7 +2515,7 @@ function Card({
       const { request, decision, remember } = entry
       return (
         <div className="confirm mcp-call">
-          <div className="confirm-head">
+          <div className="confirm-head" data-deciding="all">
             <span className="intent">call tool</span>
             <code className="path">{request.name}</code>
             <span className="counts">MCP</span>
@@ -2455,7 +2529,7 @@ function Card({
 
           {/* What the model wrote, argument by argument, as JSON. The call sends exactly this. */}
           {request.arguments.length > 0 ? (
-            <dl className="mcp-arguments">
+            <dl className="mcp-arguments" data-deciding="all">
               {request.arguments.map((argument) => (
                 <div key={argument.name}>
                   <dt>
@@ -2468,7 +2542,7 @@ function Card({
               ))}
             </dl>
           ) : (
-            <p className="permission-scope">No arguments.</p>
+            <p className="permission-scope" data-deciding="all">No arguments.</p>
           )}
 
           <p className="permission-scope">
@@ -2505,20 +2579,20 @@ function Card({
             <code className="path">{request.alias}</code>
           </div>
 
-          <p className="permission-scope">
+          <p className="permission-scope" data-deciding="all">
             <strong>Declared at:</strong> <code>{request.declared}</code>
           </p>
           {/* Where the reply pointed is the server's own bytes, released for this screen, so it is
               drawn in a container of its own and decides nothing until the answer. */}
-          <p className="permission-scope">
+          <p className="permission-scope" data-deciding="first">
             <strong>Its reply points to:</strong> <code className="mcp-destination">{request.destination}</code>
           </p>
           {/* The host and port, taken out of the address by the agent, as a fetch's host is. */}
-          <p className="permission-scope fetch-host">
+          <p className="permission-scope fetch-host" data-deciding="all">
             <strong>Reaching:</strong> <code>{request.authority}</code>
           </p>
 
-          <p className="warn">
+          <p className="warn" data-deciding="all">
             Nothing was sent there. A yes declares the server at that address and sends it what
             was being sent, and every later request to the server goes there too
             {request.mayRecord ? ', in this conversation and the next' : ' until this conversation ends'}.
@@ -2602,8 +2676,8 @@ function Card({
           answerable={answerable}
           subject={request.path}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You vouched for this path' : 'You left it confined' }}
-          head={<CardHead icon="shield-done" intent="Vouch for"
-            subject={<code className="path" data-tooltip={request.path}>{request.path}</code>}
+          head={<CardHead icon="shield-done" intent="Vouch for" deciding
+            subject={<code className="path">{request.path}</code>}
             trust={<VettingVerdict vetting={request.vetting} />} />}
           actions={<>
             <Button
@@ -2612,22 +2686,19 @@ function Card({
             >
               Leave it confined
             </Button>
-            <Button
-              kind="filled" size="small" className="approve"
-              onClick={() => onDecide('vouch', request.request, true)}
-            >
+            <Approve onClick={() => onDecide('vouch', request.request, true)}>
               Vouch for this path
-            </Button>
+            </Approve>
           </>}
         >
           <VettingReason vetting={request.vetting} />
-          <p className="warn">
+          <p className="warn" data-deciding="all">
             <Icon name="warning-triangle-filled" />
             <span>Vouching records a standing rule for this path, so it applies to later reads as
             well as this one. Only do it for content you know the origin of.</span>
           </p>
 
-          <pre className="preview">{request.preview}</pre>
+          <pre className="preview" data-deciding="first">{request.preview}</pre>
           {request.truncated && (
             <div className="quarantine-foot">
               This is the beginning of the file, not all of it.
@@ -2652,14 +2723,15 @@ const WHY_WIDTH = 80
  * The head every decision card shares: what kind of question it is, what it is about, how big it
  * is, and how far to trust it. The kind is an icon and a verb so the five read apart at a glance.
  */
-function CardHead({ icon, intent, subject, counts, trust }: {
+function CardHead({ icon, intent, subject, counts, trust, deciding = false }: {
   icon: IconName
   intent: string
   subject?: React.ReactNode
   counts?: React.ReactNode
   trust?: React.ReactNode
+  deciding?: boolean
 }): React.JSX.Element {
-  return <div className="confirm-head">
+  return <div className="confirm-head" data-deciding={deciding ? 'all' : undefined}>
     <Icon name={icon} className="card-kind" />
     <span className="intent">{intent}</span>
     {subject}
@@ -2701,7 +2773,7 @@ function DecisionCard({ className, head, decided, subject, answerable, actions, 
   return <div className={className}>
     {head}
     <div className="card-body">{children}</div>
-    {!answerable ? <Unanswered /> : decided === null ? <div className="confirm-actions">{actions}</div> : line}
+    {!answerable ? <Unanswered /> : decided === null ? <Answers>{actions}</Answers> : line}
   </div>
 }
 
@@ -2763,7 +2835,7 @@ function VettingVerdict({ vetting }: { vetting?: import('../../shared/protocol')
 
 /** The checker's one-sentence reason, beside the content it is about: it is the evidence for the verdict. */
 function VettingReason({ vetting }: { vetting?: import('../../shared/protocol').Vetting }): React.JSX.Element | null {
-  return vetting?.reason ? <p className="vetting-reason"><span className="vetting-by">Checker</span>{vetting.reason}</p> : null
+  return vetting?.reason ? <p className="vetting-reason" data-deciding="all"><span className="vetting-by">Checker</span>{vetting.reason}</p> : null
 }
 
 /** How far to lean on the checker, under a card's Details. */

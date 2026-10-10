@@ -97,6 +97,19 @@ try {
   // The chat view stays mounted under the settings, and must be out of reach of Tab while it is.
   const inertBehind = async () => assert.equal(await page.locator('.app-main').evaluate(el => el.inert), true, 'the chat view is inert under the settings')
   const fits = async locator => assert(await locator.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'content fits its width')
+  // A card's approval stays shut until the rows it rests on have been on screen at this width, so read it top to bottom first.
+  const readThrough = async card => {
+    await card.evaluate(async card => {
+      const entries = card.closest('.entries')
+      const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      const top = card.getBoundingClientRect().top - entries.getBoundingClientRect().top + entries.scrollTop
+      for (let at = Math.max(0, top - 24); ; at += 120) {
+        entries.scrollTo({ top: at, behavior: 'instant' }); await frames()
+        if (entries.scrollTop + entries.clientHeight >= entries.scrollHeight - 1) break
+      }
+    })
+    await card.locator('.confirm-actions .approve:not([aria-disabled="true"])').waitFor()
+  }
   const hasFocus = (locator) => locator.evaluate(el => {
     if (el === document.activeElement) return true
     const root = el.getRootNode()
@@ -315,11 +328,11 @@ try {
     const before = await send('Use an isolated processor to change blue to green in notes.txt and propose the write.')
     await leaveConfined()
     const card = page.locator('.confirm.untrusted').last()
-    await card.locator('.card-details summary').click()
     await card.getByText('Processor’s remark · untrusted', { exact: true }).waitFor()
     await card.getByText('Changed blue to green.', { exact: true }).waitFor()
     assert.equal(readFileSync(join(project, 'notes.txt'), 'utf8'), original, 'no write before approval')
     await page.setViewportSize({ width: 560, height: 780 }); await fits(card)
+    if (accepted) await readThrough(card)
     await card.getByRole('button', { name: accepted ? 'Apply this change' : 'Don’t write', exact: true }).evaluate(el => el.click())
     await done(before)
     assert.equal(readFileSync(join(project, 'notes.txt'), 'utf8'), accepted ? changed : original)

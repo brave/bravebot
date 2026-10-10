@@ -1988,7 +1988,7 @@ def test_the_prompt_lane_starts_from_every_prompt():
     class Governing:
         id = "PROMPT"
         rel = "docs/specs/asking.md"
-        governs = ["crates/tui/src/asks.rs"]
+        governs = ["crates/tui/src/asks.rs", "ui/src/Cards.tsx"]
 
     sources = {
         Path("crates/tui/src/asks.rs"): [
@@ -1998,18 +1998,34 @@ def test_the_prompt_lane_starts_from_every_prompt():
             "pub(crate) fn ask_move(request: &MoveRequest) -> Answer {",
         ],
         Path("crates/tui/src/elsewhere.rs"): ["pub fn ask_other<B: Backend>() {}"],
+        Path("ui/src/Cards.tsx"): [
+            "    case 'write': {",
+            "      return (",
+            "        <DecisionCard",
+            "          head={<YesOrNo />}",
+            "    case 'plan-task':",
+            "    case 'plan-reply':",
+            "      return <div className=\"plan-reply\" />",
+            "    case 'fetch': {",
+            "          <YesOrNo",
+            "    case 'move':",
+            "      return <ThreeAnswers />",
+        ],
     }
     found = [
         (site["path"], site["line"], site["function"])
         for site in audit.prompt_sites(sources, [Governing()])
     ]
     check(
-        "the prompt lane starts from every function the prompting spec's files ask with",
+        "the prompt lane starts from every function and card the prompting spec's files ask with",
         found
         == [
             ("crates/tui/src/asks.rs", 1, "ask"),
             ("crates/tui/src/asks.rs", 2, "ask_vet"),
             ("crates/tui/src/asks.rs", 4, "ask_move"),
+            ("ui/src/Cards.tsx", 1, "case 'write'"),
+            ("ui/src/Cards.tsx", 8, "case 'fetch'"),
+            ("ui/src/Cards.tsx", 10, "case 'move'"),
         ],
         str(found),
     )
@@ -2018,10 +2034,17 @@ def test_the_prompt_lane_starts_from_every_prompt():
         ROOT, lambda: audit.prompt_sites(audit.mechanics.load_sources(), audit.load_specs())
     )
     names = {(Path(site["path"]).name, site["function"]) for site in real}
-    wanted = {("confirm.rs", "ask"), ("confirm.rs", "ask_mcp_call"), ("trust_prompt.rs", "ask")}
+    wanted = {
+        ("confirm.rs", "ask"),
+        ("confirm.rs", "ask_mcp_call"),
+        ("trust_prompt.rs", "ask"),
+        ("Transcript.tsx", "case 'confirm'"),
+        ("Transcript.tsx", "case 'vet'"),
+        ("Transcript.tsx", "case 'mcp-call'"),
+    }
     check(
-        "the tree's write, call and trust prompts are on the lane's list",
-        wanted <= names,
+        "the tree's write, call and trust prompts and the window's cards are on the lane's list",
+        wanted <= names and ("Transcript.tsx", "case 'ask'") not in names,
         str(sorted(names)),
     )
 

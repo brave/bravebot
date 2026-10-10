@@ -201,7 +201,7 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
             <h1>{bot.name} is ready</h1>
             <p>Get started with your bot. Add it to a project or just chat with it.</p>
           </div>
-          <div className="composer-dock"><div className="dock-float">{notices}</div>{composer}</div>
+          <div className="composer-dock" data-veil="before"><div className="dock-float">{notices}</div>{composer}</div>
         </div>
       </div>
     )
@@ -221,7 +221,7 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
           <BotHistory rows={shown} home={bot.home} name={bot.name} query={query} onOpen={openConversation} />
         </div>
       </div>
-      <div className="composer-dock"><div className="dock-float">{notices}</div>{composer}</div>
+      <div className="composer-dock" data-veil="before"><div className="dock-float">{notices}</div>{composer}</div>
     </>
   )
 }

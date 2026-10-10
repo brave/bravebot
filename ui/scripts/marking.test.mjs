@@ -250,15 +250,15 @@ const CARDS = {
   confirm: { entry: () => t.asked(UNTRUSTED_WRITE), marks: 'class="confirm untrusted"' },
   output: {
     entry: () => t.askedOutput({ request: 1, command: 'cat notes.md', reference: 'output-1', lines: 1, output: FORGED_CHROME, summary: 'one line' }),
-    marks: '<pre class="preview">',
+    marks: '<pre class="preview" data-deciding="first">',
   },
   vet: {
     entry: () => t.askedVet({ request: 1, origin: 'notes.md', expects: 'a note', content: FORGED_CHROME, lines: 1, vetting: { verdict: 'safe' } }),
-    marks: '<pre class="preview">',
+    marks: '<pre class="preview" data-deciding="first">',
   },
   vouch: {
     entry: () => t.askedVouch({ request: 1, path: 'notes.md', preview: FORGED_CHROME, truncated: false }),
-    marks: '<pre class="preview">',
+    marks: '<pre class="preview" data-deciding="first">',
   },
 }
 

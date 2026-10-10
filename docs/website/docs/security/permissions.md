@@ -61,7 +61,11 @@ thing on the screen that is not.
 
 A review stays legible or says it could not: a long body keeps the question on screen and offers the
 rest to scroll to, a small edit in a large file shows only the change, an empty output says so, and a
-diff that cannot be computed says so rather than showing nothing.
+diff that cannot be computed says so rather than showing nothing. In the full-screen interface, and
+on the decision cards of a desktop conversation, no approval is taken until the lines it rests on have
+been on screen:
+until then the question says how many are left to read, a refusal is taken at any time, and a change
+of width starts the count again.
 
 ## One answer is never taken for another
 

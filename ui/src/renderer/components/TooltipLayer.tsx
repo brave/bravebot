@@ -144,7 +144,7 @@ export function TooltipLayer(): React.JSX.Element | null {
       style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
     >
       <Tooltip ref={tooltip} visible mode="mini" placement={shown.placement} positionStrategy="fixed" offset={6}>
-        <div slot="content" className="tooltip-text">
+        <div slot="content" className="tooltip-text" data-veil="slot">
           {shown.text}
           {shown.shortcut && <kbd className="tooltip-shortcut">{shown.shortcut}</kbd>}
         </div>
