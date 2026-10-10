@@ -288,6 +288,23 @@ pub struct Confined {
     pub carried: Vec<Carried>,
 }
 
+/// What one ambient authority is, in the words a person reads.
+///
+/// A sentence per authority rather than one with a name substituted in, because what each of them
+/// costs is different: a container daemon is root on this machine, a logged-in tool is an account
+/// elsewhere, the agent is a signature, the metadata service is a role. The word that named it
+/// comes from the table that recognised it, so no part of the command line reaches this sentence.
+pub fn authority_sentence(authority: bravebot_core::ambient::Authority, named: &str) -> String {
+    use bravebot_core::ambient::Authority;
+    match authority {
+        Authority::ContainerDaemon => t!(run_authority_container, named = named),
+        Authority::LoggedInTool => t!(run_authority_logged_in, named = named),
+        Authority::AgentSocket => t!(run_authority_agent, named = named),
+        Authority::MetadataService => t!(run_authority_metadata, named = named),
+    }
+    .to_string()
+}
+
 /// What one stage of a confined plan carries beyond the session's directories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Carried {

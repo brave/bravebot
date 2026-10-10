@@ -426,6 +426,9 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
             json!({
                 "program": stage.program,
                 "resolved": stage.resolved,
+                // The file the step runs after the path that starts it, which is what the
+                // terminal shows under the step.
+                "binary": stage.binary(),
                 "startedAs": stage.started_as,
                 "args": stage.args,
                 "display": stage.as_written(),
@@ -476,6 +479,18 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
             .iter()
             .map(|command| json!({ "program": command.program, "args": command.args, "display": command.display() }))
             .collect::<Vec<_>>(),
+        // What the stages are confined to, in the sentences the agent worded for it, or null where
+        // the turn does not confine them. Worded once in the agent so no front end carries its own
+        // copy of them; a front end that draws a run says so beside the line either way.
+        "confinement": request.confined.as_ref().map(|confined| json!({
+            "heading": confined.heading(),
+            "directories": confined
+                .directories
+                .iter()
+                .map(|directory| directory.display().to_string())
+                .collect::<Vec<_>>(),
+            "sentences": confined.sentences(),
+        })),
         "summary": request.summary(),
     })
 }
@@ -644,6 +659,8 @@ pub fn mcp_server_request(id: u64, question: &Question<'_>) -> Value {
         "digest": declaration.digest().short(),
         "requestedBy": question.file,
         "changed": question.changed,
+        // Every line the terminal draws above the answers, worded once in the agent.
+        "lines": question.lines(),
         "fetching": bravebot_agent::servers::fetching(question.alias, declaration)
             .iter()
             .map(|line| line.trim().to_string())
@@ -885,6 +902,6 @@ pub fn vet_request(id: u64, request: &VetRequest) -> Value {
             "bytes": picture.bytes })
     });
     json!({ "request": id, "origin": request.origin, "expects": request.expects,
-        "content": request.content, "lines": request.lines, "picture": picture,
+        "summary": request.summary(), "content": request.content, "lines": request.lines, "picture": picture,
         "vetting": vetting(request.verdict, request.reason.as_deref()) })
 }

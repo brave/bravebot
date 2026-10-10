@@ -1,0 +1,12 @@
+[package]
+name = "bravebot-approval"
+description = "How a proposed write is read as plain lines before it is approved, shared by the terminal and the editor bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bravebot-agent = { path = "../agent" }
+bravebot-i18n = { path = "../i18n" }

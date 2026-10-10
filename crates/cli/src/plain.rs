@@ -26,7 +26,6 @@ use bravebot_agent::confirm::{
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
     ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
-use bravebot_agent::diff::Change;
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{PermissionMode, Workspace};
 use bravebot_config::Config;
@@ -47,14 +46,6 @@ use std::process::ExitCode;
 /// Two characters, no colour and no glyph. A marker is the only thing a session in lines draws at
 /// all, and it is drawn for a reader that may be speaking it rather than looking at it.
 const MARKER: &str = "> ";
-
-/// How many lines of what a question is about are shown before the rest is counted instead.
-///
-/// A write is approved from the change it would make and a read from the bytes it would release,
-/// so the content is what the question is; and the whole of a generated file is not readable as
-/// one. A person scrolled past a thousand lines is answering whatever was in front of them at the
-/// end of it, which is not the question that was asked.
-const MOST_CONTENT_LINES: usize = 40;
 
 /// Lines of unchanged text kept either side of a change, so a hunk can be placed in its file.
 const CONTEXT: usize = 3;
@@ -1173,124 +1164,31 @@ fn shown(text: &str) -> String {
     crate::progress::printable(text)
 }
 
-/// What a check made of the same bytes, in one line, or nothing where it said nothing.
-///
-/// Advice beside the content and never in place of it: it decides nothing here, exactly as it
-/// decides nothing in the panel. The check's own sentence is not carried: it is free text written
-/// about content an attacker may own, and a line-oriented question has no margin to put it behind.
-fn checked(verdict: Verdict) -> String {
-    match verdict {
-        Verdict::Safe => t!(check_safe),
-        Verdict::Unsafe => t!(check_unsafe),
-        Verdict::Inconclusive(_) => t!(check_inconclusive),
-    }
-    .to_string()
-}
-
-/// Quarantined content as rows, each behind a margin, capped.
-///
-/// The margin is on every row, for the reason [`crate::progress`] puts it on every row: a caption
-/// above the block could be imitated by the block's own first line, and a margin cannot be. The cap
-/// is because a question has to be readable as one: a person scrolled past a thousand lines of
-/// output is answering whatever is in front of them at the end of it.
-fn quarantined(content: &str) -> Vec<String> {
-    let mut rows = Vec::new();
-    let mut counted = content.lines();
-    for line in counted.by_ref().take(MOST_CONTENT_LINES) {
-        rows.push(format!(
-            "{} {}",
-            crate::progress::QUARANTINE_BAR,
-            shown(line)
-        ));
-    }
-    let left_out = counted.count();
-    if left_out > 0 {
-        rows.push(t!(transcript_more_lines, count = left_out).to_string());
-    }
-    rows
+/// What a check made of the same bytes, in the one place its wording is decided.
+fn checked(verdict: Verdict) -> bravebot_approval::Check {
+    bravebot_approval::Check::from_word(verdict.word())
 }
 
 /// The lines a proposed write is read before approving: what it would do, then the change itself.
 fn change(request: &WriteRequest) -> Vec<String> {
     let mut lines = vec![shown(&request.summary())];
-    if request.untrusted {
-        lines.push(t!(write_untrusted).to_string());
-    }
-    // What the isolated processor that produced the body said about it, beside the diff rather than
-    // somewhere up the scrollback: a remark saying a typo was fixed is only a claim worth anything
-    // while the lines it describes are in front of the person reading it. It decides nothing, and
-    // it is free text a processor authored, so it goes behind the margin with the content.
-    if let Some(remark) = &request.remark {
-        lines.push(t!(write_remark).to_string());
-        lines.extend(quarantined(&remark.preview.join("\n")));
-    }
-    // What the scan inferred, beside the lines it read it from. These are the driver's own words
-    // about its own findings, each already a kind, a location and a masked preview, so no part of
-    // the value is repeated here and none of it needs the margin content sits behind.
-    if !request.credentials.is_empty() {
-        lines.push(t!(write_credentials).to_string());
-        lines.extend(request.credentials.iter().map(|found| shown(found)));
-    }
-
-    if request.written_since_checkout {
-        lines.push(t!(write_since_checkout).to_string());
-    }
-    lines.extend(request.line_endings_note());
-
-    let diff = &request.diff;
-    // A change too large to diff says so rather than showing a guess at it, which is what the
-    // panel does with the same diff. The summary above still counts the lines.
-    if !diff.is_exact() {
-        lines.push(t!(
-            write_too_large_to_show,
-            added = diff.added(),
-            removed = diff.removed()
-        ));
-        return lines;
-    }
-
-    let mut changed = 0usize;
-    let mut left_out = 0usize;
-    for held in diff.condensed(CONTEXT) {
-        if changed == MOST_CONTENT_LINES {
-            left_out += 1;
-            continue;
-        }
-        changed += 1;
-        lines.push(match held {
-            Change::Added(line) => format!("+ {}", shown(&line)),
-            Change::Removed(line) => format!("- {}", shown(&line)),
-            Change::Kept(line) => format!("  {}", shown(&line)),
-            Change::Elided(count) => t!(write_unchanged, count = count).to_string(),
-        });
-    }
-    if left_out > 0 {
-        lines.push(t!(transcript_more_lines, count = left_out).to_string());
-    }
+    let changes = request.diff.condensed(CONTEXT);
+    let line_endings = request.line_endings_note();
+    lines.extend(bravebot_approval::write_lines(&bravebot_approval::Write {
+        untrusted: request.untrusted,
+        remark: request
+            .remark
+            .as_ref()
+            .map(|remark| remark.preview.as_slice()),
+        credentials: &request.credentials,
+        written_since_checkout: request.written_since_checkout,
+        line_endings: line_endings.as_deref(),
+        exact: request.diff.is_exact(),
+        added: request.diff.added(),
+        removed: request.diff.removed(),
+        changes: &changes,
+    }));
     lines
-}
-
-/// What one ambient authority is, in the words a person reads.
-///
-/// A sentence per authority rather than one with a name substituted in, because what each of them
-/// costs is different: a container daemon is root on this machine, a logged-in tool is an account
-/// elsewhere, the agent is a signature, the metadata service is a role. The word that named it
-/// comes from the table that recognised it, so no part of the command line reaches this sentence.
-fn authority(spent: &bravebot_core::ambient::Spent) -> String {
-    let named = spent.named;
-    match spent.authority {
-        bravebot_core::ambient::Authority::ContainerDaemon => {
-            t!(run_authority_container, named = named)
-        }
-        bravebot_core::ambient::Authority::LoggedInTool => {
-            t!(run_authority_logged_in, named = named)
-        }
-        bravebot_core::ambient::Authority::AgentSocket => t!(run_authority_agent, named = named),
-        bravebot_core::ambient::Authority::MetadataService => {
-            t!(run_authority_metadata, named = named)
-        }
-    }
-    .to_string()
 }
 
 /// The lines a run is read before approving: every step as the line wrote it, the binary each name
@@ -1300,45 +1198,46 @@ fn authority(spent: &bravebot_core::ambient::Spent) -> String {
 /// [`bravebot_core::command::Step::as_written`], so no two argument lists render alike and a space
 /// inside an argument cannot read as the boundary between two.
 fn program(request: &RunRequest) -> Vec<String> {
-    let mut lines = vec![shown(&request.summary())];
-    for step in request.plan.steps() {
-        lines.push(shown(&step.as_written()));
-        // The binary under the name, because a name is not a program: `$PATH` decides what `grep`
-        // means, and this is what will run.
-        lines.push(format!("  {}", shown(&step.binary())));
-    }
-    if !request.plan.writes.is_empty() {
-        lines.push(t!(run_writes).to_string());
-        for path in &request.plan.writes {
-            lines.push(format!("  {}", shown(&path.to_string_lossy())));
-        }
-    }
-    // Said every time, because it is the thing a person is likeliest to assume otherwise: what the
-    // programs are confined to where the turn confines them, and that they are not where it does not.
-    match &request.confined {
-        Some(confined) => {
-            lines.push(confined.heading());
-            for directory in &confined.directories {
-                lines.push(format!("  {}", shown(&directory.to_string_lossy())));
-            }
-            lines.extend(confined.sentences());
-        }
-        None => lines.push(t!(run_not_sandboxed).to_string()),
-    }
-    // Which access in particular a yes hands over, where the line reaches one nothing here holds.
-    // The line above says what confinement there is and is said every time; this says what is
-    // being granted, and is said only where there is something to name.
-    let spends = request.ambient_authority();
-    if !spends.is_empty() {
-        lines.push(t!(run_spends_authority).to_string());
-        for spent in &spends {
-            lines.push(format!("  {}", authority(spent)));
-        }
-    }
-    if request.releases_private() {
-        lines.push(t!(run_releases_private).to_string());
-    }
-    lines
+    let steps: Vec<bravebot_approval::RunStep> = request
+        .plan
+        .steps()
+        .iter()
+        .map(|step| bravebot_approval::RunStep {
+            written: step.as_written(),
+            binary: step.binary(),
+        })
+        .collect();
+    let writes: Vec<String> = request
+        .plan
+        .writes
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    let confinement = request
+        .confined
+        .as_ref()
+        .map(|confined| bravebot_approval::Confinement {
+            heading: confined.heading(),
+            directories: confined
+                .directories
+                .iter()
+                .map(|directory| directory.to_string_lossy().into_owned())
+                .collect(),
+            sentences: confined.sentences(),
+        });
+    let ambient: Vec<String> = request
+        .ambient_authority()
+        .iter()
+        .map(|spent| bravebot_agent::confirm::authority_sentence(spent.authority, spent.named))
+        .collect();
+    bravebot_approval::run_lines(&bravebot_approval::Run {
+        summary: &request.summary(),
+        steps: &steps,
+        writes: &writes,
+        confinement: confinement.as_ref(),
+        ambient: &ambient,
+        releases_private: request.releases_private(),
+    })
 }
 
 impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
@@ -1365,147 +1264,92 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
     }
 
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
-        let mut lines = vec![
-            shown(&request.summary()),
-            t!(output_unseen).to_string(),
+        let lines = bravebot_approval::output_lines(
+            &request.summary(),
             checked(request.verdict),
-        ];
-        lines.extend(quarantined(&request.output));
+            &request.output,
+        );
         self.about(Held::Read);
         self.ask(&lines, t!(output_title))
     }
 
     fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
-        let mut lines = vec![
-            shown(&request.summary()),
-            // The planner's own words about what it expects, which is untrusted for the reason
-            // everything the planner wrote is.
-            t!(vet_expected, expects = shown(&request.expects)),
-            t!(vet_covers_this_only).to_string(),
-            t!(vet_unseen).to_string(),
-            checked(request.verdict),
-        ];
-        match &request.picture {
-            // A picture is not a thing this mode can print, so the person is given a copy to
-            // open. The path is the driver's own, which is why it goes out as any line of this
-            // program's does rather than inside the margin.
-            Some(picture) => {
-                lines.push(t!(vet_picture_open).to_string());
-                lines.push(shown(&picture.path.display().to_string()));
-                lines.push(t!(vet_picture_words).to_string());
-                if picture.is_a_pdf() {
-                    lines.push(t!(vet_pdf_hidden_text).to_string());
-                }
-                self.about(Held::Read);
-                self.ask(&lines, t!(vet_picture_title))
-            }
-            None => {
-                lines.extend(quarantined(&request.content));
-                self.about(Held::Read);
-                self.ask(&lines, t!(vet_title))
-            }
+        let picture = request
+            .picture
+            .as_ref()
+            .map(|picture| (picture.path.display().to_string(), picture.is_a_pdf()));
+        let lines = bravebot_approval::vet_lines(&bravebot_approval::Vet {
+            summary: &request.summary(),
+            expects: &request.expects,
+            check: checked(request.verdict),
+            content: &request.content,
+            picture: picture
+                .as_ref()
+                .map(|(path, pdf)| bravebot_approval::Picture { path, pdf: *pdf }),
+        });
+        self.about(Held::Read);
+        match picture {
+            Some(_) => self.ask(&lines, t!(vet_picture_title)),
+            None => self.ask(&lines, t!(vet_title)),
         }
     }
 
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
-        let mut lines = vec![
-            // The host on its own row, because that is what the answer is about: a URL is easy to
-            // misread, and `https://example.com@evil.test/` names one site and reaches another.
-            t!(fetch_host, host = shown(&request.host)),
-            shown(&request.url),
-        ];
-        // What the host is, where it is this machine's own metadata service. That service asks
-        // nothing of whoever opens the socket and answers with the credentials of the role, so
-        // the address alone does not say what the request reaches.
-        if request.ambient_authority().is_some() {
-            lines.push(t!(fetch_authority_metadata).to_string());
-        }
-        lines.push(t!(fetch_explained).to_string());
+        let lines = bravebot_approval::fetch_lines(
+            &request.host,
+            &request.url,
+            request.ambient_authority().is_some(),
+        );
         self.about(Held::Fetch);
         self.ask(&lines, t!(fetch_title))
     }
 
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
-        let lines = vec![
-            shown(&request.summary()),
-            shown(&request.program),
-            t!(server_workspace, workspace = shown(&request.workspace)),
-            match request.runs_build_tooling {
-                true => t!(server_build_tooling).to_string(),
-                false => t!(server_reads_only).to_string(),
-            },
-            t!(server_explained).to_string(),
-        ];
+        let lines = bravebot_approval::server_lines(&bravebot_approval::Server {
+            summary: &request.summary(),
+            program: &request.program,
+            workspace: &request.workspace,
+            runs_build_tooling: request.runs_build_tooling,
+        });
         self.about(Held::Server);
         self.ask(&lines, t!(server_title))
     }
 
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
-        let mut lines = vec![
-            shown(&request.path),
-            t!(vouch_explained).to_string(),
+        let lines = bravebot_approval::vouch_lines(
+            &request.path,
             checked(request.verdict),
-        ];
-        match request.preview.is_empty() {
-            true => lines.push(t!(vouch_nothing).to_string()),
-            false => lines.extend(quarantined(&request.preview)),
-        }
+            &request.preview,
+        );
         self.about(Held::Vouch);
         self.ask(&lines, t!(vouch_title))
     }
 
     /// The findings, and nothing of the file.
-    ///
-    /// Each line is already a kind, a place and a mask, so there is no content here to picture or
-    /// to put behind a margin. `shown` is still applied, for the reason the manifest's steps get
-    /// it: a control character reaching a terminal from any direction is a cursor somewhere else,
-    /// and the path in a finding is a path the planner may have spelled.
     fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
-        let mut lines = vec![shown(&request.path), t!(expose_explained).to_string()];
-        lines.push(t!(expose_found).to_string());
-        for finding in &request.credentials {
-            lines.push(format!("  {}", shown(finding)));
-        }
+        let lines = bravebot_approval::exposure_lines(&request.path, &request.credentials);
         self.about(Held::Read);
         self.ask(&lines, t!(expose_title))
     }
 
     /// The whole list, each description behind the margin and none of it cut.
-    ///
-    /// A yes puts exactly this text in front of the planner for every session the list stays the
-    /// same, so what is read here has to be all of it. The description is behind the margin because
-    /// it is the server's words, and the names and arguments are not because the client drew them
-    /// from a fixed alphabet.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
-        let mut lines = vec![match request.tools.is_empty() {
-            true => t!(mcp_tools_none, alias = shown(&request.alias)),
-            false => t!(
-                mcp_tools_offered,
-                alias = shown(&request.alias),
-                count = request.tools.len()
-            ),
-        }];
-        if request.changed {
-            lines.push(t!(mcp_tools_changed).to_string());
-        }
-        lines.push(checked(request.verdict));
-        for tool in &request.tools {
-            lines.push(format!("  {}", shown(&tool.name)));
-            if !tool.arguments.is_empty() {
-                lines.push(format!("    {}", shown(&tool.arguments.join(", "))));
-            }
-            if let Some(description) = &tool.description {
-                lines.extend(
-                    description
-                        .lines()
-                        .map(|line| format!("{} {}", crate::progress::QUARANTINE_BAR, shown(line))),
-                );
-            }
-        }
-        if request.refused > 0 {
-            lines.push(t!(mcp_tools_not_listed, count = request.refused));
-        }
-        lines.push(t!(mcp_tools_explained).to_string());
+        let tools: Vec<bravebot_approval::Tool<'_>> = request
+            .tools
+            .iter()
+            .map(|tool| bravebot_approval::Tool {
+                name: &tool.name,
+                arguments: &tool.arguments,
+                description: tool.description.as_deref(),
+            })
+            .collect();
+        let lines = bravebot_approval::tools_lines(&bravebot_approval::Tools {
+            alias: &request.alias,
+            tools: &tools,
+            refused: request.refused,
+            changed: request.changed,
+            check: checked(request.verdict),
+        });
         self.about(Held::Tools);
         self.ask(&lines, t!(mcp_tools_title))
     }
@@ -1513,19 +1357,11 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
     /// Approves this call once and nothing else, for the reason a run is approved once here: a
     /// line has room for one answer, and the one that stops asking outlives the session.
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
-        let mut lines = vec![format!("{} {}", shown(&request.name()), t!(mcp_call_kind))];
-        match request.arguments.is_empty() {
-            true => lines.push(format!("  {}", t!(mcp_call_no_arguments))),
-            false => lines.extend(
-                request
-                    .arguments
-                    .iter()
-                    .map(|(name, value)| format!("  {}: {}", shown(name), shown(value))),
-            ),
-        }
-        if let Some(description) = &request.description {
-            lines.extend(quarantined(description));
-        }
+        let lines = bravebot_approval::call_lines(&bravebot_approval::Call {
+            name: &request.name(),
+            arguments: &request.arguments,
+            description: request.description.as_deref(),
+        });
         self.about(Held::Tools);
         match self.ask(&lines, t!(mcp_call_question)) {
             Decision::Approve => CallDecision::approve(),
@@ -1550,43 +1386,21 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         self.ask(&lines, t!(path_title))
     }
 
-    /// The url a yes declares, pictured like every other word a server wrote, under the one the
-    /// declaration names now and above the host and port it reaches.
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
-        let mut lines = vec![
-            t!(
-                mcp_move_declared,
-                alias = shown(&request.alias),
-                url = shown(&request.declared)
-            ),
-            t!(mcp_move_destination, url = shown(&request.destination)),
-            t!(mcp_move_reaching, authority = shown(&request.authority)),
-            t!(mcp_move_explained).to_string(),
-        ];
-        if !request.may_record {
-            lines.push(t!(mcp_move_this_session_only).to_string());
-        }
+        let lines = bravebot_approval::move_lines(&bravebot_approval::Move {
+            alias: &request.alias,
+            declared: &request.declared,
+            destination: &request.destination,
+            authority: &request.authority,
+            may_record: request.may_record,
+        });
         self.about(Held::Move);
         self.ask(&lines, t!(mcp_move_title))
     }
 
     /// The plan, before anything has run.
-    ///
-    /// The steps are the driver's own rendering rather than somebody else's bytes, and the task is
-    /// the person's own words, so neither is behind a margin. They are still pictured: a control
-    /// character reaching a terminal from any direction is a cursor somewhere else.
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
-        let mut lines = vec![shown(&request.task)];
-        for step in &request.steps {
-            lines.push(format!("  {}", shown(step)));
-        }
-        for sentence in [
-            t!(plan_explained),
-            t!(plan_not_its_writes),
-            t!(plan_nothing_yet),
-        ] {
-            lines.push(sentence.to_string());
-        }
+        let lines = bravebot_approval::manifest_lines(&request.task, &request.steps);
         self.about(Held::Manifest);
         self.ask(&lines, t!(plan_title))
     }
@@ -1659,6 +1473,17 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_verdict_word_reads_back_as_the_check_it_names() {
+        use bravebot_approval::Check;
+        assert_eq!(checked(Verdict::Safe), Check::Safe);
+        assert_eq!(checked(Verdict::Unsafe), Check::Unsafe);
+        assert_eq!(
+            checked(Verdict::Inconclusive("timed out")),
+            Check::Inconclusive
+        );
+    }
 
     /// A confirmer that needs no backend: it answers with what the test wrote for it.
     struct Canned {

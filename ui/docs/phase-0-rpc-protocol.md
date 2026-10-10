@@ -885,7 +885,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `tokens` | `{ written }` | `Reporter::output_tokens`, **only when the figure changes** |
 | `audit` | `{ at, turn, event }` | the `Sink`, via `audit::as_json` |
 | `confirm.request` | see §8.1 | `Confirmer::confirm_write` |
-| `run.request` | `{ request, stages, directory, line, plan, writes, releasesPrivate, vouches, summary }` | command approval |
+| `run.request` | `{ request, stages, directory, line, plan, writes, releasesPrivate, confinement, vouches, summary }` | command approval |
 | `output.request` | `{ request, command, reference, lines, output, summary }` | admit command output |
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
@@ -1288,7 +1288,10 @@ Still open:
 
 ## 0.9 desktop extensions
 
-- `vet.request` carries `request`, `origin`, `expects`, full `content`, `lines`, `picture` and
+- `run.request` stages carry `binary`, the file the step runs, and the request carries
+  `confinement`: `null` where the turn does not confine the stages, else `{ heading, directories,
+  sentences }` as the agent worded them.
+- `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `picture` and
   `vetting: { verdict, reason, detail }`. `picture` is `null` for text. For a picture or a PDF it
   is `{ path, media, bytes }`, a copy of the file for the person to open, deleted once the request
   is answered, and `content` is empty. `vet.reply` carries the session, request and
@@ -1400,7 +1403,8 @@ Still open:
   server and `url` the address of a remote one; `program` is where a local server's program
   resolved, sent only where that is not its first word. `variables` holds `{ name, stored }`,
   and a stored value is never sent. `fetching` is the agent's lines about a runner that fetches
-  what it runs. `digest` is what an approval binds to.
+  what it runs. `digest` is what an approval binds to. `lines` is the question as the agent
+  words it, one string per line, for a front end that draws the question as text.
 - `mcp-tools.request` carries each tool as the client drew it: `name` (`alias:tool`),
   `arguments` (one line each) and `description`, which is the server's own text. `refused`
   counts the tools that could not be offered. `vetting` is shaped as on `vet.request`.
