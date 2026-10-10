@@ -150,6 +150,9 @@ server a checkout asks for: whether to start it, whether to offer its list of to
 make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)). Whether a remote server moved
 where its reply pointed is not answered: a yes would rewrite the person's declaration to a url the
 server wrote, so the hop is refused unasked ([SERVERS-11](mcp-servers.md#SERVERS-11)).
+Whether programs may reach a host the allowed-hosts list does not cover is not answered either: the
+host is a name a program chose and a yes would open the network to it for every later command, so
+`onUnlisted: ask` behaves as `refuse` here ([SANDBOX-24](sandboxing.md#SANDBOX-24)).
 
 **A write that would create a credential is answered too.** A value the credential scan inferred is
 a question for the person under MODE-2, and here the flag is the person's answer to it, as it is to
@@ -228,6 +231,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
+`verified-by: bravebot_agent::permission_mode::a_host_question_is_asked_in_every_mode_but_bypass_which_refuses`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_an_edit_that_leaves_a_file_holding_a_credential`

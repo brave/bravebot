@@ -501,6 +501,20 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Refused where every check is being bypassed, and asked in every other.
+    ///
+    /// A yes widens the network every later command reaches, and the hosts were chosen by a program
+    /// rather than named by the person, so the mode that answers nothing does not answer this one
+    /// yes: `onUnlisted: ask` behaves as `refuse` there (SANDBOX-24).
+    fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
+        match self.mode.get() {
+            PermissionMode::Bypass => Decision::Reject,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_host(request)
+            }
+        }
+    }
+
     /// Refused where every check is being bypassed, the one prompt that mode answers no, and asked
     /// in every other. SERVERS-13.
     ///
@@ -617,6 +631,10 @@ mod tests {
             Decision::Reject
         }
 
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
+            Decision::Reject
+        }
+
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
             Unattended.confirm_move(request)
         }
@@ -628,6 +646,87 @@ mod tests {
         }
         fn interjection(&mut self) -> Option<String> {
             Unattended.interjection()
+        }
+    }
+
+    /// Says yes to a host question and counts the times it was asked; refuses everything else.
+    struct YesToHosts(usize);
+
+    impl Confirmer for YesToHosts {
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
+            self.0 += 1;
+            Decision::Approve
+        }
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+            Unattended.confirm_path(request)
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    /// SANDBOX-24: a host question is put to the person in every mode but bypass, which refuses it
+    /// without asking. The regression it rejects: a bypassed session answering yes to hosts a
+    /// program chose, which opens the network for every later command, or one that asks.
+    #[test]
+    fn a_host_question_is_asked_in_every_mode_but_bypass_which_refuses() {
+        let request = crate::confirm::HostRequest {
+            hosts: vec!["a.example".to_string()],
+        };
+        for (mode, asked, answer) in [
+            (PermissionMode::Ask, 1, Decision::Approve),
+            (PermissionMode::AcceptEdits, 1, Decision::Approve),
+            (PermissionMode::Plan, 1, Decision::Approve),
+            (PermissionMode::Bypass, 0, Decision::Reject),
+        ] {
+            let mut yes = YesToHosts(0);
+            let decided = Confining::new(&mut yes, mode, false).confirm_host(&request);
+            assert_eq!((yes.0, decided), (asked, answer), "{mode:?}");
         }
     }
 
@@ -876,6 +975,10 @@ mod tests {
         }
         /// Refuses. This double answers no question about reach.
         fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
             Decision::Reject
         }
 
@@ -1270,6 +1373,10 @@ mod tests {
         }
         /// Refuses. This double answers no question about reach.
         fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
             Decision::Reject
         }
 

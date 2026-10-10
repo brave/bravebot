@@ -8,9 +8,10 @@
 //! event all resolve to refusal.
 
 use bravebot_agent::confirm::{
-    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
-    ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, Intent,
+    ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision,
+    RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
+    WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::reach::Lasting;
@@ -97,6 +98,10 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
 
     fn confirm_path(&mut self, request: &PathRequest) -> Decision {
         ask_path(self.terminal, request).decision()
+    }
+
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+        ask_host(self.terminal, request).decision()
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -2966,6 +2971,72 @@ fn draw_path(
     pinned::draw(frame, inside, question, scroll, seen)
 }
 
+/// Ask whether programs may reach hosts the allowed-hosts list does not cover, for the session,
+/// blocking until answered.
+pub fn ask_host<B: Backend>(terminal: &mut Terminal<B>, request: &HostRequest) -> Answer {
+    let mut scroll = 0u16;
+    let mut seen = Seen::default();
+    loop {
+        let mut drawn = Drawn::default();
+        if terminal
+            .draw(|frame| drawn = draw_host(frame, request, scroll, &mut seen))
+            .is_err()
+        {
+            return Answer::Reject;
+        }
+
+        match input::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(TermEvent::Key(key)) => match answer_for(key, &drawn) {
+                Some(Response::Answer(answer)) => return answer,
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
+                None => continue,
+            },
+            Ok(_) => continue,
+            Err(_) => return Answer::Reject,
+        }
+    }
+}
+
+/// Draw the question of whether programs may reach the hosts they asked for.
+///
+/// The hosts are what a yes grants, so each is drawn on a row of its own, bold, before the keys
+/// can take an answer. They are names a program chose, validated as host names before they get
+/// here, and appear nowhere the planner reads.
+fn draw_host(
+    frame: &mut ratatui::Frame,
+    request: &HostRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::note(), t!(host_title));
+    let width = inside.width as usize;
+    let muted = Style::default().fg(theme::muted());
+
+    let mut body = indented(
+        t!(host_asked, count = request.hosts.len()),
+        Style::default().add_modifier(Modifier::BOLD),
+        width,
+    );
+    for host in &request.hosts {
+        body.extend(indented(
+            t!(host_row, host = host.as_str()),
+            Style::default().add_modifier(Modifier::BOLD),
+            width,
+        ));
+    }
+    let deciding = body.len();
+    body.push(Line::raw(""));
+    body.extend(indented(t!(host_explained), muted, width));
+
+    let keys = |answerable| vec![answer_keys(t!(host_yes), t!(host_no), answerable)];
+    let question = Question::scrolled(body, deciding, 0, &keys);
+    pinned::draw(frame, inside, question, scroll, seen)
+}
+
 /// Ask whether to remove a checkout something was done in, blocking until answered (CHECKOUT-15).
 ///
 /// Asked with no turn running, so ctrl-c keeps the checkout like a no, and nothing is stopped.
@@ -4269,6 +4340,56 @@ mod tests {
             "{}",
             rows.join("\n")
         );
+    }
+
+    fn host_screen(hosts: &[&str], size: (u16, u16), scroll: u16) -> (Vec<String>, Drawn) {
+        let request = HostRequest {
+            hosts: hosts.iter().map(|host| host.to_string()).collect(),
+        };
+        pinned_screen(size, |frame| {
+            draw_host(frame, &request, scroll, &mut Seen::default())
+        })
+    }
+
+    /// SANDBOX-24: the person is shown how many hosts were asked for, each on a row of its own, how
+    /// long a yes lasts and that nothing is written, and the keys. One host is worded as one.
+    #[test]
+    fn a_host_prompt_shows_each_host_and_what_a_yes_does() {
+        let shown = host_screen(&["a.example", "b.example"], (160, 24), 0).0;
+        let rows = box_rows(&shown);
+        for row in ["a.example", "b.example"] {
+            assert!(
+                rows.iter().filter(|line| line.contains(row)).count() == 1,
+                "{row} is not on a row of its own in {rows:#?}"
+            );
+        }
+        let screen = rows.concat();
+        for text in [
+            "programs this session started asked for 2 hosts",
+            "Every command the planner runs from now until this session ends",
+            "Nothing is written to disk",
+            "y Yes, for this session",
+        ] {
+            assert!(screen.contains(text), "{text} is not drawn in {screen}");
+        }
+        let one = host_screen(&["a.example"], (160, 24), 0).0.concat();
+        assert!(
+            one.contains("a program this session started asked for a host"),
+            "{one}"
+        );
+    }
+
+    /// SANDBOX-24: the hosts are what a yes grants, so a yes is not taken until every row of them
+    /// has been drawn.
+    #[test]
+    fn a_host_list_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn() {
+        let names: Vec<String> = numbered('h', 8)
+            .into_iter()
+            .map(|label| format!("{label}.example.org"))
+            .collect();
+        let hosts: Vec<&str> = names.iter().map(String::as_str).collect();
+        let (rows, drawn) = host_screen(&hosts, (80, 12), 0);
+        assert!(!drawn.answerable(), "{}", rows.join("\n"));
     }
 
     /// SERVERS-11: the person is shown where the server is declared, where its reply points, and
@@ -8457,7 +8578,7 @@ mod tests {
 
     kinds!(
         Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList, McpCall,
-        Move, Path, Ask,
+        Move, Path, Host, Ask,
     );
 
     /// What a question remembers between its draws: the rows of each kind that have been shown.
@@ -8824,6 +8945,25 @@ mod tests {
                     refusing: 'n',
                     grants: Vec::new(),
                     deciding: words,
+                })
+            }
+            Kind::Host => {
+                let hosts: Vec<String> = numbered('h', 24)
+                    .into_iter()
+                    .map(|label| format!("{label}.example.org"))
+                    .collect();
+                let request = HostRequest {
+                    hosts: hosts.clone(),
+                };
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_host(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding: hosts,
                 })
             }
             // Every answer goes to the planner as an answer, and none of them approves anything.

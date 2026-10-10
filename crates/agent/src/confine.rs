@@ -19,7 +19,7 @@ use bravebot_core::command::Step;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base, credential_locations, run_base, with_security_cache};
-use bravebot_sandbox::hosts::{Refusal, Verdict};
+use bravebot_sandbox::hosts::{HostRule, Refusal, Verdict};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::proxy::Proxy;
@@ -31,6 +31,20 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+
+/// What the proxies decided for one foreground run (SANDBOX-24).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostsSeen {
+    /// What the trail records: the decisions by host, entry and stage.
+    pub detail: String,
+    /// The hosts refused only because no entry covered them, each a valid host name a program
+    /// chose, in the order first asked for. Not for the planner.
+    pub unlisted: Vec<String>,
+}
+
+/// The most hosts one line puts to the person, so a program that tries many names cannot fill a
+/// prompt. The rest stay refused and are asked about when a later line meets them.
+pub const MOST_HOSTS_ASKED: usize = 8;
 
 /// What a `run` program may reach in this session, before any step is read.
 #[derive(Debug, Clone)]
@@ -59,6 +73,9 @@ pub struct Confinement {
     /// The paths the person let programs reach for this session (SANDBOX-28). Applied before
     /// `filesystem`, so a denial of the person's still removes them.
     path_reach: Rules,
+    /// The hosts the person let programs reach for this session beyond `allowedHosts`
+    /// (SANDBOX-24), added to the allowed set of every stage that is held to a proxy.
+    host_grants: Vec<String>,
     /// What the planner asked this one line to add to every stage that has no assignment in front
     /// of it, from the fixed menu. Empty for every line that asked for nothing.
     requested: Vec<Requested>,
@@ -113,6 +130,7 @@ impl Confinement {
             grants: Vec::new(),
             filesystem: Rules::none(),
             path_reach: Rules::none(),
+            host_grants: Vec::new(),
             requested: Vec::new(),
             #[cfg(test)]
             unconfinable: None,
@@ -132,6 +150,22 @@ impl Confinement {
     pub fn with_hosts(mut self, hosts: Option<&Hosts>) -> Self {
         self.hosts = hosts.filter(|hosts| hosts.allowed.is_some()).cloned();
         self
+    }
+
+    /// This confinement with the hosts the person let programs reach for the session, added to the
+    /// allowed set of the stages a list holds. A host the denied list names stays refused.
+    #[must_use]
+    pub fn with_host_grants(mut self, granted: &[String]) -> Self {
+        self.host_grants = granted.to_vec();
+        self
+    }
+
+    /// Whether an unlisted host is to be put to the person rather than refused outright, which is
+    /// `onUnlisted: ask` under a list that is set.
+    pub fn asks_about_unlisted_hosts(&self) -> bool {
+        self.hosts.as_ref().is_some_and(|hosts| {
+            hosts.on_unlisted == Some(bravebot_config::sandbox_network::OnUnlisted::Ask)
+        })
     }
 
     /// The proxy the stage `step` is held to, or none where it is not filtered.
@@ -170,12 +204,10 @@ impl Confinement {
             || self
                 .granted(step)
                 .any(|grant| matches!(grant.reached, Reached::Scope(Scope::Remote)));
-        let list = crate::host_proxy::list_for(
-            &spelled(hosts.allowed.as_deref().unwrap_or_default()),
-            &spelled(&hosts.denied),
-            remote,
-            &toolchains,
-        )?;
+        let mut allowed = spelled(hosts.allowed.as_deref().unwrap_or_default());
+        allowed.extend(self.host_grants.iter().cloned());
+        let list =
+            crate::host_proxy::list_for(&allowed, &spelled(&hosts.denied), remote, &toolchains)?;
         crate::host_proxy::proxy_for(&list)
             .map(Some)
             .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))
@@ -300,15 +332,16 @@ impl Confinement {
     }
 
     /// What the trail records of the hosts the programs of one foreground run asked for: what the
-    /// host list decided and by which entry, from the proxies that serve its stages. `None` where
-    /// the session has no list or nothing was asked for.
+    /// host list decided and by which entry, from the proxies that serve its stages, and the hosts
+    /// it refused for want of an entry. `None` where the session has no list or nothing was asked
+    /// for.
     ///
     /// Takes the decisions, so each is recorded once. A proxy is shared by every stage with the
     /// same list, so a decision is named by the stages that proxy serves in this line, and one a
     /// job left running took is recorded with the next line that shares its proxy. A host a
     /// program asked for is carried as [`bravebot_sandbox::hosts::recordable`] allows and by no
     /// other bytes; the entries are the person's own and the defaults.
-    pub fn hosts_for_the_trail(&self, steps: &[&Step]) -> Option<String> {
+    pub fn hosts_seen(&self, steps: &[&Step]) -> Option<HostsSeen> {
         let mut served: Vec<(Arc<Proxy>, Vec<usize>)> = Vec::new();
         for (at, step) in steps.iter().enumerate() {
             let Ok(Some(proxy)) = self.host_proxy(step) else {
@@ -322,12 +355,22 @@ impl Confinement {
                 None => served.push((proxy, vec![at + 1])),
             }
         }
+        let mut unlisted: Vec<String> = Vec::new();
         let said: Vec<String> = served
             .iter()
             .filter_map(|(proxy, stages)| {
                 let taken = proxy.take_decisions();
                 if taken.decisions.is_empty() && taken.dropped == 0 {
                     return None;
+                }
+                for decision in &taken.decisions {
+                    let Some(host) = &decision.host else { continue };
+                    if decision.verdict == Verdict::Refused(Refusal::NotListed)
+                        && HostRule::parse(host).is_some()
+                        && !unlisted.contains(host)
+                    {
+                        unlisted.push(host.clone());
+                    }
                 }
                 let mut counted: Vec<(String, usize)> = Vec::new();
                 for decision in &taken.decisions {
@@ -371,7 +414,10 @@ impl Confinement {
                 ))
             })
             .collect();
-        (!said.is_empty()).then(|| said.join("; "))
+        (!said.is_empty()).then(|| HostsSeen {
+            detail: said.join("; "),
+            unlisted,
+        })
     }
 
     /// This confinement held to `mode`.
@@ -3840,21 +3886,22 @@ mod tests {
         let cat = step("/bin/cat", &["a"]);
         let proxy = listed.host_proxy(&fetch).unwrap().expect("a proxy");
 
-        assert_eq!(listed.hosts_for_the_trail(&[&cat, &fetch]), None);
+        assert_eq!(listed.hosts_seen(&[&cat, &fetch]), None);
         ask_the_proxy(&proxy, "other.example:443");
         ask_the_proxy(&proxy, "other.example:443");
         ask_the_proxy(&proxy, "trail-listed.example:8080");
 
         let said = listed
-            .hosts_for_the_trail(&[&cat, &fetch])
-            .expect("the refusals are recorded");
+            .hosts_seen(&[&cat, &fetch])
+            .expect("the refusals are recorded")
+            .detail;
         assert_eq!(
             said,
             "the host list decided for the proxy of stage 2: \
              other.example refused, not listed x2; \
              trail-listed.example refused, port not carried"
         );
-        assert_eq!(listed.hosts_for_the_trail(&[&cat, &fetch]), None);
+        assert_eq!(listed.hosts_seen(&[&cat, &fetch]), None);
     }
 
     /// A name a program asked for that is not a host name is recorded as no name, with the bytes
@@ -3869,7 +3916,7 @@ mod tests {
         let proxy = listed.host_proxy(&fetch).unwrap().expect("a proxy");
 
         ask_the_proxy(&proxy, "evil\u{1b}[2J.example:443");
-        let said = listed.hosts_for_the_trail(&[&fetch]).unwrap();
+        let said = listed.hosts_seen(&[&fetch]).unwrap().detail;
         assert_eq!(
             said,
             "the host list decided for the proxy of stage 1: \
@@ -3895,7 +3942,10 @@ mod tests {
         let proxy = listed.host_proxy(&fetch).unwrap().expect("a proxy");
         ask_the_proxy(&proxy, "a.trail-denied.example:443");
         assert_eq!(
-            listed.hosts_for_the_trail(&[&fetch]).as_deref(),
+            listed
+                .hosts_seen(&[&fetch])
+                .map(|seen| seen.detail)
+                .as_deref(),
             Some(
                 "the host list decided for the proxy of stage 1: \
                  a.trail-denied.example refused, denied by *.trail-denied.example"
@@ -3903,7 +3953,98 @@ mod tests {
         );
 
         let unlisted = confinement(&["/work/project"]).with_network(Network::Closed);
-        assert_eq!(unlisted.hosts_for_the_trail(&[&fetch]), None);
+        assert_eq!(unlisted.hosts_seen(&[&fetch]), None);
+    }
+
+    /// The hosts to put to the person are the ones the list refused for want of an entry, once
+    /// each, in the order they were asked for. The regressions it rejects: a host the person
+    /// denied, one refused for its port, or a name that is not a host name being offered as a
+    /// question, and a host repeated.
+    #[test]
+    fn only_a_host_refused_for_want_of_an_entry_is_put_to_the_person() {
+        let hosts = Hosts {
+            denied: vec![bravebot_config::sandbox_network::HostEntry {
+                entry: "banned.ask.example".to_string(),
+                by: None,
+            }],
+            ..hosts_listing(Some(&["fine.ask.example"]))
+        };
+        let listed = confinement(&["/work/project"])
+            .with_network(Network::Closed)
+            .with_hosts(Some(&hosts));
+        let fetch = step("/usr/bin/curl", &["https://fine.ask.example"]);
+        let proxy = listed.host_proxy(&fetch).unwrap().expect("a proxy");
+
+        ask_the_proxy(&proxy, "zed.ask.example:443");
+        ask_the_proxy(&proxy, "banned.ask.example:443");
+        ask_the_proxy(&proxy, "fine.ask.example:8080");
+        ask_the_proxy(&proxy, "evil\u{1b}[2J.example:443");
+        ask_the_proxy(&proxy, "[2001:db8::1]:443");
+        ask_the_proxy(&proxy, "abe.ask.example:443");
+        ask_the_proxy(&proxy, "zed.ask.example:443");
+
+        let seen = listed.hosts_seen(&[&fetch]).expect("refusals were seen");
+        assert_eq!(seen.unlisted, ["zed.ask.example", "abe.ask.example"]);
+        assert!(listed.hosts_seen(&[&fetch]).is_none());
+    }
+
+    /// Only `onUnlisted: ask` puts a host to the person, and only under a list that is set. The
+    /// regression it rejects: a prompt under `refuse`, under no setting, or with no list.
+    #[test]
+    fn only_on_unlisted_ask_under_a_list_asks_about_hosts() {
+        use bravebot_config::sandbox_network::OnUnlisted;
+        let with = |on_unlisted, allowed| {
+            confinement(&["/work/project"]).with_hosts(Some(&Hosts {
+                on_unlisted,
+                ..hosts_listing(allowed)
+            }))
+        };
+        assert!(with(Some(OnUnlisted::Ask), Some(&["a.example"])).asks_about_unlisted_hosts());
+        assert!(!with(Some(OnUnlisted::Refuse), Some(&["a.example"])).asks_about_unlisted_hosts());
+        assert!(!with(None, Some(&["a.example"])).asks_about_unlisted_hosts());
+        assert!(!with(Some(OnUnlisted::Ask), None).asks_about_unlisted_hosts());
+        assert!(!confinement(&["/work/project"]).asks_about_unlisted_hosts());
+    }
+
+    /// A granted host is added to the allowed set, so the next line's proxy is another one that
+    /// carries it, and a host the denied list names stays refused. The regression it rejects: a
+    /// grant that is held and never reaches the list, and one that outranks a denial.
+    #[test]
+    fn a_granted_host_changes_the_list_the_next_line_is_held_to() {
+        let hosts = Hosts {
+            denied: vec![bravebot_config::sandbox_network::HostEntry {
+                entry: "banned.grant.example".to_string(),
+                by: None,
+            }],
+            ..hosts_listing(Some(&["fine.grant.example"]))
+        };
+        let fetch = step("/usr/bin/curl", &["https://fine.grant.example"]);
+        let before = confinement(&["/work/project"]).with_hosts(Some(&hosts));
+        let after = before.clone().with_host_grants(&[
+            "granted.grant.example".to_string(),
+            "banned.grant.example".to_string(),
+        ]);
+        let first = before.host_proxy(&fetch).unwrap().expect("a proxy");
+        let second = after.host_proxy(&fetch).unwrap().expect("a proxy");
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(Arc::ptr_eq(
+            &second,
+            &after.host_proxy(&fetch).unwrap().unwrap()
+        ));
+
+        ask_the_proxy(&first, "granted.grant.example:80");
+        ask_the_proxy(&second, "banned.grant.example:80");
+        let refused = |confinement: &Confinement| confinement.hosts_seen(&[&fetch]).unwrap();
+        assert_eq!(refused(&before).unlisted, ["granted.grant.example"]);
+        let after_seen = refused(&after);
+        assert!(after_seen.unlisted.is_empty());
+        assert!(
+            after_seen
+                .detail
+                .contains("banned.grant.example refused, denied by"),
+            "{}",
+            after_seen.detail
+        );
     }
 
     /// A policy limited to the proxy's port is refused where the platform cannot hold a program to
