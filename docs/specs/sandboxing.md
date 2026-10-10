@@ -2166,8 +2166,6 @@ reported as what it is.
   listener run on Unix only, so whether a container reaches a loopback listener, and with it the
   denial of egress on Windows, is shown by the capability the token is built with and not by a
   connection.
-- Two tests that would show defects on Windows are marked `#[ignore]` so the job stays green:
-  `git_starts_under_the_empty_base` in the sandbox crate, which fails for the reason above, and
-  `a_denied_entry_under_the_session_stops_the_stage` in the agent crate, which fails until a
-  `denyRead` or `denyWrite` entry under a session directory stops the stage (#1898). Removing the
-  `#[ignore]` is part of fixing each.
+- One test that would show a defect on Windows is marked `#[ignore]` so the job stays green:
+  `git_starts_under_the_empty_base` in the sandbox crate, which fails for the reason above.
+  Removing the `#[ignore]` is part of fixing it.

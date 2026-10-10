@@ -893,7 +893,6 @@ fn a_stage_with_no_egress_is_given_no_proxy() {
 /// reads and writes the file the person denied. SANDBOX-25 says such a stage is not started.
 #[cfg(windows)]
 #[test]
-#[ignore = "exposes #1898: a deny entry is resolved with the verbatim prefix and the grants are not, so no entry is judged to be under a grant"]
 fn a_denied_entry_under_the_session_stops_the_stage() {
     if !can_confine() {
         return;
