@@ -279,7 +279,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
 | touches only what the session keeps | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
-| everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
+| everything else | every other command, `/sandbox` in every form, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
 it stays where it was. The exception is a line of the same command already waiting, which it waits

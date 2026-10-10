@@ -370,7 +370,7 @@ whatever next gives a session such a process has to revisit.
 `verified-by: bravebot_tui::status::the_servers_a_session_started_are_named_and_what_is_confined_follows_them`
 `verified-by: bravebot_tui::logo::the_mark_names_the_agent_its_confinement_and_its_tier`
 `verified-by: bravebot_tui::logo::a_narrow_pane_still_reports_the_confinement_and_the_tier`
-`verified-by: bravebot_cli::main::the_confinement_line_names_the_mode_unless_it_is_standard`
+`verified-by: bravebot_tui::status::the_confinement_line_names_the_mode_unless_it_is_standard`
 
 <a id="SANDBOX-11"></a>
 ### SANDBOX-11: a write row says what is at the path it names, and one that is not there is created
@@ -1230,7 +1230,24 @@ The desktop and the bridge have no flag, and read the mode from the settings and
 read there as `standard`, because a window has no line that shows its programs are unconfined. A
 subagent's programs run under the mode of the session that started it, and the mode is not in the
 session record, so a resumed session takes the mode its start-up chose and not the one it was
-saved under. The mode is chosen separately from the permission mode ([MODE-1](permission-modes.md#MODE-1))
+saved under. `/sandbox` alone says the mode in force and the flag or file that chose it, in the words `doctor`
+uses. `/sandbox strict`, `/sandbox standard` and `/sandbox off` set the mode for the rest of the
+process, and only a person's typed word does ([CMD-1](commands.md#CMD-1)): no tool, skill, hook or
+`AGENTS.md` line sets it, and the planner is told the mode in force and nothing about the command.
+The word waits while a turn runs ([CMD-8](commands.md#CMD-8)), so a turn's `run` description, its
+failure sentence, its `scopes` and `request_path` refusals and the profile its programs start under
+all come from one mode, and the change applies from the next turn; a delegate spawned after it runs
+under the new mode. A move to `off` asks first, saying that programs then start with no profile, and
+a no keeps the mode. The managed floor holds: a mode looser than the managed file's `sandbox.mode`
+pin, and `off` under a managed `run.network` of `closed`, is refused with a sentence naming the
+file, before anything is asked. Otherwise the command ranks as `--sandbox` does, so
+`/sandbox standard` replaces a checkout's `strict`. The mode is not in the session record, so a
+resumed session takes the mode its start-up chose, and the command's choice lasts until the process
+ends, across `/clear` and `/resume`. The opening screen, `/status` and the trace's `sandbox` gate
+name the mode in force after the command. The desktop has no such command: it offers none until it
+has a line that shows the mode.
+
+The mode is chosen separately from the permission mode ([MODE-1](permission-modes.md#MODE-1))
 and from `--dangerously-skip-permissions`: neither widens it. One line may start with no profile
 where a person approves it ([SANDBOX-29](#SANDBOX-29)), which is the mode `off` for that line only.
 
@@ -1283,6 +1300,16 @@ the command line prints it on its opening line.
 `verified-by: bravebot_agent::turn::a_delegate_of_a_strict_turn_cannot_read_what_a_standard_one_reads`
 `verified-by: bravebot_core::policy::the_trail_says_which_sandbox_mode_the_programs_ran_in`
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_reads_off_as_standard`
+`verified-by: bravebot_config::settings::a_session_moving_its_mode_meets_the_floor_start_up_applies`
+`verified-by: bravebot_tui::sandbox_command::a_named_mode_is_the_mode_the_next_turn_is_built_with`
+`verified-by: bravebot_tui::sandbox_command::a_move_to_off_asks_and_anything_but_a_yes_keeps_the_mode`
+`verified-by: bravebot_tui::sandbox_command::the_row_the_cursor_starts_on_keeps_the_mode`
+`verified-by: bravebot_tui::sandbox_command::the_managed_floor_refuses_a_looser_mode_naming_the_file_and_asks_nothing`
+`verified-by: bravebot_tui::sandbox_command::a_word_that_is_not_a_mode_changes_nothing_and_the_bare_word_only_reports`
+`verified-by: bravebot_tui::sandbox_command::the_report_names_what_chose_the_mode`
+`verified-by: bravebot_tui::app::the_sandbox_command_carries_its_word_unparsed`
+`verified-by: bravebot_tui::app::the_sandbox_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::ask::a_question_the_driver_puts_is_not_titled_as_the_agents`
 
 <a id="SANDBOX-23"></a>
 ### SANDBOX-23: reach a person remembered for a command is attached to that command's stage, and nothing else makes it

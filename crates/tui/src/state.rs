@@ -1481,7 +1481,15 @@ pub struct Session {
     ///
     /// Not a boundary this session is inside: it confines a process running code we did not write,
     /// and the session starts none of those. The words the screen draws say so.
+    ///
+    /// The platform's level alone: the sandbox mode is [`Session::sandbox_mode`], and the two are put
+    /// together where they are drawn, so `/sandbox` changes what the screen says.
     pub confinement: String,
+    /// The sandbox mode programs `run` starts are held to, and who chose it (SANDBOX-22).
+    ///
+    /// Held here and not read from `bravebot_config::sandbox::in_force`, which is what start-up
+    /// settled and cannot change: `/sandbox` moves this, and every turn is built from it.
+    sandbox: crate::sandbox_command::Sandboxed,
     /// The MCP servers this session started, which is what makes the confinement above one it is
     /// using rather than one it has on offer.
     pub servers: Servers,
@@ -1996,6 +2004,7 @@ impl Session {
             history_search: None,
             laid: Laid::default(),
             confinement: confinement.into(),
+            sandbox: crate::sandbox_command::Sandboxed::at_start(),
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
             kept_jobs: None,
@@ -2101,6 +2110,28 @@ impl Session {
     /// names that name nothing, or worse, name a different file of the same name.
     pub fn now_in_workspace(&mut self, root: impl Into<std::path::PathBuf>) {
         self.workspace = root.into();
+    }
+
+    /// Start under the mode a `/resume` carried over, which is the one the person last chose.
+    pub fn with_sandbox(mut self, sandbox: crate::sandbox_command::Sandboxed) -> Self {
+        self.sandbox = sandbox;
+        self
+    }
+
+    /// The sandbox mode the next turn's programs run under.
+    pub fn sandbox_mode(&self) -> bravebot_sandbox::SandboxMode {
+        self.sandbox.choice.mode
+    }
+
+    /// The mode and where it came from, which `/resume` hands to the session it starts so the
+    /// command's choice lasts as long as the process does.
+    pub fn sandbox(&self) -> &crate::sandbox_command::Sandboxed {
+        &self.sandbox
+    }
+
+    /// Move the mode for the rest of the process, from the next turn.
+    pub fn set_sandbox_mode(&mut self, mode: bravebot_sandbox::SandboxMode) {
+        self.sandbox = crate::sandbox_command::Sandboxed::typed(mode);
     }
 
     /// Say what the configuration allows, for the opening screen to draw.

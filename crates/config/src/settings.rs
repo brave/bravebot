@@ -6496,6 +6496,42 @@ mod tests {
         );
     }
 
+    /// SANDBOX-22: a running session is held to the floor start-up applies. The regression it
+    /// rejects is the command reading no pin, which would let `/sandbox off` undo what an
+    /// administrator wrote the pin to prevent.
+    #[test]
+    fn a_session_moving_its_mode_meets_the_floor_start_up_applies() {
+        use crate::sandbox::{Floor, allowed_in_session};
+        let strict = pinned("session-strict", r#"{"sandbox": {"mode": "strict"}}"#);
+        for asked in [SandboxMode::Standard, SandboxMode::Off] {
+            let refused = allowed_in_session(asked, &strict).expect_err("looser than the pin");
+            assert_eq!(
+                (
+                    refused.asked,
+                    refused.asked_in.clone(),
+                    refused.pinned,
+                    refused.because
+                ),
+                (asked, None, SandboxMode::Strict, Floor::Mode)
+            );
+            assert!(refused.pinned_in.ends_with("managed.json"), "{refused:?}");
+        }
+        assert!(allowed_in_session(SandboxMode::Strict, &strict).is_ok());
+
+        let closed = pinned("session-closed", r#"{"run": {"network": "closed"}}"#);
+        let refused = allowed_in_session(SandboxMode::Off, &closed).expect_err("opens the network");
+        assert_eq!(
+            (refused.pinned, refused.because),
+            (SandboxMode::Standard, Floor::Network)
+        );
+        for allowed in [SandboxMode::Standard, SandboxMode::Strict] {
+            assert!(allowed_in_session(allowed, &closed).is_ok());
+        }
+        for mode in [SandboxMode::Strict, SandboxMode::Standard, SandboxMode::Off] {
+            assert!(allowed_in_session(mode, &crate::Managed::default()).is_ok());
+        }
+    }
+
     /// SANDBOX-22: a pin that is not a mode pins nothing and says so, so a session is not refused
     /// on the strength of a word nobody can read.
     #[test]

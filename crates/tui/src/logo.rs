@@ -200,6 +200,9 @@ fn mark_row(stops: &[Rgb; 3], index: usize, row: &str, face: &[Span<'static>]) -
 /// and is deliberately about the platform rather than about this session: nothing the session runs
 /// is inside that boundary. The words say so, and `/status` has the room to say the rest.
 ///
+/// `mode` is the sandbox mode in force, which `/sandbox` can change, so the opening screen names the
+/// mode the next turn runs under and not the one the process started with (SANDBOX-22).
+///
 /// `tier` says whether this build can reach the premium host, and is deliberately about the
 /// configuration rather than about the credentials: a batch on disk may be expired, exhausted, or
 /// issued for another environment, so finding one would not settle the tier either. What was
@@ -208,14 +211,17 @@ fn mark_row(stops: &[Rgb; 3], index: usize, row: &str, face: &[Span<'static>]) -
 ///
 /// Stops at the name because whatever the session has to report about starting up goes next, and
 /// [`invitation`] closes the screen underneath that.
-pub fn lines(confinement: &str, tier: &str, width: u16, available: u16) -> Vec<Line<'static>> {
+pub fn lines(
+    confinement: &str,
+    mode: bravebot_sandbox::SandboxMode,
+    tier: &str,
+    width: u16,
+    available: u16,
+) -> Vec<Line<'static>> {
     lines_with_network(
-        confinement,
+        &crate::status::with_the_sandbox_mode(confinement, mode),
         tier,
-        network_shown(
-            bravebot_config::run_network(),
-            bravebot_config::sandbox::in_force().mode,
-        ),
+        network_shown(bravebot_config::run_network(), mode),
         bravebot_config::settled_sandbox_filesystem()
             .is_some_and(|settled| !settled.lists.is_empty()),
         width,
@@ -326,11 +332,17 @@ mod tests {
     const WIDE: u16 = 90;
 
     fn rows(width: u16, available: u16) -> Vec<String> {
-        lines("kernel-enforced", "premium available", width, available)
-            .iter()
-            .chain(std::iter::once(&invitation()))
-            .map(|line| line.to_string())
-            .collect()
+        lines(
+            "kernel-enforced",
+            bravebot_sandbox::SandboxMode::Standard,
+            "premium available",
+            width,
+            available,
+        )
+        .iter()
+        .chain(std::iter::once(&invitation()))
+        .map(|line| line.to_string())
+        .collect()
     }
 
     /// The mark is the point of the screen, so a short terminal loses the padding and keeps it.

@@ -146,6 +146,9 @@ const FORGET_TRUST_COMMAND: &str = "/forget-trust";
 /// The line that lists, adds and removes the reach remembered for commands (SANDBOX-23).
 const REACH_COMMAND: &str = "/reach";
 
+/// The line that reports the sandbox mode, or sets it from the next turn (SANDBOX-22).
+const SANDBOX_COMMAND: &str = "/sandbox";
+
 /// The line that reports what this session is and what it may touch.
 const STATUS_COMMAND: &str = "/status";
 
@@ -321,7 +324,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 43] {
+pub fn commands() -> [Command; 44] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -453,6 +456,12 @@ pub fn commands() -> [Command; 43] {
             name: REACH_COMMAND,
             argument: "[<where> -- <command>]",
             description: t!(command_reach),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: SANDBOX_COMMAND,
+            argument: "[strict | standard | off]",
+            description: t!(command_sandbox),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -793,6 +802,9 @@ pub enum Action {
     /// List, add or remove the reach remembered for commands. Carries the argument unparsed, since
     /// what it says back goes in the transcript, and needs the session's id and working directory.
     Reach(String),
+    /// Report the sandbox mode, or move it from the next turn. Carries the word unparsed, since the
+    /// answer depends on the managed file and may need the screen to ask.
+    Sandbox(String),
     /// Withdraw the remembered answer about the working directory. Needs the workspace, which the
     /// loop owns, and leaves this session's map as it is.
     ForgetTrust,
@@ -1090,6 +1102,7 @@ fn status_report(
         theme: &theme,
         config,
         confinement: &session.confinement,
+        sandbox_mode: session.sandbox_mode(),
         servers: &session.servers,
         permission_mode: session.permission_mode(),
         began_in_bypass: session.began_in_bypass(),
@@ -2013,6 +2026,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if let Some(argument) = argument_to(line, REACH_COMMAND) {
         return Action::Reach(argument.to_string());
+    }
+    if let Some(word) = argument_to(line, SANDBOX_COMMAND) {
+        return Action::Sandbox(word.to_string());
     }
     if line.trim() == COST_COMMAND {
         session.report_spend();
@@ -3242,6 +3258,9 @@ struct Switch {
     record: Box<bravebot_session::sessions::Record>,
     /// The workspace as the session left it, so a session that moved with `/cd` resumes from there.
     workspace: Workspace,
+    /// The sandbox mode as the session left it, so `/sandbox` lasts until the process ends and a
+    /// `/resume` does not put back the mode start-up chose.
+    sandbox: crate::sandbox_command::Sandboxed,
 }
 
 /// Run the interface until the user leaves.
@@ -3311,6 +3330,9 @@ pub fn run(
             // Only the first session is the one the command line named a definition for. A
             // session `/resume` switches to works under the definition its own record names.
             let mut named = agent;
+            // What start-up chose, until `/sandbox` moves it. Carried across a `/resume` so the
+            // command lasts until the process ends.
+            let mut sandbox = crate::sandbox_command::Sandboxed::at_start();
             loop {
                 let mut switch = None;
                 let ended = event_loop(
@@ -3318,6 +3340,7 @@ pub fn run(
                     config,
                     &workspace,
                     confinement.clone(),
+                    sandbox.clone(),
                     &mut servers,
                     start,
                     named.take(),
@@ -3328,6 +3351,7 @@ pub fn run(
                 match (ended, switch) {
                     (Ok(_), Some(next)) => {
                         workspace = next.workspace;
+                        sandbox = next.sandbox;
                         start = Start::Resuming(next.record);
                     }
                     (ended, _) => break ended,
@@ -3839,6 +3863,7 @@ fn event_loop(
     config: &mut Config,
     workspace: &Workspace,
     confinement: String,
+    sandbox: crate::sandbox_command::Sandboxed,
     servers: &mut crate::state::Servers,
     start: Start,
     named: Option<String>,
@@ -3860,6 +3885,7 @@ fn event_loop(
 
     // The one place persistence is turned on: history in ~/.bravebot outlives the session.
     let mut session = Session::new(confinement)
+        .with_sandbox(sandbox)
         .with_stored_history()
         .in_workspace(workspace.root())
         .on_tier(config);
@@ -4451,6 +4477,7 @@ fn event_loop(
                     *switch = Some(Switch {
                         record,
                         workspace: workspace.clone(),
+                        sandbox: session.sandbox().clone(),
                     });
                     return Ok(left_behind(&stored));
                 }
@@ -4478,6 +4505,15 @@ fn event_loop(
                     bravebot_agent::home::directory().as_deref(),
                     workspace.root(),
                 ));
+                needs_draw = true;
+            }
+            Action::Sandbox(word) => {
+                crate::sandbox_command::run(
+                    &mut session,
+                    &word,
+                    &bravebot_config::Managed::load(),
+                    |asking| crate::ask::ask_as(terminal, asking, t!(ask_sandbox_off_title)),
+                );
                 needs_draw = true;
             }
             Action::Reach(argument) => {
@@ -7636,7 +7672,7 @@ fn manifest_animated(
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
-        .with_sandbox_mode(bravebot_config::sandbox::in_force().mode);
+        .with_sandbox_mode(session.sandbox_mode());
     // In the order the markers in the task number them, for the reason a turn's are: a planner
     // reading "[Image #2]" has to be able to count to the picture that answers it.
     for image in pasted {
@@ -8296,7 +8332,7 @@ fn run_turn_animated(
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
-        .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
+        .with_sandbox_mode(session.sandbox_mode())
         // Whether a check that finds nothing answers in the person's place. Read off the session
         // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
         // began with.
@@ -22217,6 +22253,58 @@ mod tests {
 
         assert!(said_under_the_turn(&session).is_empty());
         assert_eq!(waiting_prompts(&session), vec!["/reach docker -- ls"]);
+    }
+
+    /// `/sandbox` carries its word whole to the loop, bare for the report, and a longer word or a
+    /// sentence that mentions it is not the command (CMD-2). The regression it rejects is the word
+    /// cut at the first space, which would read `/sandbox off please` as `/sandbox off`.
+    #[test]
+    fn the_sandbox_command_carries_its_word_unparsed() {
+        let mut session = Session::new("none");
+        for (line, word) in [
+            ("/sandbox", ""),
+            ("/sandbox strict", "strict"),
+            ("/sandbox off please", "off please"),
+        ] {
+            type_line(&mut session, line);
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Sandbox(word.to_string()),
+                "{line}"
+            );
+        }
+        for line in ["/sandboxes off", "does /sandbox off ask first"] {
+            type_line(&mut session, line);
+            assert!(
+                !matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Sandbox(_)
+                ),
+                "{line}"
+            );
+        }
+    }
+
+    /// `/sandbox` in every form waits for the turn in flight (CMD-8), so the turn's `run`
+    /// description, its refusals and the profile its programs start under all come from one mode.
+    /// The regression it rejects is the word carried out as typed, which changes the mode under a
+    /// turn that has already told the planner what it is.
+    #[test]
+    fn the_sandbox_command_waits_for_the_turn_in_flight() {
+        for line in ["/sandbox", "/sandbox strict"] {
+            let mut session = a_turn_running_on("first");
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+
+            assert!(said_under_the_turn(&session).is_empty(), "{line}");
+            assert_eq!(waiting_prompts(&session), vec![line]);
+            assert_eq!(
+                session.sandbox_mode(),
+                bravebot_sandbox::SandboxMode::Standard
+            );
+        }
     }
 
     /// A command that changes something waits behind whatever was typed before it, so it lands
