@@ -11001,9 +11001,14 @@ const PAST_THE_UNWATCHED_BOUND: usize = bravebot_agent::turn::MAX_TOOL_ROUNDS + 
 /// The model is what keeps a turn going, so a turn that runs long needs one that keeps asking.
 /// How many answers it has been given is read off the request, so the gateway holds no state of
 /// its own.
+///
+/// The listing alternates between two spellings of the directory, because the same call three
+/// times in a row is held and put to a person (TURN-9), and a session in lines has no one to
+/// answer.
 fn a_gateway_that_lists_until(rounds: usize) -> Gateway {
     a_gateway(r#"["tools"]"#, move |body| {
         let given = body.matches(r#""role":"tool""#).count();
+        let directory = if given.is_multiple_of(2) { "." } else { "./" };
         let frame = match given >= rounds {
             true => serde_json::json!({"model":"reasons-only","choices":[{
                 "index":0,"delta":{"role":"assistant","content":"done"},
@@ -11012,7 +11017,7 @@ fn a_gateway_that_lists_until(rounds: usize) -> Gateway {
                 "index":0,"delta":{"role":"assistant","tool_calls":[{
                     "index":0,"id":"call-1","type":"function","function":{
                         "name":"list_files",
-                        "arguments":"{\"directory\":\".\"}"}}]},
+                        "arguments":serde_json::json!({"directory": directory}).to_string()}}]},
                 "finish_reason":"tool_calls"}]}),
         };
         let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
