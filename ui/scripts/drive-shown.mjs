@@ -286,39 +286,52 @@ try {
     assert.equal((await replied(ready)).decision, 'reject', 'confirm: the refusal after the veil')
   }
 
-  // A first row is the whole row, not the first run of text in it. The move card's opens with a
-  // label and the destination after it, and a veil over the destination alone leaves it unread.
-  // The card is whole on screen when it arrives, so a change of width clears what was counted.
-  {
-    const found = CASES['mcp-move']
-    await emit(found.event, { ...found.request, request: 801, destination: 'https://zqd02.example/mcp' })
-    const card = page.locator('.confirm', { hasText: found.tokens[0] }).last()
+  // A first row is the whole first line an element draws: not its first run of text, and not cut
+  // at a newline drawn as a space. A veil over the end of that line leaves the row unread. Each
+  // card is whole on screen when it arrives, so a change of width clears what was counted, in the
+  // same frame as the veil goes on.
+  const endVeiled = async (name, request, after, only) => {
+    const found = CASES[name]
+    await emit(found.event, { ...found.request, ...request })
+    const card = page.locator('.confirm', { hasText: only })
     await card.waitFor()
-    const sharesRow = await card.evaluate((card) => {
+    const placed = await card.evaluate((card, after) => {
       const row = card.querySelector('[data-deciding="first"]')
-      const value = row.querySelector('code')
+      const value = row.matches('code') ? row : row.querySelector('code')
+      card.style.width = `${card.getBoundingClientRect().width - 40}px`
+      const text = value.firstChild
+      const end = document.createRange()
+      end.setStart(text, after ? text.nodeValue.indexOf(after) + after.length : 0)
+      end.setEnd(text, text.nodeValue.length)
+      const tail = end.getBoundingClientRect()
+      const box = value.getBoundingClientRect()
       const veil = document.createElement('span')
       veil.className = 'shown-veil'
       veil.dataset.veil = 'own'
-      Object.assign(veil.style, { position: 'absolute', inset: '0', pointerEvents: 'none' })
-      Object.assign(value.style, { position: 'relative' })
+      Object.assign(veil.style, {
+        position: 'absolute', left: `${tail.left - box.left - 2}px`, top: `${tail.top - box.top}px`,
+        width: `${tail.width + 4}px`, height: `${tail.height}px`, pointerEvents: 'none',
+      })
+      value.style.position = 'relative'
       value.append(veil)
-      card.style.width = `${card.getBoundingClientRect().width - 40}px`
-      const label = row.querySelector('strong').getBoundingClientRect()
-      const drawn = value.getClientRects()
-      return drawn.length === 1 && drawn[0].top < label.bottom && drawn[0].bottom > label.top
-    })
-    assert.ok(sharesRow, 'mcp-move: the destination is not on the row of its label, so the veil tests nothing')
+      const whole = document.createRange()
+      whole.selectNodeContents(row)
+      const first = whole.getClientRects()[0]
+      return end.getClientRects().length === 1 && first.left < tail.left - 4 && tail.top < first.bottom && tail.bottom > first.top
+    }, after)
+    assert.ok(placed, `${name}: the veiled text does not end the first row, so the veil tests nothing`)
     await sweep(card)
     const veiled = await states(card)
-    assert.ok(veiled.filter((button) => button.approve).every((button) => button.closed), `mcp-move: the destination was veiled, and the approval opened: ${JSON.stringify(veiled)}`)
+    assert.ok(veiled.filter((button) => button.approve).every((button) => button.closed), `${name}: the end of the first row was veiled, and the approval opened: ${JSON.stringify(veiled)}`)
     await card.evaluate((card) => { card.querySelector('.shown-veil').remove(); card.style.width = '' })
     await sweep(card)
-    assert.ok((await states(card)).every((button) => !button.closed), 'mcp-move: closed after the veil lifted and the card was read')
+    assert.ok((await states(card)).every((button) => !button.closed), `${name}: closed after the veil lifted and the card was read`)
     const ready = (await replies()).length
     await card.locator('.confirm-actions .reject').click()
-    assert.equal((await replied(ready)).decision, 'reject', 'mcp-move: the refusal after the veil')
+    assert.equal((await replied(ready)).decision, 'reject', `${name}: the refusal after the veil`)
   }
+  await endVeiled('mcp-move', { request: 801, destination: 'https://zqd02.example/zqd05' }, '', 'zqd05')
+  await endVeiled('fetch', { request: 802, url: 'https://zqf01.example/\ndocs/zqf04', ambient: [] }, '\n', 'zqf04')
 
   // The card as it waits and once read, at the smallest and the default size, in both themes.
   const shots = []

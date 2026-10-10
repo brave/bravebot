@@ -103,24 +103,28 @@ export function rowsOf(boxes: readonly Line[]): Line[] {
  * The boxes the text in `element` is drawn in; for `first`, those of its first line, which may run
  * across several text nodes. Each box is hidden where the element holding its text hides it.
  */
+const BREAKS = /^(pre|pre-wrap|pre-line|break-spaces)$/
+
 function lineBoxes(element: Element, first: boolean, frameOf: (element: Element) => Frame): Line[] {
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
   const range = document.createRange()
   const boxes: Line[] = []
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const text = node.nodeValue ?? ''
+    const holder = node.parentElement ?? element
     let end = -1
     if (first) {
       const start = boxes.length ? 0 : text.search(/\S/)
       if (start < 0) continue
-      end = text.indexOf('\n', start)
+      // A newline ends a line only where it is drawn as one, and elsewhere it is a space.
+      if (BREAKS.test(getComputedStyle(holder).whiteSpace)) end = text.indexOf('\n', start)
       range.setStart(node, start)
       range.setEnd(node, end < 0 ? text.length : end)
     } else {
       if (!/\S/.test(text)) continue
       range.selectNodeContents(node)
     }
-    const { clip, opaque } = frameOf(node.parentElement ?? element)
+    const { clip, opaque } = frameOf(holder)
     for (const box of range.getClientRects()) {
       if (box.width < SLACK || box.height < 2 * SLACK) continue
       const hidden = !opaque || box.top < clip.top - SLACK || box.bottom > clip.bottom + SLACK
