@@ -1171,6 +1171,17 @@ const CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location such as `~/.
      asked for with the `request_path` tool: the person is asked, and a yes lasts for this \
      session.";
 
+/// Said to the planner on macOS, whose profile refuses a listening socket that no line asked for.
+const MACOS_LISTENING_SENTENCE: &str = " On macOS a program cannot listen on a port of this \
+     machine unless its line asks for `loopback`, so `cargo test` on a crate whose tests bind \
+     `127.0.0.1:0`, and any build through `sccache`, fail with `Operation not permitted` without \
+     it.";
+
+/// Said after the closed network on macOS, where loopback is also how a line connects to a port of
+/// this machine.
+const MACOS_CLOSED_LOOPBACK_SENTENCE: &str =
+    " A line that asks for `loopback` may still connect to a port of this machine.";
+
 /// Said once to the planner when a step signs and the key `user.signingkey` names is one no scope
 /// reads. It names the setting and never the value, which is the person's.
 const SIGNING_KEY_REFUSED_SENTENCE: &str = " A step that signs a commit reads only a public key: \
@@ -1240,12 +1251,7 @@ fn stated(
         said.push_str(&requests_menu_sentence());
     }
     if prelude == Some(Prelude::MacOs) {
-        said.push_str(
-            " On macOS a program cannot listen on a port of this machine unless its line asks for \
-             `loopback`, so `cargo test` on a crate whose tests bind `127.0.0.1:0`, and any build \
-             through `sccache`, fail with `Operation not permitted` without it. Where the network \
-             is closed, `loopback` is also what lets a program connect to a port of this machine.",
-        );
+        said.push_str(MACOS_LISTENING_SENTENCE);
     }
     if prelude.is_some() && network.is_closed() {
         said.push_str(
@@ -1254,6 +1260,9 @@ fn stated(
              command that names a remote credential scope. A connection refused or a host that \
              does not resolve for any other program was stopped by the sandbox.",
         );
+        if prelude == Some(Prelude::MacOs) {
+            said.push_str(MACOS_CLOSED_LOOPBACK_SENTENCE);
+        }
     }
     Some(said)
 }
@@ -2223,6 +2232,7 @@ mod tests {
 
     /// SANDBOX-3: the planner is told on macOS, where the profile refuses a listening socket, that
     /// a line needs `loopback` for one, and is not told it elsewhere, where nothing is refused.
+    /// Only a closed network adds that `loopback` also reaches a port of this machine.
     #[test]
     fn the_planner_is_told_on_macos_that_listening_needs_loopback() {
         let on = |prelude| {
@@ -2231,6 +2241,14 @@ mod tests {
         };
         assert!(on(Prelude::MacOs).contains("unless its line asks for `loopback`"));
         assert!(!on(Prelude::Linux).contains("unless its line asks for `loopback`"));
+
+        let closed = |prelude| {
+            stated(true, Some(prelude), Network::Closed, SandboxMode::Standard)
+                .expect("says something")
+        };
+        assert!(closed(Prelude::MacOs).ends_with(MACOS_CLOSED_LOOPBACK_SENTENCE));
+        assert!(!on(Prelude::MacOs).contains(MACOS_CLOSED_LOOPBACK_SENTENCE));
+        assert!(!closed(Prelude::Linux).contains(MACOS_CLOSED_LOOPBACK_SENTENCE));
     }
 
     /// SANDBOX-26: a stage with a `NAME=value` in front of it gets no requested scope, as it gets
@@ -2456,7 +2474,8 @@ mod tests {
                 Some(Prelude::Linux),
                 Network::Open,
                 SandboxMode::Standard
-            ),
+            )
+            .map(|linux| format!("{linux}{MACOS_LISTENING_SENTENCE}")),
             stated(
                 true,
                 Some(Prelude::MacOs),
