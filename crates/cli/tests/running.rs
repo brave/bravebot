@@ -10939,3 +10939,113 @@ fn permissions_check_refuses_a_command_line_that_names_no_call() {
         );
     }
 }
+
+/// Past the bound an unwatched run carries, so a turn still held to it stops short of this.
+const PAST_THE_UNWATCHED_BOUND: usize = bravebot_agent::turn::MAX_TOOL_ROUNDS + 5;
+
+/// A gateway whose model asks for a listing until the conversation holds `rounds` answers to
+/// them, and then says it is done.
+///
+/// The model is what keeps a turn going, so a turn that runs long needs one that keeps asking.
+/// How many answers it has been given is read off the request, so the gateway holds no state of
+/// its own.
+fn a_gateway_that_lists_until(rounds: usize) -> Gateway {
+    a_gateway(r#"["tools"]"#, move |body| {
+        let given = body.matches(r#""role":"tool""#).count();
+        let frame = match given >= rounds {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"done"},
+                "finish_reason":"stop"}]}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"list_files",
+                        "arguments":"{\"directory\":\".\"}"}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// TURN-2: a one-shot `-p` run is held to the default bound, because nobody is watching it.
+///
+/// The model asks for more rounds than the default allows. A run that carried no bound would
+/// reach the model's own last word; one held to it is cut off with the tools taken away, which
+/// is visible on the wire as the request after the last bounded round carrying none.
+#[test]
+fn a_one_shot_run_is_held_to_the_default_bound() {
+    let gateway = a_gateway_that_lists_until(PAST_THE_UNWATCHED_BOUND);
+    let scratch = Scratch::new("cli-running-rounds-bounded").with_settings(&settings_for(&gateway));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["-p", "keep looking"],
+    );
+    let (stdout, stderr) = said(&output);
+
+    let bodies: Vec<String> = gateway.asked.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        bravebot_agent::turn::MAX_TOOL_ROUNDS + 1,
+        "the run was not held to the {} rounds an unwatched run carries: {stdout} {stderr}",
+        bravebot_agent::turn::MAX_TOOL_ROUNDS
+    );
+    assert!(
+        !bodies.last().expect("a last request").contains("\"tools\""),
+        "the last request of a bounded run still offered tools"
+    );
+}
+
+/// TURN-2: a session in lines passes no bound, because a person is watching it.
+///
+/// The same model, asking past the same number of rounds: here the turn ends on the model's own
+/// word, and the request that follows the unwatched bound still carries its tools.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_is_not_cut_off_at_the_bound_an_unwatched_run_carries() {
+    let gateway = a_gateway_that_lists_until(PAST_THE_UNWATCHED_BOUND);
+    let scratch =
+        Scratch::new("cli-running-rounds-unbounded").with_settings(&settings_for(&gateway));
+
+    let mut session = Command::new("/usr/bin/script")
+        .env_clear()
+        .env("HOME", &scratch.path)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args([
+            "-qec",
+            &format!("{} --plain", env!("CARGO_BIN_EXE_bravebot")),
+            "/dev/null",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("a terminal for a session in lines");
+    session
+        .stdin
+        .take()
+        .expect("the session's input")
+        .write_all(b"n\nkeep looking\n")
+        .expect("write the script");
+    let output = session.wait_with_output().expect("the session ends");
+
+    let (said_to_the_person, _) = said(&output);
+    let bodies: Vec<String> = gateway.asked.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        PAST_THE_UNWATCHED_BOUND + 1,
+        "the turn did not run until the model stopped asking: {said_to_the_person}"
+    );
+    assert!(
+        bodies.iter().all(|body| body.contains("\"tools\"")),
+        "a request of the turn was sent without its tools"
+    );
+    assert!(said_to_the_person.contains("done"), "{said_to_the_person}");
+}
