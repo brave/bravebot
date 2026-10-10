@@ -16489,6 +16489,32 @@ mod tests {
         );
     }
 
+    /// The regression it rejects: a listing that renders a name lossily, so a file whose name is
+    /// not text is listed under the replacement-character name of a different file (PATH-003).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_listing_leaves_out_a_name_that_is_not_text_and_does_not_merge_it_with_its_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let fixture = SkillFixture::new("skill-files-not-text");
+        let workspace = fixture.workspace();
+        let beside = fixture.home.join(".bravebot/skills/notes");
+        std::fs::write(beside.join(std::ffi::OsStr::from_bytes(b"x-\xff")), "x").unwrap();
+        std::fs::write(beside.join("x-\u{FFFD}"), "x").unwrap();
+
+        let catalogue = fixture.catalogue(&workspace);
+        let files = &catalogue.get("notes").expect("offered").files;
+        assert_eq!(
+            files
+                .iter()
+                .filter(|name| name.as_str() == "x-\u{FFFD}")
+                .count(),
+            1,
+            "{files:?}"
+        );
+        assert_eq!(files.len(), 3, "{files:?}");
+    }
+
     /// The regression it rejects: a project's skill naming a file the trust map does not vouch
     /// for (a name is content), or being handed the provenance reach that is for the user's own.
     #[cfg(unix)]
