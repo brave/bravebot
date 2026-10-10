@@ -8175,6 +8175,67 @@ fn a_search_touching_one_unvouched_file_is_quarantined_whole() {
     );
 }
 
+/// A repository map is the one tool that reads many files and still shows the planner text, so it
+/// does so only from the files the trust map vouches for: the vouched file's declaration arrives,
+/// the unvouched file's name and declaration do not, and the planner is told a count was left out.
+#[test]
+fn a_repo_map_shows_vouched_declarations_and_none_from_an_unvouched_file() {
+    const VOUCHED: &str = "vouched_declaration";
+    const UNVOUCHED: &str = "unvouched_declaration";
+
+    let scratch = Scratch::new("map-mixed-trust");
+    std::fs::create_dir_all(scratch.path.join("mine")).unwrap();
+    std::fs::write(
+        scratch.path.join("mine/a.rs"),
+        format!("pub fn {VOUCHED}() {{}}\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        scratch.path.join("theirs.rs"),
+        format!("pub fn {UNVOUCHED}() {{}}\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("repo_map", r#"{"directory":"."}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust("mine");
+
+    let task = Task::new("map the repository");
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(VOUCHED),
+        "the vouched declaration did not reach the planner: {second}"
+    );
+    assert!(
+        !second.contains(UNVOUCHED) && !second.contains("theirs.rs"),
+        "an unvouched file reached the planner: {second}"
+    );
+    assert!(
+        second.contains("left out because nobody vouched"),
+        "the planner was not told a file was left out: {second}"
+    );
+}
+
 /// Filenames are content too, since a file can be named to read like an instruction, so an untrusted
 /// listing must be quarantined as well.
 #[test]

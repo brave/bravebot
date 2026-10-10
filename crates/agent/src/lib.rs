@@ -44,6 +44,7 @@ pub mod regex;
 pub mod remembered;
 mod repeated_call;
 pub mod replace;
+pub mod repo_map;
 pub mod report;
 pub mod request_view;
 pub mod rewind;

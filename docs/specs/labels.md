@@ -13,9 +13,9 @@ guards:
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 26
+      - crates/agent/src/tools.rs: 27
       - crates/agent/src/turn.rs: 1
-      - crates/agent/src/workspace.rs: 11
+      - crates/agent/src/workspace.rs: 13
       - crates/agent/tests/workspace.rs: 35
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
@@ -34,11 +34,11 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 37
+      - crates/agent/src/tools.rs: 38
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
-      - crates/agent/tests/workspace.rs: 53
+      - crates/agent/tests/workspace.rs: 54
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 63
@@ -57,7 +57,7 @@ guards:
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
-      - crates/agent/tests/workspace.rs: 236
+      - crates/agent/tests/workspace.rs: 237
       - crates/core/src/policy.rs: 24
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -114,7 +114,7 @@ guards:
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 29
+      - crates/agent/src/tools.rs: 31
       - crates/agent/src/turn.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::render_pair_in_place
@@ -123,7 +123,7 @@ guards:
       - crates/core/src/policy.rs: 1
   - symbol: note_for
     sites:
-      - crates/agent/src/tools.rs: 10
+      - crates/agent/src/tools.rs: 11
   - symbol: Policy::label_model_output
     sites:
       - crates/agent/src/mcp.rs: 1
@@ -142,7 +142,7 @@ guards:
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 13
+      - crates/agent/src/tools.rs: 14
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 5
   - symbol: Policy::decode_transport

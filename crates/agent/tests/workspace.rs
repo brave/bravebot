@@ -9276,6 +9276,273 @@ fn a_summary_past_the_listing_cap_keeps_the_whole_total() {
     );
 }
 
+/// A repository map of `directory`, with `trust` as the trust map and `permissions` as the rules.
+fn map_of(
+    workspace: &Workspace,
+    trust: TrustStore,
+    permissions: Option<bravebot_core::permissions::Permissions>,
+    directory: &str,
+) -> Result<(bravebot_agent::workspace::RepoMap, Integrity), WorkspaceError> {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+    if let Some(permissions) = permissions {
+        policy = policy.with_permissions(permissions);
+    }
+    let map = workspace.repo_map(
+        &mut policy,
+        &Labelled::trusted(directory.to_string()),
+        1_000,
+    )?;
+    let integrity = map.label().integrity;
+    let proof = policy.authorise_content_release("test", "map");
+    Ok((map.declassify(&proof), integrity))
+}
+
+fn trusting_all_but(workspace: &Workspace, distrusted: &[&str]) -> TrustStore {
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    for path in distrusted {
+        trust.distrust(path);
+    }
+    trust
+}
+
+/// A map is read by the planner, so a file nobody vouched for must contribute neither a symbol nor
+/// its name. Mapping every file and labelling the result by the meet would be refused or, worse,
+/// pass the symbol through; mapping all and relabelling would show the planner the declaration.
+#[test]
+fn a_repo_map_holds_only_files_the_trust_map_vouches_for() {
+    let scratch = Scratch::new("map-vouched");
+    std::fs::write(scratch.path.join("mine.rs"), "pub fn mine_function() {}\n").unwrap();
+    std::fs::write(
+        scratch.path.join("theirs.rs"),
+        "pub fn theirs_function() {}\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &["theirs.rs"]);
+
+    let (map, integrity) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert!(map.body.contains("mine_function"), "{}", map.body);
+    assert!(!map.body.contains("theirs"), "{}", map.body);
+    assert_eq!((map.files, map.unvouched, map.skipped), (1, 1, 0));
+    assert_eq!(integrity, Integrity::Trusted);
+}
+
+/// "Left out" has to mean never opened. A file that is not UTF-8 fails to read, so a build that
+/// opened the unvouched file first and dropped it afterwards counts it as skipped, not unvouched.
+#[test]
+fn a_repo_map_never_opens_a_file_nobody_vouched_for() {
+    let scratch = Scratch::new("map-never-opened");
+    std::fs::write(scratch.path.join("mine.rs"), "pub fn mine_function() {}\n").unwrap();
+    std::fs::write(scratch.path.join("theirs.rs"), [0xff_u8, 0xfe, 0x00, 0xc3]).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &["theirs.rs"]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert_eq!(
+        (map.unvouched, map.skipped),
+        (1, 0),
+        "the unvouched file was opened before it was set aside"
+    );
+}
+
+/// A name that is not UTF-8 is listed with a replacement character, the spelling of the file that
+/// really holds one. Both are opened by that spelling, so the map reads the lookalike once and
+/// never the other file (PATH-003).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_repo_map_reads_a_name_and_its_lossy_lookalike_once() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let scratch = Scratch::new("map-lossy-names");
+    std::fs::write(
+        scratch
+            .path
+            .join(std::ffi::OsStr::from_bytes(b"tool-\xff.rs")),
+        "pub fn raw_function() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        scratch.path.join("tool-\u{FFFD}.rs"),
+        "pub fn lookalike_function() {}\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert_eq!(
+        map.body.matches("lookalike_function").count(),
+        1,
+        "{}",
+        map.body
+    );
+    assert!(!map.body.contains("raw_function"), "{}", map.body);
+    assert_eq!((map.files, map.skipped), (1, 0));
+}
+
+/// Ranking is a decision made from file text. A mention in a file nobody vouched for must not
+/// move a symbol up: here two such files mention `alpha` and one vouched file mentions `zeta`, so
+/// counting the unvouched mentions puts `alpha` first and the correct map puts `zeta` first.
+#[test]
+fn a_mention_in_an_unvouched_file_does_not_raise_a_symbol() {
+    let scratch = Scratch::new("map-mentions");
+    std::fs::write(scratch.path.join("a.rs"), "pub fn alpha() {}\n").unwrap();
+    std::fs::write(scratch.path.join("z.rs"), "pub fn zeta() {}\n").unwrap();
+    std::fs::write(scratch.path.join("c.rs"), "fn caller() { zeta(); }\n").unwrap();
+    std::fs::write(scratch.path.join("u1.rs"), "fn one() { alpha(); }\n").unwrap();
+    std::fs::write(scratch.path.join("u2.rs"), "fn two() { alpha(); }\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &["u1.rs", "u2.rs"]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    let zeta = map.body.find("fn zeta()").expect("zeta shown");
+    let alpha = map.body.find("fn alpha()").expect("alpha shown");
+    assert!(zeta < alpha, "{}", map.body);
+}
+
+/// A declaration can be a binding with its value on the same line, so a file holding a credential
+/// contributes nothing, and the count does not say which file it was.
+#[test]
+fn a_repo_map_leaves_out_a_file_holding_a_credential() {
+    let scratch = Scratch::new("map-credential");
+    std::fs::write(
+        scratch.path.join("keys.rs"),
+        "pub const LEAKY_KEY: &str = \"AKIAIOSFODNN7EXAMPLE\";\n",
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("fine.rs"), "pub fn fine_function() {}\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert!(map.body.contains("fine_function"), "{}", map.body);
+    assert!(
+        !map.body.contains("LEAKY_KEY") && !map.body.contains("keys.rs"),
+        "{}",
+        map.body
+    );
+    assert_eq!((map.files, map.unvouched, map.skipped), (1, 0, 1));
+}
+
+/// A rule fencing a file keeps it out of a map as it keeps it out of a search, and a denied file
+/// is not counted as one that was set aside, since counting it would confirm it exists.
+#[test]
+fn a_repo_map_does_not_open_a_file_a_deny_rule_covers() {
+    let scratch = Scratch::new("map-denied");
+    std::fs::write(
+        scratch.path.join("fenced.rs"),
+        "pub fn fenced_function() {}\n",
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("open.rs"), "pub fn open_function() {}\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(
+        &workspace,
+        trust,
+        Some(denying(&["Read(./fenced.rs)"])),
+        ".",
+    )
+    .expect("map");
+
+    assert!(!map.body.contains("fenced"), "{}", map.body);
+    assert_eq!((map.files, map.unvouched, map.skipped), (1, 0, 0));
+}
+
+/// Vendored and generated trees would drown the project's own symbols.
+#[test]
+fn a_repo_map_skips_noise_directories() {
+    let scratch = Scratch::new("map-noise");
+    for dir in ["node_modules", "target", "src"] {
+        std::fs::create_dir_all(scratch.path.join(dir)).unwrap();
+    }
+    std::fs::write(
+        scratch.path.join("node_modules/dep.js"),
+        "function vendored() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        scratch.path.join("target/gen.rs"),
+        "pub fn generated() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        scratch.path.join("src/real.rs"),
+        "pub fn real_function() {}\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert!(map.body.contains("src/real.rs"), "{}", map.body);
+    assert!(
+        !map.body.contains("vendored") && !map.body.contains("generated"),
+        "{}",
+        map.body
+    );
+    assert_eq!(map.files, 1);
+}
+
+/// A walk that stopped at its cap has not mapped the tree, and a map that says nothing reads as
+/// complete.
+#[test]
+fn a_repo_map_says_when_the_file_cap_stopped_it() {
+    let scratch = Scratch::new("map-capped");
+    for n in 0..5 {
+        std::fs::write(
+            scratch.path.join(format!("f{n}.rs")),
+            format!("pub fn function_{n}() {{}}\n"),
+        )
+        .unwrap();
+    }
+    let capped = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(3), None);
+    let trust = trusting_all_but(&capped, &[]);
+    let (map, _) = map_of(&capped, trust, None, ".").expect("map");
+    assert!(map.truncated, "the cap was reached and not reported");
+
+    let whole = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&whole, &[]);
+    let (map, _) = map_of(&whole, trust, None, ".").expect("map");
+    assert!(!map.truncated, "a complete map claimed to be cut short");
+    assert_eq!(map.files, 5);
+}
+
+/// The argument names a directory; a file there is refused in the tool's words, not left to the
+/// filesystem's "Not a directory".
+#[test]
+fn a_repo_map_of_a_file_is_refused() {
+    let scratch = Scratch::new("map-file");
+    std::fs::write(scratch.path.join("one.rs"), "pub fn one() {}\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let error = map_of(&workspace, trust, None, "one.rs").expect_err("a file is not a directory");
+
+    assert!(
+        error.to_string().contains("made of a directory"),
+        "the refusal was the filesystem's and not the tool's: {error}"
+    );
+}
+
 /// A turn holds a clone of the session's workspace. A directory opened through the clone in the
 /// middle of the turn (PATHREQ-7) is open in the session's copy once the turn ends, so `/add-dir
 /// close`, `/clear` and the session record see it; a directory closed through the session's copy
