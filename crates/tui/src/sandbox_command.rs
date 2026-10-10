@@ -234,6 +234,25 @@ mod tests {
         assert_eq!(session.sandbox_mode(), SandboxMode::Standard);
     }
 
+    /// SANDBOX-22: the session that `/resume` or `/clear` starts is built from the held choice of
+    /// the one that ended, and reports it as the command's. The regression it rejects is a new
+    /// session that takes `at_start()` again, which puts back the mode start-up chose. The loop's
+    /// two hand-offs (`Switch.sandbox` in `run`, `with_sandbox` in `event_loop`) are reasoned only:
+    /// they need a terminal.
+    #[test]
+    fn a_session_started_from_the_held_choice_keeps_the_commands_mode() {
+        let mut first = Session::new("kernel-enforced");
+        run(&mut first, "strict", &Managed::default(), never_asked);
+
+        let next = Session::new("kernel-enforced").with_sandbox(first.sandbox().clone());
+        assert_eq!(next.sandbox_mode(), SandboxMode::Strict);
+        assert!(
+            next.sandbox().typed,
+            "the report must still name the command"
+        );
+        assert_eq!(next.sandbox(), first.sandbox());
+    }
+
     /// SANDBOX-22: `off` asks first, and a no, a decline and a reply in the person's own words all
     /// keep the mode. The regression it rejects is a move to `off` made before the question is
     /// answered, which unconfines programs on the strength of a line that may have been a slip.

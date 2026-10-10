@@ -1302,6 +1302,7 @@ the command line prints it on its opening line.
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_reads_off_as_standard`
 `verified-by: bravebot_config::settings::a_session_moving_its_mode_meets_the_floor_start_up_applies`
 `verified-by: bravebot_tui::sandbox_command::a_named_mode_is_the_mode_the_next_turn_is_built_with`
+`verified-by: bravebot_tui::sandbox_command::a_session_started_from_the_held_choice_keeps_the_commands_mode`
 `verified-by: bravebot_tui::sandbox_command::a_move_to_off_asks_and_anything_but_a_yes_keeps_the_mode`
 `verified-by: bravebot_tui::sandbox_command::the_row_the_cursor_starts_on_keeps_the_mode`
 `verified-by: bravebot_tui::sandbox_command::the_managed_floor_refuses_a_looser_mode_naming_the_file_and_asks_nothing`
