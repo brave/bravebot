@@ -6,6 +6,7 @@ governs:
   - crates/tui/src/app.rs
   - crates/tui/src/skills.rs
   - crates/tui/src/caffeinate.rs
+  - crates/tui/src/away.rs
   - crates/tui/src/init_command.rs
   - crates/tui/src/review_command.rs
   - crates/tui/src/prompt_files.rs
@@ -845,6 +846,34 @@ a length the driver already holds, so nothing branches on untrusted content.
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::state::a_count_is_apportioned_in_whole_numbers_that_add_up_to_it`
 `verified-by: bravebot_agent::request_view::the_size_of_the_tool_definitions_is_what_was_sent`
+
+<a id="CMD-20"></a>
+### CMD-20: a person who has been away is given a recap, once, without asking
+
+When the terminal has reported being left, at least five minutes have passed since the last turn
+completed, and the session has had at least three turns, the interface does what `/recap` does
+(CMD-16), once, with nothing queued behind it. It does not do it again until another turn has
+completed, and a recap the person asked for counts as one. A terminal that reports no focus changes is
+taken to be in front of the person, so it never recaps by itself. An `awaySummaryEnabled` setting of
+`false` turns it off, and any other value, or none, leaves it on. It is the terminal interface's
+alone: a `-p` run and the desktop app have no such view and never make one.
+
+Nothing from the conversation reaches the decision. It reads the clock, the focus reports, a count of
+turns and the setting, all of which the interface holds itself.
+
+**Why.** CMD-16 only helps a person who thinks to ask. A person returning to a long session is the one
+least likely to remember what it was doing, and the first thing they would do is ask.
+
+`verified-by: bravebot_tui::away::a_recap_is_due_once_every_condition_holds`
+`verified-by: bravebot_tui::away::a_recap_waits_for_the_idle_time`
+`verified-by: bravebot_tui::away::a_recap_waits_for_the_terminal_to_be_left`
+`verified-by: bravebot_tui::away::a_recap_waits_for_enough_turns`
+`verified-by: bravebot_tui::away::a_recap_is_not_made_twice_in_a_row`
+`verified-by: bravebot_tui::away::a_recap_is_not_made_where_the_setting_turned_it_off`
+`verified-by: bravebot_tui::away::a_session_with_no_completed_turn_owes_nothing`
+`verified-by: bravebot_tui::app::leaving_the_terminal_after_a_completed_turn_makes_a_recap_due`
+`verified-by: bravebot_config::settings::only_a_boolean_turns_the_away_recap_off`
+`verified-by: bravebot_config::settings::the_away_recap_switch_is_among_the_names_reported`
 
 ## Known costs
 

@@ -2302,6 +2302,18 @@ fn queued_next(session: &mut Session) -> Option<Action> {
     session.send_queued().map(Action::Submit)
 }
 
+/// What an idle session does next of its own accord: the queue first, then the recap owed to a
+/// person who has been away (CMD-20). The recap comes after the queue so a line somebody typed is
+/// never held back by it, and it is owed once: the arm that runs it calls [`Away::recapped`].
+fn queued_or_recap(session: &mut Session, now: Instant) -> Option<Action> {
+    queued_next(session).or_else(|| {
+        session
+            .away
+            .due(now, session.turns)
+            .then_some(Action::Recap)
+    })
+}
+
 /// Settle a `/agent` line against the definitions this session resolved, and start the turn it
 /// names where it names one.
 ///
@@ -3856,13 +3868,17 @@ fn idle_action(session: &mut Session, taken: TermEvent) -> Action {
         // rather than a clipboard tool spawned on a timer for the whole life of the
         // session.
         TermEvent::FocusGained => {
+            session.away.focus(true);
             session.image_on_clipboard = crate::clipboard::holds_an_image();
             Action::Redraw
+        }
+        TermEvent::FocusLost => {
+            session.away.focus(false);
+            Action::None
         }
         // Nothing else draws while the box is idle, so a frame laid out for the old size
         // would stay until the next key (INPUT-41).
         TermEvent::Resize(..) => Action::Redraw,
-        _ => Action::None,
     }
 }
 
@@ -4071,6 +4087,7 @@ fn event_loop(
     session.adopt_wheel_rows(settings.wheel_rows());
     session.adopt_panel();
     session.adopt_caffeinate();
+    session.away.adopt(settings.away_summary_enabled());
     // A background job belongs to the session here and ends with it, except where nothing may
     // outlive the process that wrote it (RUN-15).
     if !bravebot_core::incognito::engaged() {
@@ -4230,7 +4247,7 @@ fn event_loop(
                 Some(prompt) => Action::Submit(prompt),
                 // Then what the queue is holding, before the interface settles down to wait, for
                 // the reason a tick is looked at here.
-                None => match queued_next(&mut session) {
+                None => match queued_or_recap(&mut session, Instant::now()) {
                     Some(action) => action,
                     None => {
                         if a_countdown_is_owed_a_frame(
@@ -4683,6 +4700,9 @@ fn event_loop(
             }
             action @ (Action::Aside(..) | Action::Recap) => {
                 let recap = action == Action::Recap;
+                if recap {
+                    session.away.recapped();
+                }
                 let (question, pasted, attached) = match action {
                     Action::Aside(question, pasted, attached) => (question, pasted, attached),
                     _ => (String::new(), Vec::new(), Vec::new()),
@@ -13769,6 +13789,71 @@ mod tests {
                 "{taken:?} left the offer standing"
             );
         }
+    }
+
+    /// The recap on return needs to know the terminal was left and when a turn last finished, and
+    /// both are read off events the loop already takes: a terminal that reports focus changes and a
+    /// completed turn make a recap due, and coming back withdraws it.
+    #[test]
+    fn leaving_the_terminal_after_a_completed_turn_makes_a_recap_due() {
+        let mut session = Session::new("none");
+        let turns = crate::away::FEWEST_TURNS;
+
+        session.complete("done", Vec::new(), 0);
+        let later = std::time::Instant::now() + crate::away::IDLE;
+        assert!(
+            !session.away.due(later, turns),
+            "the terminal was never left"
+        );
+
+        assert_eq!(
+            idle_action(&mut session, TermEvent::FocusLost),
+            Action::None
+        );
+        assert!(session.away.due(later, turns), "left, and a turn is done");
+
+        idle_action(&mut session, TermEvent::FocusGained);
+        assert!(
+            !session.away.due(later, turns),
+            "coming back withdrew nothing"
+        );
+    }
+
+    /// The loop's idle pass: a line somebody queued goes before the recap, the recap is asked for
+    /// once, and the Recap arm marking it done is what stops it coming round again on every pass.
+    #[test]
+    fn an_owed_recap_waits_for_the_queue_and_is_not_asked_for_twice() {
+        let mut session = Session::new("none");
+        session.turns = crate::away::FEWEST_TURNS;
+        for c in "first".chars() {
+            session.type_char(c);
+        }
+        session.submit();
+        for c in "second".chars() {
+            session.type_char(c);
+        }
+        assert!(session.queue(), "the line was not queued");
+        idle_action(&mut session, TermEvent::FocusLost);
+        session.complete("done", Vec::new(), 0);
+        let later = std::time::Instant::now() + crate::away::IDLE;
+
+        assert_eq!(
+            queued_or_recap(&mut session, later),
+            Some(Action::Submit("second".to_string())),
+            "the recap went ahead of a queued line"
+        );
+        session.status = Status::Idle;
+        assert_eq!(
+            queued_or_recap(&mut session, later),
+            Some(Action::Recap),
+            "an owed recap was not asked for once the queue was empty"
+        );
+        session.away.recapped();
+        assert_eq!(
+            queued_or_recap(&mut session, later),
+            None,
+            "a recap came round again with no turn since"
+        );
     }
 
     /// Nothing else draws while the box is idle, so a resize that maps to no action leaves the

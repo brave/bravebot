@@ -1433,6 +1433,8 @@ pub struct Session {
     panel: bool,
     /// Whether `/caffeinate` is on, and the hold it keeps while work is pending.
     pub(crate) caffeinate: crate::caffeinate::KeepAwake,
+    /// When a recap is owed to a person who has been away (CMD-20).
+    pub(crate) away: crate::away::Away,
     /// The person's own prompt-file directory (CMD-17), or `None` where nothing reads one.
     prompt_files: Option<std::path::PathBuf>,
     /// What the info panel says this session is.
@@ -2013,6 +2015,7 @@ impl Session {
             show_trail: false,
             panel: false,
             caffeinate: Default::default(),
+            away: Default::default(),
             prompt_files: None,
             identity: Identity::default(),
             scroll: 0,
@@ -9140,6 +9143,7 @@ impl Session {
                 .answered_as(answered_as),
         );
         self.status = Status::Idle;
+        self.away.turn_done(std::time::Instant::now());
         self.finish_turn(tokens, bravebot_agent::Ending::Done);
         // Accumulated across the session: the figure answers "what has this cost me", which is
         // about the session rather than the last turn.

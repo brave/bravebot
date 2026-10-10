@@ -16,6 +16,7 @@ mod test_profile;
 pub mod app;
 pub mod ask;
 pub mod avatar;
+mod away;
 pub mod caffeinate;
 pub mod checkouts_command;
 pub mod clipboard;

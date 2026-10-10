@@ -466,6 +466,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
+| `awaySummaryEnabled` | whether a session is recapped by itself after you have been away ([below](#awaysummaryenabled)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
@@ -756,6 +757,18 @@ tool's definition sent from its next request on. The name has to match one on th
 Loading changes what is sent and not who is asked: a loaded tool still asks you before each call.
 A number or a size like `"20k"`; anything else, and zero, leaves every tool in full, which is the
 default. It lasts a turn, so a later turn loads again.
+
+### `awaySummaryEnabled`
+
+```json
+{ "awaySummaryEnabled": false }
+```
+
+After the terminal has been unfocused for five minutes since the last turn finished, a session of at
+least three turns recaps itself once, as `/recap` does, and not again until another turn finishes.
+It needs a terminal that reports when it is left. `false` turns the automatic recap off, and `/recap`
+still works. Only the boolean `false` turns it off: `"false"` in quotes, or any other value, leaves it
+on.
 
 ### `terminalTitle`
 
