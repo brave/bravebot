@@ -1,4 +1,4 @@
-//! `bravebot permissions check <Family> <specifier>`: which rule decides a call (CLI-28).
+//! `bravebot permissions check <Family> <specifier>`: which rule decides a call (CLI-29).
 //!
 //! The rules are loaded the way a session in this directory loads them, and the call is only
 //! matched against them: nothing is opened, started or fetched. The specifier is what a person

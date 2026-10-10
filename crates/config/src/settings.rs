@@ -340,7 +340,7 @@ pub struct Settings {
     /// Each rule in force and the file that wrote it, in the order the layers were read.
     ///
     /// Kept because the merged lists cannot say which file an entry came from, and a report of
-    /// which rule decided a call has to name the file to edit (CLI-28).
+    /// which rule decided a call has to name the file to edit (CLI-29).
     rule_sources: Vec<RuleSource>,
     /// The layers that named a `provider` block and were not obeyed, weakest first, for `doctor`.
     ///
@@ -4110,7 +4110,7 @@ mod tests {
     }
 
     /// A rule is traced to the layer that wrote it, in the list it was written in, so a report of
-    /// which rule decided can name the file to edit (CLI-28). The same text in two lists and two
+    /// which rule decided can name the file to edit (CLI-29). The same text in two lists and two
     /// layers is where a lookup on the text alone would name the wrong file.
     #[test]
     fn a_rule_is_traced_to_the_file_and_list_that_wrote_it() {
