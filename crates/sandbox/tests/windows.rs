@@ -9,7 +9,7 @@
 //! meant to remove.
 #![cfg(windows)]
 
-use bravebot_sandbox::base::{Prelude, base, run_base};
+use bravebot_sandbox::base::{Prelude, base};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::windows::AppContainerSandbox;
 use bravebot_sandbox::{Environment, Sandbox, SandboxError, Stream, Streams};
@@ -233,50 +233,4 @@ fn a_policy_that_refuses_a_read_or_a_write_starts_no_program() {
         );
     }
     assert!(!marker.exists(), "a program ran under a refused policy");
-}
-
-/// SANDBOX-18 and CRED-14: a session opened on the home directory is refused the credential
-/// locations, as a session opened anywhere else is. A write row over the home directory is a grant
-/// of everything beneath it and this backend cannot subtract from a grant, so today the program
-/// reads all three.
-///
-/// The regression it rejects: the credential table skipped for Windows, which hands a program
-/// `~/.bravebot/gateway-keys.json`, `~/.ssh` and `~/.aws` whenever the session is the home
-/// directory or contains it.
-#[test]
-#[ignore = "exposes #1899: run_base returns the bare base on Windows, so a write row over the home directory grants the credential locations"]
-fn a_write_row_over_the_home_is_refused_the_credential_locations() {
-    let sandbox = sandbox();
-    let home = scratch("home");
-    for row in [
-        ".bravebot/gateway-keys.json",
-        ".ssh/id_ed25519",
-        ".aws/credentials",
-        "docs/notes.txt",
-    ] {
-        let file = home.join(row);
-        std::fs::create_dir_all(file.parent().expect("a row has a parent")).expect("a directory");
-        std::fs::write(file, "contents\n").expect("a file");
-    }
-    let policy = run_base(Prelude::Windows, &scratch("home-tmp"), Some(&home)).allow_write(&home);
-    let read = |row: &str| {
-        cmd(
-            &sandbox,
-            &format!("type {}", home.join(row.replace('/', "\\")).display()),
-            &policy,
-        )
-        .map(|(code, _)| code)
-    };
-
-    assert!(matches!(read("docs/notes.txt"), Ok(Some(0))), "the control");
-    for row in [
-        ".bravebot/gateway-keys.json",
-        ".ssh/id_ed25519",
-        ".aws/credentials",
-    ] {
-        assert!(
-            !matches!(read(row), Ok(Some(0))),
-            "{row} was read from a session opened on the home directory"
-        );
-    }
 }

@@ -921,24 +921,29 @@ fn a_denied_entry_under_the_session_stops_the_stage() {
     );
 }
 
-/// The regression it rejects: the credential table skipped on Windows, so a session opened on the
-/// home directory grants the directories that hold a key. The home directory's own files are the
-/// control that the session is granted at all.
+/// The regression it rejects: the credential check skipped on Windows, so a session opened on the
+/// home directory, or on a credential location itself, is granted read and write over the
+/// directories that hold a key and `settings.json`, which a container cannot be refused a path
+/// inside. The stage is refused before any program starts. A session beside the credential
+/// locations is the control that the refusal is not made for every session.
 #[cfg(windows)]
 #[test]
-#[ignore = "exposes #1899: the Windows run base names no credential location, so a session grant over the home directory covers them"]
 fn a_session_opened_on_the_home_directory_is_refused_the_credential_locations() {
     if !can_confine() {
         return;
     }
     let places = Places::new("home-session");
-    let confinement = Confinement::here(vec![places.home.clone()], None, Some(&places.home))
-        .expect("a platform with a base");
-    let read = |row: &str| {
-        let line = cat(places.home.join(row).display());
-        let plan = bravebot_agent::cmdline::compile(&line, &places.home, None, &mut |_, _| Ok(()))
+    let line = cat(places.home.join(".bravebot\\gateway-keys.json").display());
+    for (root, location) in [
+        (places.home.clone(), ".bravebot"),
+        (places.home.join(".ssh"), ".ssh"),
+    ] {
+        let confinement = Confinement::here(vec![root.clone()], None, Some(&places.home))
+            .expect("a platform with a base");
+        let plan = bravebot_agent::cmdline::compile(&line, &root, None, &mut |_, _| Ok(()))
             .unwrap_or_else(|error| panic!("`{line}` should compile: {error}"));
-        exec::run_plan_observed(
+
+        let refused = exec::run_plan_observed(
             &plan,
             &Cancel::new(),
             exec::LIMIT,
@@ -946,23 +951,18 @@ fn a_session_opened_on_the_home_directory_is_refused_the_credential_locations() 
             None,
             Some(&confinement),
             &mut |_| Ok(()),
-        )
-        .unwrap_or_else(|error| panic!("`{line}` should start: {error}"))
-    };
+        );
 
-    assert!(
-        read(".gitconfig").ended_well,
-        "the home directory is granted"
-    );
-    for row in [
-        ".bravebot\\gateway-keys.json",
-        ".ssh\\id_ed25519",
-        ".aws\\credentials",
-    ] {
-        let ran = read(row);
         assert!(
-            !ran.ended_well && !ran.stdout.contains("secret"),
-            "{row} was read: {ran:?}"
+            matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. }) if detail.contains(location)),
+            "a session on {} was not refused for {location}: {refused:?}",
+            root.display()
         );
     }
+
+    let ran = places.run(
+        &cat(places.session.join("inside.txt").display()),
+        Some(&places.confinement()),
+    );
+    assert!(ran.ended_well && ran.stdout.contains("inside"), "{ran:?}");
 }
