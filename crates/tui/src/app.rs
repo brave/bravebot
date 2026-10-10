@@ -2302,6 +2302,18 @@ fn queued_next(session: &mut Session) -> Option<Action> {
     session.send_queued().map(Action::Submit)
 }
 
+/// What an idle session does next of its own accord: the queue first, then the recap owed to a
+/// person who has been away (CMD-20). The recap comes after the queue so a line somebody typed is
+/// never held back by it, and it is owed once: the arm that runs it calls [`Away::recapped`].
+fn queued_or_recap(session: &mut Session, now: Instant) -> Option<Action> {
+    queued_next(session).or_else(|| {
+        session
+            .away
+            .due(now, session.turns)
+            .then_some(Action::Recap)
+    })
+}
+
 /// Settle a `/agent` line against the definitions this session resolved, and start the turn it
 /// names where it names one.
 ///
@@ -4234,13 +4246,8 @@ fn event_loop(
                 Some(prompt) => Action::Submit(prompt),
                 // Then what the queue is holding, before the interface settles down to wait, for
                 // the reason a tick is looked at here.
-                None => match queued_next(&mut session) {
+                None => match queued_or_recap(&mut session, Instant::now()) {
                     Some(action) => action,
-                    // Nothing queued and the person away: the recap is owed (CMD-20), and comes
-                    // after the queue so a line somebody typed is never held back by it. Looked at
-                    // in the same pass as the rest for the same reason, since nobody presses a key
-                    // for it.
-                    None if session.away.due(Instant::now(), session.turns) => Action::Recap,
                     None => {
                         if a_countdown_is_owed_a_frame(
                             session.looping().is_some(),
@@ -13789,6 +13796,43 @@ mod tests {
         assert!(
             !session.away.due(later, turns),
             "coming back withdrew nothing"
+        );
+    }
+
+    /// The loop's idle pass: a line somebody queued goes before the recap, the recap is asked for
+    /// once, and the Recap arm marking it done is what stops it coming round again on every pass.
+    #[test]
+    fn an_owed_recap_waits_for_the_queue_and_is_not_asked_for_twice() {
+        let mut session = Session::new("none");
+        session.turns = crate::away::FEWEST_TURNS;
+        for c in "first".chars() {
+            session.type_char(c);
+        }
+        session.submit();
+        for c in "second".chars() {
+            session.type_char(c);
+        }
+        assert!(session.queue(), "the line was not queued");
+        idle_action(&mut session, TermEvent::FocusLost);
+        session.complete("done", Vec::new(), 0);
+        let later = std::time::Instant::now() + crate::away::IDLE;
+
+        assert_eq!(
+            queued_or_recap(&mut session, later),
+            Some(Action::Submit("second".to_string())),
+            "the recap went ahead of a queued line"
+        );
+        session.status = Status::Idle;
+        assert_eq!(
+            queued_or_recap(&mut session, later),
+            Some(Action::Recap),
+            "an owed recap was not asked for once the queue was empty"
+        );
+        session.away.recapped();
+        assert_eq!(
+            queued_or_recap(&mut session, later),
+            None,
+            "a recap came round again with no turn since"
         );
     }
 
