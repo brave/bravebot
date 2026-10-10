@@ -8639,6 +8639,9 @@ fn a_kept_checkout_is_removed_by_its_number() {
         distrusting.root().exists(),
         "a checkout worked from was removed"
     );
+    // The opened directory belongs to the session whichever clone opened it, so `/add-dir close`
+    // on any of them ends it.
+    added.close_added_directory(&c1).expect("closed");
 
     assert_eq!(
         elsewhere.remove_session_checkout("c3", &mut trust),
@@ -9271,4 +9274,52 @@ fn a_summary_past_the_listing_cap_keeps_the_whole_total() {
         found.matched, 500,
         "the total stopped where the listing did"
     );
+}
+
+/// A turn holds a clone of the session's workspace. A directory opened through the clone in the
+/// middle of the turn (PATHREQ-7) is open in the session's copy once the turn ends, so `/add-dir
+/// close`, `/clear` and the session record see it; a directory closed through the session's copy
+/// is closed in the clone too, so a turn that outlives the close cannot keep reaching it.
+#[test]
+fn a_directory_opened_through_a_clone_is_open_in_the_workspace_it_came_from() {
+    let scratch = Scratch::new("opened-through-a-clone");
+    let project = scratch.path.join("project");
+    let beside = scratch.path.join("beside");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&beside).unwrap();
+    std::fs::write(beside.join("notes.txt"), "NOTES").unwrap();
+
+    let mut session = Workspace::new(&project).expect("workspace");
+    let turn = session.clone();
+    let opened = turn
+        .open_directory(beside.to_str().expect("utf-8 path"))
+        .expect("the directory opens");
+
+    assert_eq!(session.added_directories(), std::slice::from_ref(&opened));
+    let reaches = |workspace: &Workspace| {
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+        workspace
+            .list(
+                &mut policy,
+                &Labelled::trusted(opened.display().to_string()),
+                None,
+                None,
+            )
+            .is_ok()
+    };
+    assert!(reaches(&session), "the session cannot reach it");
+    assert!(reaches(&turn), "the clone cannot reach what it opened");
+
+    session
+        .close_added_directory(opened.to_str().expect("utf-8 path"))
+        .expect("the session closes it");
+    assert!(turn.added_directories().is_empty());
+    assert!(!reaches(&turn), "the turn kept reaching it");
 }

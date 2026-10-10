@@ -143,7 +143,9 @@ A write, a run, a command's output and vouching for a file nobody vouched for ar
 without being put to anybody, and the question a session opens with about trusting the working
 directory is not put either: the workspace is trusted, which is what answering it yes would have
 recorded ([trust-map.md](trust-map.md) is what that record means). A directory a settings file
-asked for is opened and vouched for without being put either. So are the three questions about a
+asked for is opened and vouched for without being put either, and so is a directory a
+`request_path` is granted for, which is opened for the file tools as `/add-dir` would open it
+([PATHREQ-7](tools/request-path.md#PATHREQ-7)). So are the three questions about a
 server a checkout asks for: whether to start it, whether to offer its list of tools, and whether to
 make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)). Whether a remote server moved
 where its reply pointed is not answered: a yes would rewrite the person's declaration to a url the
@@ -222,6 +224,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::bypassing_opens_the_directories_a_file_named_without_asking`
+`verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_agent::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`

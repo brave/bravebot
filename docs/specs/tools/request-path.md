@@ -57,12 +57,18 @@ program should not have put.
 `verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
 
 <a id="PATHREQ-4"></a>
-### PATHREQ-4: a yes is reach and not trust, and it is recorded
+### PATHREQ-4: a person's yes is reach and not trust, and it is recorded
 
-A yes marks nothing trusted ([TRUST-9](../trust-map.md#TRUST-9)) and writes no file. The trace
-carries one `path_reach` record for it, and `/status` lists it.
+A person's yes marks nothing trusted ([TRUST-9](../trust-map.md#TRUST-9)) and writes no file;
+where the mode that answers every question grants the request, it opens the directory
+and trusts it as [PATHREQ-7](#PATHREQ-7) says. The trace
+carries one `path_reach` record for it, and `/status` lists it. The record says who answered: that
+the user let programs reach the path, or, where the mode that answers every question did, the name
+of that mode and that nobody was asked. A record that credited a person with an answer the mode gave
+would be a person's word nobody said.
 
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_marks_nothing_trusted_and_is_recorded`
+`verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
 
 <a id="PATHREQ-5"></a>
@@ -83,13 +89,40 @@ unknown name ([DELEGATE-12](../delegation.md#DELEGATE-12)).
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
 
 <a id="PATHREQ-7"></a>
-### PATHREQ-7: a yes does not reach the file tools
+### PATHREQ-7: a yes does not reach the file tools, except where the mode that answers every question gave it
 
-A yes lets a program reach the path. `read_file`, `write_file`, `edit_file`, `list_files` and
-`search` stay confined to the working directory and the directories opened with `/add-dir`
+A person's yes lets a program reach the path. `read_file`, `write_file`, `edit_file`, `list_files`
+and `search` stay confined to the working directory and the directories opened with `/add-dir`
 ([TRUST-10](../trust-map.md#TRUST-10)), and keep refusing a path that only a yes reaches. The refusal
 says to open the directory with `/add-dir`, which also marks it trusted ([TRUST-9](../trust-map.md#TRUST-9)).
 `request_path` does not do that, since the path is a string the planner chose and a trust decision
 over it would be one made on its say-so ([TRUST-8](../trust-map.md#TRUST-8)).
 
+**Bypass.** Where the mode that answers every permission question
+([MODE-4](../permission-modes.md#MODE-4)) grants the request, no person is there to run `/add-dir`
+and none is asked, so the grant also opens the directory as `/add-dir` does: reachable by the file
+tools, trusted, closed by `/add-dir close` and `/clear`, and carried by `--resume`
+([TRUST-9](../trust-map.md#TRUST-9)). It is opened only where `/add-dir` would open it. A path
+refused unasked ([PATHREQ-3](#PATHREQ-3)) is refused here too, and a directory inside the project,
+a file, a directory whose name is not text, or one `permissions.readsStayInWorkspace` keeps the
+tools out of is not opened, with the
+grant for programs left standing and the result saying the file tools were not given it. A directory
+that holds the project is opened, and the result says that no delegate is given a checkout while it
+is open ([CHECKOUT-7](../checkouts.md#CHECKOUT-7)). The result tells the planner which tools now
+reach the path, so it does not ask the person to run `/add-dir`.
+
+**Why.** The text a planner chose is the only thing that decides the path, which is the reason a
+person's yes does not vouch for it. In bypass the person has already declared that nothing a session
+does needs their word, and a session that stops on a question nobody is there to answer is the one
+failure the mode exists to avoid: `pr-fix` makes a worktree beside the project, and its edits stop at
+the first file tool.
+
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_does_not_let_the_file_tools_touch_it`
+`verified-by: bravebot_agent::turn::outside_bypass_a_yes_to_a_path_opens_nothing_for_the_file_tools`
+`verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
+`verified-by: bravebot_agent::turn::under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing`
+`verified-by: bravebot_agent::turn::under_bypass_a_directory_inside_the_project_is_not_opened`
+`verified-by: bravebot_agent::turn::under_bypass_a_file_or_a_kept_in_workspace_is_not_opened`
+`verified-by: bravebot_agent::turn::under_bypass_a_directory_whose_name_is_not_text_is_not_opened`
+`verified-by: bravebot_agent::turn::under_bypass_a_directory_holding_the_project_says_it_ends_checkouts`
+`verified-by: bravebot_agent::workspace::a_directory_opened_through_a_clone_is_open_in_the_workspace_it_came_from`
