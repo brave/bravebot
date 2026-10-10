@@ -282,13 +282,33 @@ impl FrontEnd {
         started["data"]["sandbox"].clone()
     }
 
-    /// The next question a turn puts to the window, or the event that ended it.
+    /// Start a manifest run, see it to its end, and return the sandbox mode `manifest.started`
+    /// said it runs under. A plan put to the window is rejected, since only the mode is wanted.
+    fn plan(&mut self, session: &str) -> Value {
+        self.call(
+            "manifest.run",
+            json!({"session": session, "task": "do the work"}),
+        );
+        let started = self.until(|message| message["event"] == "manifest.started");
+        let mut next = self.question_or_the_end();
+        if next["event"] == "manifest.request" {
+            self.reply("manifest.reply", session, &next, "reject");
+            next = self.question_or_the_end();
+        }
+        assert!(
+            next["event"] == "manifest.done" || next["event"] == "manifest.error",
+            "{next}"
+        );
+        started["data"]["sandbox"].clone()
+    }
+
+    /// The next question a turn or a run puts to the window, or the event that ended it.
     fn question_or_the_end(&self) -> Value {
         self.until(|message| {
             message["event"].as_str().is_some_and(|event| {
                 (event.ends_with(".request") && event != "trust.request")
-                    || event == "turn.done"
-                    || event == "turn.error"
+                    || ["turn.done", "turn.error", "manifest.done", "manifest.error"]
+                        .contains(&event)
             })
         })
     }
@@ -354,6 +374,25 @@ fn a_window_chooses_the_mode_the_next_turn_runs_under() {
         json!({"sandboxMode": "standard"})
     );
     assert_eq!(front.ask(&session), "standard");
+}
+
+/// SANDBOX-22: a manifest run started from a session runs under the mode the window chose for it,
+/// as a turn does. The failure this rejects is a run that reads the settings and not the choice,
+/// while the window shows the mode it chose.
+#[test]
+fn a_manifest_run_runs_under_the_mode_the_window_chose() {
+    let scratch = Scratch::new("bridge-sandbox-manifest");
+    let (endpoint, _rounds) = a_planner(|_, _| None);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, true);
+    assert_eq!(front.plan(&session), "standard");
+
+    front.sandbox(&session, json!("strict"));
+    assert_eq!(
+        front.plan(&session),
+        "strict",
+        "the run did not take the choice"
+    );
 }
 
 /// SANDBOX-22: a window cannot turn the sandbox off, and a word that is no mode is refused rather
