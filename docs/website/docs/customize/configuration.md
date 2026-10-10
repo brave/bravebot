@@ -460,6 +460,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([below](#runnetwork)) |
 | `sandbox.filesystem.allowRead`, `denyRead`, `allowWrite`, `denyWrite` | lists of paths that move what a program the agent runs reads and writes ([below](#sandboxfilesystem)) |
 | `run.maxOutput` | how much of what a command printed the agent reads ([below](#runmaxoutput)) |
+| `download.maxBytes` | the most one `download_url` call may save to a file ([below](#downloadmaxbytes)) |
 | `run.defaultSeconds`, `run.maxSeconds` | how long a command may run ([below](#rundefaultseconds-and-runmaxseconds)) |
 | `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
@@ -911,6 +912,18 @@ grant.
 The desktop app shows the lists in the conversation's permissions view, each entry with the file
 that wrote it, and says in the notice above the conversation when an entry is not in force. It does
 not edit them: change the settings file, and the next conversation reads it.
+
+### `download.maxBytes`
+
+```json
+{ "download": { "maxBytes": 524288000 } }
+```
+
+The most bytes one `download_url` call may write to a file. A body over it is not saved, and the
+agent is told that this setting names the limit. Without this key the figure is 100 MiB. It is a
+budget on your disk, not on the conversation, because the bytes never enter the conversation. Zero
+and anything that is not a whole number leave the built-in figure in force, and the nearest settings
+file that names one wins.
 
 ### `run.maxOutput`
 

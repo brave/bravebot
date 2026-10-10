@@ -289,9 +289,26 @@ pub struct Streamed<'r> {
     reader: Box<dyn std::io::Read + Send + 'r>,
     read: usize,
     truncated: bool,
+    /// The most of the body this will hand back, [`MAX_RESPONSE_BYTES`] unless the caller moved it.
+    cap: usize,
+    /// How much is asked of the reader at a time.
+    chunk: usize,
 }
 
 impl Streamed<'_> {
+    /// Raise or lower the cap this body is read under, for a caller that saves it to a file
+    /// instead of holding it in a conversation.
+    ///
+    /// Only the size changes. The label was fixed before the first byte and nothing here can
+    /// change it, and the cap is still enforced across the whole stream. Reads are larger too,
+    /// since a body worth raising the cap for is not one that has to look like it is being typed.
+    #[must_use]
+    pub fn capped_at(mut self, cap: usize) -> Self {
+        self.cap = cap;
+        self.chunk = DOWNLOAD_CHUNK_BYTES;
+        self
+    }
+
     /// The label every piece of this body carries.
     pub fn label(&self) -> Label {
         self.label
@@ -311,16 +328,16 @@ impl Streamed<'_> {
             return Ok(None);
         }
 
-        let remaining = MAX_RESPONSE_BYTES + 1 - self.read;
-        let mut buffer = vec![0u8; STREAM_CHUNK_BYTES.min(remaining)];
+        let remaining = self.cap + 1 - self.read;
+        let mut buffer = vec![0u8; self.chunk.min(remaining)];
         match self.reader.read(&mut buffer) {
             Ok(0) => Ok(None),
             Ok(n) => {
                 self.read += n;
                 buffer.truncate(n);
-                if self.read > MAX_RESPONSE_BYTES {
+                if self.read > self.cap {
                     self.truncated = true;
-                    buffer.truncate(n - (self.read - MAX_RESPONSE_BYTES));
+                    buffer.truncate(n - (self.read - self.cap));
                     if buffer.is_empty() {
                         return Ok(None);
                     }
@@ -352,6 +369,9 @@ impl fmt::Debug for Streamed<'_> {
 ///
 /// Small enough that a reply appears to arrive as it is written rather than in visible jumps.
 const STREAM_CHUNK_BYTES: usize = 1024;
+
+/// How much is read at a time from a body that is going to a file.
+const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
 /// A request to send.
 #[derive(Debug, Clone)]
@@ -628,6 +648,8 @@ impl Egress {
             reader,
             read: 0,
             truncated: false,
+            cap: MAX_RESPONSE_BYTES,
+            chunk: STREAM_CHUNK_BYTES,
         })
     }
 
@@ -1561,7 +1583,22 @@ mod tests {
             reader: Box::new(std::io::Cursor::new(body)),
             read: 0,
             truncated: false,
+            cap: MAX_RESPONSE_BYTES,
+            chunk: STREAM_CHUNK_BYTES,
         }
+    }
+
+    /// A download is held to the figure its caller was given and not to the built-in cap, in both
+    /// directions: a larger body than the built-in cap arrives whole, and a smaller figure cuts a
+    /// body the built-in cap would have let through.
+    #[test]
+    fn a_stream_raised_or_lowered_is_cut_at_the_figure_it_was_given() {
+        let (total, truncated) =
+            drain(streamed(vec![b'x'; MAX_RESPONSE_BYTES + 10]).capped_at(MAX_RESPONSE_BYTES + 10));
+        assert_eq!((total, truncated), (MAX_RESPONSE_BYTES + 10, false));
+
+        let (total, truncated) = drain(streamed(vec![b'x'; 5000]).capped_at(3000));
+        assert_eq!((total, truncated), (3000, true));
     }
 
     /// The flag has to mean the body was cut, not that the cap was reached: a caller that cannot

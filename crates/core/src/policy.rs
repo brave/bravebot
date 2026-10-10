@@ -16435,7 +16435,7 @@ five
         use crate::delegate::{ADDRESSED, Definition, Definitions, Kind};
 
         /// Every tool name a turn might be offered that the tests below turn on.
-        const OFFERED: [&str; 13] = [
+        const OFFERED: [&str; 14] = [
             "read_file",
             "list_files",
             "write_file",
@@ -16447,6 +16447,7 @@ five
             "todo_write",
             "schedule_next",
             "fetch_url",
+            "download_url",
             "vet_content",
             "spawn_agent",
         ];
@@ -16482,6 +16483,7 @@ five
                         "todo_write",
                         "schedule_next",
                         "fetch_url",
+                        "download_url",
                         "vet_content",
                         "spawn_agent",
                     ]

@@ -860,6 +860,12 @@ pub struct Task {
     /// knows. `None` rather than the built-in number, so the default lives in one place
     /// ([`crate::tools::OUTPUT_CAP`]) and a caller saying "unchanged" is not a second copy of it.
     pub output_cap: Option<usize>,
+    /// The most one `download_url` call this turn makes may write to a file, or `None` for the
+    /// built-in cap ([`crate::tools::DOWNLOAD_CAP`]).
+    ///
+    /// The caller's business for the reason `output_cap` is: it is what `download.maxBytes` came to
+    /// across the layers of a settings file only the caller read.
+    pub download_cap: Option<usize>,
     /// How long a command this turn runs may take, and the most one call may ask for.
     ///
     /// The caller's business for the reason `output_cap` is, and resolved rather than optional: the
@@ -1114,6 +1120,7 @@ impl Task {
             // The built-in cap, which is a caller that read no settings file saying nothing about
             // what a command's output may spend.
             output_cap: None,
+            download_cap: None,
             // And the built-in figures for how long one may run, for the same reason.
             deadlines: crate::exec::Deadlines::BUILT_IN,
             // Unconfined, which is what a turn has always done.
@@ -1334,6 +1341,14 @@ impl Task {
     /// the cap every turn ran under before the key existed. See [`Task::output_cap`].
     pub fn with_output_cap(mut self, cap: Option<usize>) -> Self {
         self.output_cap = cap;
+        self
+    }
+
+    /// Bound how much one `download_url` call may write to a file, or `None` for the built-in cap.
+    ///
+    /// What `download.maxBytes` comes to. See [`Task::download_cap`].
+    pub fn with_download_cap(mut self, cap: Option<usize>) -> Self {
+        self.download_cap = cap;
         self
     }
 
@@ -2063,6 +2078,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
         &mut tools::Tools {
             workspace,
             output_cap: tools::OUTPUT_CAP,
+            download_cap: tools::DOWNLOAD_CAP,
             deadlines: task.deadlines,
             skills: &skills,
             slots: &mut slots,
@@ -4767,6 +4783,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 &mut tools::Tools {
                                     workspace,
                                     output_cap: task.output_cap.unwrap_or(tools::OUTPUT_CAP),
+                                    download_cap: task.download_cap.unwrap_or(tools::DOWNLOAD_CAP),
                                     deadlines: task.deadlines,
                                     skills: &catalogue,
                                     slots: quarantine,

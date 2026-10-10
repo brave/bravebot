@@ -43,6 +43,7 @@ fn take_turn(
             workspace,
             attribution: Default::default(),
             output_cap: None,
+            download_cap: None,
             deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
             auto_vetting: false,
             sandbox: bravebot_sandbox::SandboxMode::default(),
