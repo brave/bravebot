@@ -1445,12 +1445,35 @@ is kept for the rest of the process. A denied entry that is not a rule fails the
 dropping it would let the host through, and so does a proxy that cannot be started: a stage is
 never started without the filter its list asks for.
 
-Half built. The list, its defaults, the proxy, the settings that carry the list through the
-layers, the managed pin and the environment injection are written and tested. Unbuilt: policy rows
-that allow only the proxy's port, so a program that ignores the variables still connects directly,
-the prompt for an unlisted host, the trace record and the `/status` line, and refusing the stage
-with the SANDBOX-19 sentence naming the setting.
+A stage held to a proxy has a policy that allows outbound TCP to that proxy's loopback port and to
+no other address, and reaches no name resolver, since the proxy resolves the name it tunnels to. A
+program that ignores the variables and connects to a host, or to another loopback port, is refused
+by the operating system. That costs a stage the loopback services of its own, a local database or
+a test server, and a program that does not send its connections through the variables: `ssh`
+reads none of them, so a remote reached over ssh cannot connect while a list is set; an HTTPS
+remote can. A unix socket a write row already names is still reached. macOS applies
+this in the profile. Linux and Windows cannot limit egress to one port (the Landlock rules of a
+kernel this build supports filter by port and leave UDP open, and an AppContainer holds the internet
+capability or does not), so a stage is refused there while a list is set, with
+`sandbox.network.allowedHosts` named, as a stage is refused where the network cannot be closed
+([SANDBOX-20](#SANDBOX-20)). The stage is not started with the variables alone. The sentence the
+planner reads under SANDBOX-19 says the network is limited by that setting and names no host.
 
+Half built. The list, its defaults, the proxy, the settings that carry the list through the
+layers, the managed pin, the environment injection and the port-limited policy on macOS are
+written and tested. Unbuilt: a backend on Linux and Windows that limits egress to the port, the
+prompt for an unlisted host, the trace record and the `/status` line.
+
+`verified-by: bravebot_sandbox::policy::the_port_egress_is_limited_to_is_carried_and_goes_with_the_network`
+`verified-by: bravebot_sandbox::macos::egress_limited_to_a_port_names_the_port_and_no_other_address`
+`verified-by: bravebot_sandbox::macos::a_process_limited_to_a_port_reaches_that_port_and_not_another`
+`verified-by: bravebot_sandbox::windows::a_policy_limiting_egress_to_one_port_is_refused`
+`verified-by: bravebot_sandbox::linux::a_policy_limiting_egress_to_one_port_is_refused`
+`verified-by: bravebot_agent::confine::a_platform_that_cannot_hold_a_program_to_the_proxy_is_refused_naming_the_setting`
+`verified-by: bravebot_agent::confine::a_stage_under_a_host_list_is_prepared_limited_to_the_proxy_port`
+`verified-by: bravebot_agent::confine::the_profile_line_names_the_host_list_setting_and_no_host`
+`verified-by: bravebot_agent::confine::a_stage_under_a_host_list_cannot_connect_around_the_proxy`
+`verified-by: bravebot_agent::confine::a_platform_that_cannot_hold_a_stage_to_the_proxy_refuses_it`
 `verified-by: bravebot_sandbox::hosts::an_exact_entry_covers_that_name_and_no_other`
 `verified-by: bravebot_sandbox::hosts::a_wildcard_covers_names_below_the_domain_and_not_the_domain`
 `verified-by: bravebot_sandbox::hosts::a_denied_entry_wins_over_an_allowed_one_in_either_order`

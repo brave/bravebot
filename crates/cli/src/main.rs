@@ -5342,6 +5342,7 @@ mod tests {
             level,
             mechanisms: vec!["a mechanism"],
             network_denial_enforced,
+            egress_limited_to_a_port: false,
             // Nothing `doctor` prints depends on this, so the report reads the same either way.
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
@@ -8192,6 +8193,7 @@ mod tests {
             level: ConfinementLevel::Partial,
             mechanisms: vec!["a mechanism"],
             network_denial_enforced: true,
+            egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant,
         };

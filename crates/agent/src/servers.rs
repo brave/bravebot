@@ -3039,6 +3039,7 @@ mod tests {
             level: ConfinementLevel::Partial,
             mechanisms: vec!["test"],
             network_denial_enforced: false,
+            egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: grants,
             subtracts_from_a_grant: true,
         }

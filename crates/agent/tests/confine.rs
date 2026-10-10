@@ -371,6 +371,12 @@ fn can_close_the_network() -> bool {
             .is_ok_and(|sandbox| sandbox.capabilities().network_denial_enforced)
 }
 
+fn can_hold_to_a_port() -> bool {
+    can_confine()
+        && bravebot_sandbox::for_current_platform()
+            .is_ok_and(|sandbox| sandbox.capabilities().egress_limited_to_a_port)
+}
+
 /// Whether anything connected to a loopback listener while `line` ran under `confinement`.
 ///
 /// What is observed is the listener's accept, not the program's exit status: a program that is
@@ -813,7 +819,7 @@ fn connect_through(address: &str, host: &str) -> String {
 /// port the stage is told refuses the unlisted name and the listed one is not refused by it.
 #[test]
 fn a_stage_with_a_host_list_is_pointed_at_the_proxy_that_applies_it() {
-    if !can_confine() {
+    if !can_hold_to_a_port() {
         return;
     }
     let places = Places::new("hosts-proxy");
@@ -831,7 +837,7 @@ fn a_stage_with_a_host_list_is_pointed_at_the_proxy_that_applies_it() {
 /// model-written `HTTPS_PROXY=` points the stage at a proxy of its choosing.
 #[test]
 fn an_assignment_in_the_line_cannot_point_a_stage_elsewhere() {
-    if !can_confine() {
+    if !can_hold_to_a_port() {
         return;
     }
     let places = Places::new("hosts-assignment");
@@ -965,4 +971,53 @@ fn a_session_opened_on_the_home_directory_is_refused_the_credential_locations() 
         Some(&places.confinement()),
     );
     assert!(ran.ended_well && ran.stdout.contains("inside"), "{ran:?}");
+}
+
+/// The regression it rejects: a stage that ignores the proxy variables connecting straight to its
+/// target, which makes the list advice. The same line with no list is the control that this
+/// machine lets the connection through; under the list nothing arrives.
+#[cfg(unix)]
+#[test]
+fn a_stage_under_a_host_list_cannot_connect_around_the_proxy() {
+    if !can_hold_to_a_port() {
+        return;
+    }
+    let places = Places::new("hosts-around");
+    let line = |port: u16| format!("nc -z 127.0.0.1 {port}");
+    let list = hosts(Some(&["mine.example"]), &[]);
+    let listed = places.confinement().with_hosts(Some(&list));
+
+    let control = reached_a_listener(&places, line, Some(&places.confinement()));
+    let around = reached_a_listener(&places, line, Some(&listed));
+
+    assert!(control, "the open network did not reach the listener");
+    assert!(!around, "a stage reached a port other than the proxy's");
+}
+
+/// The regression it rejects: a platform that cannot hold a program to the proxy running the stage
+/// anyway, with the variables set and the network otherwise open. It refuses, and the refusal names
+/// the setting.
+#[test]
+fn a_platform_that_cannot_hold_a_stage_to_the_proxy_refuses_it() {
+    if !can_confine() || can_hold_to_a_port() {
+        return;
+    }
+    let places = Places::new("hosts-refused");
+    let list = hosts(Some(&["mine.example"]), &[]);
+    let listed = places.confinement().with_hosts(Some(&list));
+
+    let refused = exec::run_plan_observed(
+        &places.plan("cat inside.txt"),
+        &Cancel::new(),
+        exec::LIMIT,
+        None,
+        None,
+        Some(&listed),
+        &mut |_| Ok(()),
+    );
+
+    assert!(
+        matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. }) if detail.contains("sandbox.network.allowedHosts")),
+        "{refused:?}"
+    );
 }

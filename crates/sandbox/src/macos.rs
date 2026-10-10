@@ -158,12 +158,23 @@ impl SeatbeltSandbox {
         // included. Egress is IP, and a socket is reached where a write row reaches it, as
         // Landlock's ResolveUnix is granted. Host names resolve through the platform resolver's
         // socket, where Linux resolves over IP.
+        //
+        // Egress limited to a port is to that port on the loopback address and to nothing else by
+        // IP, and the resolver is left out: the proxy on that port resolves the names it is asked
+        // for.
         if policy.allow_network {
-            out.push_str("(allow network-outbound (remote ip))\n");
-            out.push_str(&format!(
-                "(allow network-outbound (literal {}))\n",
-                quote(RESOLVER)
-            ));
+            match policy.egress_only_to {
+                Some(port) => out.push_str(&format!(
+                    "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
+                )),
+                None => {
+                    out.push_str("(allow network-outbound (remote ip))\n");
+                    out.push_str(&format!(
+                        "(allow network-outbound (literal {}))\n",
+                        quote(RESOLVER)
+                    ));
+                }
+            }
             for row in &policy.writable {
                 out.push_str(&format!(
                     "(allow network-outbound (subpath {}))\n",
@@ -286,6 +297,7 @@ impl Sandbox for SeatbeltSandbox {
             level: ConfinementLevel::Kernel,
             mechanisms: vec!["seatbelt"],
             network_denial_enforced: true,
+            egress_limited_to_a_port: true,
             // A profile is text the kernel reads as the process starts, so a path that is
             // not there yet is named in one and the file can be created afterwards.
             grants_paths_that_do_not_exist: true,
@@ -897,6 +909,102 @@ int main(void) {
         );
     }
 
+    /// Egress limited to a port names that port on the loopback address and leaves out the rule
+    /// for any address and the resolver's socket, while a write row still reaches its socket.
+    #[test]
+    fn egress_limited_to_a_port_names_the_port_and_no_other_address() {
+        let profile = SeatbeltSandbox::profile(
+            &SandboxPolicy::strict()
+                .allow_write("/tmp/agent")
+                .allow_network_egress_only_to(8123),
+        );
+        assert!(
+            profile.contains("(allow network-outbound (remote ip \"localhost:8123\"))\n"),
+            "{profile}"
+        );
+        assert!(
+            !profile.contains("(allow network-outbound (remote ip))"),
+            "egress to any address is still granted: {profile}"
+        );
+        assert!(
+            !profile.contains(RESOLVER),
+            "the resolver is still granted: {profile}"
+        );
+        assert!(
+            profile.contains("(allow network-outbound (subpath \"/tmp/agent\"))\n"),
+            "a socket under a write row is no longer reached: {profile}"
+        );
+    }
+
+    /// The port is the only thing a limited process reaches by IP. Both halves run against
+    /// listeners this test holds: the named port answering is what makes a refusal of the other
+    /// mean the rule was applied and not that nothing was listening.
+    #[test]
+    fn a_process_limited_to_a_port_reaches_that_port_and_not_another() {
+        let named = TcpListener::bind("127.0.0.1:0").expect("a loopback port to connect to");
+        let other = TcpListener::bind("127.0.0.1:0").expect("a second loopback port");
+        let (named_port, other_port) = (
+            named.local_addr().expect("the bound address").port(),
+            other.local_addr().expect("the bound address").port(),
+        );
+        other
+            .set_nonblocking(true)
+            .expect("the listener can be polled");
+
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read("/private/etc")
+            .allow_read("/System")
+            .allow_read("/Library")
+            .allow_network_egress_only_to(named_port);
+        let curl = |port: u16| {
+            let args: Vec<OsString> = [
+                "-s",
+                "--noproxy",
+                "*",
+                "-m",
+                "5",
+                &format!("http://127.0.0.1:{port}/"),
+            ]
+            .iter()
+            .map(OsString::from)
+            .collect();
+            sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/curl"),
+                    &args,
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+        };
+
+        let mut reaching = curl(named_port);
+        answer_one(&named);
+        assert_eq!(
+            reaching.wait().expect("should wait").code(),
+            Some(0),
+            "the named port was refused, so nothing below means anything"
+        );
+
+        let mut refused = curl(other_port);
+        assert_eq!(
+            refused.wait().expect("should wait").code(),
+            Some(CURL_COULDNT_CONNECT),
+            "the connection was not what failed"
+        );
+        assert!(
+            matches!(
+                other.accept(),
+                Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock
+            ),
+            "a connection arrived at a port the policy did not name"
+        );
+    }
+
     /// A path containing a quote must not close the string literal and let its
     /// remainder be parsed as profile directives. The payload text still appears, but it
     /// is part of the path, but every quote in it is escaped, so Seatbelt reads the
@@ -963,6 +1071,7 @@ int main(void) {
         let caps = SeatbeltSandbox.capabilities();
         assert_eq!(caps.level, ConfinementLevel::Kernel);
         assert!(caps.network_denial_enforced);
+        assert!(caps.egress_limited_to_a_port);
         assert!(caps.mechanisms.contains(&"seatbelt"));
     }
 

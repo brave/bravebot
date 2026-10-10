@@ -257,6 +257,7 @@ impl Sandbox for Unavailable {
             level: ConfinementLevel::None,
             mechanisms: Vec::new(),
             network_denial_enforced: false,
+            egress_limited_to_a_port: false,
             // Nothing is granted here at all, so claiming a kind of grant it installs
             // would be a claim about a process this backend never starts.
             grants_paths_that_do_not_exist: false,
