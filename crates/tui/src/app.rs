@@ -808,6 +808,8 @@ pub enum Action {
     ApplyCheckout(String, Vec<String>),
     /// Run a command the user typed in shell mode. Needs the workspace and the conversation.
     Run(String),
+    /// Run a command typed `!!`: the same, with its output drawn and never put in the conversation.
+    RunPrivately(String),
     /// Put the transcript in front of the user in their editor. Needs the terminal, which the
     /// loop owns, and gives the session nothing back.
     Show,
@@ -1853,10 +1855,15 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         }
         // Before every command arm, because in shell mode the line is a command and nothing else.
         // `/status` is a path to a program somebody might have, and `!` is how they said so.
-        KeyCode::Enter if session.shell => match session.submit_command() {
-            Some(line) => Action::Run(line),
-            None => Action::None,
-        },
+        KeyCode::Enter if session.shell => {
+            // Read before the line is taken, which leaves the mode.
+            let private = session.shell_private();
+            match session.submit_command() {
+                Some(line) if private => Action::RunPrivately(line),
+                Some(line) => Action::Run(line),
+                None => Action::None,
+            }
+        }
         // Every command on one arm, reading the one table the set is written in, so a word the table
         // names is dispatched and never sent. Before the arm that completes a half-typed one, which
         // is what a whole word is not, and before the arm that submits, which is what the word must
@@ -2272,6 +2279,9 @@ fn queued_next(session: &mut Session) -> Option<Action> {
     // typed first happens first.
     if let Some(line) = session.take_queued_shell() {
         return Some(Action::Run(line));
+    }
+    if let Some(line) = session.take_queued_private_shell() {
+        return Some(Action::RunPrivately(line));
     }
     session.send_queued().map(Action::Submit)
 }
@@ -4248,6 +4258,7 @@ fn event_loop(
             other => other,
         };
 
+        let private = matches!(action, Action::RunPrivately(_));
         match action {
             Action::Quit => return Ok(left_behind(&stored)),
             Action::Copy => copy_selection(terminal, &mut session)?,
@@ -4977,12 +4988,18 @@ fn event_loop(
                     })?;
                 }
             }
-            Action::Run(line) => {
+            Action::Run(line) | Action::RunPrivately(line) => {
                 // Shell effects have no file-tool journal, but older edits can still be undone.
                 session.rewind.bind_coverage(&workspace);
                 workspace.mark_rewind_gap(bravebot_agent::rewind::CoverageGap::Command);
-                let events =
-                    run_command(terminal, &mut session, &workspace, &line, &mut conversation)?;
+                let events = run_command(
+                    terminal,
+                    &mut session,
+                    &workspace,
+                    &line,
+                    &mut conversation,
+                    private,
+                )?;
                 // Saved like a turn, and for the same reason: the command is in the conversation
                 // now, so a session resumed without it would have the planner referring to output
                 // it can no longer see.
@@ -6983,13 +7000,15 @@ fn command_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
 /// No approval is asked for. The prompt a run normally goes through exists so a person endorses argv
 /// the *planner* chose, and here the person typed it themselves: asking would be asking them to
 /// confirm their own keystroke. What it printed goes into the conversation, labelled from that same
-/// provenance by the kernel. See [`bravebot_agent::shell::record`].
+/// provenance by the kernel. See [`bravebot_agent::shell::record`]. A `private` command is the
+/// exception: what it printed is drawn and goes nowhere else, through [`bravebot_agent::shell::show`].
 fn run_command(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
     workspace: &Workspace,
     line: &str,
     conversation: &mut Conversation,
+    private: bool,
 ) -> io::Result<Vec<Stamped>> {
     let cancel = Cancel::new();
     let worker_cancel = cancel.clone();
@@ -7044,9 +7063,12 @@ fn run_command(
     // most consequential thing this feature does, so it must not be the one thing left unrecorded.
     let mut sink = Trail::new();
     match ran {
-        Ok(ran) => match bravebot_agent::shell::record(line, &ran, conversation, &mut sink) {
+        Ok(ran) => match shell_result(line, &ran, conversation, &mut sink, private) {
             Ok(recorded) => {
-                session.printed(&recorded.text);
+                match private {
+                    true => session.printed_privately(&recorded.text),
+                    false => session.printed(&recorded.text),
+                }
                 if !recorded.succeeded {
                     session.note(t!(command_reported_a_failure));
                 }
@@ -7057,6 +7079,20 @@ fn run_command(
     }
 
     Ok(sink.events().to_vec())
+}
+
+/// Release what a command printed, into the conversation unless the person typed it `!!`.
+fn shell_result(
+    line: &str,
+    ran: &bravebot_agent::shell::Ran,
+    conversation: &mut Conversation,
+    sink: &mut Trail,
+    private: bool,
+) -> Result<bravebot_agent::shell::Recorded, bravebot_agent::shell::ShellError> {
+    match private {
+        true => bravebot_agent::shell::show(line, ran, sink),
+        false => bravebot_agent::shell::record(line, ran, conversation, sink),
+    }
 }
 
 /// Interpret a key press while a single request is out.
@@ -15107,6 +15143,101 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Enter)),
             Action::Run("ls -la".to_string())
         );
+    }
+
+    /// A second `!` right after the first is the private form: the line that runs is what follows
+    /// both, and Enter asks for the run whose output is not recorded.
+    ///
+    /// Rejects: `!!` read as a plain command line, or the second `!` typed into the command.
+    #[test]
+    fn a_second_bang_makes_the_command_private() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "!!cat .env");
+
+        assert!(session.shell_private(), "the second marker did not take");
+        assert_eq!(session.input(), "cat .env");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::RunPrivately("cat .env".to_string())
+        );
+        assert!(!session.shell_private(), "the mode outlived the command");
+    }
+
+    /// The default is unchanged: one `!` runs the line and records it. A `!` after the first
+    /// character is history expansion for the shell.
+    ///
+    /// Rejects: privacy leaking from an earlier `!!` into the next plain command, or a `!` inside a
+    /// command being taken for the marker.
+    #[test]
+    fn a_plain_command_after_a_private_one_is_recorded_again() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "!!ls");
+        handle_key(&mut session, key(KeyCode::Enter));
+        type_line(&mut session, "!ls !x");
+
+        assert!(!session.shell_private());
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Run("ls !x".to_string())
+        );
+    }
+
+    /// SHELL-4: only keystrokes arm anything. A paste that begins with `!` into an armed line is
+    /// text in the line, never the second marker.
+    ///
+    /// Rejects: a paste reaching the marker check and making a line private (or, by the same path,
+    /// arming the mode).
+    #[test]
+    fn a_pasted_bang_does_not_make_the_command_private() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "!");
+        handle_paste(&mut session, "!ls");
+
+        assert!(!session.shell_private(), "a paste made the line private");
+        assert_eq!(session.input(), "!ls");
+    }
+
+    /// Backspace takes the markers off one at a time, so a person who typed `!!` by mistake is back
+    /// at an ordinary shell line before they are back at the prompt.
+    ///
+    /// Rejects: backspace leaving shell mode outright and dropping a plain command's recording.
+    #[test]
+    fn backspace_leaves_the_private_form_before_shell_mode() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "!!");
+        handle_key(&mut session, key(KeyCode::Backspace));
+        assert!(session.shell && !session.shell_private());
+        handle_key(&mut session, key(KeyCode::Backspace));
+        assert!(!session.shell);
+    }
+
+    /// The private form leaves the conversation as it was and still has output to draw; the plain
+    /// form puts the line and its output in the conversation.
+    ///
+    /// Rejects: the private flag being ignored, so the output of `!!cat .env` reaches the next
+    /// request, and the opposite fault of a plain command no longer being recorded.
+    #[test]
+    fn a_private_command_leaves_the_conversation_unchanged() {
+        let directory = std::env::temp_dir();
+        let ran = bravebot_agent::shell::run("echo only-for-me", &directory, &Cancel::new())
+            .expect("it runs");
+
+        let mut kept = Conversation::new();
+        let shown = shell_result("echo only-for-me", &ran, &mut kept, &mut Trail::new(), true)
+            .expect("shown");
+        assert!(shown.text.contains("only-for-me"), "nothing to draw");
+        assert!(kept.messages().is_empty(), "a private command was recorded");
+
+        let mut recorded = Conversation::new();
+        shell_result(
+            "echo only-for-me",
+            &ran,
+            &mut recorded,
+            &mut Trail::new(),
+            false,
+        )
+        .expect("recorded");
+        assert_eq!(recorded.messages().len(), 1);
     }
 
     /// A running turn or command is what the title marks as working, and anything else is the box

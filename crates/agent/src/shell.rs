@@ -235,6 +235,44 @@ pub fn record<S: Sink>(
     conversation: &mut Conversation,
     sink: &mut S,
 ) -> Result<Recorded, ShellError> {
+    let released = released(line, ran, sink)?;
+
+    // Said in the driver's own words, from the exit code, which is structure rather than content.
+    let outcome = outcome(ran);
+
+    let said = if released.trim().is_empty() {
+        format!("I ran `{line}` in the shell myself{outcome}. It printed nothing.")
+    } else {
+        format!("I ran `{line}` in the shell myself{outcome}. It printed:\n\n{released}")
+    };
+    conversation.push_from(
+        Message::user(said),
+        crate::request_view::Provenance::Trusted("shell output"),
+    );
+
+    Ok(Recorded {
+        text: released,
+        succeeded: ran.succeeded(),
+    })
+}
+
+/// What a command the user ran printed, for the screen alone: nothing is put into the conversation.
+///
+/// The private form of [`record`], for a person who wants to read a log or an `.env` in their own
+/// shell without it going to the model service. It takes no `Conversation`, so there is nothing for
+/// it to push into, and the output still passes the gate [`record`] passes it through, so what is
+/// drawn is what the gate released.
+///
+/// Under the same call-site rule as [`record`]: `line` is only ever a line a person typed.
+pub fn show<S: Sink>(line: &str, ran: &Ran, sink: &mut S) -> Result<Recorded, ShellError> {
+    Ok(Recorded {
+        text: released(line, ran, sink)?,
+        succeeded: ran.succeeded(),
+    })
+}
+
+/// What a command printed, labelled and released by the gate, with the line as its routing.
+fn released<S: Sink>(line: &str, ran: &Ran, sink: &mut S) -> Result<String, ShellError> {
     // Under the same label a run's output carries, since the planner reads this the same way and a
     // diagnostic run together with the output reads as something the command produced.
     let text = crate::exec::both_streams(&ran.stdout, &ran.stderr);
@@ -258,34 +296,21 @@ pub fn record<S: Sink>(
     // decides whether these bytes go anywhere at all. Were a later change to label a command's
     // output untrusted, this refuses and neither the planner nor the screen sees it. Reading the
     // label and then using a copy taken beforehand would make the check decorative.
-    let released = policy
+    policy
         .read_trusted_content("shell", &labelled)
-        .map_err(|denial| ShellError::Io(denial.to_string()))?;
+        .map_err(|denial| ShellError::Io(denial.to_string()))
+}
 
-    // Said in the driver's own words, from the exit code, which is structure rather than content.
-    let outcome = if ran.succeeded() {
+/// The exit status in the driver's own words, empty for a command that succeeded.
+fn outcome(ran: &Ran) -> String {
+    if ran.succeeded() {
         String::new()
     } else {
         match ran.code {
             Some(code) => format!(" (exited {code})"),
             None => " (killed)".to_string(),
         }
-    };
-
-    let said = if released.trim().is_empty() {
-        format!("I ran `{line}` in the shell myself{outcome}. It printed nothing.")
-    } else {
-        format!("I ran `{line}` in the shell myself{outcome}. It printed:\n\n{released}")
-    };
-    conversation.push_from(
-        Message::user(said),
-        crate::request_view::Provenance::Trusted("shell output"),
-    );
-
-    Ok(Recorded {
-        text: released,
-        succeeded: ran.succeeded(),
-    })
+    }
 }
 
 /// Read a pipe on a thread, lossily, so output that is not UTF-8 does not fail the run.

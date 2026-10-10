@@ -619,6 +619,9 @@ enum Waiting {
     /// A command line, typed with shell mode armed: run through the shell when the queue reaches
     /// it, exactly as Enter on it at rest would have run it.
     Shell,
+    /// A command line typed `!!`: run like [`Waiting::Shell`], with its output drawn and never
+    /// recorded.
+    ShellPrivate,
 }
 
 impl Waiting {
@@ -1303,6 +1306,10 @@ pub struct Session {
     /// The prompt a new session is to begin with, once the session [`Session::hand_over`] named has
     /// been set up, and the next pass of the loop sends it.
     handed_over: Option<String>,
+    /// Whether the armed line is the private form, typed `!!`: run it, draw what it printed, and put
+    /// none of it into the conversation. Read through [`Session::shell_private`], which is false
+    /// whenever `shell` is, so a flag left over from a mode that has ended arms nothing.
+    shell_private: bool,
     /// Whether the list of keys is up.
     ///
     /// Like `shell`, the `?` that opens it is a mode rather than a character: it is never part of
@@ -1955,6 +1962,7 @@ impl Session {
             shell: false,
             handoff: false,
             handed_over: None,
+            shell_private: false,
             shortcuts: false,
             // The box everybody has, until a settings file or a choice says otherwise. A session
             // constructed by a test reads nothing from disk and edits the ordinary way.
@@ -3480,6 +3488,19 @@ impl Session {
         // sitting behind a marker, and "rm the old builds" is a reasonable thing to have typed.
         if c == '!' && self.input.is_empty() && !self.shell && self.status == Status::Idle {
             self.shell = true;
+            self.shell_private = false;
+            return;
+        }
+        // A second `!` before anything else is typed makes the command private: its output is drawn
+        // and never recorded. Like the first it is a mode and not a character, so the line that runs
+        // is what the person sees after the marker.
+        if c == '!'
+            && self.input.is_empty()
+            && self.shell
+            && !self.shell_private
+            && self.status == Status::Idle
+        {
+            self.shell_private = true;
             return;
         }
         if self.typing_over() {
@@ -7011,7 +7032,12 @@ impl Session {
         // deleted, not the words. Leaving shell mode is not an edit of the line, so the offsets a
         // selection is held as stay valid across it and the stretch stays on the screen.
         if marker.is_none() && self.caret == 0 {
-            self.shell = false;
+            // The second marker goes first, so `!!` backs out to `!` as it was typed.
+            if self.shell_private() {
+                self.shell_private = false;
+            } else {
+                self.shell = false;
+            }
             return;
         }
         if self.typing_over() {
@@ -7334,6 +7360,11 @@ impl Session {
         }
     }
 
+    /// Whether the armed command line is the private form, whose output is never recorded.
+    pub fn shell_private(&self) -> bool {
+        self.shell && self.shell_private
+    }
+
     /// Take the current line as a command to run, if shell mode is on and there is one.
     ///
     /// Leaves shell mode, so the next line is a prompt again: the mode lasts for one command, the
@@ -7434,6 +7465,13 @@ impl Session {
         } else {
             self.transcript.push(Entry::output(text.trim_end()));
         }
+        self.back_to_the_tail();
+    }
+
+    /// Show what a command run privately printed, with a line saying it went no further.
+    pub fn printed_privately(&mut self, text: &str) {
+        self.printed(text);
+        self.transcript.push(Entry::system(t!(shell_kept_private)));
         self.back_to_the_tail();
     }
 
@@ -7571,7 +7609,11 @@ impl Session {
     /// Leaves shell mode, exactly as running one at rest does: the mode lasts one command, and one
     /// still armed over an emptied box would claim whatever is typed next.
     pub fn queue_shell(&mut self) -> bool {
-        if !self.shell || !self.queue_line(Waiting::Shell) {
+        let waiting = match self.shell_private() {
+            true => Waiting::ShellPrivate,
+            false => Waiting::Shell,
+        };
+        if !self.shell || !self.queue_line(waiting) {
             return false;
         }
         self.shell = false;
@@ -7656,7 +7698,7 @@ impl Session {
     pub fn where_it_goes(&self, at: usize) -> Bound {
         match self.queued[at].waiting {
             Waiting::Command => Bound::CarriedOut,
-            Waiting::Shell => Bound::Run,
+            Waiting::Shell | Waiting::ShellPrivate => Bound::Run,
             Waiting::Prompt if self.a_turn_is_running() && !self.stopping => Bound::IntoThisTurn,
             Waiting::Prompt if self.queued[..at].iter().any(|line| line.waiting.is_sent()) => {
                 Bound::IntoTheNextTurn
@@ -7815,7 +7857,17 @@ impl Session {
     /// Only from the head of the queue, for the reason [`Session::take_queued_command`] takes only
     /// from there: what somebody typed first happens first.
     pub fn take_queued_shell(&mut self) -> Option<String> {
-        if self.status != Status::Idle || self.queued.first()?.waiting != Waiting::Shell {
+        self.take_queued_shell_of(Waiting::Shell)
+    }
+
+    /// Take the command line waiting longest, as [`Session::take_queued_shell`] does, where it was
+    /// typed `!!` and so is run with its output kept out of the conversation.
+    pub fn take_queued_private_shell(&mut self) -> Option<String> {
+        self.take_queued_shell_of(Waiting::ShellPrivate)
+    }
+
+    fn take_queued_shell_of(&mut self, waiting: Waiting) -> Option<String> {
+        if self.status != Status::Idle || self.queued.first()?.waiting != waiting {
             return None;
         }
         let line = self.queued.remove(0).prompt;
@@ -11053,6 +11105,36 @@ mod tests {
                 session.queue_shell(),
                 "the command line was not taken as a queued one"
             );
+        }
+
+        /// A line typed `!!` and queued behind a turn comes out as the private kind, and the plain
+        /// taker leaves it alone, so neither form can be run as the other.
+        ///
+        /// Rejects: the queue forgetting which form a line was typed in, which would record the
+        /// output of a line the person asked to keep private.
+        #[test]
+        fn a_queued_private_line_is_taken_as_private_only() {
+            let mut session = Session::new("none");
+            session.shell_private = true;
+            queue_shell(&mut session, "cat .env");
+            session.status = Status::Idle;
+
+            assert_eq!(session.take_queued_shell(), None);
+            assert_eq!(
+                session.take_queued_private_shell(),
+                Some("cat .env".to_string())
+            );
+        }
+
+        /// The plain form is unchanged by the private one existing.
+        #[test]
+        fn a_queued_plain_line_is_not_taken_as_private() {
+            let mut session = Session::new("none");
+            queue_shell(&mut session, "ls");
+            session.status = Status::Idle;
+
+            assert_eq!(session.take_queued_private_shell(), None);
+            assert_eq!(session.take_queued_shell(), Some("ls".to_string()));
         }
 
         /// The whole of what the mode is for: the lines on the screen are the delegate's own.

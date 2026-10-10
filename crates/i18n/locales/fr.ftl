@@ -2236,6 +2236,7 @@ session-model-substituted =
     `bravebot doctor` si un abonnement était attendu.
 session-error = erreur : { $problem }
 session-no-output = aucune sortie
+shell-kept-private = saisie avec !!, cette sortie n'a pas été envoyée au modèle
 
 ## Pourquoi un tour a échoué
 

@@ -2691,6 +2691,7 @@ session-model-substituted =
     subscription was expected.
 session-error = error: { $problem }
 session-no-output = no output
+shell-kept-private = typed with !!, so this output was not sent to the model
 
 ## Why a turn failed
 
