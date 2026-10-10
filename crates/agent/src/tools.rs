@@ -887,7 +887,11 @@ fn table(
              and ${...} are refused for that reason: write the value out. Name the program \
              outright for the same reason, since a pattern there stands for whichever file it \
              matches today: `./scr*.sh` is refused where `./script.sh` runs. Quoting settles all \
-             of them, so '$HOME' is six characters and reaches the program as one argument. The user \
+             of them, so '$HOME' is six characters and reaches the program as one argument. A \
+             pattern the program should match itself is quoted for the same reason, so write \
+             `find . -name '*.md'`: unquoted, `*.md` is looked up as files and refused when none \
+             matches. A pattern after the = of an option, as in `grep -r x . --include=*.md`, \
+             is passed to the program as written. The user \
              approves the compiled plan before anything runs, so say what you are running and \
              why first. \
              \
@@ -906,7 +910,7 @@ fn table(
              A program meant to keep running, such as a server or a watcher, needs \
              background: true. Without it the line is waited on and stopped at its deadline \
              ("
-                .to_string()
+            .to_string()
                 + &format!(
                     "{deadline_default} seconds by default; set deadline_seconds to allow up to \
                      {deadline_ceiling}"
@@ -12151,6 +12155,22 @@ mod tests {
         assert!(
             described.contains("returns less"),
             "the description does not say to prefer whichever returns less: {described}"
+        );
+    }
+
+    /// The planner learns which spelling works only from this description or from a refusal, so
+    /// the description gives both cases: a pattern given to `find -name` is quoted, and a pattern
+    /// after an option's `=` is not.
+    #[test]
+    fn the_run_description_says_when_a_pattern_for_the_program_is_quoted() {
+        let described = run_description();
+        assert!(
+            described.contains("`find . -name '*.md'`"),
+            "the description does not show the quoted pattern: {described}"
+        );
+        assert!(
+            described.contains("`grep -r x . --include=*.md`, is passed to the program as written"),
+            "the description does not say an option's pattern is passed as written: {described}"
         );
     }
 

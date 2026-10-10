@@ -302,7 +302,7 @@ impl fmt::Display for Reason {
                 "an assignment's value must be literal text, so that the plan shows what the program will see",
             ),
             Self::NoMatch => f.write_str(
-                "matched no file. A pattern standing for nothing is not an argument, so there is no plan to show",
+                "matched no file. A pattern standing for nothing is not an argument, so there is no plan to show. If the program should receive the pattern, quote the word so it is passed as written, for example find . -name '*.md'",
             ),
             Self::TooMany { found, cap } => write!(
                 f,
@@ -1346,7 +1346,8 @@ pub const MAX_DIRECTORIES: usize = 4096;
 ///
 /// Braces multiply, `~` becomes a path, and a pattern becomes the files it matches, sorted. A word
 /// with no pattern in it stands for itself and touches no filesystem, so a target that does not
-/// exist yet is still an argument.
+/// exist yet is still an argument. So does an option whose pattern follows its `=`, such as
+/// `--include=*.md`, since the program matches it.
 ///
 /// `directory` is where the command will run, which is what a relative pattern is relative to.
 pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<String>, Refused> {
@@ -1374,10 +1375,17 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
             out.push(render(&candidate));
             continue;
         }
+        if is_option_value(&candidate) {
+            // The program does the matching, so the word is passed as written and nothing on disk
+            // decides whether it is.
+            out.push(render(&candidate));
+            continue;
+        }
         let matched = walk(directory, &candidate).map_err(refused)?;
         if matched.is_empty() {
             // Never the pattern itself. A shell passes an unmatched pattern through as an
-            // argument, which is the one thing nobody ever means by writing it.
+            // argument, and a plan showing one reads as a list of files. A pattern meant for the
+            // program is quoted, and the refusal says so.
             return Err(refused(Reason::NoMatch));
         }
         out.extend(matched);
@@ -1404,9 +1412,23 @@ fn is_pattern(piece: &Piece) -> bool {
     }
 }
 
+/// Whether a word is an option whose value holds the pattern, as `--include=*.md` is.
+///
+/// The text before the first pattern starts with `-` and holds an `=`. A pattern before the `=`,
+/// as in `--*=x`, names files and is expanded.
+fn is_option_value(pieces: &[Piece]) -> bool {
+    let mut written = String::new();
+    for piece in pieces {
+        let Piece::Text(text) = piece else { break };
+        written.push_str(text);
+    }
+    written.starts_with('-') && written.contains('=')
+}
+
 /// A word's pieces as the pattern they were written as.
 ///
-/// The spelling a refusal quotes back, and the text a pattern-free word simply is.
+/// The spelling a refusal quotes back, and the text a pattern-free word or an option value is
+/// passed as.
 fn render(pieces: &[Piece]) -> String {
     let mut out = String::new();
     for piece in pieces {
@@ -2759,8 +2781,8 @@ mod tests {
     }
 
     /// A pattern standing for nothing is not an argument. A shell hands the pattern through as
-    /// text, which is never what anybody writing one meant, and would put a plan in front of a
-    /// person that reads as a list of files and is not one.
+    /// text, which would put a plan in front of a person that reads as a list of files and is
+    /// not one.
     #[test]
     fn a_pattern_matching_nothing_is_refused_rather_than_passed_through() {
         let tree = Tree::new("nothing");
@@ -2768,6 +2790,60 @@ mod tests {
         let refusal = expansion_refused("ls *.zzz", 1, &tree.root);
         assert_eq!(refusal.reason, Reason::NoMatch);
         assert_eq!(refusal.text, "*.zzz");
+    }
+
+    /// `find . -name *.md` means the pattern for `find`, and the refusal is the only thing the
+    /// planner sees, so it has to name the fix. The advice is only worth giving if the quoted
+    /// spelling it shows is accepted and arrives as written.
+    #[test]
+    fn the_refusal_of_a_pattern_matching_nothing_says_to_quote_the_word() {
+        let tree = Tree::new("quote-advice");
+        tree.file("a.rs");
+        let refusal = expansion_refused("find . -name *.md", 3, &tree.root);
+        assert_eq!(refusal.reason, Reason::NoMatch);
+        assert_eq!(refusal.text, "*.md");
+        let shown = refusal.to_string();
+        assert!(
+            shown.contains("quote the word") && shown.contains("-name '*.md'"),
+            "the refusal does not tell the planner to quote the word: {shown}"
+        );
+        assert_eq!(expanded("find . -name '*.md'", 3, &tree.root), ["*.md"]);
+    }
+
+    /// `grep --include=*.md` hands the pattern to grep, and no file is named `--include=...`.
+    /// The person is shown the argument the program will get, as for a quoted word. A file
+    /// that happens to be named like the option must not turn it into that file's name.
+    #[test]
+    fn a_pattern_in_an_option_value_is_passed_as_written() {
+        let tree = Tree::new("option-value");
+        tree.file("a.md");
+        let plan = compiled("grep -r x . --include=*.md --vmodule=brave/*", &tree.root);
+        assert_eq!(
+            plan.steps.steps()[0].args,
+            ["-r", "x", ".", "--include=*.md", "--vmodule=brave/*"]
+        );
+
+        tree.file("--include=x.md");
+        assert_eq!(
+            expanded("grep -r x . --include=*.md", 4, &tree.root),
+            ["--include=*.md"]
+        );
+        assert_eq!(
+            expanded("grep -r x . --include={*.md,*.rs}", 4, &tree.root),
+            ["--include=*.md", "--include=*.rs"]
+        );
+    }
+
+    /// Only the value of an option is the program's to match. A pattern before the `=`, or in a
+    /// word that is not an option, still names files and is expanded or refused as any other.
+    #[test]
+    fn a_pattern_before_the_equals_or_outside_an_option_is_still_expanded() {
+        let tree = Tree::new("option-name");
+        tree.file("--a=x").file("--b=x");
+        assert_eq!(expanded("ls --*=x", 1, &tree.root), ["--a=x", "--b=x"]);
+        let refusal = expansion_refused("ls name=*.zzz", 1, &tree.root);
+        assert_eq!(refusal.reason, Reason::NoMatch);
+        assert_eq!(refusal.text, "name=*.zzz");
     }
 
     /// An approval prompt long enough that nobody reads it is a prompt that grants everything and
