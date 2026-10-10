@@ -336,8 +336,8 @@ make what this tool can reach a property of whichever server you installed.
 | Python | `pyright-langserver` |
 | Go | `gopls` |
 
-The table is fixed and there is nothing to configure. The binary has to be installed and on your
-`PATH`.
+The binary has to be installed and on your `PATH`. A language not in the table has no server until
+you declare one, [below](#declaring-a-server-of-your-own).
 
 **A server runs with the access your own shell would give it, and is not confined.** The prompt says
 so in those words: it reads the whole tree and the dependency sources, and starting it runs code
@@ -379,6 +379,49 @@ again and the tree is not indexed twice. A `reader` delegate is not offered `lsp
 server runs the project's build tooling, and a reader may not run programs. A delegate working in a
 [checkout](../customize/agents.md#a-checkout-of-its-own) is not offered it either, since the server
 indexes your working tree.
+
+### Declaring a server of your own
+
+A C, C++, Java, Kotlin, Ruby, PHP, Swift, Lua or C# project needs a server the table does not hold.
+Declare one in `~/.bravebot/lsp.json`:
+
+```json
+{
+  "servers": {
+    "clangd": {
+      "command": "clangd",
+      "args": ["--background-index"],
+      "extensions": { "c": "c", "h": "c", "cpp": "cpp", "hpp": "cpp" },
+      "env": { "CLANGD_FLAGS": "--log=error" },
+      "initializationOptions": {}
+    }
+  }
+}
+```
+
+| Key | |
+|---|---|
+| `command` | a program name looked up on your `PATH`, or an absolute path; a relative path is refused |
+| `args` | arguments, optional |
+| `extensions` | each file extension the server handles, with the language id the protocol wants; required |
+| `env` | variables set for it, optional |
+| `initializationOptions` | sent to the server as written, optional |
+
+**Only this file is read.** A `lsp.json`, `.lsp.json` or `.github/lsp.json` in a project changes
+nothing, because a command in a file a project carries is a command a tool call could have written.
+
+A declared extension wins over the table, so declaring `rs` replaces `rust-analyzer`. Where two
+declarations name one extension, the first by name wins. An extension nothing names answers that no
+server is configured.
+
+**The prompt names the whole command and says what starting it runs is not known.** It does not
+say the server runs nothing, and it does not say it runs your dependencies' code, because
+bravebot did not choose the program. It runs with your own access and is not confined. Your
+answer is kept for the session against the declaration as it stood: edit the file and the next
+question is put to you again.
+
+A declared server is settled once the progress it reported has ended. One that reports no progress
+is waited on for twenty seconds once, and every answer after that says it may be short.
 
 ### A location is structure; the text at it is content
 

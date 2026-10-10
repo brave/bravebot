@@ -327,15 +327,27 @@ pub fn reference_params(uri: &str, line: usize, character: usize) -> Value {
 /// for the life of the process, and every answer is marked partial forever. Withholding it did not
 /// make the client safer; it made the notice meaningless. A progress notification carries a token and
 /// a percentage and asks for nothing.
-pub fn initialize_params(root_uri: &str, client_name: &str, client_version: &str) -> Value {
-    serde_json::json!({
+///
+/// `options` is the `initializationOptions` a person's declaration gave a server of their own, sent
+/// as written. A server from the table is given none.
+pub fn initialize_params(
+    root_uri: &str,
+    client_name: &str,
+    client_version: &str,
+    options: Option<&Value>,
+) -> Value {
+    let mut params = serde_json::json!({
         "processId": Value::Null,
         "rootUri": root_uri,
         "capabilities": {
             "window": { "workDoneProgress": true },
         },
         "clientInfo": { "name": client_name, "version": client_version },
-    })
+    });
+    if let Some(options) = options {
+        params["initializationOptions"] = options.clone();
+    }
+    params
 }
 
 /// A `file://` URI for an absolute path.
@@ -785,7 +797,7 @@ mod tests {
     /// which asks nothing of this process. Everything that would let a server drive us stays absent.
     #[test]
     fn initialize_advertises_no_capability_a_server_can_act_through() {
-        let params = initialize_params("file:///w", "bravebot", "0.1.0");
+        let params = initialize_params("file:///w", "bravebot", "0.1.0", None);
         assert_eq!(params["rootUri"], "file:///w");
 
         let capabilities = &params["capabilities"];

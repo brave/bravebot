@@ -2088,12 +2088,24 @@ function Card({
           <p className="permission-scope">
             <strong>Program:</strong> <code>{request.program}</code>
           </p>
+          {request.args.length > 0 && (
+            <p className="permission-scope">
+              <strong>Arguments:</strong> <code>{request.argumentsLine}</code>
+            </p>
+          )}
           <p className="permission-scope">
             <strong>Indexes:</strong> <code>{request.workspace}</code>
           </p>
 
+          {/* A server a person declared runs a program this code did not choose (LSP-11). */}
           {/* A server that runs build tooling executes code from dependencies (LSP-5). */}
-          {request.runsBuildTooling ? (
+          {request.declared ? (
+            <p className="warn">
+              You declared this server yourself, so what starting it runs is not known. It may
+              run code from your project and its dependencies. It runs with your own access
+              and is not confined.
+            </p>
+          ) : request.runsBuildTooling ? (
             <p className="warn">
               Starting it runs the build tooling of its ecosystem, so code from your
               dependencies runs with your own access, the way a build or a test run does. It

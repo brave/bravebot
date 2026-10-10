@@ -22,6 +22,7 @@ pub mod hooks;
 pub mod install;
 pub mod keys;
 pub mod limit;
+pub mod lsp;
 mod managed;
 pub mod mcp;
 mod obfuscate;

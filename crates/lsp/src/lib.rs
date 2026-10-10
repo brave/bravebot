@@ -25,7 +25,9 @@ pub mod server;
 mod testutil;
 
 pub use protocol::{Location, Operation, SymbolKind};
-pub use server::{Language, Question, Roster, Server, Servers, Starting};
+pub use server::{
+    BuildTooling, Declared, Language, Question, Roster, Served, Server, Servers, Starting,
+};
 
 use bravebot_core::policy::Denial;
 use std::fmt;
@@ -52,7 +54,7 @@ pub struct Answer {
 #[derive(Debug)]
 pub enum LspError {
     /// A person was asked whether to start the server and said no.
-    Refused { language: server::Language },
+    Refused { language: server::Served },
     /// The policy refused the call.
     Denied(Denial),
     /// This file's language has no server in the table.
@@ -61,24 +63,24 @@ pub enum LspError {
     NoServerForQuery,
     /// The server for this language is not installed.
     NoBinary {
-        language: server::Language,
-        program: &'static str,
+        language: server::Served,
+        program: String,
     },
     /// The server was there and did not start.
     Start {
-        language: server::Language,
+        language: server::Served,
         detail: String,
     },
     /// The server exited while we were talking to it.
-    Exited { language: server::Language },
+    Exited { language: server::Served },
     /// The transport failed, or the server sent something unusable.
     Transport {
-        language: server::Language,
+        language: server::Served,
         detail: String,
     },
     /// The server did not answer inside the budget.
     TimedOut {
-        language: server::Language,
+        language: server::Served,
         method: String,
     },
     /// The server returned a JSON-RPC error.
@@ -91,7 +93,7 @@ pub enum LspError {
     /// analysed. What is reported is structure: which language, which method was put, and the code
     /// the protocol assigns to the failure.
     Server {
-        language: server::Language,
+        language: server::Served,
         code: i64,
         method: String,
     },
@@ -208,14 +210,14 @@ mod tests {
         );
         assert!(
             LspError::NoBinary {
-                language: server::Language::Rust,
-                program: "rust-analyzer"
+                language: server::Language::Rust.into(),
+                program: "rust-analyzer".into()
             }
             .is_absence_of_a_server()
         );
         assert!(
             LspError::Start {
-                language: server::Language::Rust,
+                language: server::Language::Rust.into(),
                 detail: "boom".into()
             }
             .is_absence_of_a_server()
@@ -224,7 +226,7 @@ mod tests {
         // A server that answered and failed is not an absent one.
         assert!(
             !LspError::Server {
-                language: server::Language::Rust,
+                language: server::Language::Rust.into(),
                 code: -32601,
                 method: "textDocument/implementation".into()
             }
@@ -232,7 +234,7 @@ mod tests {
         );
         assert!(
             !LspError::TimedOut {
-                language: server::Language::Rust,
+                language: server::Language::Rust.into(),
                 method: "textDocument/references".into()
             }
             .is_absence_of_a_server()
@@ -260,22 +262,22 @@ mod tests {
                 path: "a.txt".into(),
             },
             LspError::NoBinary {
-                language: server::Language::Rust,
-                program: "rust-analyzer",
+                language: server::Language::Rust.into(),
+                program: "rust-analyzer".into(),
             },
             LspError::Start {
-                language: server::Language::Rust,
+                language: server::Language::Rust.into(),
                 detail: "boom".into(),
             },
             LspError::Exited {
-                language: server::Language::Rust,
+                language: server::Language::Rust.into(),
             },
             LspError::TimedOut {
-                language: server::Language::Rust,
+                language: server::Language::Rust.into(),
                 method: "textDocument/references".into(),
             },
             LspError::Server {
-                language: server::Language::Rust,
+                language: server::Language::Rust.into(),
                 code: -32601,
                 method: "textDocument/implementation".into(),
             },

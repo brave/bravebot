@@ -3,6 +3,7 @@ id: LSP
 title: lsp
 status: normative
 governs:
+  - crates/config/src/lsp.rs
   - crates/lsp/src/lib.rs
   - crates/lsp/src/protocol.rs
   - crates/lsp/src/server.rs
@@ -270,7 +271,8 @@ dependency sources, runs the build tooling of its ecosystem, and for Rust that m
 proc macros out of `Cargo.lock` execute. That is code from the dependency tree running with the
 user's access. It is the same thing `cargo test` does and the same thing `run` does after
 [RUN-7](run.md#RUN-7), and it must be asked for in those terms rather than described as a lookup.
-TypeScript and Python are asked about in the same terms. Given no `tsserver.path`,
+TypeScript and Python are asked about in the same terms. A server a person declared is asked about
+as well, and [LSP-11](#LSP-11) says what is different about that question. Given no `tsserver.path`,
 typescript-language-server runs the `tsserver.js` in the nearest `typescript/lib` under
 `node_modules`, `.yarn/sdks`, `.pnpm/sdks` or `.vscode/pnpify`, looking in the workspace and then
 each directory above it, before its own copy, so what starts is the project's TypeScript. pyright
@@ -301,9 +303,10 @@ assigns. The server's sentence is not carried at all.
 <a id="LSP-6"></a>
 ### LSP-6: no server means no answer, and says which
 
-Where no server is configured for a file's language, where the binary is absent, and where a server
-was configured but failed to start are three different sentences, and none of them is an empty
-result. Nothing falls back to searching the tree.
+Where no server is configured for a file's language (neither the table nor a declaration under
+[LSP-11](#LSP-11) names its extension), where the binary is absent, and where a server was
+configured but failed to start are three different sentences, and none of them is an empty result.
+Nothing falls back to searching the tree.
 
 **Why.** An absent server reported as "no references found" is a false negative that reads as
 proof, which is the failure [MCP-5](../mcp.md#MCP-5) and
@@ -330,11 +333,20 @@ quarantined, since a notice inside a body nobody may read tells nobody anything.
 A request may wait for indexing to finish, bounded by a limit; reaching the limit answers with what
 the index has and the notice above, rather than failing.
 
+A server a person declared ([LSP-11](#LSP-11)) reports its indexing under a token this repository
+did not fix, so it counts as settled when it has begun some progress and every piece it began has
+ended, read from the protocol's two progress kinds and never from a word in one. Work it begins
+afterwards unsettles it again, and an answer given meanwhile says it may be short. A server that
+reports no progress at all never settles: it is waited on for the bound once, and every answer
+after that is partial and says so, rather than every question waiting the bound again.
+
 **Why bounded.** Indexing a large workspace outlasts a person's patience, and a turn held open with
 nothing to show for it is [RUN-11](run.md#RUN-11)'s problem arriving by another road.
 
 `verified-by: bravebot_lsp::server::an_answer_during_indexing_is_marked_partial`
 `verified-by: bravebot_lsp::server::a_settled_index_makes_no_partial_claim`
+`verified-by: bravebot_lsp::server::a_declared_server_that_reports_no_progress_is_waited_on_once`
+`verified-by: bravebot_lsp::server::work_a_declared_server_begins_after_settling_makes_the_next_answer_partial`
 `verified-by: bravebot_agent::lsp::a_partial_answer_says_so_even_when_quarantined`
 
 <a id="LSP-8"></a>
@@ -466,7 +478,74 @@ incognito has already accepted.
 `verified-by: bravebot_lsp::server::the_cache_is_never_read_by_the_driver`
 `verified-by: bravebot_lsp::server::a_server_whose_index_directory_cannot_be_made_private_does_not_start`
 
+<a id="LSP-11"></a>
+### LSP-11: a person may declare a server, in their own directory and nowhere else
+
+`~/.bravebot/lsp.json` holds `{ "servers": { "<name>": { "command", "args", "extensions", "env",
+"initializationOptions" } } }`. `command` is a bare program name looked up the way a table server's
+is, or an absolute path; a relative path is a problem with the entry, because it would run a program
+out of the workspace. `extensions` maps each extension the server handles to the language id sent
+with `didOpen`. `env` and `initializationOptions` are optional and are handed over as written. An
+entry that cannot be used is left out and the others are kept.
+
+**No file inside a checkout declares a server.** [SERVERS-1](../mcp-servers.md#SERVERS-1) is the
+reason and applies unchanged: a command is what [BACKEND-1](../backends.md#BACKEND-1) keeps out of
+a settings file, and the agent can write in the workspace. Only the state directory is read, so a
+`.github/lsp.json`, a `.lsp.json` or an `lsp.json` in a workspace changes nothing. A checkout that
+requests a declared server by alias is not built.
+
+**The path still decides the language.** A declared extension wins over the table, the first
+declaration (in name order) to name an extension wins over a later one, and nothing reads the file
+to decide any of it ([LSP-2](#LSP-2)). An extension nothing names is unconfigured under
+[LSP-6](#LSP-6).
+
+**Starting one is put to the person under [LSP-5](#LSP-5), in terms that fit what is known.** The
+prompt names the resolved program and every argument, an argument holding a space or a control
+character quoted so that two lists starting different commands never read alike, and the name the
+person gave the declaration.
+What starting it runs is not known for a program this repository did not choose, and the prompt says
+that it is unknown, never that it runs nothing and never that it runs the dependency tree's code.
+The server runs with the person's own access and is not confined.
+
+**The approval binds to a digest of the declaration.** A server is filed under the SHA-256 of its
+name, command, arguments, extensions, variables and initialization options, so one edited to run
+something else is not the one that was approved. The file is read at each question, a running
+server whose digest is no longer declared is stopped, and the edited one is asked about as a new
+server. A file that cannot be read at that moment, one caught half written, changes nothing: the
+declarations stand as they were. The approval lasts the session, as [LSP-8](#LSP-8) has it for every server.
+
+**The label on every answer is unchanged.** [LSP-3](#LSP-3) labels a location by the files it names
+and hover text is quarantined, whichever binary answered, so nothing the declaration says appears
+in either. Its variables are the person's own and may name a credential the agent withholds from a
+table server ([RUN-12](run.md#RUN-12)); a value is never repeated by a log line or the prompt.
+
+`verified-by: bravebot_config::lsp::the_file_is_read_from_the_state_directory`
+`verified-by: bravebot_config::lsp::a_relative_command_is_not_a_declaration`
+`verified-by: bravebot_config::lsp::a_bad_entry_is_listed_and_the_others_are_kept`
+`verified-by: bravebot_config::lsp::an_unknown_key_is_a_problem`
+`verified-by: bravebot_config::lsp::the_digest_covers_everything_that_decides_what_runs`
+`verified-by: bravebot_config::lsp::debug_names_the_server_and_not_its_variables`
+`verified-by: bravebot_lsp::server::a_declared_extension_starts_the_declared_command_after_approval`
+`verified-by: bravebot_lsp::server::an_undeclared_extension_answers_unconfigured`
+`verified-by: bravebot_lsp::server::a_changed_declaration_is_asked_about_again`
+`verified-by: bravebot_lsp::server::a_declared_extension_wins_over_the_table_and_over_a_later_declaration`
+`verified-by: bravebot_agent::declared_lsp::a_declared_extension_starts_the_declared_command_after_approval`
+`verified-by: bravebot_agent::declared_lsp::a_declaration_found_in_the_workspace_is_ignored`
+`verified-by: bravebot_agent::declared_lsp::a_changed_declaration_is_asked_about_again`
+`verified-by: bravebot_agent::declared_lsp::an_undeclared_extension_answers_unconfigured`
+`verified-by: bravebot_agent::declared_lsp::an_unreadable_declaration_file_leaves_the_approved_server_running`
+`verified-by: bravebot_agent::declared_lsp::a_prompt_shows_an_argument_with_a_space_as_one_argument`
+`verified-by: bravebot_config::lsp::an_extension_with_a_dot_inside_it_is_a_problem`
+`verified-by: bravebot_tui::confirm::a_declared_server_is_asked_about_with_its_arguments_and_as_unknown`
+`verified-by: bravebot_ui_bridge::wire::a_server_prompt_carries_what_would_run_and_whether_it_builds`
+
 ## Known costs
+
+- **A declared server's own build tooling is unknown, so the prompt cannot say what it runs.**
+  [LSP-11](#LSP-11) says that it is unknown. A person who declares a server wrapping a build tool
+  approves one that may run the dependency tree's code as [LSP-5](#LSP-5) describes for the table,
+  and nothing here can tell them whether it does. A declaration file that cannot be read, or an
+  entry that cannot be used, leaves its extensions unconfigured, and nothing reports it.
 
 - **A location is attention, and attention can be steered.** An
   attacker who owns a file in a tree the user vouched for decides which paths and lines come back from a query about

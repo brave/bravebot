@@ -2275,32 +2275,46 @@ fn draw_server(
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::ok(), t!(server_title));
 
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(
-                format!("{} ", t!(server_verb)),
-                Style::default()
-                    .fg(theme::ok())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                request.program.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::styled(
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!("{} ", t!(server_verb)),
+            Style::default()
+                .fg(theme::ok())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            request.program.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ])];
+    if !request.args.is_empty() {
+        lines.push(Line::styled(
             format!(
                 "  {}",
-                t!(server_workspace, workspace = request.workspace.as_str())
+                t!(server_arguments, arguments = request.arguments_line())
             ),
             Style::default().fg(theme::muted()),
+        ));
+    }
+    lines.push(Line::styled(
+        format!(
+            "  {}",
+            t!(server_workspace, workspace = request.workspace.as_str())
         ),
-        Line::raw(""),
-    ];
+        Style::default().fg(theme::muted()),
+    ));
+    lines.push(Line::raw(""));
 
     // The consequential half. Drawn in the warning colour where dependency code runs, since that is
     // the part of this question a person could not have inferred from the word "start".
-    let (sentence, style) = if request.runs_build_tooling {
+    let (sentence, style) = if request.declared {
+        // What a program a person named runs is not known here, so the prompt says that rather than
+        // that it runs nothing.
+        (
+            t!(server_declared_unknown),
+            Style::default().fg(theme::note()),
+        )
+    } else if request.runs_build_tooling {
         (t!(server_build_tooling), Style::default().fg(theme::note()))
     } else {
         (t!(server_reads_only), Style::default().fg(theme::muted()))
@@ -4008,6 +4022,51 @@ mod tests {
         let mut drawn = Drawn::default();
         let rows = rows_of(width, height, |frame| drawn = draw(frame));
         (rows, drawn)
+    }
+
+    fn server_screen(request: &ServerRequest) -> String {
+        pinned_screen((160, 24), |frame| {
+            draw_server(frame, request, 0, &mut Seen::default())
+        })
+        .0
+        .join("\n")
+    }
+
+    /// LSP-11: the question about a server a person declared names every argument, and says what
+    /// starting it runs is not known. It must say neither that it runs the project's code nor that it
+    /// only reads, since nothing here chose the program.
+    #[test]
+    fn a_declared_server_is_asked_about_with_its_arguments_and_as_unknown() {
+        let table = ServerRequest {
+            language: "Rust".into(),
+            program: "/usr/bin/rust-analyzer".into(),
+            args: Vec::new(),
+            workspace: "/work".into(),
+            runs_build_tooling: true,
+            declared: false,
+        };
+        let declared = ServerRequest {
+            language: "clangd".into(),
+            program: "/usr/bin/clangd".into(),
+            args: vec!["--background-index".into(), "--log=error".into()],
+            declared: true,
+            ..table.clone()
+        };
+
+        let shown = server_screen(&declared);
+        assert!(shown.contains("/usr/bin/clangd"), "{shown}");
+        assert!(shown.contains("--background-index --log=error"), "{shown}");
+        assert!(shown.contains("not known"), "{shown}");
+        assert!(!shown.contains("the way building or testing"), "{shown}");
+        assert!(!shown.contains("nothing is written"), "{shown}");
+
+        // The table's server keeps its own sentence, so the unknown one is not shown for it.
+        let from_the_table = server_screen(&table);
+        assert!(
+            from_the_table.contains("the way building or testing"),
+            "{from_the_table}"
+        );
+        assert!(!from_the_table.contains("not known"), "{from_the_table}");
     }
 
     fn fetch_screen(request: &FetchRequest, size: (u16, u16), scroll: u16) -> (Vec<String>, Drawn) {
@@ -8586,10 +8645,12 @@ mod tests {
                 let program = numbered('s', 100);
                 let workspace = numbered('w', 100);
                 let request = ServerRequest {
-                    language: "Rust",
+                    language: "Rust".to_string(),
                     program: format!("/{}/rust-analyzer", program.join("/")),
+                    args: Vec::new(),
                     workspace: format!("/{}", workspace.join("/")),
                     runs_build_tooling: true,
+                    declared: false,
                 };
                 let mut deciding = program;
                 deciding.extend(workspace);

@@ -569,14 +569,20 @@ pub fn fetch_request(id: u64, request: &FetchRequest) -> Value {
 ///
 /// `runsBuildTooling` is sent as a boolean and the front end writes the sentence. When it is
 /// true, starting the server runs code from the dependency tree with the person's own access,
-/// as a build does. The card must say so (LSP-5).
+/// as a build does. The card must say so (LSP-5). `declared` is set for a server the person
+/// declared themselves, whose program is one this code did not choose: what starting it runs
+/// is not known, and the card says that instead (LSP-11). `args` are the arguments it is
+/// started with.
 pub fn server_request(id: u64, request: &ServerRequest) -> Value {
     json!({
         "request": id,
         "language": request.language,
         "program": request.program,
+        "args": request.args,
+        "argumentsLine": request.arguments_line(),
         "workspace": request.workspace,
         "runsBuildTooling": request.runs_build_tooling,
+        "declared": request.declared,
         "summary": request.summary(),
     })
 }

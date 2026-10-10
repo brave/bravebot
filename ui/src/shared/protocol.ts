@@ -491,14 +491,20 @@ export interface FetchRequest {
  * the name from its own table, so nothing a turn read chooses what runs.
  *
  * When `runsBuildTooling` is true, starting the server runs code from the dependency tree with
- * the person's own access, as a build does. The card must say so.
+ * the person's own access, as a build does. The card must say so. When `declared` is true the
+ * person declared the server themselves, so what starting it runs is not known and the card
+ * says that in place of either sentence (LSP-11). `args` are the arguments it is started with.
  */
 export interface ServerRequest {
   request: number
   language: string
   program: string
+  args: string[]
+  /** The arguments as one line, quoted where one holds a space, so it reads back into the list. */
+  argumentsLine: string
   workspace: string
   runsBuildTooling: boolean
+  declared: boolean
   summary: string
 }
 

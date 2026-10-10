@@ -183,11 +183,12 @@ const CARDS = {
     why: 'the address the planner wrote and the host the agent read out of it, asked about before any reply exists',
   },
   server: {
-    entry: () => t.askedServer({ request: 1, language: FORGED_CHROME, program: FORGED_CHROME, workspace: FORGED_CHROME, runsBuildTooling: true, summary: 'start a language server' }),
+    entry: () => t.askedServer({ request: 1, language: FORGED_CHROME, program: FORGED_CHROME, args: [FORGED_CHROME], argumentsLine: FORGED_CHROME, workspace: FORGED_CHROME, runsBuildTooling: true, declared: false, summary: 'start a language server' }),
     marks: null,
-    // docs/specs/tools/lsp.md: the language and the program come from a table in the agent, the
-    // path is what `$PATH` resolved that name to, and the workspace is the session's own root.
-    why: 'a language and a program out of the agent’s own table, the path that name resolved to, and the project’s root, asked about before any server has answered',
+    // docs/specs/tools/lsp.md: the language and the program come from a table in the agent or from
+    // a declaration the person wrote in their own directory (LSP-11), the path is what `$PATH`
+    // resolved that name to, and the workspace is the session's own root.
+    why: 'a language, a program and its arguments out of the agent’s own table or the person’s own declaration, the path that name resolved to, and the project’s root, asked about before any server has answered',
   },
   manifest: {
     entry: () => t.askedManifest({ request: 1, task: FORGED_CHROME, steps: [FORGED_CHROME] }),
