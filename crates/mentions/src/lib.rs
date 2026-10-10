@@ -171,6 +171,8 @@ pub fn matching(root: &Path, typed: &str, sources: &Sources) -> Vec<Entry> {
                 entries.push(Entry {
                     path: format!("{alias}/"),
                     is_directory: true,
+                    note: None,
+                    title: None,
                 });
             }
         }
