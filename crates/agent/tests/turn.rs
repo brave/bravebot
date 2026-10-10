@@ -27638,6 +27638,8 @@ fn a_delegate_runs_under_the_output_cap_of_the_turn_that_spawned_it() {
 struct Watched {
     seen: Vec<(String, Option<bravebot_agent::report::DelegateId>)>,
     from: Option<bravebot_agent::report::DelegateId>,
+    narrated: Vec<String>,
+    waited_on: Vec<bravebot_agent::report::DelegateId>,
 }
 
 impl Watched {
@@ -27664,6 +27666,14 @@ impl Watched {
 
 impl bravebot_agent::report::Reporter for Watched {
     fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn narration(&mut self, text: String) {
+        self.narrated.push(text);
+    }
+
+    fn delegate_waiting(&mut self, delegate: bravebot_agent::report::DelegateId) {
+        self.waited_on.push(delegate);
+    }
 
     fn reporting_for(&mut self, delegate: Option<bravebot_agent::report::DelegateId>) {
         self.from = delegate;
@@ -28909,13 +28919,47 @@ fn a_turn_does_not_answer_while_a_delegate_is_still_working() {
         "the turn ended without collecting the delegate it started: {:?}",
         reporter.lines()
     );
+    let requests = every_request(&received);
     assert!(
-        every_request(&received)
+        requests
             .iter()
             .any(|body| body.contains("THE-DELEGATE-FINISHED-ANYWAY")),
         "what the delegate said never reached the planner"
     );
     assert_eq!(outcome.reply_for_display(), "it came back and I read it");
+
+    // What the planner is told when it starts a delegate is how to wait for one: answer with one
+    // line, and the turn waits and asks again. A promise that it would not be asked to answer
+    // leaves a planner with nothing to do writing a full summary.
+    assert!(
+        requests.iter().any(|body| {
+            body.contains("end the round with one line naming what is outstanding")
+                && !body.contains("before you are asked to answer")
+        }),
+        "the result of spawning a delegate did not say how to wait for it"
+    );
+
+    // The first answer was said on the way to the next round, so an interface keeps it as text
+    // between calls. Reported as the reply in progress it is cleared when the next round starts
+    // and never reaches the transcript, although the planner's conversation holds it.
+    let said: Vec<&str> = reporter
+        .narrated
+        .iter()
+        .map(String::as_str)
+        .filter(|text| !text.is_empty())
+        .collect();
+    assert_eq!(
+        said,
+        ["I am done, whatever it says"],
+        "the answer given while a delegate worked was not reported as between-calls text, or the \
+         turn's final answer was: {:?}",
+        reporter.lines()
+    );
+    assert_eq!(
+        reporter.waited_on,
+        [bravebot_agent::report::DelegateId::nth(1)],
+        "the interface was not told which delegate the turn waited on"
+    );
 }
 
 /// CMDLINE-4: a delegate resolves a `~` the way the turn that spawned it would.
@@ -36031,7 +36075,9 @@ fn a_job_output_call_naming_a_delegate_says_its_report_arrives_on_its_own() {
 
     let answer = "'d1' is a delegate, not a background job, so job_output neither reads it nor \
                   stops it. How it ended reaches you on its own, in a message saying d1 has \
-                  finished or did not finish";
+                  finished or did not finish. When a delegate is all that is left, end the round \
+                  with one line naming what is outstanding: the turn waits for the report and \
+                  asks you again.";
     let last = every_request(&received)
         .into_iter()
         .rfind(|body| body.contains("WAIT-ON-THE-DELEGATE"))

@@ -8801,6 +8801,9 @@ fn run_turn_animated(
                 crate::remote_confirm::ToMain::ReportingFor(delegate) => {
                     session.reporting_for(delegate)
                 }
+                crate::remote_confirm::ToMain::DelegateWaiting(delegate) => {
+                    session.waiting_on_delegate(delegate)
+                }
                 crate::remote_confirm::ToMain::DelegateStarted(delegation) => {
                     session.delegate_started(delegation)
                 }
@@ -9078,6 +9081,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         | ToMain::Returned(_)
         | ToMain::Landed(_)
         | ToMain::Interjected(_)
+        | ToMain::DelegateWaiting(_)
         | ToMain::DelegateStarted(_)
         | ToMain::DelegateFinished { .. }
         | ToMain::ReportingFor(_) => return None,

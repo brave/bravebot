@@ -1867,6 +1867,7 @@ indicator-checking = { $lines ->
     [one] Vérification de { $lines } ligne
    *[other] Vérification de { $lines } lignes
     }
+indicator-waiting-on-delegate = En attente de { $delegate }
 indicator-hook = Exécution du hook : { $program } ({ $moment })
 indicator-checking-picture = Vérification d'une image
 indicator-checking-pdf = Vérification d'un PDF

@@ -1689,6 +1689,13 @@ pub struct Session {
     checking: Option<bravebot_core::vetting::Checking>,
     /// The hook holding the turn open, as its moment and program, while one runs (HOOK-8).
     hook: Option<(&'static str, String)>,
+    /// The delegate the turn is joining, from the moment the driver starts waiting on it until its
+    /// report is in or the next round begins (DELEGATE-17).
+    ///
+    /// Separate from [`Session::phase`] because no request is in flight: the turn has nothing to
+    /// ask the model until the report arrives, so without it the screen names nothing at all for
+    /// the whole wait.
+    waiting_on: Option<bravebot_agent::report::DelegateId>,
     /// The points this session can be put back to.
     pub rewind: bravebot_session::rewind::RewindStack,
     /// Where the turn in flight began, for the snapshot that rewinds to it.
@@ -2064,6 +2071,7 @@ impl Session {
             phase: None,
             checking: None,
             hook: None,
+            waiting_on: None,
             running: None,
             movable: None,
             queued: Vec::new(),
@@ -2422,6 +2430,13 @@ impl Session {
             return Some(t!(indicator_composing, call = call).to_string());
         }
 
+        // The turn has asked for everything it needs from the model and is waiting for a delegate
+        // to finish. Nothing else on this row says so, and a screen that names nothing while a
+        // delegate works reads as a turn that has stopped (DELEGATE-17).
+        if let Some(id) = self.waiting_on {
+            return Some(t!(indicator_waiting_on_delegate, delegate = id.to_string()).to_string());
+        }
+
         // Only the phases that say something a person cannot see elsewhere. Planning is the
         // first call, before any line has appeared, and reconnecting is a pause that looks
         // exactly like thinking and is not: nothing is being worked out and what the model had
@@ -2640,6 +2655,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.hook = None;
+        self.waiting_on = None;
         self.running = None;
         self.movable = None;
         self.started = None;
@@ -2737,6 +2753,11 @@ impl Session {
     /// Record what the turn is waiting on.
     pub fn set_phase(&mut self, phase: Phase) {
         self.phase = Some(phase);
+        // A delegate announces its own phases while the turn waits on another, and none of them
+        // ends that wait.
+        if self.attributed_to.is_none() {
+            self.waiting_on = None;
+        }
         // A phase is announced once at the top of every round and again when a request is being
         // sent afresh. Either way what was on the screen belongs to a reply that is over or to
         // one that has been thrown away, so the tail starts empty.
@@ -2762,6 +2783,11 @@ impl Session {
     /// would take a visible answer off the screen because a tool call went to a model.
     pub fn checking(&mut self, checking: bravebot_core::vetting::Checking) {
         self.checking = Some(checking);
+    }
+
+    /// Record that the turn is waiting on this delegate's report.
+    pub fn waiting_on_delegate(&mut self, id: bravebot_agent::report::DelegateId) {
+        self.waiting_on = Some(id);
     }
 
     /// Record that the check is over.
@@ -2963,6 +2989,9 @@ impl Session {
     ) {
         if self.attributed_to == Some(id) {
             self.attributed_to = None;
+        }
+        if self.waiting_on == Some(id) {
+            self.waiting_on = None;
         }
         if let Some(at) = self.at(id)
             && let Some(delegate) = self.transcript[at].delegate.as_mut()
@@ -7132,6 +7161,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.hook = None;
+        self.waiting_on = None;
         self.running = None;
         self.movable = None;
         // A prompt is English and a command line is not, so the line coming back must not land
@@ -9025,6 +9055,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.hook = None;
+        self.waiting_on = None;
         self.running = None;
         self.movable = None;
         self.started = Some(Instant::now());
@@ -9063,6 +9094,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.hook = None;
+        self.waiting_on = None;
         self.running = None;
         self.movable = None;
         self.streaming.clear();
@@ -9350,6 +9382,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.hook = None;
+        self.waiting_on = None;
         self.running = None;
         self.movable = None;
         self.started = Some(Instant::now());
@@ -9382,6 +9415,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.hook = None;
+        self.waiting_on = None;
         self.running = None;
         self.movable = None;
         self.tokens += tokens;
@@ -9414,6 +9448,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.hook = None;
+        self.waiting_on = None;
         self.running = None;
         self.movable = None;
         self.tokens += tokens;
@@ -18081,6 +18116,53 @@ mod tests {
             );
             s.hook_over();
             assert_eq!(s.indicator().expect("working").verb, "Planning");
+        }
+
+        /// DELEGATE-17: a turn joining a delegate has no request in flight, and the round's own
+        /// phase is one the indicator does not name, so without the delegate's number the row
+        /// says nothing for as long as the delegate works.
+        #[test]
+        fn a_turn_waiting_on_a_delegate_names_it_until_its_report_is_in() {
+            use bravebot_agent::report::DelegateId;
+            let mut s = working();
+            s.set_phase(Phase::Thinking);
+            let named_nothing = s.indicator().expect("working").verb;
+            s.waiting_on_delegate(DelegateId::nth(1));
+            assert_eq!(s.indicator().expect("working").verb, "Waiting on d1");
+
+            // Another delegate's report does not end the wait on this one.
+            s.delegate_finished(DelegateId::nth(2), String::new(), false, None);
+            assert_eq!(s.indicator().expect("working").verb, "Waiting on d1");
+
+            s.delegate_finished(DelegateId::nth(1), String::new(), false, None);
+            assert_eq!(s.indicator().expect("working").verb, named_nothing);
+        }
+
+        /// The next round starts a request, and a row still naming the delegate would claim the
+        /// turn is waiting on one that has reported.
+        #[test]
+        fn a_new_round_ends_the_wait_the_indicator_names() {
+            let mut s = working();
+            s.set_phase(Phase::Thinking);
+            let named_nothing = s.indicator().expect("working").verb;
+            s.waiting_on_delegate(bravebot_agent::report::DelegateId::nth(1));
+            s.set_phase(Phase::Thinking);
+            assert_eq!(s.indicator().expect("working").verb, named_nothing);
+        }
+
+        /// A second delegate announcing a phase while the turn waits on the first is not the
+        /// turn starting a round, so the indicator keeps naming the delegate waited on.
+        #[test]
+        fn another_delegates_phase_does_not_end_the_wait_the_indicator_names() {
+            let mut s = working();
+            s.set_phase(Phase::Thinking);
+            let waiting = bravebot_agent::report::DelegateId::nth(1);
+            s.waiting_on_delegate(waiting);
+            let named = s.indicator().expect("working").verb;
+            s.reporting_for(Some(bravebot_agent::report::DelegateId::nth(2)));
+            s.set_phase(Phase::Thinking);
+            s.reporting_for(None);
+            assert_eq!(s.indicator().expect("working").verb, named);
         }
 
         /// CHECK-14: a picture has no lines to count, and "Checking 1 line" over a photograph is

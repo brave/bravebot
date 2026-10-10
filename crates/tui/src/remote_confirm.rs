@@ -162,6 +162,8 @@ pub enum ToMain {
     Landed(Landing),
     /// A prompt the person typed mid-turn has reached the planner. No reply.
     Interjected(String),
+    /// The turn is about to wait on this delegate's report. No reply.
+    DelegateWaiting(DelegateId),
     /// A delegate has begun. No reply.
     DelegateStarted(Delegation),
     /// One delegate has finished, with what the turn was told and what it reported. No reply.
@@ -465,6 +467,10 @@ impl Reporter for RemoteReporter {
 
     fn reporting_for(&mut self, delegate: Option<DelegateId>) {
         let _ = self.outbound.send(ToMain::ReportingFor(delegate));
+    }
+
+    fn delegate_waiting(&mut self, delegate: DelegateId) {
+        let _ = self.outbound.send(ToMain::DelegateWaiting(delegate));
     }
 
     fn delegate_started(&mut self, delegation: Delegation) {
@@ -1066,6 +1072,7 @@ mod tests {
                     ToMain::Returned(_) => seen.push("returned"),
                     ToMain::Landed(_) => seen.push("landed"),
                     ToMain::Interjected(_) => seen.push("interjected"),
+                    ToMain::DelegateWaiting(_) => seen.push("delegate waiting"),
                     ToMain::DelegateStarted(_) => seen.push("delegate started"),
                     ToMain::DelegateFinished { .. } => seen.push("delegate finished"),
                     ToMain::ReportingFor(_) => seen.push("reporting for"),
@@ -1088,6 +1095,7 @@ mod tests {
         reporter.notice("AGENTS.md was not loaded".into());
         reporter.streaming("about".into());
         reporter.composing(Some("Write"));
+        reporter.delegate_waiting(DelegateId::nth(1));
         reporter.tool_started(Activity::running("Write", "notes.md"));
         reporter.tool_finished(Activity::running("Write", "notes.md").done("1 line"));
         assert_eq!(
@@ -1104,6 +1112,7 @@ mod tests {
                 "notice",
                 "streaming",
                 "composing",
+                "delegate waiting",
                 "started",
                 "finished",
                 "write"

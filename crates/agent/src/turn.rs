@@ -4556,6 +4556,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // the answer so far goes into the conversation, the reports follow it, and the
                         // planner answers once more knowing what came back.
                         if !delegates.is_empty() {
+                            // Between-calls text rather than the reply: the round is not the
+                            // turn's last, and left as the reply in progress it would be cleared
+                            // when the next round starts and never reach the transcript.
+                            narrate_between_calls(&mut policy, &mut reporter, &completion.content);
                             record_answer(&mut policy, conversation, &completion.content)?;
                             collect_delegates(
                                 &mut delegates,
