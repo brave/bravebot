@@ -1187,38 +1187,93 @@ mod tests {
         };
         use bravebot_core::command::{Pipeline, Stage};
 
-        let pipeline = Pipeline::new(vec![Stage::new("docker", vec!["ps".into()])]);
-        let run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/docker".into()], "/w");
-        let steps: Vec<_> = run
-            .plan
-            .steps()
-            .iter()
-            .map(|stage| bravebot_approval::RunStep {
-                written: stage.as_written(),
-                binary: stage.binary(),
+        let as_the_terminal_draws = |run: &RunRequest| {
+            let steps: Vec<_> = run
+                .plan
+                .steps()
+                .iter()
+                .map(|stage| bravebot_approval::RunStep {
+                    written: stage.as_written(),
+                    binary: stage.binary(),
+                })
+                .collect();
+            let writes: Vec<String> = run
+                .plan
+                .writes
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect();
+            let confinement =
+                run.confined
+                    .as_ref()
+                    .map(|confined| bravebot_approval::Confinement {
+                        heading: confined.heading(),
+                        directories: confined
+                            .directories
+                            .iter()
+                            .map(|directory| directory.to_string_lossy().into_owned())
+                            .collect(),
+                        sentences: confined.sentences(),
+                    });
+            let ambient: Vec<String> = run
+                .ambient_authority()
+                .iter()
+                .map(|spent| {
+                    bravebot_agent::confirm::authority_sentence(spent.authority, spent.named)
+                })
+                .collect();
+            bravebot_approval::run_lines(&bravebot_approval::Run {
+                summary: &run.summary(),
+                steps: &steps,
+                writes: &writes,
+                confinement: confinement.as_ref(),
+                ambient: &ambient,
+                releases_private: run.releases_private(),
             })
-            .collect();
-        let ambient: Vec<String> = run
-            .ambient_authority()
-            .iter()
-            .map(|spent| bravebot_agent::confirm::authority_sentence(spent.authority, spent.named))
-            .collect();
+            .join("\n")
+        };
+
+        let pipeline = Pipeline::new(vec![Stage::new("docker", vec!["ps".into()])]);
+        let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/docker".into()], "/w");
+        run.plan.writes = vec!["/w/out.txt".into()];
         assert!(
-            !ambient.is_empty(),
+            !run.ambient_authority().is_empty(),
             "the fixture reaches no ambient authority"
         );
-        let expected = bravebot_approval::run_lines(&bravebot_approval::Run {
-            summary: "",
-            steps: &steps,
-            writes: &[],
-            confinement: None,
-            ambient: &ambient,
-            releases_private: run.releases_private(),
-        })
-        .join("\n");
-        let mut data = crate::wire::run_request(1, &run);
-        data["summary"] = json!("");
-        assert_eq!(run_text(&data).as_deref(), Some(expected.as_str()));
+        let data = crate::wire::run_request(1, &run);
+        assert_eq!(
+            run_text(&data).as_deref(),
+            Some(as_the_terminal_draws(&run).as_str())
+        );
+
+        run.confined = Some(bravebot_agent::Confined {
+            directories: vec!["/w".into(), "/var/scratch/session".into()],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: vec![bravebot_agent::Carried {
+                program: "docker".into(),
+                toolchain: None,
+                scope: Some(bravebot_sandbox::scope::Scope::Docker),
+                reaches: vec![bravebot_sandbox::scope::Reach {
+                    variable: "DOCKER_CONFIG",
+                    path: "/home/someone/docker-work".into(),
+                }],
+                network: false,
+                remembered: Vec::new(),
+            }],
+            reads_the_machine: false,
+        });
+        let confined = as_the_terminal_draws(&run);
+        assert!(
+            confined.contains("/var/scratch/session") && confined.contains("docker-work"),
+            "the confined fixture shows none of its confinement: {confined}"
+        );
+        assert_eq!(
+            run_text(&crate::wire::run_request(1, &run)).as_deref(),
+            Some(confined.as_str())
+        );
 
         let mut unknown = data.clone();
         unknown["ambient"][0]["authority"] = json!("something-new");
