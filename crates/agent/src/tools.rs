@@ -961,6 +961,17 @@ fn table(
                                         every time with the names shown, and no answer to it is \
                                         remembered. A name outside the list is an error."
                     },
+                    "unconfined": {
+                        "type": "boolean",
+                        "description": "Start this one line with no sandbox, for a program \
+                                        that has to write where the sandbox does not let it, \
+                                        such as a login that stores a credential in its own \
+                                        directory. Only where the session is told it accepts \
+                                        it. The user is asked about the line every time, \
+                                        told that it runs with no sandbox, and no answer to \
+                                        it is remembered. What it prints is not trusted. Do \
+                                        not combine it with 'scopes'."
+                    },
                     "directory": {
                         "type": "string",
                         "description": "Directory to run the command in, relative to the \
@@ -7303,6 +7314,60 @@ const NOT_ACCEPTING_REQUESTS: &str = "refused: this session does not accept a re
      credential scope or toolchain list. Run the line without 'scopes', and say what it needs \
      for the person to add.";
 
+/// What a refused request to run one line with no sandbox says, whatever refused it: the planner
+/// learns that the line did not run and not which setting withheld it.
+const NOT_ACCEPTING_UNCONFINED: &str = "refused: this session does not accept a request to run a \
+     line with no sandbox. Run the line without 'unconfined', and say what it needs for the \
+     person to add.";
+
+/// Whether this turn may be asked to start one line with no profile (SANDBOX-29).
+///
+/// Only in the mode `standard`: `strict` is the person asking for the profile to be held whatever a
+/// planner would rather, and `off` has no profile to remove. Not in a delegate, whose sub-task is
+/// reach the person never set up. Not in a workspace the person has not trusted, and not under a
+/// managed `run.network` of `closed`, for the reason [`bravebot_config::sandbox::resolve`] floors
+/// `off` there: a line with no profile is not held to a closed network. A turn nobody is at to ask
+/// is refused by the confirmer, and the mode that asks nothing does not approve it
+/// ([`crate::permission_mode`]).
+fn unconfined_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> Result<(), String> {
+    let accepted = unconfined_is_accepted(
+        tools.confine_runs,
+        tools.sandbox,
+        policy.trusts_path(&tools.workspace.trust_key(".")),
+        network_pinned_closed(bravebot_config::settled_run_network()),
+        tools.delegated,
+    );
+    match accepted {
+        true => Ok(()),
+        false => Err(NOT_ACCEPTING_UNCONFINED.to_string()),
+    }
+}
+
+/// The rule [`unconfined_accepted`] applies, over the facts it reads, so each refusal is a row of a
+/// table a test can walk.
+fn unconfined_is_accepted(
+    confine_runs: bool,
+    mode: bravebot_sandbox::SandboxMode,
+    workspace_trusted: bool,
+    network_pinned_closed: bool,
+    delegated: bool,
+) -> bool {
+    confine_runs
+        && mode == bravebot_sandbox::SandboxMode::Standard
+        && workspace_trusted
+        && !network_pinned_closed
+        && !delegated
+}
+
+/// Whether the administrator's file closed the network, which only a managed pin does here: a person
+/// who closed it in their own settings is the one asked about the line.
+fn network_pinned_closed(settled: Option<&bravebot_config::RunNetwork>) -> bool {
+    settled.is_some_and(|settled| {
+        settled.network == bravebot_sandbox::network::Network::Closed
+            && matches!(settled.decided, bravebot_config::Decided::Managed(_))
+    })
+}
+
 /// The names `scopes` holds, each a word of the fixed menu and compared exactly, once each.
 ///
 /// Absent, null and an empty array ask for nothing. Anything else that is not an array of menu
@@ -7450,6 +7515,24 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     if !requested.is_empty()
         && let Err(refusal) = requests_accepted(policy, tools)
     {
+        return Produced::problem(refusal);
+    }
+
+    // Whether the planner asks for this one line to start with no profile. Refused rather than
+    // dropped where it cannot be honoured, and where it is mistyped, as `read` is: a planner that
+    // believed it had asked would be handed the profile's failure to chase as a fault.
+    let unconfined = match arguments.get("unconfined") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(asked)) => *asked,
+        Some(_) => return Produced::problem("error: 'unconfined' must be true or false"),
+    };
+    if unconfined && !requested.is_empty() {
+        return Produced::problem(
+            "error: give 'unconfined' or 'scopes', not both. A line with no sandbox has no \
+             profile for a scope to be added to.",
+        );
+    }
+    if unconfined && let Err(refusal) = unconfined_accepted(policy, tools) {
         return Produced::problem(refusal);
     }
 
@@ -7649,18 +7732,27 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         policy.recall(lines.clone());
     }
 
+    // No confinement at all for a line the planner asked to run with none: its stages start as
+    // they do under the mode `off`, for this line only, and the next line is built from the
+    // session's mode again.
     let confinement = tools
         .confinement()
+        .filter(|_| !unconfined)
         .map(|confinement| confinement.with_requested(&requested));
     if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
         return Produced::problem(NOT_ACCEPTING_REQUESTS.to_string());
     }
-    if tools.confine_runs {
+    if unconfined {
+        policy.record_sandbox_mode("unconfined");
+    } else if tools.confine_runs {
         policy.record_sandbox_mode(tools.sandbox.name());
     }
 
     let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
-    let asking = policy.plan_needs_approval_requesting(&plan, &names);
+    let asking = match unconfined {
+        true => policy.plan_needs_approval_unconfined(),
+        false => policy.plan_needs_approval_requesting(&plan, &names),
+    };
     // Whether the record is what stopped the question. Read where the result is quarantined: the
     // advice about vouching is advice about a prompt, and no prompt will return here for this line
     // until somebody deletes the entry.
@@ -7682,7 +7774,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             // endorse a record they were not shown.
             record: record
                 .as_ref()
-                .filter(|_| policy.may_remember(&plan) && requested.is_empty())
+                .filter(|_| policy.may_remember(&plan) && requested.is_empty() && !unconfined)
                 .filter(|_| crate::remembered::may_be_added_to())
                 .map(|store| store.path().to_path_buf()),
             // Said only where a key at this prompt will not finish the asking, only where a rule
@@ -7695,7 +7787,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             // than this session's.
             pattern: tools
                 .home
-                .filter(|_| varied && policy.a_rule_could_answer(&plan) && requested.is_empty())
+                .filter(|_| {
+                    varied
+                        && policy.a_rule_could_answer(&plan)
+                        && requested.is_empty()
+                        && !unconfined
+                })
                 .map(bravebot_config::user_settings_file),
             // The reference, so the person reads what is going in as well as that something is.
             // The driver's own name for a slot, never a byte of what the slot holds.
@@ -7713,6 +7810,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 .zip(tools.remembering)
                 .filter(|_| !requested.is_empty() && crate::reach::may_be_added_to())
                 .map(|(home, _)| crate::reach::Store::new(home).path().to_path_buf()),
+            unconfined,
         };
         // Read before the question is put, for the reason a write's is.
         let mode = tools.permission_mode.get();
@@ -7740,7 +7838,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         // The tree is not among the refusals, and that is RUN-8's own answer rather than an
         // omission: an entry names the directory it was given in, so a line outside the workspace
         // root is one an entry can hold as written, and it grants there and nowhere else.
-        if answer.remember && plan.can_be_remembered() {
+        if answer.remember && plan.can_be_remembered() && !unconfined {
             for command in request.would_vouch_for() {
                 policy.remember_command(command);
             }
@@ -7774,6 +7872,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         // RUN-20 is asked of the table again by `line_to_record`.
         if policy.may_remember(&plan)
             && requested.is_empty()
+            && !unconfined
             && let (Some(store), Some(session), Some(line)) = (
                 record.as_ref(),
                 tools.remembering,
@@ -7797,7 +7896,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // A vouch was for the programs as they ran without the credential, so what a line lent one
     // prints is not trusted on its account.
     let label = match bravebot_core::capability::Capability::ShellExec.output_label() {
-        Some(opaque) if !requested.is_empty() => opaque,
+        Some(opaque) if !requested.is_empty() || unconfined => opaque,
         _ => label,
     };
 
@@ -11568,13 +11667,63 @@ mod tests {
         }
     }
 
+    /// SANDBOX-29: a request to run one line with no profile is accepted in `standard` of a trusted
+    /// workspace in the turn that holds the session, and refused in each other case, one row each:
+    /// `strict` and `off`, an untrusted workspace, a managed closed network and a delegate. The
+    /// first row is the control, so a function that refused everything fails it. The regression it
+    /// rejects is a refusal that was never wired in, which lets that one setting hand the line a
+    /// shell's reach.
+    #[test]
+    fn an_unconfined_request_is_accepted_only_where_every_condition_holds() {
+        use bravebot_sandbox::SandboxMode::{Off, Standard, Strict};
+        for (confine, mode, trusted, pinned, delegated, accepted, why) in [
+            (true, Standard, true, false, false, true, "the control"),
+            (true, Strict, true, false, false, false, "strict"),
+            (true, Off, true, false, false, false, "off"),
+            (true, Standard, false, false, false, false, "untrusted"),
+            (true, Standard, true, true, false, false, "managed closed"),
+            (true, Standard, true, false, true, false, "a delegate"),
+            (false, Standard, true, false, false, false, "no confinement"),
+        ] {
+            assert_eq!(
+                unconfined_is_accepted(confine, mode, trusted, pinned, delegated),
+                accepted,
+                "{why}"
+            );
+        }
+    }
+
+    /// SANDBOX-29: only the administrator's closed network refuses the request. The same word from
+    /// the person's own settings or flag leaves the person to be asked, and an open or unsettled
+    /// network refuses nothing.
+    #[test]
+    fn only_a_managed_closed_network_refuses_an_unconfined_request() {
+        use bravebot_config::{Decided, RunNetwork};
+        use bravebot_sandbox::network::Network;
+        let settled = |network, decided| RunNetwork { network, decided };
+        assert!(network_pinned_closed(Some(&settled(
+            Network::Closed,
+            Decided::Managed(None)
+        ))));
+        for held in [
+            settled(Network::Closed, Decided::Flag),
+            settled(Network::Closed, Decided::Settings(None)),
+            settled(Network::Closed, Decided::Default),
+            settled(Network::Open, Decided::Managed(None)),
+        ] {
+            assert!(!network_pinned_closed(Some(&held)), "{held:?}");
+        }
+        assert!(!network_pinned_closed(None));
+    }
+
     /// `run` has exactly one field saying what to run. The line is compiled here rather than handed
     /// anywhere, so a second way to say what to run would be a second thing to keep honest.
     /// `background` says what to do with the line rather than what it is, `deadline_seconds` says
     /// how long to wait for it, `directory` names where to run it, `stdin_ref` names a
     /// reference to feed it ([RUN-3]), which is a source rather than a second way to say what
-    /// runs, `read` asks for what it printed in the same result ([RUN-22]), and `scopes` names what
-    /// the line is lent beyond the profile, from a fixed menu (SANDBOX-26).
+    /// runs, `read` asks for what it printed in the same result ([RUN-22]), `scopes` names what
+    /// the line is lent beyond the profile, from a fixed menu (SANDBOX-26), and `unconfined` asks for
+    /// the line to start with no profile (SANDBOX-29).
     ///
     /// [RUN-3]: ../../../docs/specs/tools/run.md
     /// [RUN-22]: ../../../docs/specs/tools/run.md
@@ -11602,10 +11751,12 @@ mod tests {
                 "read",
                 "scopes",
                 "stdin_ref",
+                "unconfined",
                 "why"
             ],
             "run gained a field beside the command line, whether to wait for it, how long, \
-             where, what to feed it, whether to read it, what it is lent, and why it was run"
+             where, what to feed it, whether to read it, what it is lent, whether it is unconfined, and \
+             why it was run"
         );
         assert_eq!(properties["scopes"]["type"], "array");
         assert_eq!(properties["scopes"]["items"]["type"], "string");
@@ -11618,6 +11769,7 @@ mod tests {
         assert_eq!(properties["deadline_seconds"]["type"], "integer");
         assert_eq!(properties["directory"]["type"], "string");
         assert_eq!(properties["read"]["type"], "boolean");
+        assert_eq!(properties["unconfined"]["type"], "boolean");
         assert_eq!(properties["stdin_ref"]["type"], "string");
         assert_eq!(
             tool.function.parameters["required"]

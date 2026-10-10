@@ -1085,6 +1085,15 @@ fn draw_run(
             Style::default().fg(theme::running()),
         ))),
     }
+    // The planner's request, which the answer is to. Drawn in the colour of a failure, since the
+    // line is about to be given what the sandbox was holding back.
+    if request.unconfined {
+        lines.extend(indented(
+            t!(run_unconfined),
+            Style::default().fg(theme::fail()),
+            inside.width as usize,
+        ));
+    }
 
     // Which access in particular a yes hands over, where the line reaches one nothing here holds:
     // a container daemon, a tool already logged in, the ssh agent, the metadata service. The line
@@ -1211,6 +1220,9 @@ fn draw_run(
         if request.asks_for_scopes() {
             why.push(t!(run_scopes_not_remembered));
         }
+        if request.unconfined {
+            why.push(t!(run_unconfined_not_remembered));
+        }
         for reason in why {
             lines.push(Line::from(Span::styled(
                 format!("  {reason}"),
@@ -1224,7 +1236,7 @@ fn draw_run(
     // that it stops the asking without making anything readable. The place it is written down is
     // part of the grant rather than a footnote, because nobody can endorse a record they were not
     // shown, and deleting the line from that file is the way back.
-    if let Some(path) = &request.record {
+    if let Some(path) = request.record.as_ref().filter(|_| request.may_record()) {
         lines.push(Line::raw(""));
         record.start = measure(&lines);
         lines.push(Line::from(Span::styled(
@@ -3915,6 +3927,7 @@ mod tests {
         RunRequest {
             confined: None,
             reach_record: None,
+            unconfined: false,
             stdin: None,
             // A line naming a file to write is asked about however it was answered, so the prompt
             // offers no key that would outlive the session.
@@ -4946,6 +4959,7 @@ mod tests {
         RunRequest {
             confined: None,
             reach_record: None,
+            unconfined: false,
             stdin: None,
             // Private input is asked about every time, so neither standing key is offered.
             record: None,
@@ -5061,6 +5075,7 @@ mod tests {
         RunRequest {
             confined: None,
             reach_record: None,
+            unconfined: false,
             stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "LD_PRELOAD=./evil.so git log".to_string(),
@@ -5108,6 +5123,61 @@ mod tests {
             &a_run_writing_a_file(),
         );
         assert_eq!(shouted, None, "the shifted spelling still answered");
+    }
+
+    /// SANDBOX-29: a line the planner asked to run with no sandbox says so on the prompt, offers no
+    /// answer that lasts, and binds none of `a`, `r`, `f`, `m` or `e`, though the request carries
+    /// every path those keys write to. The control is the same request without the flag, where
+    /// `a` and `r` answer. The regression it rejects is a key that remembers the request.
+    #[test]
+    fn a_run_asking_to_be_unconfined_says_so_and_binds_no_lasting_key() {
+        let recordable = || RunRequest {
+            reach_record: Some("/home/someone/.bravebot/reach.jsonl".into()),
+            ..a_recordable_run()
+        };
+        for key in ['a', 'r'] {
+            assert!(
+                run_answer_for(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    &recordable()
+                )
+                .is_some(),
+                "the control did not take `{key}`, so the rows below prove nothing"
+            );
+        }
+
+        let request = RunRequest {
+            unconfined: true,
+            ..recordable()
+        };
+        let drawn = rendered_run(&request);
+        assert!(
+            drawn.contains("with no sandbox"),
+            "the prompt did not say the line runs with none: {drawn}"
+        );
+        assert!(
+            !drawn.contains("stop asking about this exact line"),
+            "the prompt explained a key it does not offer: {drawn}"
+        );
+        assert!(
+            drawn.contains("asked about every time"),
+            "the prompt did not say why no lasting answer is offered: {drawn}"
+        );
+        for key in ['a', 'A', 'r', 'R', 'f', 'F', 'm', 'M', 'e', 'E'] {
+            assert_eq!(
+                run_answer_for(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    &request
+                ),
+                None,
+                "`{key}` answered a request to run with no sandbox"
+            );
+        }
+        let once = run_answer_for(
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+            &request,
+        );
+        assert_eq!(once, Some(RunResponse::Answer(RunAnswer::Approve)));
     }
 
     /// A line the planner asked to carry a scope asks every time whatever is remembered, so the
@@ -5170,6 +5240,7 @@ mod tests {
         RunRequest {
             confined: None,
             reach_record: None,
+            unconfined: false,
             stdin: None,
             plan: bravebot_core::command::Plan {
                 line: "sh check.sh > out.txt".to_string(),
@@ -5476,6 +5547,7 @@ mod tests {
     fn the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them() {
         let no_record = RunRequest {
             reach_record: None,
+            unconfined: false,
             ..a_run_keeping_remote()
         };
         let no_request = a_run_asking_for(Vec::new());

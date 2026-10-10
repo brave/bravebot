@@ -734,6 +734,7 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     };
     let request = RunRequest {
         reach_record: None,
+        unconfined: false,
         confined: None,
         record: None,
         pattern: None,
@@ -788,6 +789,7 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
     use bravebot_sandbox::scope::{Requested, Scope};
     let request = RunRequest {
         reach_record: None,
+        unconfined: false,
         confined: Some(Confined {
             reads_the_machine: false,
             directories: vec![],
@@ -850,6 +852,7 @@ fn a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_t
     use bravebot_core::command::{Plan, Step, Steps};
     let request = RunRequest {
         reach_record: None,
+        unconfined: false,
         confined: None,
         record: None,
         pattern: None,
@@ -890,6 +893,7 @@ fn a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field
     use bravebot_core::command::{Plan, Step, Steps};
     let request = RunRequest {
         reach_record: None,
+        unconfined: false,
         confined: None,
         record: None,
         pattern: None,
