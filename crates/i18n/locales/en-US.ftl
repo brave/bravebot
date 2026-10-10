@@ -2153,6 +2153,9 @@ indicator-checking = { $lines ->
     [one] Checking { $lines } line
    *[other] Checking { $lines } lines
     }
+# Said while the turn waits for a delegate to finish and has nothing to ask the model until its
+# report arrives. The argument is the delegate's number, such as d1.
+indicator-waiting-on-delegate = Waiting on { $delegate }
 # Said while a hook holds the turn open. The moment is the word the hooks file spells it with and
 # the program is the first word of the command the person wrote there: nothing the hook printed.
 indicator-hook = Running hook: { $program } ({ $moment })
