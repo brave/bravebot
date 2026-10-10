@@ -1108,6 +1108,11 @@ fn status_report(
         servers: &session.servers,
         permission_mode: session.permission_mode(),
         began_in_bypass: session.began_in_bypass(),
+        programs_write_unasked: crate::status::programs_write_unasked(
+            session.sandbox_mode(),
+            session.permission_mode(),
+            bravebot_agent::home::profile().as_deref(),
+        ),
         auto_vetting: session.auto_vetting(),
         turns: session.turns,
         tokens: session.tokens,

@@ -4425,6 +4425,18 @@ mod tests {
             assert!(!flagged.writes_without_a_request(), "{what}");
             assert_eq!(rows(flagged), rows(plain), "{what}");
         }
+        let homeless = |unasked| {
+            Confinement::new(
+                Prelude::MacOs,
+                PathBuf::from("/tmp"),
+                None,
+                vec![root.clone()],
+                None,
+            )
+            .with_unasked_writes(unasked)
+        };
+        assert!(!homeless(true).writes_without_a_request(), "no home");
+        assert_eq!(rows(homeless(true)), rows(homeless(false)), "no home");
         let standard = bypass_confinement(Prelude::MacOs, &home, &root);
         assert!(standard.writes_without_a_request());
         assert!(
