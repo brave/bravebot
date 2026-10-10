@@ -1220,6 +1220,7 @@ impl Workspace {
             path: root.display().to_string(),
             detail: e.to_string(),
         })?;
+        bravebot_sandbox::programs::keep_out(&canonical);
         Ok(Self {
             #[cfg(test)]
             after_write: Arc::new(Mutex::new(None)),
@@ -1329,6 +1330,9 @@ impl Workspace {
     /// by a tool, so a turn cannot widen its own reach by calling this: the caller is the code that
     /// made the directory.
     pub fn open_scratch(&mut self, directory: Option<PathBuf>) {
+        if let Some(directory) = &directory {
+            bravebot_sandbox::programs::keep_out(directory);
+        }
         self.scratch = directory;
     }
 
@@ -1484,6 +1488,7 @@ impl Workspace {
     pub fn open_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
         let canonical = self.resolve_directory(directory)?;
 
+        bravebot_sandbox::programs::keep_out(&canonical);
         let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
         if !added.contains(&canonical) {
             added.push(canonical.clone());
@@ -1677,6 +1682,7 @@ impl Workspace {
 
         refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
 
+        bravebot_sandbox::programs::keep_out(&canonical);
         // The old root among them: it is a directory that was open, and after this it is not.
         let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
         // Names relative to the root left behind mean nothing under the new one (INSTR-14).
@@ -5333,6 +5339,64 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::io;
+
+    /// Whether a program planted in `directory` is one the lookup for programs bravebot starts on
+    /// its own account would find, with `directory` alone on `PATH`.
+    fn found_in(directory: &Path, program: &str) -> bool {
+        let planted = directory.join(program);
+        std::fs::write(&planted, "").expect("planted");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755))
+                .expect("executable");
+        }
+        let path = std::env::join_paths([directory]).expect("path");
+        bravebot_sandbox::programs::find_in(
+            std::ffi::OsStr::new(program),
+            &path,
+            &bravebot_sandbox::programs::registered(),
+        )
+        .is_some()
+    }
+
+    /// SANDBOX-30: a program planted where a confined stage may write is not the one started
+    /// unconfined, from the moment the directory is open and not only once a stage has run in it.
+    #[test]
+    fn every_directory_a_stage_may_write_is_kept_out_of_the_search_for_programs() {
+        let fresh = |name: &str| {
+            let directory = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&directory);
+            std::fs::create_dir_all(&directory).expect("scratch");
+            directory
+        };
+        let control = fresh("programs-control");
+        let root = fresh("programs-root");
+        let added = fresh("programs-added");
+        let moved = fresh("programs-moved");
+        let session = fresh("programs-session");
+
+        assert!(
+            found_in(&control, "bravebot-probe-control"),
+            "the probe finds a program in a directory nothing has opened"
+        );
+
+        let mut workspace = Workspace::new(&root).expect("workspace");
+        assert!(!found_in(&root, "bravebot-probe-root"));
+
+        workspace
+            .add_directory(&added.display().to_string())
+            .expect("added");
+        assert!(!found_in(&added, "bravebot-probe-added"));
+
+        workspace.open_scratch(Some(session.clone()));
+        assert!(!found_in(&session, "bravebot-probe-session"));
+
+        workspace
+            .change_root(&moved.display().to_string())
+            .expect("moved");
+        assert!(!found_in(&moved, "bravebot-probe-moved"));
+    }
 
     /// SANDBOX-28: reach is held by the workspace, in the order it was given and numbered from one,
     /// shared by a clone (a delegate's view), upgraded and never downgraded by a second grant, and

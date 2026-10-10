@@ -648,7 +648,12 @@ impl Confinement {
             policy = policy.allow_read(scratch).allow_write(scratch);
         }
         let policy = self.path_reach.apply(policy);
-        self.filesystem.apply(policy).starting_in(directory)
+        let policy = self.filesystem.apply(policy);
+        // A program bravebot starts itself must not be found in a place this stage can write.
+        for row in &policy.writable {
+            bravebot_sandbox::programs::keep_out(&row.path);
+        }
+        policy.starting_in(directory)
     }
 
     /// The one sentence that says what the programs of `steps` ran under, for a result whose
@@ -1345,6 +1350,46 @@ mod tests {
             roots.iter().map(PathBuf::from).collect(),
             Some(Path::new("/var/scratch")),
         )
+    }
+
+    /// Every directory a stage is granted writes in is out of the search for a program bravebot
+    /// starts on its own account (SANDBOX-30), whatever granted it: a toolchain's directory is as
+    /// much a place to plant an `aws` as the project.
+    #[test]
+    fn a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs() {
+        let granted = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/confine-programs-granted");
+        let _ = std::fs::remove_dir_all(&granted);
+        std::fs::create_dir_all(&granted).expect("granted directory");
+        let granted = granted.canonicalize().expect("canonical");
+        let planted = granted.join("bravebot-confine-probe");
+        std::fs::write(&planted, "").expect("planted");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755))
+                .expect("executable");
+        }
+        let path = std::env::join_paths([&granted]).expect("path");
+        let search = || {
+            bravebot_sandbox::programs::find_in(
+                OsStr::new("bravebot-confine-probe"),
+                &path,
+                &bravebot_sandbox::programs::registered(),
+            )
+        };
+        assert!(search().is_some(), "found before any policy is built");
+
+        let confined = Confinement::new(
+            Prelude::Linux,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![granted.clone()],
+            None,
+        );
+        confined.policy(&step("/bin/cat", &["f"]), &granted, &[]);
+
+        assert_eq!(search(), None);
     }
 
     /// A confinement on a platform that reads the machine except the credential locations.

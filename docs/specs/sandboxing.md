@@ -21,6 +21,7 @@ governs:
   - crates/agent/src/confine.rs
   - crates/agent/src/reach.rs
   - crates/sandbox/src/rules.rs
+  - crates/sandbox/src/programs.rs
   - crates/tui/src/status.rs
 documented-by: docs/website/docs/security/security.md
 ---
@@ -34,7 +35,8 @@ untrusted half free. A program the user asked for is the one case of our own tha
 because the code it runs is not ours: `run` starts it under the profile its plan accounts for on
 Linux and macOS ([SANDBOX-17](#SANDBOX-17)), and the last section here is what that profile is. The inhibitor `/caffeinate` starts
 is neither: its program and arguments are fixed in our code
-([commands.md](commands.md#CMD-12)), so it is not confined.
+([commands.md](commands.md#CMD-12)), so it is not confined, and it is found as
+[SANDBOX-30](#SANDBOX-30) says.
 
 Confinement is an operating-system boundary. Everywhere else in these specs the boundary is the
 capability set and the label on a value, which is a different mechanism answering a different
@@ -1912,6 +1914,58 @@ nothing keeps the request from becoming a standing allowance approved for a diff
 `verified-by: bravebot_agent::turn::an_unconfined_value_that_is_not_a_boolean_is_an_error`
 `verified-by: bravebot_tui::confirm::a_run_asking_to_be_unconfined_says_so_and_binds_no_lasting_key`
 `verified-by: bravebot_ui_bridge::refusal::the_window_refuses_an_unconfined_run_without_asking`
+
+<a id="SANDBOX-30"></a>
+### SANDBOX-30: a program bravebot starts itself is never one a confined stage could have written
+
+The programs bravebot starts on its own account, unconfined and with the person's access to `~/.ssh`,
+`~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard tools, `osascript`, and the
+inhibitor `/caffeinate` starts. Each is resolved to an absolute path before it is started, from the
+absolute entries of `PATH` that lie outside every directory a confined stage may write.
+
+- **Those directories are the session's.** Each directory the session was opened on, added, or
+  moved to, its scratch directory, the system temporary directory, and every row a stage's policy
+  grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it. A directory is added to the
+  set when it is opened or first granted, and is never removed from it, because closing a
+  directory does not remove a file already written there.
+- **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
+  and so is a file in another directory that links into one.
+- **An entry that is not absolute is not searched,** and neither is an empty one, which a shell
+  reads as the current directory. A name carrying a separator is not looked up, and an absolute
+  path is started as given.
+- **Nothing found is not installed.** A person whose only `aws` is in such a directory, an
+  activated virtualenv's `bin` among them, is told it is not installed
+  (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
+  tried.
+- **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
+  would stop `pip install` in an activated environment, which is what the grants are for.
+
+**Why.** A stage can write `.venv/bin/aws`, and an activated environment puts that directory first
+on `PATH`. The name `aws` then resolves to the stage's file, which bravebot starts outside any
+confinement ([CRED-14](credential-protection.md#CRED-14)): the stage has chosen what runs with
+the person's access, which the confinement exists to deny it.
+
+`verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
+`verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
+`verified-by: bravebot_sandbox::programs::a_program_is_found_when_no_writable_directory_is_involved`
+`verified-by: bravebot_sandbox::programs::a_relative_path_entry_is_never_searched`
+`verified-by: bravebot_sandbox::programs::an_empty_path_entry_is_never_searched`
+`verified-by: bravebot_sandbox::programs::the_system_temp_directory_counts_as_writable`
+`verified-by: bravebot_sandbox::programs::a_link_in_a_safe_directory_to_a_writable_file_is_not_found`
+`verified-by: bravebot_sandbox::programs::a_link_inside_a_writable_directory_to_a_safe_program_is_not_found`
+`verified-by: bravebot_sandbox::programs::a_path_entry_that_links_into_a_writable_directory_is_not_searched`
+`verified-by: bravebot_sandbox::programs::a_sibling_directory_sharing_a_name_prefix_is_not_writable`
+`verified-by: bravebot_sandbox::programs::a_registered_directory_is_kept_out_of_the_search`
+`verified-by: bravebot_sandbox::programs::an_absolute_path_is_the_callers_own_choice`
+`verified-by: bravebot_bedrock::credentials::an_aws_a_confined_stage_wrote_at_the_front_of_path_is_not_the_one_run`
+`verified-by: bravebot_bedrock::credentials::an_aws_only_in_a_directory_a_stage_may_write_is_reported_as_not_installed`
+`verified-by: bravebot_agent::workspace::every_directory_a_stage_may_write_is_kept_out_of_the_search_for_programs`
+`verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
+`verified-by: bravebot_tui::clipboard::a_copy_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`
+`verified-by: bravebot_tui::clipboard::a_copy_tool_installed_outside_every_writable_directory_is_started`
+`verified-by: bravebot_tui::clipboard::a_paste_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`
+`verified-by: bravebot_tui::clipboard::a_paste_tool_installed_outside_every_writable_directory_is_read`
+`verified-by: bravebot_tui::clipboard::the_clipboard_entry_points_start_no_tool_found_only_in_a_directory_a_stage_may_write`
 
 ## Programs a person asked for
 
