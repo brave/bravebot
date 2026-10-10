@@ -286,6 +286,7 @@ try {
     assert((await card.innerText()).includes('Release notes, to identify the release colour.'))
     assert((await card.innerText()).includes('Plain release notes.'))
     await page.setViewportSize({ width: 560, height: 780 }); await fits(card)
+    if (accepted) await readThrough(card)
     const action = card.getByRole('button', { name: accepted ? 'Let the planner read once' : 'Keep it out', exact: true })
     await action.click()
     const terminal = await done(before)
