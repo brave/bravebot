@@ -60,6 +60,8 @@ silence is the answer for a caller nobody is watching, and a watched turn takes 
 `verified-by: bravebot_agent::turn::an_unbounded_turn_is_never_made_to_answer`
 `verified-by: bravebot_agent::turn::a_turn_that_keeps_calling_tools_is_made_to_answer`
 `verified-by: bravebot_ui_bridge::rounds::a_desktop_turn_is_not_cut_off_at_the_bound_an_unwatched_run_carries`
+`verified-by: bravebot_cli::running::a_one_shot_run_is_held_to_the_default_bound`
+`verified-by: bravebot_cli::running::a_session_in_lines_is_not_cut_off_at_the_bound_an_unwatched_run_carries`
 
 <a id="TURN-3"></a>
 ### TURN-3: a turn that has written nothing for long enough is told so
