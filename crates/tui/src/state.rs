@@ -1064,6 +1064,8 @@ pub struct Identity {
     pub branch: Option<String>,
     pub issue: Option<String>,
     pub pull_request: Option<String>,
+    /// The id `--resume`, `--fork` and `/resume` take, once a record on disk answers to it.
+    pub id: Option<String>,
 }
 
 /// The scroller, while it is open.
@@ -9673,6 +9675,15 @@ impl Session {
         let identity = Identity {
             issue: issue.map(str::to_string),
             pull_request: pull_request.map(str::to_string),
+            ..self.identity.clone()
+        };
+        self.reidentify(identity)
+    }
+
+    /// Record the id the info panel shows, answering as [`Session::identify`] does.
+    pub fn name_id(&mut self, id: Option<&str>) -> bool {
+        let identity = Identity {
+            id: id.map(str::to_string),
             ..self.identity.clone()
         };
         self.reidentify(identity)

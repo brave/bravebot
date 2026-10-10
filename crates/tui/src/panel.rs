@@ -190,6 +190,17 @@ fn head(session: &Session, text: usize) -> Vec<Line<'static>> {
     if let Some(branch) = &identity.branch {
         about.push(row(ending(&crate::render::printable(branch), text), dim()));
     }
+    if let Some(id) = &identity.id {
+        // Whole, since a lookup reads `{id}.json` and a fragment finds nothing, so split after the
+        // last hyphen over two rows rather than cut.
+        let id = crate::render::printable(id);
+        let (first, second) = id.split_at(id.rfind('-').map_or(0, |at| at + 1));
+        for half in [first, second] {
+            if !half.is_empty() {
+                about.push(row(half.to_string(), dim()));
+            }
+        }
+    }
     if !about.is_empty() {
         section(&mut body, t!(panel_session).to_string(), about);
     }
@@ -1046,6 +1057,78 @@ mod tests {
             drawn[directory - 1].ends_with('…'),
             "the cut row has no ellipsis: {drawn:#?}"
         );
+    }
+
+    const ID: &str = "0b3f6c1e-9a2d-4e57-8c41-5d7a2f90b3e8";
+
+    /// A lookup reads `{id}.json`, so a fragment finds nothing: the id is drawn whole, over two
+    /// rows split at a hyphen, and the two rows read back as the id.
+    #[test]
+    fn the_session_id_is_drawn_whole_over_two_rows() {
+        let mut session = Session::new("none");
+        session.identify("name", "~/b".to_string(), Some("main"));
+        session.name_id(Some(ID));
+        let drawn = texts(&lines(&session, WIDTH, 30));
+        let at = drawn
+            .iter()
+            .position(|row| row == "0b3f6c1e-9a2d-4e57-8c41-")
+            .unwrap_or_else(|| panic!("no first half of the id: {drawn:#?}"));
+        assert_eq!(drawn[at + 1], "5d7a2f90b3e8", "{drawn:#?}");
+        assert_eq!(
+            drawn[at - 1],
+            "main",
+            "the id is not the section's last row"
+        );
+        assert_eq!(format!("{}{}", drawn[at], drawn[at + 1]), ID);
+    }
+
+    /// A session with no record has no id to resume by, so the row is absent, and it follows the
+    /// handle: it appears with the first save and goes when the handle has none.
+    #[test]
+    fn the_id_row_follows_whether_the_session_has_a_record() {
+        let mut open = opened_at(120);
+        let shown = |session: &Session| {
+            texts(&lines(session, WIDTH, 30))
+                .iter()
+                .any(|row| row.starts_with("0b3f6c1e"))
+        };
+        open.identify("name", "~/b".to_string(), None);
+        assert!(!shown(&open), "an id row before any record");
+        assert!(open.name_id(Some(ID)), "the first save did not redraw");
+        assert!(shown(&open));
+        assert!(!open.name_id(Some(ID)), "an unchanged id redrew the panel");
+        assert!(open.name_id(Some("11111111-2222-4333-8444-555555555555")));
+        assert!(!shown(&open), "the old id outlived a change of session");
+        assert!(open.name_id(None));
+        assert!(
+            !texts(&lines(&open, WIDTH, 30))
+                .iter()
+                .any(|r| r.starts_with("11111111"))
+        );
+    }
+
+    /// The two id rows lengthen the Session section, and the hint line keeps the context reading
+    /// until the panel can show its Context section whole.
+    #[test]
+    fn the_id_rows_count_toward_where_the_context_section_fits() {
+        let mut session = opened_at(120);
+        session.identify("name", "~/b".to_string(), None);
+        let bare = (1..40)
+            .find(|rows| shows_context(&session, 120, *rows))
+            .expect("fits somewhere");
+        session.name_id(Some(ID));
+        let with_id = (1..40)
+            .find(|rows| shows_context(&session, 120, *rows))
+            .expect("fits somewhere");
+        assert_eq!(with_id, bare + 2);
+        for rows in [with_id - 1, with_id] {
+            let drawn = panel_column(&screen(&mut session, 120, rows), 120);
+            assert_eq!(
+                drawn.contains(&crate::render::context_reading(&session)),
+                shows_context(&session, 120, rows),
+                "shows_context disagrees with the rows drawn at {rows}: {drawn:#?}"
+            );
+        }
     }
 
     /// A branch is whatever a checkout was given, and an escape in it drawn raw would act on the

@@ -4152,6 +4152,7 @@ fn event_loop(
             crate::status::abbreviate(workspace.root()),
             stored.branch(),
         );
+        needs_draw |= session.name_id(stored.resumable());
         needs_draw |= session.link(
             stored.link(bravebot_session::sessions::Link::Issue),
             stored.link(bravebot_session::sessions::Link::PullRequest),
