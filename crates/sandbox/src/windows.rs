@@ -360,17 +360,28 @@ const LONGEST_PROFILE_NAME: usize = 64;
 /// deciding what the program was asked to do ([SANDBOX-4]).
 ///
 /// The rules are the ones `CommandLineToArgvW` parses back, which is what the C runtime
-/// and every language runtime on this platform use: every argument is quoted, a backslash
-/// run immediately before the closing quotation mark is doubled, and a backslash run
-/// before an embedded quotation mark is doubled and the quotation mark escaped. A
-/// backslash anywhere else is literal, so a path is not rewritten by being quoted.
+/// and every language runtime on this platform use: an argument that is empty or holds a
+/// space, a tab, a quotation mark or a character `cmd.exe` reads as its own (`& | < > ^ % ( ) !`)
+/// is quoted, a backslash run immediately before the closing
+/// quotation mark is doubled, and a backslash run before an embedded quotation mark is doubled
+/// and the quotation mark escaped. A backslash anywhere else is literal, so a path is not
+/// rewritten by being quoted. Any other argument is written as it is, since `cmd.exe` reads its
+/// own switches from the command line and does not find `/c` once it is quoted. One holding a
+/// character `cmd.exe` acts on is quoted, so a batch file or `cmd.exe` is not handed a second
+/// command by an argument.
 ///
 /// [SANDBOX-4]: ../../../docs/specs/sandboxing.md
 fn command_line(program: &str, args: &[String]) -> String {
     let mut line = quoted(program);
     for arg in args {
         line.push(' ');
-        line.push_str(&quoted(arg));
+        if arg.is_empty()
+            || arg.contains([' ', '\t', '"', '&', '|', '<', '>', '^', '%', '(', ')', '!'])
+        {
+            line.push_str(&quoted(arg));
+        } else {
+            line.push_str(arg);
+        }
     }
     line
 }
@@ -762,7 +773,14 @@ mod tests {
     /// policy is otherwise one this backend applies, so the refusal is the only reason.
     #[test]
     fn a_policy_refusing_a_read_is_refused_rather_than_applied() {
-        let policy = a_policy_this_backend_applies().deny_read("/workspace/credentials");
+        let workspace = std::path::PathBuf::from(if cfg!(windows) {
+            r"C:\workspace"
+        } else {
+            "/workspace"
+        });
+        let policy = a_policy_this_backend_applies()
+            .allow_read(&workspace)
+            .deny_read(workspace.join("credentials"));
 
         let refusal = refusal_for(&policy).expect("a read refusal is not enforceable here");
 
@@ -909,7 +927,7 @@ mod tests {
     fn a_backslash_before_a_quotation_mark_does_not_escape_the_escape() {
         assert_eq!(
             command_line("s.exe", &[r#"a\"b"#.to_string(), "next".to_string()]),
-            r#""s.exe" "a\\\"b" "next""#
+            r#""s.exe" "a\\\"b" next"#
         );
         assert_eq!(
             command_line("s.exe", &[r#"a\\"b"#.to_string()]),
@@ -923,8 +941,8 @@ mod tests {
     #[test]
     fn a_path_ending_in_a_separator_does_not_swallow_the_argument_after_it() {
         assert_eq!(
-            command_line("s.exe", &["C:\\dir\\".to_string(), "next".to_string()]),
-            r#""s.exe" "C:\dir\\" "next""#
+            command_line("s.exe", &["C:\\my dir\\".to_string(), "next".to_string()]),
+            r#""s.exe" "C:\my dir\\" next"#
         );
     }
 
@@ -934,8 +952,31 @@ mod tests {
     fn quoting_a_path_leaves_the_path_it_names_alone() {
         assert_eq!(
             command_line("s.exe", &["C:\\dir\\file".to_string()]),
-            r#""s.exe" "C:\dir\file""#
+            r#""s.exe" C:\dir\file"#
         );
+    }
+
+    /// The regression it rejects: every argument quoted, which hands `cmd.exe` a `"/c"` it does
+    /// not read as its switch, so it starts and runs nothing. What it is asked to run still
+    /// arrives as the one argument it is.
+    #[test]
+    fn an_argument_that_needs_no_quoting_is_written_as_it_is() {
+        assert_eq!(
+            command_line("cmd.exe", &["/c".to_string(), "echo hello".to_string()]),
+            r#""cmd.exe" /c "echo hello""#
+        );
+    }
+
+    /// The regression it rejects: the quoting dropped for every argument that holds no space,
+    /// which hands `cmd.exe` or a batch file the `&` of `a&calc` as a second command.
+    #[test]
+    fn an_argument_cmd_would_act_on_stays_quoted() {
+        for argument in ["a&calc", "a|b", "a>b", "a<b", "a^b", "%PATH%", "(a)", "a!"] {
+            assert_eq!(
+                command_line("cmd.exe", &["/c".to_string(), argument.to_string()]),
+                format!(r#""cmd.exe" /c "{argument}""#)
+            );
+        }
     }
 
     /// An argument with nothing in it is still an argument, and one written unquoted
@@ -944,7 +985,7 @@ mod tests {
     fn an_empty_argument_is_still_an_argument() {
         assert_eq!(
             command_line("s.exe", &[String::new(), "after".to_string()]),
-            r#""s.exe" "" "after""#
+            r#""s.exe" "" after"#
         );
     }
 

@@ -185,10 +185,10 @@ jobs:
   # the price of a linker package. The aarch64 Windows build shares what is checked here, since
   # what these arms are gated on is `windows` rather than the architecture.
   #
-  # Linting, not running. The suite needs a Windows host, and it spawns a POSIX shell, drives a pty
-  # and exercises a confinement backend Windows has none of; whether those are made to work is the
-  # question of whether Windows is supported at all, which is #88. The desktop app's pair is the
-  # exception, run on a Windows host in windows-desktop below.
+  # Linting, not running. Most of the suite needs a Windows host, and it spawns a POSIX shell and
+  # drives a pty; whether those are made to work is the question of whether Windows is supported at
+  # all, which is #88. The desktop app's pair is run on a Windows host in windows-desktop below, and
+  # the confinement backend in sandbox-windows below.
   windows:
     name: Lint the Windows target
     runs-on: ubuntu-latest
@@ -632,6 +632,53 @@ jobs:
       - name: Walkthrough regression
         timeout-minutes: 10
         run: make check-ui-walkthrough
+
+  # The AppContainer backend with real processes. The windows job above compiles the calls and
+  # starts nothing, so without this job no process is started under a container and the refusals
+  # and the empty Windows base rest on the code alone.
+  #
+  # Only the tests written for Windows run. The rest of the sandbox crate's tests use Unix paths
+  # and programs, and the agent's other confined-process tests spawn a POSIX shell. Target as in
+  # the windows job above.
+  sandbox-windows:
+    name: Sandbox on Windows
+    runs-on: windows-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        # Pinned to a full commit SHA; see the note in the `check` job above.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test the backend's decisions
+        run: cargo test -p bravebot-sandbox --locked --no-fail-fast --lib 'windows::'
+
+      - name: Test the backend with real processes
+        run: cargo test -p bravebot-sandbox --locked --no-fail-fast --test windows
+
+      - name: Test a confined program run for a person
+        # The session is granted its temporary directory, so it is a directory of its own and not
+        # the runner's.
+        run: |
+          mkdir -p "$RUNNER_TEMP/confine"
+          export TMP="$(cygpath -w "$RUNNER_TEMP/confine")"
+          export TEMP="$TMP"
+          cargo test -p bravebot-agent --locked --no-fail-fast --test confine
 
   # The installers a release ships, built as a release builds them from the cross-built helpers,
   # and each installed on a runner of its own architecture by the job after this one. Beside each
