@@ -283,8 +283,10 @@ substitution makes the prompt a lie, or it's pointless. So: refused.
 Globs are different, and worth understanding. We expand them **before** the prompt, against the
 actual working tree. So the human doesn't see `src/**/*.ts`: they see the twelve files it
 matched. If it matches nothing, that's an error rather than bash's behaviour of passing the
-pattern through literally. A pattern meant for the program, as in `grep --include=*.md`, is
-quoted (`'--include=*.md'`), and the refusal says so. And the expansion is capped, because
+pattern through literally. A pattern meant for the program, as in `find . -name '*.md'`, is
+quoted, and the refusal says so. The exception is an option's value: in `grep --include=*.md` the
+pattern comes after the `=` of a word starting with `-`, so it is passed to grep as written and the
+human sees `--include=*.md`. And the expansion is capped, because
 an approval prompt with a thousand paths in it is a prompt nobody reads: a word may stand for at
 most a hundred arguments, and working out one pattern may read at most four thousand directories.
 Past either, the compile fails and says the count. `**` steps over the same directories a listing
