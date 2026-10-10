@@ -7,7 +7,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 214
+      - crates/agent/src/tools.rs: 228
   - symbol: Produced::refused_with_a_note
     sites:
       - crates/agent/src/tools.rs: 8
@@ -44,6 +44,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`vet_content`](vet-content.md) | the reference naming the slot | none | the bytes, if a person allows it |
 | [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds` | none | what it has printed since the last look |
 | [`fetch_url`](fetch-url.md) | `url` | none | a reference |
+| [`download_url`](download-url.md) | `url`, `path` | none | the path and the byte count |
 | [`load_skill`](load-skill.md) | `name` | none | the skill's text |
 | [`load_tool`](../mcp-servers.md#SERVERS-16) | `name` | none | confirmation that the tool is offered from the next request |
 | [`todo_write`](todo-write.md) | none | `todos` | confirmation |

@@ -421,6 +421,7 @@ fn run(
         attribution: settings.attribution().clone(),
         prompts,
         output_cap: settings.run_output_cap(),
+        download_cap: settings.download_max_bytes(),
         deadlines: bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
         model,
         in_force: named,
@@ -613,6 +614,8 @@ struct Running<'a> {
     /// Read once beside the attribution and for the same reason: a file edited mid-session
     /// describes the next one.
     output_cap: Option<usize>,
+    /// What the settings say one `download_url` call may write to a file, where they said anything.
+    download_cap: Option<usize>,
     /// How long a command may run, and the most one call may ask for, as the settings leave them.
     ///
     /// Resolved once beside the cap and for the same reason: a file edited mid-session describes
@@ -734,6 +737,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_attribution(self.attribution.clone())
             .with_system_prompts(self.prompts.clone())
             .with_output_cap(self.output_cap)
+            .with_download_cap(self.download_cap)
             .with_deadlines(self.deadlines)
             .with_confined_runs(true)
             .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)

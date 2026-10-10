@@ -92,6 +92,7 @@ the routing-versus-content split they share.
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 4 | `read_output` |
 | [tools/vet-content.md](tools/vet-content.md) | `VET` | 4 | `vet_content` |
 | [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 8 | `fetch_url` |
+| [tools/download-url.md](tools/download-url.md) | `DOWNLOAD` | 5 | `download_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 5 | `load_skill` |
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 2 | `todo_write` |
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |

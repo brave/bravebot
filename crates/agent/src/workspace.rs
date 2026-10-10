@@ -2751,13 +2751,80 @@ impl Workspace {
         contents: &Labelled<String>,
         expected_revision: Option<u64>,
     ) -> Result<PathBuf, WorkspaceError> {
+        self.write_released(
+            policy,
+            relative,
+            contents.label(),
+            expected_revision,
+            |resolved, proof| std::fs::write(resolved, contents.clone().declassify(proof)),
+        )
+    }
+
+    /// Write a file whose path was endorsed by a person, with a body that arrives in pieces.
+    ///
+    /// The routing gates are those of [`Workspace::write_endorsed`], and the content gate is the
+    /// one it applies to a body carrying `label`. `fill` is handed the file to write and the proof
+    /// that the gates passed, and is where the pieces are declassified one at a time: the whole
+    /// body is never held here or anywhere else. The file appears under its name only when `fill`
+    /// returns `Ok`, so a body that stops half-way, or that a caller refuses, leaves what was
+    /// there before and no partial file.
+    pub(crate) fn write_streamed_endorsed<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        label: bravebot_core::label::Label,
+        expected_revision: Option<u64>,
+        fill: impl FnOnce(
+            &mut std::fs::File,
+            &bravebot_core::policy::Declassification,
+        ) -> std::io::Result<()>,
+    ) -> Result<PathBuf, WorkspaceError> {
+        policy.before_capability(Capability::FileWrite)?;
+        let relative = policy.before_endorsed_destination("file_write", "path", path)?;
+        // Only the label is read by this gate, so a stand-in with no bytes carries it.
+        policy.before_action(
+            "file_write",
+            "contents",
+            Role::Content,
+            &Labelled::new(String::new(), label),
+        )?;
+
+        self.write_released(
+            policy,
+            relative,
+            label,
+            expected_revision,
+            |resolved, proof| {
+                let parent = resolved
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let mut staged = Staged::create_in(parent)?;
+                fill(staged.file(), proof)?;
+                staged.keep_as(resolved)
+            },
+        )
+    }
+
+    /// The part of a write every body shares: reserve the path, capture what was there, release
+    /// the bytes to `put`, and record what the file now holds.
+    ///
+    /// `label` is the body's, which is what the file's recorded trust follows. The bytes are
+    /// `put`'s to carry, behind the proof it is handed.
+    fn write_released<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        relative: String,
+        label: bravebot_core::label::Label,
+        expected_revision: Option<u64>,
+        put: impl FnOnce(&Path, &bravebot_core::policy::Declassification) -> std::io::Result<()>,
+    ) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve(&relative)?;
         let written = policy.file_authority().key(&self.trust_key(&relative));
         let folds = volume_folds_case(&self.root);
         // Before the capture rather than inside it, so no other write waits on the record's sync.
         // A write refused after this leaves a line distrusting a path it did not change, which
         // is the direction that trusts nothing.
-        if contents.label().integrity == bravebot_core::label::Integrity::Untrusted {
+        if label.integrity == bravebot_core::label::Integrity::Untrusted {
             crate::memory::record_before_write(self.memories(), &written, folds).map_err(|e| {
                 WorkspaceError::Io {
                     path: relative.clone(),
@@ -2788,7 +2855,6 @@ impl Workspace {
 
         // Both gates have passed, so the bytes may be released to the write.
         let proof = policy.authorise_content_release("file_write", "contents");
-        let body = contents.clone().declassify(&proof);
 
         if let Some(parent) = resolved.parent() {
             std::fs::create_dir_all(parent).map_err(|e| WorkspaceError::Io {
@@ -2797,14 +2863,14 @@ impl Workspace {
             })?;
         }
 
-        std::fs::write(&resolved, body).map_err(|e| WorkspaceError::Io {
+        put(&resolved, &proof).map_err(|e| WorkspaceError::Io {
             path: relative,
             detail: e.to_string(),
         })?;
 
         #[cfg(test)]
         self.interrupt_after_write()?;
-        effect.complete(contents.label().integrity);
+        effect.complete(label.integrity);
         crate::memory::after_write(policy, self.memories(), &written, folds);
         Ok(resolved)
     }
@@ -5352,6 +5418,63 @@ fn written_below(named: &Path, opened: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// A file being filled beside the one it will replace, so a body that stops half-way leaves no
+/// partial file under the destination's name.
+struct Staged {
+    file: Option<std::fs::File>,
+    path: PathBuf,
+    kept: bool,
+}
+
+impl Staged {
+    fn create_in(directory: &Path) -> std::io::Result<Self> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = directory.join(format!(
+            ".bravebot-download-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        Ok(Self {
+            file: Some(file),
+            path,
+            kept: false,
+        })
+    }
+
+    fn file(&mut self) -> &mut std::fs::File {
+        self.file
+            .as_mut()
+            .expect("the file is open until it is kept")
+    }
+
+    /// Put the staged file where `destination` is, replacing what is there.
+    fn keep_as(&mut self, destination: &Path) -> std::io::Result<()> {
+        use std::io::Write;
+        if let Some(mut file) = self.file.take() {
+            file.flush()?;
+        }
+        // Keeps the mode of a file being replaced, as a write in place would.
+        if let Ok(existing) = std::fs::metadata(destination) {
+            let _ = std::fs::set_permissions(&self.path, existing.permissions());
+        }
+        std::fs::rename(&self.path, destination)?;
+        self.kept = true;
+        Ok(())
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        if !self.kept {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 #[cfg(test)]

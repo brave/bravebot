@@ -4762,6 +4762,7 @@ fn event_loop(
                         &answers.rules.permissions,
                         settings.attribution(),
                         settings.run_output_cap(),
+                        settings.download_max_bytes(),
                         bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
                     )?;
 
@@ -4963,6 +4964,7 @@ fn event_loop(
                         &answers.rules.permissions,
                         settings.attribution(),
                         settings.run_output_cap(),
+                        settings.download_max_bytes(),
                         bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
                         &mut stored,
                     )?;
@@ -7678,6 +7680,8 @@ fn manifest_animated(
     // anything. Passed in beside the attribution and for the same reason: which layer named it is
     // settled where the settings were read.
     output_cap: Option<usize>,
+    // And what one download may write to a file, for the same reason.
+    download_cap: Option<usize>,
     // And how long a command may run, resolved where those settings were read and for the same
     // reason (RUN-23).
     deadlines: bravebot_agent::exec::Deadlines,
@@ -7721,6 +7725,7 @@ fn manifest_animated(
         .with_permission_mode(permission_mode.clone())
         .with_attribution(attribution.clone())
         .with_output_cap(output_cap)
+        .with_download_cap(download_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
         .with_sandbox_mode(session.sandbox_mode());
@@ -8287,6 +8292,8 @@ fn run_turn_animated(
     // anything. Passed in beside the attribution and for the same reason: which layer named it is
     // settled where the settings were read.
     output_cap: Option<usize>,
+    // And what one download may write to a file, for the same reason.
+    download_cap: Option<usize>,
     // And how long a command may run, resolved where those settings were read and for the same
     // reason (RUN-23).
     deadlines: bravebot_agent::exec::Deadlines,
@@ -8381,6 +8388,7 @@ fn run_turn_animated(
         // sends, ticks and goal rounds included (CLI-19).
         .with_system_prompts(session.system_prompts().clone())
         .with_output_cap(output_cap)
+        .with_download_cap(download_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
         .with_sandbox_mode(session.sandbox_mode())

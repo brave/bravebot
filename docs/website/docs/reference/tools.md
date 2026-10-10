@@ -25,6 +25,7 @@ that is merely carried.
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
 | [`job_output`](#job_output) | `job`, `kill`, `wait_seconds` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
+| [`download_url`](#download_url) | `url`, `path` | none | **yes: the host unless a rule names it, and the destination every time** |
 | [`spawn_processor`](#spawn_processor) | `reads`, `about` | `instruction` | no |
 | [`spawn_agent`](#spawn_agent) | `kind` | `task`, `each` | not the call, but its writes and runs do |
 | [`load_skill`](#load_skill) | `name` | none | no |
@@ -761,6 +762,37 @@ Markdown is the only type ranked. A site holding no Markdown answers with whatev
 answered without the header, so a page that is only ever HTML arrives as it did before. Ranking HTML
 above the wildcard would cost more than sending no header at all, since an endpoint that serves both
 a compact form and a full page reads that as a request for the page.
+
+## `download_url`
+
+Saves what an `http` or `https` URL serves to a file in the workspace, byte for byte.
+[`fetch_url`](#fetch_url) cannot do this: it decodes a body that is not text lossily and stops at
+2 MiB, so a picture, an archive, a PDF or a font comes out corrupted.
+
+| Parameter | |
+|---|---|
+| `url` | the one URL to download |
+| `path` | the workspace file to save it to |
+
+**You are asked about the host, and then about the destination.** The host question and the rules
+that answer it are [`fetch_url`](#fetch_url)'s: an `allow` rule matching the host answers it, a
+`deny` rule refuses without asking, a redirect may not leave the approved host, and a name that
+resolves to a non-public address is not fetched. The destination is put to you every time, whatever
+the trust map says about the path, as `url -> path`, and an existing file is shown as an overwrite.
+Nothing is sent before you answer.
+
+**The bytes go from the network to the file.** They are written as they arrive and are never held by
+the agent or shown to the model. The file is recorded as not vouched for, so reading it later is
+quarantined as a fetched page is. The model is told the path, the number of bytes and the HTTP
+status. The content type the server named is shown to you and not to the model.
+
+**A failed download changes nothing.** The file is staged beside its destination and replaces it
+only once the whole body has arrived, so a dropped connection, a stop or a body over the size cap
+leaves what was there and no partial file.
+
+The cap is 100 MiB per call and is the [`download.maxBytes`](../customize/configuration.md#downloadmaxbytes)
+setting. A delegate is never offered the tool, and plan mode
+refuses it, since it writes a file.
 
 ## `spawn_processor`
 

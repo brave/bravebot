@@ -3126,6 +3126,7 @@ verb-run = Run
 verb-read-output = Read output
 verb-vet-content = Vet
 verb-fetch-url = Fetch
+verb-download-url = Download
 verb-job-output = Job
 verb-spawn-agent = Delegate
 verb-schedule-next = Schedule

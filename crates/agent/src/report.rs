@@ -1000,6 +1000,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "read_output" => t!(verb_read_output),
         "vet_content" => t!(verb_vet_content),
         "fetch_url" => t!(verb_fetch_url),
+        "download_url" => t!(verb_download_url),
         "job_output" => t!(verb_job_output),
         // Named for what it is rather than for what it does, exactly as a processor is: a person
         // watching a line go by should be able to see that the work moved somewhere else.

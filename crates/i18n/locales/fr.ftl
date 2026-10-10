@@ -2626,6 +2626,7 @@ verb-run = Exécuter
 verb-read-output = Lire la sortie
 verb-vet-content = Vérifier
 verb-fetch-url = Récupérer
+verb-download-url = Télécharger
 verb-job-output = Tâche
 verb-spawn-agent = Déléguer
 verb-schedule-next = Programmer

@@ -1826,6 +1826,8 @@ fn run_task(
         // And what they say a command's output may spend of this run's context (RUN-21), off the
         // same resolved settings.
         .with_output_cap(settings.run_output_cap())
+        // And what they say one download may write to a file (DOWNLOAD-4).
+        .with_download_cap(settings.download_max_bytes())
         // And how long one may take, resolved here because this is where the settings were read
         // (RUN-23).
         .with_deadlines(bravebot_agent::exec::Deadlines::resolve(

@@ -1234,6 +1234,30 @@ fn table(
                 "required": ["url"]
             }),
         ),
+        Tool::function(
+            "download_url",
+            "Save an http or https URL to a file in the workspace without reading it: binary \
+             safe, and the bytes go from the network to the file and never into your context. \
+             Use it for a picture, archive, PDF, font or any file fetch_url would corrupt. It \
+             replaces an existing file at the path. The file is quarantined like anything fetched, so \
+             you cannot read it back or be told what it says. The user is asked about the host and \
+             about the destination before anything is written.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The absolute http or https URL to download."
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path to save it to, e.g. \
+                                        assets/logo.png."
+                    }
+                },
+                "required": ["url", "path"]
+            }),
+        ),
     ];
 
     if running.offered() {
@@ -1824,6 +1848,11 @@ pub struct Tools<'a> {
     /// tree, and one that read a settings file would answer differently on a machine whose owner
     /// had configured it.
     pub output_cap: usize,
+    /// The most one `download_url` call may write to a file, from `download.maxBytes` or
+    /// [`DOWNLOAD_CAP`] where nothing named one.
+    ///
+    /// Resolved by the caller that read the settings, for the reason `output_cap` is.
+    pub download_cap: usize,
     /// How long a command may run, and the most a call may ask for, from `run.defaultSeconds` and
     /// `run.maxSeconds` or the built-in figures where nothing named them.
     ///
@@ -2817,7 +2846,7 @@ impl Produced {
 pub(crate) fn writes_a_file(name: &str) -> bool {
     matches!(
         strip_namespace(name),
-        "write_file" | "edit_file" | "apply_checkout"
+        "write_file" | "edit_file" | "apply_checkout" | "download_url"
     )
 }
 
@@ -2864,7 +2893,7 @@ fn strip_namespace(name: &str) -> &str {
 /// new. `None` for a tool with no single argument naming a target.
 fn target_key(tool: &str) -> Option<&'static str> {
     match tool {
-        "read_file" | "write_file" | "edit_file" => Some("path"),
+        "read_file" | "write_file" | "edit_file" | "download_url" => Some("path"),
         "apply_checkout" => Some("checkout"),
         "list_files" => Some("directory"),
         "search" => Some("pattern"),
@@ -3319,6 +3348,8 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // point somewhere, so this one is refused here too: the gate would pass it, since the
         // capability really is held.
         "fetch_url" if !tools.delegated => fetch_url(policy, tools, confirmer, &arguments),
+        // The same refusal for the same reason, and a write on top of it.
+        "download_url" if !tools.delegated => download_url(policy, tools, confirmer, &arguments),
         "job_output" => job_output(policy, tools, reporter, &arguments),
         // A delegate ends when it answers, a tick the person timed has its next look coming
         // already, and a turn nothing will ask again has nowhere for a wait to go, so none of the
@@ -8508,6 +8539,250 @@ fn fetch_url<S: Sink, C: Confirmer>(
     }
 }
 
+/// How long a download may run from the moment the reply begins.
+///
+/// Longer than a fetch's reply, since a body worth saving to a file is one that takes a while, and
+/// still a bound: nothing else ends a server that sends a byte a minute.
+const DOWNLOAD_WITHIN: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// What a download that did not finish says about why, kept apart from the text it is reported in
+/// so the sentence is chosen once the write has returned.
+enum DownloadStopped {
+    TooLarge,
+    Cancelled,
+    Failed(String),
+}
+
+/// A server's content type as a person may be shown it: printable ASCII only and short.
+///
+/// The header is the server's own words, and this goes to a screen. A control character or an
+/// escape sequence in it would be drawn as an instruction to the terminal rather than as text, so
+/// only the characters a media type is written in are kept, and a long one is cut.
+fn shown_content_type(raw: Option<&str>) -> String {
+    const LONGEST: usize = 100;
+    match raw {
+        None => "no content type".to_string(),
+        Some(raw) => raw
+            .chars()
+            .filter(|c| c.is_ascii_graphic() || *c == ' ')
+            .take(LONGEST)
+            .collect(),
+    }
+}
+
+/// Save what a URL serves to a file, which neither the driver nor the planner reads.
+///
+/// Two routing arguments, each of which a person can read and answer for: the URL, through the
+/// questions and rules `fetch_url` puts to a host (FETCH-2, FETCH-4), and the path, through the
+/// destination gate `write_file` applies (WRITE-3). The bytes go from the socket to the file in
+/// pieces, labelled as a fetched body is, and nothing here holds or looks at them (DOWNLOAD-1).
+fn download_url<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    arguments: &Value,
+) -> Produced {
+    let workspace = tools.workspace;
+    let Some(proposed) = argument(arguments, "url") else {
+        return Produced::problem(
+            "error: 'url' is required and must be a string holding an http or https URL",
+        );
+    };
+    if named_argument(arguments, "path_ref").is_some() {
+        return Produced::problem(
+            "error: download_url takes 'path' and no reference: name the file to save to",
+        );
+    }
+
+    // Read for the reason `fetch_url` reads it: the host is taken out of these bytes below.
+    let url = match policy.read_planner_argument("download_url", "url", &proposed) {
+        Ok(url) => url,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    let Some(host) = bravebot_core::url::host_of(&url) else {
+        return Produced::problem(format!(
+            "error: '{url}' names no host to download from; give an absolute http or https URL"
+        ));
+    };
+
+    // Before anybody is asked, for the reason it is in `fetch_url`: a rule is a statement that
+    // something does not happen.
+    if let Err(denial) = policy.before_fetch_rules(&url) {
+        return Produced::problem(format!(
+            "refused: {denial}. Do not retry this URL and do not look for another route to that \
+             host: say in your reply what you needed from it."
+        ));
+    }
+
+    let found = match path_argument(
+        policy,
+        workspace,
+        "download_url",
+        Purpose::Effect,
+        tools.slots,
+        arguments,
+    ) {
+        Ok(found) => found,
+        Err(refusal) => return Produced::problem(refusal),
+    };
+    let (path, shown_path, proposed_path) = (found.path, found.shown, found.released);
+
+    if policy.fetch_needs_approval(&url) {
+        let request = crate::confirm::FetchRequest {
+            url: url.clone(),
+            host: host.clone(),
+        };
+        if confirmer.confirm_fetch(&request) == Decision::Reject {
+            return Produced::problem(
+                "refused: the user did not approve fetching this. Do not retry the same URL; \
+                 ask what they would prefer."
+                    .to_string(),
+            );
+        }
+    }
+
+    // What the file holds now is not read: it is replaced whole, and the person is told so.
+    let (replaces, approved_revision) = policy.capture_files(|_, capture| {
+        (
+            workspace.names_a_file(&proposed_path),
+            capture.revision_of(&workspace.trust_key(&proposed_path)),
+        )
+    });
+    let intent = if replaces {
+        Intent::Overwrite
+    } else {
+        Intent::Create
+    };
+
+    // Always put to the person, whatever the trust map would have said about the path: the bytes
+    // are nobody's and the file is somebody's, so the pair is the one thing they can answer for.
+    let request = WriteRequest {
+        written_since_checkout: false,
+        intent,
+        existing: replaces.then(String::new),
+        // The pair, in the one field every front end draws as the destination. No file is read and
+        // no body is held, so there is nothing to put in `contents` and nothing for a diff to say.
+        path: format!("{url} -> {proposed_path}"),
+        contents: String::new(),
+        diff: Diff::compute("", ""),
+        untrusted: true,
+        remark: None,
+        credentials: Vec::new(),
+        may_always: false,
+        record: None,
+    };
+    let mode = tools.permission_mode.get();
+    let answer = confirmer.confirm_write(&request);
+    policy.record_answer(mode.answers_a_write_unasked(false).then(|| mode.name()));
+    if !answer.approved() {
+        return Produced::problem(
+            "refused: the user did not approve saving this there. Do not retry the same \
+             download; ask what they would prefer."
+                .to_string(),
+        );
+    }
+
+    // Bound to this exact URL, so an approval cannot be spent on another.
+    policy.endorse_fetch(&url);
+    let label = match policy.before_fetch(&url) {
+        Ok(label) => label,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    if let Some(spent) = bravebot_core::ambient::at_host(&host) {
+        policy.record_ambient(&[spent]);
+    }
+
+    // No `Accept` of this program's own: a download wants the file as the server holds it, and
+    // the Markdown preference `fetch_url` states is for a page a processor reads.
+    let request = bravebot_net::Request::get(&url).stream_within(DOWNLOAD_WITHIN);
+    let opened = tools
+        .chat
+        .egress
+        .fetch_streaming(policy, request, label, Some(tools.cancel));
+    // Once the request is open, so a failure does not leave the turn's other egress being checked
+    // against the host this one call was approved for. The body is read below with no hop left.
+    policy.fetch_finished();
+    let mut stream = match opened {
+        Ok(stream) => stream.capped_at(tools.download_cap),
+        Err(error) => {
+            return Produced::problem(format!("error: downloading {url} failed: {error}"));
+        }
+    };
+    let status = stream.status;
+    let content_type = shown_content_type(stream.content_type.as_deref());
+
+    // The approval is the path's authority, and it is bound to this exact value.
+    policy.issue_grant("file_write", "path", proposed_path.clone());
+
+    let cancel = tools.cancel;
+    let mut written = 0usize;
+    let mut stopped = None;
+    let outcome = workspace.write_streamed_endorsed(
+        policy,
+        &path,
+        label,
+        Some(approved_revision),
+        |file, proof| {
+            use std::io::Write;
+            loop {
+                if cancel.is_cancelled() {
+                    stopped = Some(DownloadStopped::Cancelled);
+                    return Err(std::io::Error::other("cancelled"));
+                }
+                match stream.next_chunk() {
+                    Ok(Some(piece)) => {
+                        let bytes = piece.declassify(proof);
+                        file.write_all(&bytes)?;
+                        written += bytes.len();
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        stopped = Some(DownloadStopped::Failed(error.to_string()));
+                        return Err(std::io::Error::other("the body stopped"));
+                    }
+                }
+            }
+            if stream.truncated() {
+                stopped = Some(DownloadStopped::TooLarge);
+                return Err(std::io::Error::other("over the cap"));
+            }
+            Ok(())
+        },
+    );
+
+    match (outcome, stopped) {
+        (Ok(_), _) => {
+            workspace.record_write(Some(&shown_path));
+            let verb = if replaces { "replaced" } else { "created" };
+            confirmed(
+                format!(
+                    "{verb} {shown_path} with {written} bytes downloaded from {url} (HTTP \
+                     {status}). It is written and quarantined: you cannot read it, and there is \
+                     nothing further to do for it."
+                ),
+                format!("{status}, {written} bytes, {content_type}"),
+            )
+            .marked_untrusted(true)
+            .having_changed_a_file()
+        }
+        (Err(_), Some(DownloadStopped::TooLarge)) => Produced::problem(format!(
+            "error: {url} is larger than the {} bytes a download may write, so nothing was \
+             saved. Do not retry; say that the limit is download.maxBytes in settings.json.",
+            tools.download_cap
+        )),
+        (Err(_), Some(DownloadStopped::Cancelled)) => {
+            Produced::problem("error: the download was stopped, so nothing was saved")
+        }
+        (Err(_), Some(DownloadStopped::Failed(error))) => Produced::problem(format!(
+            "error: downloading {url} failed part-way: {error}. Nothing was saved."
+        )),
+        (Err(e), None) => Produced::problem(format!(
+            "error: {}",
+            workspace_failure(policy, "download_url", "path", &e, &shown_path)
+        )),
+    }
+}
+
 /// A call to a tool of an MCP server whose list somebody vouched for (SERVERS-7).
 ///
 /// What the server answered is content nobody vouched for, as a fetched page is, and so is what
@@ -8723,6 +8998,12 @@ fn job_output<S: Sink, R: Reporter>(
 /// budget rather than a boundary, `run.maxOutput` may name another (RUN-21), and this is what
 /// stands where nothing did.
 pub(crate) const OUTPUT_CAP: usize = 16 * 1024;
+
+/// The most one `download_url` call may write to a file where nobody named a figure.
+///
+/// A disk-budget decision: the bytes go to a file and never into the conversation, so this bounds
+/// what one call can leave on the person's disk. `download.maxBytes` may name another.
+pub(crate) const DOWNLOAD_CAP: usize = 100 * 1024 * 1024;
 
 /// `text` cut to `cap` bytes, keeping the head and the tail, or `None` where it fits.
 ///
@@ -11023,6 +11304,7 @@ mod tests {
                 "vet_content",
                 "spawn_agent",
                 "fetch_url",
+                "download_url",
                 "request_path",
                 "watch_file",
                 "schedule_next"
@@ -11311,10 +11593,12 @@ mod tests {
             .iter()
             .map(|t| t.function.name.clone())
             .collect();
-            assert!(
-                !offered.iter().any(|t| t == "fetch_url"),
-                "a {name} was offered a way to reach a host of its own"
-            );
+            for reaching in ["fetch_url", "download_url"] {
+                assert!(
+                    !offered.iter().any(|t| t == reaching),
+                    "a {name} was offered {reaching}, a way to reach a host of its own"
+                );
+            }
         }
     }
 
@@ -11421,6 +11705,19 @@ mod tests {
             !withheld.contains("run"),
             "a turn holding no run was told to use it: {withheld}"
         );
+    }
+
+    /// A server's `Content-Type` header is shown on the person's screen, so what it carries must
+    /// not reach the terminal as escape sequences or control characters, and a long one is cut.
+    #[test]
+    fn a_content_type_is_shown_without_anything_a_terminal_would_obey() {
+        assert_eq!(shown_content_type(Some("image/png")), "image/png");
+        assert_eq!(shown_content_type(None), "no content type");
+        assert_eq!(
+            shown_content_type(Some("text/plain\u{1b}[2J\u{7}\r\nx")),
+            "text/plain[2Jx"
+        );
+        assert_eq!(shown_content_type(Some(&"a".repeat(500))).len(), 100);
     }
 
     /// The kernel narrows a definition's capabilities by asking
@@ -15739,6 +16036,7 @@ mod tests {
             body(&mut Tools {
                 workspace,
                 output_cap: OUTPUT_CAP,
+                download_cap: DOWNLOAD_CAP,
                 deadlines: Deadlines::BUILT_IN,
                 skills: &skills,
                 slots: &mut slots,

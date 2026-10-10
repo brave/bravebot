@@ -949,6 +949,7 @@ impl Bridge {
         }
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();
+        let download_cap = settings.download_max_bytes();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let auto_vetting = open.auto_vetting;
         let sandbox =
@@ -1020,6 +1021,7 @@ impl Bridge {
                 config,
                 attribution,
                 output_cap,
+                download_cap,
                 deadlines,
                 auto_vetting,
                 sandbox,
@@ -1932,6 +1934,9 @@ struct Work {
     /// What the settings say a command's output may spend of this turn's conversation, where they
     /// said anything (RUN-21). Read where the attribution was and carried the same way.
     output_cap: Option<usize>,
+    /// What the settings say one `download_url` call this turn makes may write to a file, where they
+    /// said anything (DOWNLOAD-4). Read where the cap above was and carried the same way.
+    download_cap: Option<usize>,
     /// How long a command this turn runs may take, and the most one call may ask for (RUN-23). Read
     /// where the cap was and carried the same way.
     deadlines: bravebot_agent::exec::Deadlines,
@@ -2048,6 +2053,7 @@ fn work(work: Work) {
         config,
         attribution,
         output_cap,
+        download_cap,
         deadlines,
         auto_vetting,
         sandbox,
@@ -2123,6 +2129,7 @@ fn work(work: Work) {
         .with_model(model)
         .with_attribution(attribution)
         .with_output_cap(output_cap)
+        .with_download_cap(download_cap)
         .with_deadlines(deadlines)
         .with_confined_runs(true)
         .with_sandbox_mode(sandbox)

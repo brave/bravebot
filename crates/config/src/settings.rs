@@ -139,6 +139,7 @@ const READ_KEYS: &[&str] = &[
     "agent",
     "attribution",
     "deferMcpToolsAbove",
+    "download",
     "editorMode",
     "effort",
     "env",
@@ -425,6 +426,11 @@ pub struct Settings {
     /// about its own: answering with the number here would make this crate the second place it is
     /// written down.
     run_output: Option<usize>,
+    /// What `download.maxBytes` said, if it said anything.
+    ///
+    /// `None` is the built-in cap, which belongs to the turn that spends the disk, for the reason
+    /// `run_output` is `None` where nobody named a figure.
+    download_max: Option<usize>,
     /// What `run.defaultSeconds` and `run.maxSeconds` said, where they said anything.
     run_deadlines: RunDeadlines,
     /// What `run.network` came to across the layers, if any of them said it.
@@ -1094,6 +1100,7 @@ impl Settings {
             attribution: attribution_block(root),
             search: search_caps(root),
             run_output: run_output_cap(root),
+            download_max: download_max_bytes(root),
             run_deadlines: run_deadlines(root),
             wheel_rows: wheel_rows(root),
             // The word one root states, there being no file to name. [`Settings::layered`]
@@ -1449,6 +1456,13 @@ impl Settings {
         self.run_output
     }
 
+    /// The most the settings in force let one `download_url` call write to a file.
+    ///
+    /// `None` where nobody named one, for the reason [`Settings::run_output_cap`] answers `None`.
+    pub fn download_max_bytes(&self) -> Option<usize> {
+        self.download_max
+    }
+
     /// How long the settings in force let a command run, and the most a call may name for itself.
     ///
     /// `None` per figure for the reason [`Settings::run_output_cap`] answers `None`: the built-in
@@ -1567,6 +1581,7 @@ impl Settings {
             && self.attribution.is_empty()
             && self.search.is_empty()
             && self.run_output.is_none()
+            && self.download_max.is_none()
             && self.run_deadlines.is_empty()
             && self.wheel_rows.is_none()
             && self.run_network.is_none()
@@ -1735,6 +1750,7 @@ impl Settings {
             .chain(self.search.files.is_some().then_some("search.maxFiles"))
             .chain(self.search.time.is_some().then_some("search.maxSeconds"))
             .chain(self.run_output.is_some().then_some("run.maxOutput"))
+            .chain(self.download_max.is_some().then_some("download.maxBytes"))
             .chain(
                 self.run_deadlines
                     .default
@@ -2256,7 +2272,8 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
                     || key == "provider"
                     || key == "attribution"
                     || key == "keybindings"
-                    || key == "search" =>
+                    || key == "search"
+                    || key == "download" =>
             {
                 for (name, value) in above {
                     lay_over(displaced, under, name, value);
@@ -2545,6 +2562,23 @@ fn run_output_cap(root: &serde_json::Map<String, serde_json::Value>) -> Option<u
         return None;
     };
     run.get("maxOutput")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|cap| *cap > 0)
+        .and_then(|cap| usize::try_from(cap).ok())
+}
+
+/// The `download.maxBytes` value: the most one `download_url` call may write to a file.
+///
+/// Read the way `run.maxOutput` is, and absent on the same terms: zero is the number somebody
+/// writes meaning "no cap", and read literally it is a download permitted no bytes, which refuses
+/// every one. A value that is not a whole count is absence too, so a half-typed file leaves the
+/// built-in cap in force rather than stopping a session.
+fn download_max_bytes(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize> {
+    let serde_json::Value::Object(download) = root.get("download")? else {
+        return None;
+    };
+    download
+        .get("maxBytes")
         .and_then(serde_json::Value::as_u64)
         .filter(|cap| *cap > 0)
         .and_then(|cap| usize::try_from(cap).ok())
@@ -3490,6 +3524,38 @@ mod tests {
             None,
             "a project file that set the cap to zero was handed the home layer's figure"
         );
+    }
+
+    /// A saved file can be larger than anything worth reading, so the cap on a download is a number
+    /// a person writes down (DOWNLOAD-4). Zero and every shape that is not a whole count are absence,
+    /// and the nearest layer that named one wins.
+    #[test]
+    fn a_settings_file_names_the_most_a_download_may_write() {
+        let settings = Settings::parse(r#"{"download": {"maxBytes": 104857600}}"#);
+        assert_eq!(settings.download_max_bytes(), Some(104_857_600));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["download.maxBytes"]);
+
+        for text in [
+            r#"{"download": {"maxBytes": 0}}"#,
+            r#"{"download": {"maxBytes": "100"}}"#,
+            r#"{"download": {"maxBytes": 1.5}}"#,
+            r#"{"download": {"maxBytes": -1}}"#,
+            r#"{"download": "big"}"#,
+            r#"{"maxBytes": 100}"#,
+        ] {
+            assert_eq!(
+                Settings::parse(text).download_max_bytes(),
+                None,
+                "{text:?} capped something"
+            );
+        }
+
+        let layered = Layers::new("download-cap-layers")
+            .global(r#"{"download": {"maxBytes": 1000}}"#)
+            .project(r#"{"download": {"maxBytes": 2000}}"#)
+            .read();
+        assert_eq!(layered.download_max_bytes(), Some(2000));
     }
 
     /// SCROLL-3: terminals differ in how many events a notch sends, so the figure has to reach the
