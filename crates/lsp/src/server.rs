@@ -3200,17 +3200,44 @@ while IFS= read -r header; do
 done
 "#;
 
+    /// One scratch directory per test, for the reason [`REJECTS_A_POSITION`] gives. nextest runs each
+    /// test in a process of its own, where [`LAUNCHING`] orders nothing, so a shared name lets one
+    /// test's setup delete the server another test is running.
     #[cfg(unix)]
-    const DECLARED: &str = "bravebot-lsp-declared";
+    const DECLARED_AND_APPROVED: &str = "bravebot-lsp-declared-and-approved";
 
     #[cfg(unix)]
-    fn the_declared_server(_: &str) -> Option<PathBuf> {
-        Some(crate::testutil::scratch_dir(DECLARED).join("server"))
+    const DECLARED_FOR_ANOTHER_EXTENSION: &str = "bravebot-lsp-declared-for-another-extension";
+
+    #[cfg(unix)]
+    const DECLARED_AND_CHANGED: &str = "bravebot-lsp-declared-and-changed";
+
+    #[cfg(unix)]
+    const DECLARED_WITHOUT_PROGRESS: &str = "bravebot-lsp-declared-without-progress";
+
+    #[cfg(unix)]
+    const DECLARED_WORKING_LATER: &str = "bravebot-lsp-declared-working-later";
+
+    #[cfg(unix)]
+    fn the_approved_declared_server(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DECLARED_AND_APPROVED).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_declared_for_another_extension(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DECLARED_FOR_ANOTHER_EXTENSION).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_changed_declared_server(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DECLARED_AND_CHANGED).join("server"))
     }
 
     /// A workspace holding one file the declared server serves, with its script and a log path.
     #[cfg(unix)]
-    fn a_workspace_with_a_declared_server() -> (
+    fn a_workspace_with_a_declared_server(
+        name: &str,
+    ) -> (
         std::sync::MutexGuard<'static, ()>,
         crate::testutil::Scratch,
         PathBuf,
@@ -3219,7 +3246,7 @@ done
         use std::os::unix::fs::PermissionsExt;
 
         let launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
-        let scratch = crate::testutil::Scratch::new(DECLARED);
+        let scratch = crate::testutil::Scratch::new(name);
         std::fs::create_dir_all(&*scratch).expect("create the workspace");
         std::fs::write(scratch.join("a.zz"), "one\ntwo\n").expect("write the file");
         std::fs::write(scratch.join("notes.txt"), "text\n").expect("write the file");
@@ -3275,11 +3302,12 @@ done
     #[cfg(unix)]
     #[test]
     fn a_declared_extension_starts_the_declared_command_after_approval() {
-        let (_launching, scratch, log, declared) = a_workspace_with_a_declared_server();
+        let (_launching, scratch, log, declared) =
+            a_workspace_with_a_declared_server(DECLARED_AND_APPROVED);
         let mut servers = Servers::new(
             scratch.to_path_buf(),
             None,
-            the_declared_server,
+            the_approved_declared_server,
             false,
             Vec::new,
         );
@@ -3341,11 +3369,12 @@ done
     #[cfg(unix)]
     #[test]
     fn an_undeclared_extension_answers_unconfigured() {
-        let (_launching, scratch, log, declared) = a_workspace_with_a_declared_server();
+        let (_launching, scratch, log, declared) =
+            a_workspace_with_a_declared_server(DECLARED_FOR_ANOTHER_EXTENSION);
         let mut servers = Servers::new(
             scratch.to_path_buf(),
             None,
-            the_declared_server,
+            the_server_declared_for_another_extension,
             false,
             Vec::new,
         );
@@ -3371,11 +3400,12 @@ done
     #[cfg(unix)]
     #[test]
     fn a_changed_declaration_is_asked_about_again() {
-        let (_launching, scratch, _log, declared) = a_workspace_with_a_declared_server();
+        let (_launching, scratch, _log, declared) =
+            a_workspace_with_a_declared_server(DECLARED_AND_CHANGED);
         let mut servers = Servers::new(
             scratch.to_path_buf(),
             None,
-            the_declared_server,
+            the_changed_declared_server,
             false,
             Vec::new,
         );
@@ -3448,7 +3478,8 @@ done
     #[cfg(unix)]
     #[test]
     fn a_declared_server_that_reports_no_progress_is_waited_on_once() {
-        let (_launching, scratch, _log, declared) = a_workspace_with_a_declared_server();
+        let (_launching, scratch, _log, declared) =
+            a_workspace_with_a_declared_server(DECLARED_WITHOUT_PROGRESS);
         let mut server =
             a_launched_declared_server(&scratch, declared, &[("REPORTS_NO_PROGRESS", "1")]);
         let file = scratch.join("a.zz");
@@ -3480,7 +3511,8 @@ done
     #[cfg(unix)]
     #[test]
     fn work_a_declared_server_begins_after_settling_makes_the_next_answer_partial() {
-        let (_launching, scratch, _log, declared) = a_workspace_with_a_declared_server();
+        let (_launching, scratch, _log, declared) =
+            a_workspace_with_a_declared_server(DECLARED_WORKING_LATER);
         let mut server = a_launched_declared_server(
             &scratch,
             declared,
