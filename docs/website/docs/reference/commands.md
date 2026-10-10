@@ -232,8 +232,12 @@ clears the pick.
 A style stands where [`--system-prompt`](cli.md#--system-prompt-prompt-and---append-system-prompt-prompt) stands: it replaces the
 opening of the system prompt and nothing after it. If you also gave `--system-prompt`, that is used
 and the style is not. A style grants nothing: writes are still put to you where they would have been,
-and plan mode still refuses them. The pick lasts for the session and is not written down. Styles
-cannot yet be read from files.
+and plan mode still refuses them. The pick lasts for the session and is not written down.
+
+Your own styles are files in `~/.bravebot/styles`: `terse.md` there is the style `terse`, and its
+words replace the opening in the same way. A name is lowercase letters and digits joined by hyphens.
+A file that is empty, longer than 4096 bytes or a symbolic link is not offered, and a file named
+after a built-in style is ignored. Styles are not read from a project.
 
 ## `/effort [level]`
 

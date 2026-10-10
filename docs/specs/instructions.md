@@ -347,13 +347,22 @@ gate and reads each import through it, so nothing untrusted decides what is read
 `verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_imports_does_not_reach_the_system_prompt`
 
 <a id="INSTR-12"></a>
-### INSTR-12: a built-in output style stands where `--system-prompt` stands, and yields to it
+### INSTR-12: an output style stands where `--system-prompt` stands, and yields to it
 
-`/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`),
-`/style off` clears the pick and `/style` alone says which is in force and lists the names. The
+`/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`)
+or one of the person's own, `/style off` clears the pick and `/style` alone says which is in force and lists the names. The
 pick lasts for the session and is not recorded, so a resumed session starts with none. A name is
-compared whole against the built-in list: nothing a person types after `/style` reaches the prompt,
-and no style is read from a file.
+compared whole against the built-in list and the person's own files, and nothing a person types after
+`/style` reaches the prompt.
+
+A person's own style is a file `~/.bravebot/styles/<name>.md`. Its name is a slug (lowercase letters
+and digits in runs joined by hyphens, as in [MEMORY-3](definition-memory.md#MEMORY-3)) and a name is
+never joined to a path before it has been checked as one, so nothing typed can name a file outside
+that directory. A file is a style only where it is a regular file, not a symbolic link, of at most
+4096 bytes of UTF-8 with some words in it. A file called by a built-in name is ignored, so a file
+cannot take the place of one this build ships. Its words are the person's own configuration and
+trusted for sitting in `~/.bravebot`, as `~/.bravebot/AGENTS.md` is. A style a project holds is
+not read: nothing under the workspace is looked at for one.
 
 A style's words stand in for the opening of the system prompt, as `--system-prompt` does
 ([CLI-19](cli.md#CLI-19), [INSTR-10](#INSTR-10)), and for nothing after it. Where both are present
@@ -369,17 +378,25 @@ refuses it, and the guidance on reading a tool's output is not in the opening, s
 remove it. `proactive` says so in its own words and does not change the mode.
 
 **Why.** Wording for tone and format is a thing a person wants to switch between tasks, and
-`--system-prompt` can only be given when the program starts. Fixing the set at build time keeps the
-rule INSTR-10 relies on: the words in the opening are written by this program or typed by the person,
-and nothing read from a project reaches that place.
+`--system-prompt` can only be given when the program starts. Taking a style only from this build or
+from `~/.bravebot` keeps the rule INSTR-10 relies on, that the words in the opening are written by
+this program or by the person, typed or kept in the person's own configuration, and that nothing
+read from a project reaches that place.
 
-**Known costs.** Only the terminal interface has `/style`. Styles are not read from `~/.bravebot/styles` or from a project, there is no
-`style` setting, and the choice is not written to the trace. Each needs the trust map or the
+**Known costs.** Only the terminal interface has `/style`. Styles are not read from a project, there
+is no `style` setting, and the choice is not written to the trace. Each needs the trust map or the
 settings layers to say who may name a style, and none is built.
 
 `verified-by: bravebot_agent::turn::a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::styles::a_style_is_found_by_its_whole_name_only`
 `verified-by: bravebot_agent::styles::no_style_takes_the_quarantine_guidance_with_it`
+`verified-by: bravebot_agent::styles::a_file_in_the_home_directory_is_a_style_by_its_name`
+`verified-by: bravebot_agent::styles::a_file_cannot_stand_in_for_a_built_in_name`
+`verified-by: bravebot_agent::styles::a_name_that_is_not_a_slug_never_reaches_a_path`
+`verified-by: bravebot_agent::styles::a_link_an_empty_file_and_a_long_file_are_not_styles`
+`verified-by: bravebot_agent::styles::the_offered_names_are_the_built_ins_then_the_accepted_files_in_order`
+`verified-by: bravebot_agent::turn::a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt`
+`verified-by: bravebot_tui::app::a_style_file_in_the_home_directory_is_listed_and_picked_by_name`
 `verified-by: bravebot_tui::app::the_style_command_takes_a_name_or_nothing`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_style_picked_under_a_replaced_opening_says_it_does_not_show`

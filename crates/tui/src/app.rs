@@ -6048,32 +6048,39 @@ fn set_limit(session: &mut Session, figure: &str) {
 
 /// Say which output style is in force, take one by name, or clear the pick.
 ///
-/// Only the styles this build ships are offered, so a name is looked up and never read from the
-/// line into the prompt. The pick lasts for the session and is not recorded.
+/// A name is looked up among the styles this build ships and the person's own files under
+/// `~/.bravebot/styles`, and is never read from the line into the prompt. The pick lasts for the
+/// session and is not recorded.
 fn set_style(session: &mut Session, word: &str) {
+    set_style_in(session, word, bravebot_agent::home::directory().as_deref());
+}
+
+/// [`set_style`] with the `~/.bravebot` directory named, so a test can give it a scratch one.
+fn set_style_in(session: &mut Session, word: &str, home: Option<&std::path::Path>) {
     let word = word.trim();
-    let styles = bravebot_agent::styles::BUILT_IN
-        .iter()
-        .map(|style| style.name)
-        .collect::<Vec<_>>()
-        .join(", ");
+    let styles = bravebot_agent::styles::available(home).join(", ");
     if word.is_empty() {
         let note = match session.style() {
-            Some(style) => t!(session_style_in_force, style = style.name, styles = styles),
+            Some(style) => t!(
+                session_style_in_force,
+                style = style.name.as_ref(),
+                styles = styles
+            ),
             None => t!(session_style_none, styles = styles).to_string(),
         };
         session.note(note);
     } else if word == STYLE_OFF {
         session.choose_style(None);
         session.note(t!(session_style_cleared));
-    } else if let Some(style) = bravebot_agent::styles::named(word) {
+    } else if let Some(style) = bravebot_agent::styles::find(home, word) {
+        let name = style.name.to_string();
         session.choose_style(Some(style));
         // `--system-prompt` was given for this run and has the opening, so the pick is held and
         // says it does not show.
         if session.system_prompts().replacing.is_some() {
-            session.note(t!(session_style_set_but_replaced, style = style.name));
+            session.note(t!(session_style_set_but_replaced, style = name));
         } else {
-            session.note(t!(session_style_set, style = style.name));
+            session.note(t!(session_style_set, style = name));
         }
     } else {
         session.note(t!(session_style_unknown, style = word, styles = styles));
@@ -8958,7 +8965,7 @@ fn finish_turn(
 
 /// The output style `/style` chose, carried on the turn so it opens the system prompt (CLI-19).
 fn with_session_style(task: Task, session: &Session) -> Task {
-    task.with_style(session.style())
+    task.with_style(session.style().cloned())
 }
 
 /// The session's spend limit and what the session had spent before this turn, carried on the turn
@@ -16208,17 +16215,20 @@ mod tests {
         assert_eq!(
             with_session_style(Task::new("p"), &session)
                 .style
-                .map(|style| style.name),
-            Some("concise")
+                .map(|style| style.name.to_string()),
+            Some("concise".to_string())
         );
 
         set_style(&mut session, "explanatory");
-        assert_eq!(session.style().map(|style| style.name), Some("explanatory"));
+        assert_eq!(
+            session.style().map(|style| style.name.to_string()),
+            Some("explanatory".to_string())
+        );
 
         set_style(&mut session, "no-such-style");
         assert_eq!(
-            session.style().map(|style| style.name),
-            Some("explanatory"),
+            session.style().map(|style| style.name.to_string()),
+            Some("explanatory".to_string()),
             "an unknown name replaced the style in force"
         );
 
@@ -16361,6 +16371,43 @@ mod tests {
         }
     }
 
+    /// A file under `~/.bravebot/styles` is listed and picked as the built-ins are, its words reach
+    /// the next turn's task, and a name the directory does not hold leaves the held style alone.
+    #[test]
+    fn a_style_file_in_the_home_directory_is_listed_and_picked_by_name() {
+        let home = crate::testutil::scratch_dir("bravebot-app-style-file");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("styles")).unwrap();
+        std::fs::write(home.join("styles/terse.md"), "Answer in one line.").unwrap();
+
+        let mut session = Session::new("none");
+        set_style_in(&mut session, "", Some(&home));
+        set_style_in(&mut session, "terse", Some(&home));
+        let task = with_session_style(Task::new("p"), &session);
+        let style = task.style.expect("the file's style reaches the task");
+        assert_eq!(
+            (style.name.as_ref(), style.words.as_ref(), style.from_file),
+            ("terse", "Answer in one line.", true)
+        );
+        set_style_in(&mut session, "../terse", Some(&home));
+        set_style_in(&mut session, "other", Some(&home));
+        assert_eq!(
+            session.style().map(|style| style.name.to_string()),
+            Some("terse".to_string()),
+            "a name the directory does not hold replaced the style in force"
+        );
+        let said = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            said.contains("available: concise, explanatory, proactive, terse"),
+            "{said}"
+        );
+    }
+
     /// A run given `--system-prompt` keeps its own opening, so `/style` says the pick does not show
     /// rather than reporting a style that no turn will carry.
     #[test]
@@ -16392,7 +16439,10 @@ mod tests {
             "{}",
             said(&plain)
         );
-        assert_eq!(replaced.style().map(|style| style.name), Some("concise"));
+        assert_eq!(
+            replaced.style().map(|style| style.name.to_string()),
+            Some("concise".to_string())
+        );
     }
 
     /// `/advisors` is not `/advisor`: the whole word must match.
