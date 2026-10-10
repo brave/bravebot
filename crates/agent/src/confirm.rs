@@ -388,6 +388,9 @@ impl Confined {
         }
         for (program, request) in &self.requested {
             let sentence = match request {
+                Requested::Loopback => {
+                    t!(run_carries_loopback, program = program.as_str()).to_string()
+                }
                 Requested::Scope(scope) => self.scope_sentence(*scope, program),
                 Requested::Toolchain(toolchain) => t!(
                     run_carries_toolchain,
@@ -626,8 +629,8 @@ impl RunRequest {
         scopes
     }
 
-    /// The toolchain lists and the signing scope the planner asked for, each once, which the
-    /// remembering answers leave out.
+    /// The toolchain lists, the signing scope and loopback the planner asked for, each once, which
+    /// the remembering answers leave out.
     pub fn requested_not_remembered(&self) -> Vec<&'static str> {
         let mut names = Vec::new();
         for (_, request) in self
@@ -641,6 +644,7 @@ impl RunRequest {
                     | bravebot_sandbox::scope::Requested::Scope(
                         bravebot_sandbox::scope::Scope::Signing
                     )
+                    | bravebot_sandbox::scope::Requested::Loopback
             ) && !names.contains(&request.name())
             {
                 names.push(request.name());

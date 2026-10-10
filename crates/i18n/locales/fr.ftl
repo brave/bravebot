@@ -1375,6 +1375,7 @@ run-confined = ses fichiers sont confinés à ces répertoires, au répertoire t
 run-confined-machine = il peut lire cette machine sauf les endroits qui contiennent des identifiants, et n'écrire que dans ces répertoires, le répertoire temporaire du système et les caches des chaînes d'outils :
 run-carries-known-hosts = { $program } ajoute aussi à vos hôtes ssh connus et peut atteindre votre agent ssh
 run-carries-toolchain = { $program } atteint aussi l'installation et le cache de la chaîne d'outils { $toolchain }
+run-carries-loopback = { $program } peut aussi écouter sur des ports de cette machine et s'y connecter
 run-carries-remote = { $program } lit aussi vos identifiants git et gh, votre configuration ssh et vos clés publiques, jamais une clé privée, et ajoute à vos hôtes ssh connus
 run-carries-aws = { $program } lit aussi vos identifiants aws dans ~/.aws
 run-carries-kubernetes = { $program } lit aussi vos identifiants kubernetes dans ~/.kube
@@ -1434,7 +1435,7 @@ run-unconfined = le planificateur a demandé que cette seule ligne s'exécute sa
 run-unconfined-not-remembered =
     une ligne que le planificateur a demandé d'exécuter sans isolation est soumise à chaque fois, ni la ligne ni la demande ne sont donc retenues
 run-scopes-not-remembered =
-    une ligne pour laquelle le planificateur a demandé une portée d'identifiants ou une chaîne d'outils est soumise à chaque fois, la ligne elle-même ne peut donc pas être retenue
+    une ligne pour laquelle le planificateur a demandé une portée d'identifiants, une chaîne d'outils ou loopback est soumise à chaque fois, la ligne elle-même ne peut donc pas être retenue
 run-keep-reach-explained =
     m : retenir aussi l'accès demandé pour ces commandes, afin que le prochain plan pour elles le porte
 run-keep-reach-scopes = l'accès retenu est { $scopes }, en lecture seule

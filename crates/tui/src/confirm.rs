@@ -5202,7 +5202,7 @@ mod tests {
             "the prompt offered to remember a run that will always ask: {drawn}"
         );
         assert!(
-            drawn.contains("credential scope or a toolchain list"),
+            drawn.contains("credential scope, toolchain list or loopback"),
             "the prompt did not say which of the reasons this is: {drawn}"
         );
 
@@ -5551,6 +5551,7 @@ mod tests {
         let toolchain_only = a_run_asking_for(vec![bravebot_sandbox::scope::Requested::Toolchain(
             bravebot_sandbox::toolchain::Toolchain::Cargo,
         )]);
+        let loopback_only = a_run_asking_for(vec![bravebot_sandbox::scope::Requested::Loopback]);
         let mut option_first = a_run_keeping_remote();
         option_first.plan.steps =
             bravebot_core::command::Steps::Pipeline(vec![bravebot_core::command::Step {
@@ -5566,6 +5567,7 @@ mod tests {
             no_record,
             no_request,
             toolchain_only,
+            loopback_only,
             option_first,
         ] {
             for key in ['m', 'M', 'e', 'E'] {
@@ -5603,7 +5605,8 @@ mod tests {
     }
 
     /// SANDBOX-27: the prompt names the programs and the scope, says the line is still asked about,
-    /// says a toolchain list is not kept, shows where the record is, and draws both keys.
+    /// says a toolchain list and loopback are not kept, shows where the record is, and draws both
+    /// keys.
     #[test]
     fn a_prompt_offering_to_keep_a_request_names_what_would_be_kept() {
         let mut request = a_run_keeping_remote();
@@ -5618,13 +5621,22 @@ mod tests {
                     bravebot_sandbox::toolchain::Toolchain::Cargo,
                 ),
             ));
+        request
+            .confined
+            .as_mut()
+            .expect("confined")
+            .requested
+            .push((
+                "gh".to_string(),
+                bravebot_sandbox::scope::Requested::Loopback,
+            ));
         let drawn = fully_rendered_run(&request);
         for wanted in [
             "gh pr".to_string(),
             "remote, read only".to_string(),
             "/home/someone/.bravebot/reach.jsonl".to_string(),
             "still asked about every time".to_string(),
-            "cargo is not remembered".to_string(),
+            "cargo, loopback is not remembered".to_string(),
             t!(run_keep_reach).to_string(),
             t!(run_keep_reach_always).to_string(),
         ] {
