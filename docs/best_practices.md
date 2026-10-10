@@ -20,6 +20,7 @@ checks is a bug against this directory rather than an entry in it.
 | [best-practices/paths.md](best-practices/paths.md) | carrying paths, programs and arguments as bytes so a lossy rendering never decides what is approved, granted or started |
 | [best-practices/compatibility.md](best-practices/compatibility.md) | persisted data that earlier versions wrote still reading, or being migrated |
 | [best-practices/ui.md](best-practices/ui.md) | what a change to the desktop UI is held to before it lands, and where its logic lives |
+| [best-practices/portability.md](best-practices/portability.md) | a fix or addition making sense for other people on other computers, with no workaround for one setup |
 
 The review pass over the rule this repository exists for is
 [development/reviewing-for-the-rule.md](development/reviewing-for-the-rule.md): the four
