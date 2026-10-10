@@ -302,7 +302,7 @@ impl fmt::Display for Reason {
                 "an assignment's value must be literal text, so that the plan shows what the program will see",
             ),
             Self::NoMatch => f.write_str(
-                "matched no file. A pattern standing for nothing is not an argument, so there is no plan to show",
+                "matched no file. A pattern standing for nothing is not an argument, so there is no plan to show. If the program should receive the pattern, quote the word so it is passed as written, for example '--include=*.md'",
             ),
             Self::TooMany { found, cap } => write!(
                 f,
@@ -1377,7 +1377,8 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
         let matched = walk(directory, &candidate).map_err(refused)?;
         if matched.is_empty() {
             // Never the pattern itself. A shell passes an unmatched pattern through as an
-            // argument, which is the one thing nobody ever means by writing it.
+            // argument, and a plan showing one reads as a list of files. A pattern meant for the
+            // program is quoted, and the refusal says so.
             return Err(refused(Reason::NoMatch));
         }
         out.extend(matched);
@@ -2759,8 +2760,8 @@ mod tests {
     }
 
     /// A pattern standing for nothing is not an argument. A shell hands the pattern through as
-    /// text, which is never what anybody writing one meant, and would put a plan in front of a
-    /// person that reads as a list of files and is not one.
+    /// text, which would put a plan in front of a person that reads as a list of files and is
+    /// not one.
     #[test]
     fn a_pattern_matching_nothing_is_refused_rather_than_passed_through() {
         let tree = Tree::new("nothing");
@@ -2768,6 +2769,27 @@ mod tests {
         let refusal = expansion_refused("ls *.zzz", 1, &tree.root);
         assert_eq!(refusal.reason, Reason::NoMatch);
         assert_eq!(refusal.text, "*.zzz");
+    }
+
+    /// An option whose value is a pattern for the program is looked up as a file, and the
+    /// refusal is the only thing the planner sees, so it has to name the fix. The advice is only
+    /// worth giving if the quoted spelling it shows is accepted and arrives as written.
+    #[test]
+    fn the_refusal_of_an_option_value_pattern_says_to_quote_the_word() {
+        let tree = Tree::new("option-value");
+        tree.file("a.rs");
+        let refusal = expansion_refused("grep -r x . --include=*.md", 4, &tree.root);
+        assert_eq!(refusal.reason, Reason::NoMatch);
+        assert_eq!(refusal.text, "--include=*.md");
+        let shown = refusal.to_string();
+        assert!(
+            shown.contains("quote the word") && shown.contains("'--include=*.md'"),
+            "the refusal does not tell the planner to quote the word: {shown}"
+        );
+        assert_eq!(
+            expanded("grep -r x . '--include=*.md'", 4, &tree.root),
+            ["--include=*.md"]
+        );
     }
 
     /// An approval prompt long enough that nobody reads it is a prompt that grants everything and

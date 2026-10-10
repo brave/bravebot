@@ -214,7 +214,8 @@ approval covers without the text changing at all.
 
 Expansion happens against the workspace at compile time, so the person sees the file list rather
 than the pattern. A pattern matching nothing is a compile error and not an argument passed through
-literally, which is what a shell would do and is never what anyone meant.
+literally, which is what a shell would do. A pattern meant for the program, such as the value of
+`grep --include=*.md`, is written quoted, and the refusal says to quote the word.
 
 Expansion is bounded. Past the bound the compile fails and says the count, rather than putting a
 thousand paths in front of a reader who will approve them unread.
@@ -237,6 +238,8 @@ everything and asks nothing.
 `verified-by: bravebot_agent::cmdline::a_pattern_becomes_the_files_it_matches`
 `verified-by: bravebot_agent::cmdline::a_pattern_matches_within_one_segment_and_a_tree_across_them`
 `verified-by: bravebot_agent::cmdline::a_pattern_matching_nothing_is_refused_rather_than_passed_through`
+`verified-by: bravebot_agent::cmdline::the_refusal_of_an_option_value_pattern_says_to_quote_the_word`
+`verified-by: bravebot_agent::tools::the_run_description_says_a_pattern_for_the_program_is_quoted`
 `verified-by: bravebot_agent::cmdline::expansion_is_bounded_and_the_refusal_says_the_count`
 `verified-by: bravebot_agent::cmdline::a_tree_pattern_does_not_descend_into_an_ignored_directory`
 `verified-by: bravebot_agent::cmdline::a_dot_file_is_matched_only_by_a_pattern_that_writes_the_dot`
