@@ -17626,7 +17626,7 @@ fn keeping_a_request_leaves_a_toolchain_out() {
         Some(&state.path),
     );
     assert!(!seen[0].offers_to_keep_reach());
-    assert_eq!(seen[0].requested_toolchains(), ["cargo"]);
+    assert_eq!(seen[0].requested_not_remembered(), ["cargo"]);
     assert!(only.reach.is_empty(), "{:?}", only.reach);
 
     let state = Scratch::new("scopes-keep-both-state");
@@ -17640,6 +17640,45 @@ fn keeping_a_request_leaves_a_toolchain_out() {
     assert_eq!(
         both.reach[0].reached,
         bravebot_agent::reach::Reached::Scope(bravebot_sandbox::scope::Scope::Aws)
+    );
+}
+
+/// SANDBOX-26 and SANDBOX-27: `signing` is a name a `run` line may request, the person is asked
+/// about it, and `m` or `e` remember nothing for it, alone or beside another scope. The
+/// regressions it rejects: the name refused as off the menu, and the signing row riding into the
+/// record, where `/reach` could not read it back.
+#[test]
+fn a_request_for_signing_is_asked_about_and_never_remembered() {
+    if cannot_confine_here() {
+        return;
+    }
+    let state = Scratch::new("scopes-keep-signing-state");
+    let keep = bravebot_agent::RunDecision::approve_and_keep_reach(
+        bravebot_agent::reach::Lasting::EverySession,
+    );
+    let (only, seen) = keeping_a_request(
+        "scopes-keep-signing-only",
+        serde_json::json!(["signing"]),
+        keep,
+        Some(&state.path),
+    );
+    assert_eq!(seen.len(), 1, "the line was not asked about");
+    assert!(only.second.contains("It exited 0."), "{}", only.second);
+    assert!(!seen[0].offers_to_keep_reach());
+    assert_eq!(seen[0].requested_not_remembered(), ["signing"]);
+    assert!(only.reach.is_empty(), "{:?}", only.reach);
+
+    let state = Scratch::new("scopes-keep-signing-remote-state");
+    let (both, _) = keeping_a_request(
+        "scopes-keep-signing-remote",
+        serde_json::json!(["remote", "signing"]),
+        keep,
+        Some(&state.path),
+    );
+    assert_eq!(both.reach.len(), 1, "{:?}", both.reach);
+    assert_eq!(
+        both.reach[0].reached,
+        bravebot_agent::reach::Reached::Scope(bravebot_sandbox::scope::Scope::Remote)
     );
 }
 

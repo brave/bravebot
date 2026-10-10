@@ -607,7 +607,8 @@ impl RunRequest {
     }
 
     /// The credential scopes the planner asked for, each once, in the menu's order. A toolchain
-    /// list is not among them: a reach is remembered for a scope of the closed table only.
+    /// list and the signing scope are not among them: a reach is remembered for a scope of the
+    /// closed table only, and `/reach` does not name signing.
     pub fn requested_credential_scopes(&self) -> Vec<bravebot_sandbox::scope::Scope> {
         let mut scopes = Vec::new();
         for (_, request) in self
@@ -616,6 +617,7 @@ impl RunRequest {
             .flat_map(|confined| &confined.requested)
         {
             if let bravebot_sandbox::scope::Requested::Scope(scope) = request
+                && *scope != bravebot_sandbox::scope::Scope::Signing
                 && !scopes.contains(scope)
             {
                 scopes.push(*scope);
@@ -624,16 +626,22 @@ impl RunRequest {
         scopes
     }
 
-    /// The toolchain lists the planner asked for, each once, which the remembering answers leave out.
-    pub fn requested_toolchains(&self) -> Vec<&'static str> {
+    /// The toolchain lists and the signing scope the planner asked for, each once, which the
+    /// remembering answers leave out.
+    pub fn requested_not_remembered(&self) -> Vec<&'static str> {
         let mut names = Vec::new();
         for (_, request) in self
             .confined
             .iter()
             .flat_map(|confined| &confined.requested)
         {
-            if matches!(request, bravebot_sandbox::scope::Requested::Toolchain(_))
-                && !names.contains(&request.name())
+            if matches!(
+                request,
+                bravebot_sandbox::scope::Requested::Toolchain(_)
+                    | bravebot_sandbox::scope::Requested::Scope(
+                        bravebot_sandbox::scope::Scope::Signing
+                    )
+            ) && !names.contains(&request.name())
             {
                 names.push(request.name());
             }

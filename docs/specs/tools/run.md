@@ -214,7 +214,7 @@ write nothing and read only paths the user vouched for. Never a property of the 
 worked out for itself, never a declaration by a stage, never anything derived from what a program
 printed.
 
-A line whose call asks for a credential scope or a toolchain list ([SANDBOX-26](../sandboxing.md#SANDBOX-26))
+A line whose call asks for a credential scope (`signing` among them) or a toolchain list ([SANDBOX-26](../sandboxing.md#SANDBOX-26))
 is asked about whatever answers the same line without the request: a vouched entry and a
 remembered line hold the program, its arguments and a tree, and not what the line was lent.
 The same holds for a line whose call asks to run with no sandbox ([SANDBOX-29](../sandboxing.md#SANDBOX-29)).

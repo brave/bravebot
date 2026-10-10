@@ -32,7 +32,8 @@ pub enum Scope {
     /// `~/.docker`.
     Docker,
     /// The public key a signed commit is made with, and the agent that signs with the private
-    /// half. A stage carries it by its argv and never by a request, so it is not on the menu.
+    /// half. A stage carries it by its argv or by a `run` call's request. `/reach` does not name
+    /// it, so it is never remembered.
     Signing,
 }
 
@@ -46,8 +47,9 @@ pub enum Requested {
 
 impl Requested {
     /// Every name the planner may use, in the order it is told them.
-    pub const MENU: [&'static str; 10] = [
+    pub const MENU: [&'static str; 11] = [
         "remote",
+        "signing",
         "aws",
         "kubernetes",
         "docker",
@@ -61,9 +63,12 @@ impl Requested {
 
     /// The request a word names, compared exactly: `Remote`, ` aws` and the empty string name none.
     pub fn named(word: &str) -> Option<Self> {
-        Scope::named(word)
-            .map(Self::Scope)
-            .or_else(|| Toolchain::named(word).map(Self::Toolchain))
+        match word {
+            "signing" => Some(Self::Scope(Scope::Signing)),
+            _ => Scope::named(word)
+                .map(Self::Scope)
+                .or_else(|| Toolchain::named(word).map(Self::Toolchain)),
+        }
     }
 
     /// The word the menu, the prompt and the trail know it by.
@@ -87,8 +92,9 @@ impl Scope {
         }
     }
 
-    /// The scope a person names by the word the prompt and the planner know it by. `Signing` is
-    /// not named: only an argv that signs carries it.
+    /// The scope `/reach` and a remembered grant name by the word the prompt knows it by. `Signing`
+    /// is not named here: an argv that signs carries it and a `run` call may request it
+    /// ([`Requested::named`]), and neither is remembered.
     pub fn named(word: &str) -> Option<Self> {
         [Self::Remote, Self::Aws, Self::Kubernetes, Self::Docker]
             .into_iter()
@@ -755,6 +761,7 @@ mod tests {
     fn the_menu_is_every_scope_and_every_toolchain() {
         let scopes = EVERY_SCOPE.map(Scope::name);
         assert!(scopes.iter().all(|name| Requested::MENU.contains(name)));
+        assert!(Requested::MENU.contains(&Scope::Signing.name()));
         for toolchain in [
             Toolchain::Cargo,
             Toolchain::Node,
@@ -765,7 +772,7 @@ mod tests {
         ] {
             assert!(Requested::MENU.contains(&toolchain.name()));
         }
-        assert_eq!(Requested::MENU.len(), scopes.len() + 6);
+        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 6);
     }
 
     const GIT: &str = "/usr/bin/git";
@@ -2006,13 +2013,17 @@ mod tests {
         assert_eq!(of("/tmp/not-git", "commit -m message"), None);
     }
 
-    /// The planner and `/reach` name the credential scopes from a fixed menu, and signing is not
-    /// on it: a line carries it only by the argv that signs, and only for a person who signs.
+    /// SANDBOX-16, SANDBOX-26: a `run` call may ask for the signing scope by name, so a line that
+    /// signs without the argv shape the scope is keyed on (a script, or `-c` before the
+    /// operation) can have it. `/reach` and a remembered grant do not name it.
     #[test]
-    fn signing_cannot_be_named() {
+    fn signing_can_be_requested_and_not_remembered() {
+        assert_eq!(
+            Requested::named("signing"),
+            Some(Requested::Scope(Scope::Signing))
+        );
+        assert!(Requested::MENU.contains(&"signing"));
         assert_eq!(Scope::named("signing"), None);
-        assert_eq!(Requested::named("signing"), None);
-        assert!(!Requested::MENU.contains(&"signing"));
     }
 
     /// A home with `.gitconfig` signing with `~/keys/work.pub`, and an unrelated private key.

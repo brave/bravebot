@@ -607,8 +607,15 @@ impl Confinement {
                                 policy = policy.allow_read(reach.path);
                             }
                         }
+                        // A request lends the agent where the argv that signs would: only to a
+                        // person whose git signs with ssh.
+                        let lends_the_agent = match scope {
+                            Scope::Remote => true,
+                            Scope::Signing => signing::read(home).enabled,
+                            _ => false,
+                        };
                         match variable(environment, "SSH_AUTH_SOCK") {
-                            Some(socket) if scope == Scope::Remote => policy.allow_write(socket),
+                            Some(socket) if lends_the_agent => policy.allow_write(socket),
                             _ => policy,
                         }
                     }
@@ -681,10 +688,12 @@ impl Confinement {
         let Some(home) = self.home.as_deref() else {
             return false;
         };
-        steps
-            .iter()
-            .any(|step| self.scope_of(step) == Some(Scope::Signing))
-            && signing::read(home).key == signing::Key::Refused
+        steps.iter().any(|step| {
+            self.scope_of(step) == Some(Scope::Signing)
+                || self
+                    .requested_for(step)
+                    .contains(&Requested::Scope(Scope::Signing))
+        }) && signing::read(home).key == signing::Key::Refused
     }
 
     /// What the programs of `steps` could reach, by name, without the closing fixed sentence.
@@ -3768,6 +3777,78 @@ mod tests {
             assert!(!writes(&policy, "/run/agent.sock"), "{args:?}");
             assert!(!policy.allow_network, "{args:?}");
         }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16 and SANDBOX-26: a line that names no `git` operation of its own, such as a
+    /// script, is lent the public key and the agent socket when it asks for `signing`, and not
+    /// when it asks for nothing, for a scope that reads a different credential, or for `signing`
+    /// where the person's git does not sign with ssh.
+    #[test]
+    #[cfg(unix)]
+    fn a_stage_that_asked_for_signing_is_lent_the_key_and_the_agent() {
+        use bravebot_sandbox::scope::Requested;
+        let (home, confined) =
+            a_confinement_over_a_home_that("asked", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
+        let environment = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let script = step("/bin/sh", &["-c", "git -c core.editor=true rebase main"]);
+        let key = home.join("keys/work.pub");
+        let key = key.to_str().unwrap();
+
+        let none = confined.policy(&script, Path::new("/work/project"), &environment);
+        assert!(!reads(&none, key));
+        assert!(!writes(&none, "/run/agent.sock"));
+
+        let aws = confined
+            .clone()
+            .with_requested(&[Requested::Scope(Scope::Aws)]);
+        let other = aws.policy(&script, Path::new("/work/project"), &environment);
+        assert!(!reads(&other, key));
+        assert!(!writes(&other, "/run/agent.sock"));
+
+        let asked = confined
+            .clone()
+            .with_requested(&[Requested::Scope(Scope::Signing)]);
+        let policy = asked.policy(&script, Path::new("/work/project"), &environment);
+        assert!(reads(&policy, key));
+        assert!(writes(&policy, "/run/agent.sock"));
+        assert!(!reads(&policy, home.join(".ssh").to_str().unwrap()));
+        assert!(policy.allow_network);
+        assert!(asked.egress(&script));
+        std::fs::remove_dir_all(&home).unwrap();
+
+        let (home, confined) = a_confinement_over_a_home_that(
+            "asked-not-signing",
+            "[user]\nsigningkey = ~/keys/work.pub\n",
+            &["keys/work.pub"],
+        );
+        let asked = confined.with_requested(&[Requested::Scope(Scope::Signing)]);
+        let policy = asked.policy(&script, Path::new("/work/project"), &environment);
+        assert!(!reads(
+            &policy,
+            home.join("keys/work.pub").to_str().unwrap()
+        ));
+        assert!(!writes(&policy, "/run/agent.sock"));
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A request for `signing` where the key is one no scope reads gets the same explanation as a
+    /// commit does, so the planner learns why the signature failed.
+    #[test]
+    #[cfg(unix)]
+    fn a_request_for_signing_over_a_key_no_scope_reads_is_explained() {
+        use bravebot_sandbox::scope::Requested;
+        let (home, confined) = a_confinement_over_a_home_that(
+            "asked-refused",
+            "[gpg]\nformat = ssh\n[user]\nsigningkey = ~/.ssh/id_secret-name\n",
+            &[".ssh/id_secret-name"],
+        );
+        let script = step("/bin/sh", &["-c", "git rebase main"]);
+        assert!(!confined.profile(&[&script]).contains("user.signingkey"));
+        let asked = confined.with_requested(&[Requested::Scope(Scope::Signing)]);
+        let line = asked.profile(&[&script]);
+        assert!(line.contains("`user.signingkey`"), "{line}");
+        assert!(!line.contains("secret-name"), "{line}");
         std::fs::remove_dir_all(&home).unwrap();
     }
 

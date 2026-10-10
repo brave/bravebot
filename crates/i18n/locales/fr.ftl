@@ -1441,8 +1441,8 @@ run-keep-reach-still-asked =
     la ligne reste soumise à chaque fois, avec cet accès affiché, et rien de ce qu'elle affiche n'est approuvé
 run-keep-reach-lifetimes =
     m vaut pour cette session. e vaut jusqu'à son retrait, dans cette copie de travail, ou dans toute copie pour un programme auquel l'accès appartient, comme git pour remote.
-run-keep-reach-toolchains =
-    { $toolchains } n'est pas retenu : une liste de chaînes d'outils est redemandée à chaque fois
+run-keep-reach-asked-again =
+    { $names } n'est pas retenu : il est redemandé à chaque fois
 run-keep-reach-where = c'est écrit ici :
 run-keep-reach-undo =
     /reach liste ce qui est retenu, et /reach remove <numéro> en oublie un
