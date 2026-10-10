@@ -21,7 +21,7 @@ The roster, `bravebot sessions`, `bravebot sessions stop`, `bravebot --bg`, `bra
 `bravebot reply` are built, and the session a background process runs is the session in lines. A
 clause that is built whole names its tests. A clause with a part still to build reads
 `verified-by: none` until all of it lands, and the parts not built are: the supervisor and restarts
-([BG-12](#BG-12)), `/bg`, and the checkout ([BG-14](#BG-14)). The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
+([BG-12](#BG-12)) and the checkout ([BG-14](#BG-14)). `/bg` is built. The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
 no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built. A question from an
 MCP server that has to be started is held like any other, and is drawn as a foreground session
 draws it. A `stopped` or `interrupted` session is started again from `attach` or `reply` by a terminal,
@@ -76,10 +76,15 @@ rules to keep in step with the first, and the second set is the one nobody reads
 
 `bravebot --bg "prompt"` starts a background session whose first turn is the prompt as typed.
 `/bg` between two turns of a foreground session hands that conversation to a background session and
-ends the foreground process once the record is written. `/bg` while a turn is running is refused,
-because the process holding that turn cannot be handed over. Both start the session in the working
-directory they ran in, and `/bg` keeps the permission mode the foreground session was in
-([BG-8](#BG-8)).
+ends the foreground process once the record is written. The new process resumes that record and
+opens idle. `/bg` typed while a turn is running waits for the turn to end ([CMD-8](commands.md#CMD-8)),
+since the record is written then. Both start the session in the working directory they ran in, and
+`/bg` keeps the permission mode the foreground session was in ([BG-8](#BG-8)).
+
+`/bg` is refused, and the foreground session carries on, in bypass ([BG-8](#BG-8)), in an incognito
+session or one with no record yet, after an option that `--bg` refuses (such as `--no-shell` or
+`--settings`) was given at the command line, and while a loop, a goal or a watch is running,
+because the background session has none of those ([Not decided](#not-decided)).
 
 Nothing else starts one. The planner has no tool for it, a delegate cannot, and neither can a hook,
 a loop tick, a watch or a file the session read. A prompt that arrived on a pipe is untrusted input
@@ -89,7 +94,14 @@ and does not start one either.
 that may start unwatched work, so the only thing that may is a person, and the line they typed is
 the whole of what they asked for.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::the_background_command_is_never_a_prompt_and_waits_for_the_turn`
+`verified-by: bravebot_tui::app::the_background_command_carries_the_record_and_the_mode`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_in_bypass`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_without_a_record_or_with_work_it_would_drop`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_after_an_option_it_cannot_pass_on`
+`verified-by: bravebot_cli::background::the_host_is_started_with_the_mode_it_runs_in`
+`verified-by: bravebot_cli::running::a_handed_over_session_runs_in_the_mode_it_was_given`
+`verified-by: bravebot_cli::running::bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal`
 
 <a id="BG-3"></a>
 ### BG-3: the supervisor moves process state and decides nothing from content
@@ -390,6 +402,9 @@ it is stated.
   started asking stays asking, and a person who wants a session to write unasked has to start it
   from a foreground session already in that mode with `/bg`. Letting a mode change last until
   detach raises the question of what the session runs in after the person leaves.
+- **Whether a loop, a goal or a watch goes with `/bg`.** The session in lines has none of the
+  three, so `/bg` refuses while one is running and the person ends it or waits. Carrying one over
+  means the background process arms it again from the record, and nothing records it yet.
 - **Whether bypass is ever allowed.** Other tools refuse it until an interactive step accepts a
   disclaimer. Bravebot has no such step: the flag is the acceptance. [BG-8](#BG-8) refuses it.
 - **Whether the checkout is made at the first edit rather than at the start.** A checkout at the

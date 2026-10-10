@@ -2417,6 +2417,7 @@ command-rename = Call this conversation something else
 command-branch = Copy this session and carry on in the copy, keeping the original to return to
 command-handoff = Start a new session from a brief you can edit, written for the next goal
 command-resume = Pick up another session of this directory, by id or from a list
+command-background = Hand this session to a background process and leave it running
 command-issue = Say which issue this session is for, show it, or clear it
 command-pr = Say which pull request this session is for, show it, or clear it
 command-compact = Summarise the conversation so far, keeping the recent part
@@ -2563,6 +2564,11 @@ session-cd-needs-a-path = /cd needs a directory, as in /cd ~/projects/other
 session-directory-changed = now working in { $directory }, and trusting it for this session
 # The mode the person was in, taken away by a settings layer of the directory they moved into.
 session-bypass-made-unreachable = permissions.bypassUnreachable is set here, so bypassing is off and the session is asking again
+session-bg-bypass = /bg is refused in bypass, because a session nobody is watching does not run in a mode that answers every question. Switch to another mode first, or use a one-shot run.
+session-bg-option-lost = /bg is refused because this session was started with { $flag }, which a background session does not receive. Start a session without that option to use /bg.
+session-bg-keeps-nothing-running = /bg is refused while a loop, a goal or a watch is running, because the background session would not run it. Stop it first.
+session-bg-nothing-recorded = /bg hands over the session's record, and this session has none yet. Send a prompt first.
+session-bg-incognito = /bg is refused in an incognito session, which writes no record to hand over.
 # Said once per directory that was open and is not any more, so nobody discovers it by being
 # refused a file they could read a minute ago.
 session-directory-closed = closed { $directory }; open it again with /add-dir { $directory }
@@ -3326,6 +3332,7 @@ bg-not-started = The background session did not start.
 bg-started = Started { $id }. Join it with: bravebot attach { $id }
 bg-spawn-failed = Could not start the background session: { $problem }
 bg-unsupported = Background sessions are not available on this platform.
+bg-handed-over = Handed this session to a background process. Join it with: bravebot attach { $id }
 attach-usage = attach takes a session's id
 attach-needs-a-terminal = attach answers a session's prompts from the lines typed, and this is not a terminal
 reply-usage = reply takes a session's id and the prompt to send

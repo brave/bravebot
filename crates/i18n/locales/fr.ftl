@@ -2030,6 +2030,7 @@ command-recap = Résumer où en est cette session, sans le mettre dans la conver
 command-handoff = Démarrer une nouvelle session depuis un résumé modifiable, écrit pour la suite
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
 command-resume = Reprendre une autre session de ce répertoire, par identifiant ou dans une liste
+command-background = Confier cette session à un processus en arrière-plan et la laisser tourner
 command-forget-trust = Ne plus retenir que ce répertoire est approuvé, pour que les sessions suivantes ici demandent
 command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
@@ -2152,6 +2153,11 @@ session-cd-needs-a-path = /cd demande un répertoire, comme /cd ~/projets/autre
 session-directory-changed = travail désormais dans { $directory }, et approuvé pour cette session
 # Le mode où se trouvait la personne, retiré par une couche de réglages du répertoire où elle est allée.
 session-bypass-made-unreachable = permissions.bypassUnreachable est défini ici : le contournement est désactivé et la session demande de nouveau
+session-bg-bypass = /bg est refusé en contournement, car une session que personne ne surveille ne tourne pas dans un mode qui répond à toutes les questions. Changez de mode d'abord, ou utilisez une exécution ponctuelle.
+session-bg-option-lost = /bg est refusé, car cette session a été démarrée avec { $flag }, que la session en arrière-plan ne reçoit pas. Démarrez une session sans cette option pour utiliser /bg.
+session-bg-keeps-nothing-running = /bg est refusé tant qu'une boucle, un objectif ou une surveillance est en cours, car la session en arrière-plan ne l'exécuterait pas. Arrêtez-le d'abord.
+session-bg-nothing-recorded = /bg confie l'enregistrement de la session, et celle-ci n'en a pas encore. Envoyez d'abord une invite.
+session-bg-incognito = /bg est refusé dans une session incognito, qui n'écrit aucun enregistrement à confier.
 # Dit une fois par répertoire qui était ouvert et ne l'est plus, pour que personne ne l'apprenne
 # en se voyant refuser un fichier lisible une minute plus tôt.
 session-directory-closed = { $directory } fermé ; rouvrez-le avec /add-dir { $directory }
@@ -2852,6 +2858,7 @@ bg-not-started = La session en arrière-plan n'a pas démarré.
 bg-started = { $id } est démarrée. Rejoignez-la avec : bravebot attach { $id }
 bg-spawn-failed = Impossible de démarrer la session en arrière-plan : { $problem }
 bg-unsupported = Les sessions en arrière-plan ne sont pas disponibles sur cette plateforme.
+bg-handed-over = Session confiée à un processus en arrière-plan. Rejoignez-la avec : bravebot attach { $id }
 attach-usage = attach exige l'identifiant d'une session
 attach-needs-a-terminal = attach répond aux questions d'une session avec les lignes tapées, et ceci n'est pas un terminal
 reply-usage = reply exige l'identifiant d'une session et l'invite à envoyer

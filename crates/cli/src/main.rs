@@ -97,6 +97,9 @@ fn main() -> ExitCode {
             )
         })
         .cloned();
+    if let Some(flag) = &carried {
+        bravebot_tui::app::background_cannot_carry(flag);
+    }
 
     // Engaged here rather than deeper in because it must be true before the first thing that could
     // write is reached, and this is the last moment that is certain to be before all of them.
@@ -395,10 +398,14 @@ fn main() -> ExitCode {
         },
         Some("attach") => background::attach(&args[1..]),
         Some("reply") => background::reply(&args[1..]),
-        Some("__bg-host") => match args.get(1) {
-            Some(id) => background::host(id),
-            None => ExitCode::FAILURE,
-        },
+        Some("__bg-host") => {
+            use bravebot_session::jobs::Mode as HostMode;
+            match (args.get(1), args.get(2).map(|word| HostMode::named(word))) {
+                (Some(id), Some(Some(mode))) => background::host(id, mode),
+                (Some(id), None) => background::host(id, HostMode::Ask),
+                _ => ExitCode::FAILURE,
+            }
+        }
         Some("mcp") => mcp::command(&args[1..]),
         Some("permissions") => permissions_check::command(&args[1..]),
         Some("completion") => match completion::command(&args[1..]) {
@@ -3063,6 +3070,12 @@ fn interactive(
     skip_permissions: bool,
     prompts: SystemPrompts,
 ) -> ExitCode {
+    if agent.is_some() {
+        bravebot_tui::app::background_cannot_carry("--agent");
+    }
+    if let Some(flag) = flag_named(&prompts) {
+        bravebot_tui::app::background_cannot_carry(flag);
+    }
     let mut config = match Config::from_env() {
         Ok(c) => c,
         Err(err) => {
@@ -3134,6 +3147,17 @@ fn interactive(
             ExitCode::SUCCESS
         }
         Ok(bravebot_tui::app::Ended::Left(None)) => ExitCode::SUCCESS,
+        // After the terminal is handed back, so what it says survives on the screen. The process
+        // that starts the background session is this one, run by the person (BG-2).
+        Ok(bravebot_tui::app::Ended::Background { left, mode }) => {
+            match background::hand_over(&left, mode) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(code) => {
+                    eprintln!("{}", resume_hint(&left, workspace.root()));
+                    code
+                }
+            }
+        }
         // Printed after the terminal is handed back, like the hint above, with the argument status:
         // the session never took a turn, and a one-shot run exits with the same status for the
         // same name (CLI-17).
