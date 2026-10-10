@@ -764,11 +764,11 @@ fn hosts(allowed: Option<&[&str]>, denied: &[&str]) -> bravebot_config::sandbox_
 
 /// A line that prints `HTTPS_PROXY`, behind `assignment` when it is not empty. Windows runs
 /// `cmd.exe`, a native program: Git's `printenv` is an MSYS program, which a container cannot start,
-/// so the variable would be read as empty. A variable that is not set prints as `%HTTPS_PROXY%`,
-/// which is the same for a control and a confined run.
+/// so the variable would be read as empty. It uses `set` because the container quotes an argument
+/// holding `%` and an unconfined run does not, so `echo %HTTPS_PROXY%` prints differently in each.
 fn print_proxy(assignment: &str) -> String {
     let program = if cfg!(windows) {
-        "cmd /c echo %HTTPS_PROXY%"
+        "cmd /c set HTTPS_PROXY"
     } else {
         "printenv HTTPS_PROXY"
     };
@@ -779,9 +779,14 @@ fn print_proxy(assignment: &str) -> String {
     }
 }
 
-/// What a confined `printenv HTTPS_PROXY` printed.
+/// The value a [`print_proxy`] line printed, without the `HTTPS_PROXY=` that `set` puts before it.
 fn proxy_variable(places: &Places, line: &str, confinement: Option<&Confinement>) -> String {
-    places.run(line, confinement).stdout.trim().to_string()
+    let printed = places.run(line, confinement).stdout;
+    let printed = printed.trim();
+    printed
+        .strip_prefix("HTTPS_PROXY=")
+        .unwrap_or(printed)
+        .to_string()
 }
 
 /// What `CONNECT host:443` through the proxy at `address` was answered with, as a first line.
