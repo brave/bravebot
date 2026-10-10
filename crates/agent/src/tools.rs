@@ -7315,10 +7315,10 @@ const NOT_ACCEPTING_REQUESTS: &str = "refused: this session does not accept a re
      for the person to add.";
 
 /// What a refused request to run one line with no sandbox says, whatever refused it: the planner
-/// learns that the line did not run and not which setting withheld it.
+/// learns that the line did not run and not which setting withheld it. It does not name the
+/// argument: the planner learns that from the `run` description (SANDBOX-29).
 const NOT_ACCEPTING_UNCONFINED: &str = "refused: this session does not accept a request to run a \
-     line with no sandbox. Run the line without 'unconfined', and say what it needs for the \
-     person to add.";
+     line with no sandbox. Say what the line needs and why, so the person can arrange it.";
 
 /// Whether this turn may be asked to start one line with no profile (SANDBOX-29).
 ///

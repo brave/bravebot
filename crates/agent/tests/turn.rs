@@ -17949,8 +17949,9 @@ fn the_mode_that_asks_nothing_does_not_approve_an_unconfined_line() {
 
 /// SANDBOX-29: the request is refused, nothing is asked and the line does not run in `strict`, under
 /// `off`, in a workspace the person has not trusted, and when it is combined with `scopes`. The
-/// refusal is the same sentence for the first three, so it does not say which setting withheld it.
-/// The control is the same call in `standard` of a trusted workspace, which runs.
+/// refusal is the same sentence for the first three, so it does not say which setting withheld it,
+/// and it does not name the argument, which the planner learns from the `run` description. The
+/// control is the same call in `standard` of a trusted workspace, which runs.
 #[test]
 fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
     if cannot_confine_here() {
@@ -18017,6 +18018,10 @@ fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
             "{why}: {said}"
         );
         if why != "with scopes" {
+            assert!(
+                !said.contains("unconfined"),
+                "{why}: the refusal names the argument: {said}"
+            );
             sentences.push(said);
         }
     }
