@@ -31,6 +31,7 @@ pub mod mode;
 pub mod network;
 pub mod policy;
 pub mod process;
+pub mod programs;
 pub mod proxy;
 pub mod rules;
 pub mod scope;

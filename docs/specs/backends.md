@@ -2616,3 +2616,13 @@ as the `model` key is, and the switch is decided by a category the driver derive
   and sends `extra_content` back, even where its `baseURL` names a proxy. A proxy that wants a
   bearer token is reached by keying the entry with another name, which gets the behaviour of any
   other gateway.
+
+- **An `aws` that lives only in a directory a stage can write is not found.** The AWS CLI is
+  started unconfined, so [SANDBOX-30](sandboxing.md#SANDBOX-30) searches only the `PATH` entries a
+  confined stage cannot write. Somebody whose only `aws` is in an activated virtualenv, or in the
+  session's own directory or the temporary directory, gets `NotInstalled` until they install it
+  elsewhere or open the session from a directory that does not hold it. A session opened on a
+  directory that holds the install, `~/.local/bin` under a session opened on the home directory
+  among them, is the same case. The same holds for a
+  directory a toolchain was granted writes in once a stage has run with it, so a CLI installed under
+  such a cache is found before the first such stage and not after.

@@ -18,6 +18,7 @@
 //! [`bravebot_core::policy::Policy::admit_pasted_image`] states in full.
 
 use bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES;
+use std::ffi::OsStr;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -50,6 +51,9 @@ const COPY_TOOLS: &[(&str, &[&str])] = &[
 
 /// Run a tool and write the text to it, reporting whether it took it.
 fn pipe_into(program: &str, arguments: &[&str], text: &str) -> bool {
+    let Some(program) = bravebot_sandbox::programs::find(OsStr::new(program)) else {
+        return false;
+    };
     let Ok(mut child) = Command::new(program)
         .args(arguments)
         .stdin(Stdio::piped())
@@ -348,6 +352,7 @@ fn text_on_clipboard() -> Option<String> {
 /// A non-zero exit is a refusal: `osascript` returns one when the clipboard holds no picture, which
 /// is the ordinary case and not a fault worth reporting.
 fn run_bytes(program: &str, arguments: &[&str]) -> Option<Vec<u8>> {
+    let program = bravebot_sandbox::programs::find(OsStr::new(program))?;
     let output = Command::new(program)
         .args(arguments)
         .stdin(Stdio::null())

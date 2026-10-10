@@ -100,6 +100,8 @@ impl Drop for Held {
 
 /// Start `program` with `arguments`, its standard input a pipe this process holds open.
 pub fn start_program(program: &str, arguments: &[String]) -> io::Result<Held> {
+    let program = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))
+        .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
     let child = Command::new(program)
         .args(arguments)
         .stdin(Stdio::piped())
