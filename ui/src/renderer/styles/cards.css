@@ -90,9 +90,10 @@
 /* A fetch that reaches a machine's metadata service is bordered as a command releasing private
    data is: both are a grant the request itself does not show. */
 .confirm.fetch.spends { border-color: var(--warn); border-width: 2px; }
-/* An address has no spaces to break at, so it breaks anywhere rather than run under the edge
-   of the card, where the end of it would be the part nobody read. */
-.confirm.fetch .confirm-head .path { overflow-wrap: anywhere; }
+/* An address or a path has no spaces to break at, so it breaks anywhere rather than run under the
+   edge of the card, where the end of it would be the part nobody read. */
+.confirm.fetch .confirm-head .path,
+.confirm.vouch .confirm-head .path { white-space: normal; overflow-wrap: anywhere; }
 .confirm.fetch .fetch-host { border-top: 0; color: var(--ink); }
 .confirm.fetch .fetch-host code { font-family: var(--mono); font-weight: 600; }
 /* A server that runs build tooling gets the warning border a command releasing private data gets. */
@@ -108,9 +109,9 @@
 .confirm[class*="mcp-"] .permission-scope code { overflow-wrap: anywhere; }
 .mcp-list { margin: var(--leo-spacing-xs) 0 0; padding-left: var(--leo-spacing-2xl); }
 .mcp-tools-list { display: flex; flex-direction: column; gap: var(--leo-spacing-m); margin: 0; padding: 0; list-style: none; }
-.mcp-tool-name { font: var(--type-code); font-weight: 600; }
+.mcp-tool-name { font: var(--type-code); font-weight: 600; overflow-wrap: anywhere; }
 .mcp-tool-arguments { margin: var(--leo-spacing-xs) 0 0; padding-left: var(--leo-spacing-2xl); }
-.mcp-tool-arguments code { font: var(--type-code); }
+.mcp-tool-arguments code { font: var(--type-code); overflow-wrap: anywhere; }
 /* A server's own words, set apart so they never read as the app's. */
 .mcp-tool-description {
   margin: var(--leo-spacing-xs) 0 0;
@@ -299,6 +300,14 @@
   background: var(--surface-raised);
 }
 .confirm-actions .approve .aside { font: var(--type-caption); opacity: 0.75; }
+/* How many of the rows the answer rests on have not been on screen yet, at the left of the row. */
+.shown-left {
+  margin-right: auto;
+  align-self: center;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+}
 
 /* What became of the question, in the answers' place. Folded, it is the whole card. */
 .decided {

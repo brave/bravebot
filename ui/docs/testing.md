@@ -41,6 +41,10 @@ matter:
   property of the `<details>` in its shadow root.
 - A dialog is `getByRole('dialog', { name })`; Leo draws its box in the top layer, so measure
   it through `shadowRoot.querySelector('dialog')`.
+- An approving button on a decision card stays shut until the rows it rests on have been on
+  screen (PROMPT-4), and a shut Leo button is `aria-disabled`, which Playwright's `isDisabled`
+  and `isEnabled` do not read. A driver that approves a card taller than its window scrolls the
+  card through first, or waits for `.approve:not([aria-disabled="true"])`.
 
 
 - `npm run drive:manual-walkthrough`: the manual 0.9 verification through the real app
@@ -143,6 +147,7 @@ at, that a control keeps keyboard focus through an animation.
 | `npm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
 | `npm run drive:plan` | Starting a manifest run from the composer, approving and declining its plan, that the run stays out of the conversation, and that its record is read and cannot be typed into |
 | `npm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |
+| `npm run drive:shown` | That no decision card takes an approval before the rows it rests on have been on screen: every kind drawn too tall for a 900x560 window, shut until scrolled through, shut again on a change of width, deaf to a press while shut, and a refusal taken at once. Screenshots of a card waiting and read, light and dark |
 | `npm run drive:rules` | Permission rules from settings files: what is refused, what is not asked, and what is reported as not in force |
 | `npm run drive:permission-mode` | The composer's permission mode: accepting edits, plan mode, a change while a turn runs, and the menu shortcut |
 | `npm run drive:ask` | Answering a series of questions the planner asks, likewise live |

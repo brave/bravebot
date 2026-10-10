@@ -28,6 +28,7 @@
     "drive:columns": "npm run bridge && electron-vite build && node scripts/drive-columns.mjs",
     "drive:vetting": "npm run bridge && electron-vite build && node scripts/drive-vetting.mjs",
     "drive:fetch": "npm run bridge && electron-vite build && node scripts/drive-fetch.mjs",
+    "drive:shown": "npm run bridge && electron-vite build && node scripts/drive-shown.mjs",
     "drive:language-server": "npm run bridge && electron-vite build && node scripts/drive-language-server.mjs",
     "drive:plan": "npm run bridge && electron-vite build && node scripts/drive-plan.mjs",
     "drive:exposure": "npm run bridge && electron-vite build && node scripts/drive-exposure.mjs",

@@ -6,6 +6,9 @@ governs:
   - crates/tui/src/confirm.rs
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/remote_confirm.rs
+  - ui/src/renderer/shown.ts
+  - ui/src/renderer/components/Transcript.tsx
+  - ui/src/renderer/components/Diff.tsx
 documented-by: docs/website/docs/security/permissions.md
 ---
 
@@ -173,8 +176,29 @@ A processor's remark is bounded in **drawn rows**, so on a terminal of 80x24 or 
 push the bytes it is a claim about below the fold, and the block says how many lines it is not
 showing. On a smaller one the yes waits until those bytes have been drawn.
 
+In the desktop window, a card that asks for an approval takes none until each row that decides it
+has been on screen whole, at one moment or over several as the card is scrolled: inside every box
+that clips it, in a window that is showing, with nothing drawn over it. The rows are the ones the
+terminal waits on for the same question. For a write they are every credential the check found and
+the first row of the change. For a run they are the line the planner wrote, each stage, the files
+it writes, its input, the access it spends and each warning, and a remembered approval also waits
+on the row saying what it covers. For reading output, a vetting card and a vouch they are what the
+check said and the first row of the content, with the path for a vouch and all of the path to open
+for a vetted picture. For a language server they are the program and the folder it indexes; for an
+MCP server, what it runs or reaches, the program, what it receives, what it may read, where it runs
+and each warning; and for a plan, an exposure, a tool list and a call, the steps, the findings, the
+tools and the arguments. The terminal keeps the host of a fetch and of a moved server pinned, which
+a card that scrolls with the transcript cannot, so the card waits on them instead: for a fetch, the
+first row of the address, the host and the access it spends; for a moved server, where it was
+declared, the first row of where its reply points, the host it reaches and the warning. The
+planner's own questions approve nothing and wait on nothing. Until the rows have been on screen the
+row of answers says how many are left and an approval refuses a press, and a refusal is taken at
+once. Nothing counts before the card is first measured, and a change in the card's width, or in how
+many rows an element draws, starts the count again.
+
 **Why.** Reviewing a whole file body on a terminal is not review, which is why `edit_file` exists
-on a passage rather than a whole body. A prompt that scrolled the question away would be collecting a keypress, not a decision.
+on a passage rather than a whole body. A prompt that scrolled the question away would be collecting a keypress, not a decision. A card
+in a window is the same question asked with a mouse, so it owes the same.
 
 `verified-by: bravebot_tui::confirm::a_long_body_keeps_the_question_on_screen_and_offers_the_rest`
 `verified-by: bravebot_tui::confirm::the_rest_of_a_long_body_can_be_scrolled_to`
@@ -206,6 +230,7 @@ on a passage rather than a whole body. A prompt that scrolled the question away 
 `verified-by: bravebot_tui::trust_prompt::paging_through_a_list_on_a_short_terminal_reads_every_rule`
 `verified-by: bravebot_tui::trust_prompt::a_question_a_small_terminal_cuts_off_takes_no_answer`
 `verified-by: bravebot_tui::trust_prompt::a_question_that_fits_its_box_says_nothing_of_scrolling`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs pins that every row an approval rests on is marked as deciding for each kind of card and that the count opens, resets and stays shut as described, and make check-ui runs it; ui/scripts/drive-shown.mjs draws each card too tall for a 900x560 window and checks, independently of the card's own count, that no approval opens or is taken before those rows have been on screen)`
 
 ## What an answer means
 

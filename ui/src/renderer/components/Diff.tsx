@@ -17,7 +17,7 @@ import { highlightLine, languageOf } from '../highlight'
  * Coloured by the file's extension, except for a write nobody vouched for: that is a stranger's
  * patch, and it is read as the plain text it is.
  */
-export function Diff({ changes, path, untrusted = false }: { changes: Change[]; path?: string; untrusted?: boolean }): React.JSX.Element {
+export function Diff({ changes, path, untrusted = false, deciding = false }: { changes: Change[]; path?: string; untrusted?: boolean; deciding?: boolean }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [wrap, setWrap] = useState(true)
   const language = untrusted || !path ? null : languageOf(path)
@@ -26,10 +26,11 @@ export function Diff({ changes, path, untrusted = false }: { changes: Change[]; 
     <Button kind="plain-faint" size="tiny" className="code-wrap" aria-pressed={wrap} aria-label="Wrap lines"
       data-tooltip={wrap ? 'Stop wrapping long lines' : 'Wrap long lines'} onClick={() => setWrap(!wrap)}>Wrap</Button>
   )
-  const body = (
+  // The first line is the one an approval waits on, in the card only: the larger view is a copy.
+  const body = (first: boolean): React.JSX.Element => (
     <pre className={`diff ${wrap ? 'wrapped' : 'unwrapped'}`}>
       {lines.map((line, index) => (
-        <div key={index} className={`line ${line.kind}`}>
+        <div key={index} className={`line ${line.kind}`} data-deciding={first && index === 0 ? 'all' : undefined}>
           <span className="line-number" aria-label={line.before ? `Original line ${line.before}` : undefined}>{line.before}</span>
           <span className="line-number" aria-label={line.after ? `Proposed line ${line.after}` : undefined}>{line.after}</span>
           <span className="sign">{line.sign}</span>
@@ -48,13 +49,13 @@ export function Diff({ changes, path, untrusted = false }: { changes: Change[]; 
       {wrapToggle}
       <IconButton icon="fullscreen-on" label="Expand diff" tooltip="Review in a larger view" size="tiny" onClick={() => setExpanded(true)} />
     </div>
-    {body}
+    {body(deciding)}
     {expanded && <Modal title="Review proposed changes" size="xl" onClose={() => setExpanded(false)} className="expanded-diff"
       subtitle="Review the supplied changes here, then return to the approval card to decide."
       actions={<Button kind="filled" onClick={() => setExpanded(false)}>Done</Button>}>
       <div className="diff-review">
         <div className="code-toolbar"><span className="code-language">{path ?? 'Proposed changes'}</span>{wrapToggle}</div>
-        {body}
+        {body(false)}
       </div>
     </Modal>}
   </div>
