@@ -1180,6 +1180,41 @@ mod tests {
         );
     }
 
+    /// IMPORT-6: a `{file:path}` credential is not followed. The shown line names the path, no
+    /// question about a key is asked, and the entry is written as a declined key is: with the
+    /// variable opencode reads for that id, and a line saying to export it.
+    #[test]
+    fn a_file_key_is_shown_by_path_and_treated_as_declined() {
+        let scratch = Scratch::new("cli-import-file-key");
+        let secret = scratch.write("elsewhere/key.txt", "sk-or-in-a-file");
+        scratch.write(
+            ".config/opencode/opencode.json",
+            &format!(
+                r#"{{"provider": {{"openrouter": {{"options": {{"apiKey": "{{file:{}}}"}}, "models": {{"z-ai/glm-4.6": {{}}}}}}}}}}"#,
+                secret.display().to_string().replace('\\', "\\\\")
+            ),
+        );
+
+        let (said, _) = asked(&scratch, "y\n", &Managed::default());
+
+        assert!(said.contains(&secret.display().to_string()), "{said}");
+        assert!(
+            !said.contains("in plain text"),
+            "a question was asked: {said}"
+        );
+        assert!(
+            !said.contains("sk-or-in-a-file"),
+            "the file was read: {said}"
+        );
+        let file = written(&scratch);
+        assert!(file.contains(r#""env":["OPENROUTER_API_KEY"]"#), "{file}");
+        assert!(
+            !file.contains("apiKey") && !file.contains("sk-or-in-a-file"),
+            "{file}"
+        );
+        assert!(said.contains("OPENROUTER_API_KEY: export it"), "{said}");
+    }
+
     /// IMPORT-7: the import adds and replaces nothing, and a name already set is shown as left.
     #[test]
     fn a_name_already_set_keeps_its_value() {

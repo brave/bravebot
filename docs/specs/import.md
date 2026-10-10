@@ -69,6 +69,7 @@ should not open with a question about another program.
 `verified-by: bravebot_cli::running::a_first_run_with_ollama_running_offers_to_import_it`
 `verified-by: bravebot_cli::running::a_first_run_with_nothing_importable_refuses_as_before`
 `verified-by: bravebot_cli::running::a_configured_service_with_a_brave_model_is_not_offered_an_import`
+`verified-by: bravebot_cli::running::nothing_is_asked_where_stdin_or_stdout_is_not_a_terminal`
 
 <a id="IMPORT-2"></a>
 ### IMPORT-2: only a person's own user-level configuration is read, never a checkout's
@@ -317,6 +318,7 @@ spec's known costs, which an import should not make the easy path.
 `verified-by: bravebot_config::import::a_key_built_from_a_substitution_is_left`
 `verified-by: bravebot_cli::import::a_held_key_is_asked_about_separately_and_never_drawn`
 `verified-by: bravebot_cli::import::a_declined_key_names_the_variable_to_export`
+`verified-by: bravebot_cli::import::a_file_key_is_shown_by_path_and_treated_as_declined`
 
 <a id="IMPORT-7"></a>
 ### IMPORT-7: the import writes the user layer only, and replaces no value bravebot reads
@@ -408,6 +410,7 @@ working, and ending over one would refuse a service that answers.
 `verified-by: bravebot_cli::running::an_approved_import_opens_the_session_on_the_file_it_wrote`
 `verified-by: bravebot_cli::running::an_unset_variable_after_an_import_is_named_before_the_session_opens`
 `verified-by: bravebot_cli::running::an_unset_variable_for_another_entry_is_said_and_the_session_opens`
+`verified-by: bravebot_cli::running::an_import_that_leaves_no_model_to_run_ends_with_the_refusal_for_that_case`
 
 <a id="IMPORT-10"></a>
 ### IMPORT-10: a running Ollama is asked once, on this machine, within a bound, and says nothing where it does not answer
