@@ -20,6 +20,7 @@
 use bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES;
 use std::ffi::OsStr;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 /// Put `text` on the clipboard, reporting whether anything took it.
@@ -51,7 +52,17 @@ const COPY_TOOLS: &[(&str, &[&str])] = &[
 
 /// Run a tool and write the text to it, reporting whether it took it.
 fn pipe_into(program: &str, arguments: &[&str], text: &str) -> bool {
-    let Some(program) = bravebot_sandbox::programs::find(OsStr::new(program)) else {
+    pipe_into_found_by(bravebot_sandbox::programs::find, program, arguments, text)
+}
+
+/// [`pipe_into`] with the lookup that turns the tool's name into the program started.
+fn pipe_into_found_by(
+    find: impl Fn(&OsStr) -> Option<PathBuf>,
+    program: &str,
+    arguments: &[&str],
+    text: &str,
+) -> bool {
+    let Some(program) = find(OsStr::new(program)) else {
         return false;
     };
     let Ok(mut child) = Command::new(program)
@@ -352,7 +363,16 @@ fn text_on_clipboard() -> Option<String> {
 /// A non-zero exit is a refusal: `osascript` returns one when the clipboard holds no picture, which
 /// is the ordinary case and not a fault worth reporting.
 fn run_bytes(program: &str, arguments: &[&str]) -> Option<Vec<u8>> {
-    let program = bravebot_sandbox::programs::find(OsStr::new(program))?;
+    run_bytes_found_by(bravebot_sandbox::programs::find, program, arguments)
+}
+
+/// [`run_bytes`] with the lookup that turns the tool's name into the program started.
+fn run_bytes_found_by(
+    find: impl Fn(&OsStr) -> Option<PathBuf>,
+    program: &str,
+    arguments: &[&str],
+) -> Option<Vec<u8>> {
+    let program = find(OsStr::new(program))?;
     let output = Command::new(program)
         .args(arguments)
         .stdin(Stdio::null())
@@ -388,6 +408,164 @@ mod tests {
             &[],
             "hello"
         ));
+    }
+
+    #[cfg(unix)]
+    fn script(directory: &std::path::Path, name: &str, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(directory).unwrap();
+        let file = directory.join(name);
+        std::fs::write(&file, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A clipboard tool is started with the session's access to the person's clipboard and
+    /// nothing confining it, so a file a confined stage wrote under the tool's name must never be
+    /// the one that runs. The system's own `true` would also succeed, so a lookup that ignored the
+    /// kept-out directory, or that fell back to the bare name, copies and fails this.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_tool_found_only_in_a_directory_a_stage_may_write_is_not_started() {
+        use bravebot_sandbox::programs::find_in;
+        let session = crate::testutil::scratch_dir("clipboard-copy-kept-out");
+        let _ = std::fs::remove_dir_all(&session);
+        let marker = session.join("started");
+        script(
+            &session.join("bin"),
+            "true",
+            &format!("touch '{}'", marker.display()),
+        );
+        let path = std::env::join_paths([session.join("bin")]).unwrap();
+        let writable = [session.clone()];
+
+        let copied = pipe_into_found_by(|p| find_in(p, &path, &writable), "true", &[], "hello");
+
+        let started = marker.exists();
+        let _ = std::fs::remove_dir_all(&session);
+        assert!(!started, "the planted tool was started");
+        assert!(!copied);
+    }
+
+    /// The same lookup finds a tool installed outside every directory a stage may write, so the
+    /// refusal above is the directory's and not a lookup that finds nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_tool_installed_outside_every_writable_directory_is_started() {
+        use bravebot_sandbox::programs::find_in;
+        let session = crate::testutil::scratch_dir("clipboard-copy-installed-session");
+        let system = crate::testutil::scratch_dir("clipboard-copy-installed-system");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&system);
+        script(&system, "bravebot-test-copy-tool", "cat >/dev/null");
+        let path = std::env::join_paths([&system]).unwrap();
+        let writable = [session.clone()];
+
+        let copied = pipe_into_found_by(
+            |p| find_in(p, &path, &writable),
+            "bravebot-test-copy-tool",
+            &[],
+            "hello",
+        );
+
+        let _ = std::fs::remove_dir_all(&system);
+        assert!(copied);
+    }
+
+    /// Reading the clipboard starts a tool the same way copying does. The system's own `uname`
+    /// would print something, so a lookup that ignored the kept-out directory, or that fell back
+    /// to the bare name, returns bytes and fails this.
+    #[cfg(unix)]
+    #[test]
+    fn a_paste_tool_found_only_in_a_directory_a_stage_may_write_is_not_started() {
+        use bravebot_sandbox::programs::find_in;
+        let session = crate::testutil::scratch_dir("clipboard-paste-kept-out");
+        let _ = std::fs::remove_dir_all(&session);
+        script(&session.join("bin"), "uname", "echo planted");
+        let path = std::env::join_paths([session.join("bin")]).unwrap();
+        let writable = [session.clone()];
+
+        let read = run_bytes_found_by(|p| find_in(p, &path, &writable), "uname", &[]);
+
+        let _ = std::fs::remove_dir_all(&session);
+        assert_eq!(read, None);
+    }
+
+    /// The control for the refusal above: a tool outside every writable directory is started and
+    /// what it printed is read.
+    #[cfg(unix)]
+    #[test]
+    fn a_paste_tool_installed_outside_every_writable_directory_is_read() {
+        use bravebot_sandbox::programs::find_in;
+        let session = crate::testutil::scratch_dir("clipboard-paste-installed-session");
+        let system = crate::testutil::scratch_dir("clipboard-paste-installed-system");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&system);
+        script(&system, "bravebot-test-paste-tool", "echo installed");
+        let path = std::env::join_paths([&system]).unwrap();
+        let writable = [session.clone()];
+
+        let read = run_bytes_found_by(
+            |p| find_in(p, &path, &writable),
+            "bravebot-test-paste-tool",
+            &[],
+        );
+
+        let _ = std::fs::remove_dir_all(&system);
+        assert_eq!(read, Some(b"installed\n".to_vec()));
+    }
+
+    /// `copy` and every read of the clipboard reach a tool through [`pipe_into`] and
+    /// [`run_bytes`], so those are what must resolve a tool's name through the session's lookup.
+    /// The tests above hand the lookup in and so cannot see a caller that stops using it. This one
+    /// runs the test binary again with `PATH` holding only a directory the session keeps out, a
+    /// `true` and a `uname` planted in it, and calls both entry points with their own lookup.
+    /// A caller that starts the bare name instead finds the planted files and fails the child.
+    #[cfg(unix)]
+    #[test]
+    fn the_clipboard_entry_points_start_no_tool_found_only_in_a_directory_a_stage_may_write() {
+        const TEST: &str = "clipboard::tests::the_clipboard_entry_points_start_no_tool_found_only_in_a_directory_a_stage_may_write";
+        const SESSION: &str = "BRAVEBOT_TEST_CLIPBOARD_KEPT_OUT_SESSION";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
+
+            let copied = pipe_into("true", &[], "hello");
+            let read = run_bytes("uname", &[]);
+
+            assert!(
+                !session.join("started").exists(),
+                "pipe_into started the planted tool"
+            );
+            assert!(!copied);
+            assert_eq!(read, None, "run_bytes started the planted tool");
+            return;
+        }
+
+        let session = crate::testutil::scratch_dir("clipboard-entry-points-kept-out");
+        let _ = std::fs::remove_dir_all(&session);
+        let bin = session.join("bin");
+        script(
+            &bin,
+            "true",
+            &format!(": > '{}'", session.join("started").display()),
+        );
+        script(&bin, "uname", "echo planted");
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(SESSION, &session)
+            .env("PATH", &bin)
+            .output()
+            .unwrap();
+
+        let ran = session.join("ran").exists();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        let _ = std::fs::remove_dir_all(&session);
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(child.status.success(), "{report}");
     }
 
     /// A machine with none of these tools installed is the ordinary case on a bare server, and it
