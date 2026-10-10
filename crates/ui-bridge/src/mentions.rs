@@ -9,29 +9,33 @@ use crate::protocol::Failure;
 use bravebot_agent::Workspace;
 use bravebot_agent::workspace::WorkspaceError;
 use serde_json::{Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// What the window offers for `line`, with the cursor on row `cursor`.
 ///
 /// `typed` is what follows the `@` of the last word, or null when the line is not being typed
 /// towards a name, which is what closes the list. `completes` is whether Enter on that row
 /// completes the name rather than sending the line (NAME-7).
+///
+/// `sources` is asked for only once a name is being typed, because it opens the session's
+/// workspace and the window asks about every line, most of which name nothing.
 pub fn offer(
     project: &Path,
     line: &str,
     cursor: usize,
-    sources: &bravebot_mentions::Sources,
-) -> Value {
+    sources: impl FnOnce() -> Result<Vec<(String, PathBuf)>, Failure>,
+) -> Result<Value, Failure> {
     let Some(typed) = bravebot_mentions::typed_reference(line) else {
-        return json!({ "typed": null, "entries": [], "completes": false });
+        return Ok(json!({ "typed": null, "entries": [], "completes": false }));
     };
-    let entries = bravebot_mentions::matching(project, &typed, sources);
-    let completes = bravebot_mentions::enter_completes(project, &typed, &entries, cursor, sources);
+    let sources = sources()?;
+    let entries = bravebot_mentions::matching(project, &typed, &sources);
+    let completes = bravebot_mentions::enter_completes(project, &typed, &entries, cursor, &sources);
     let entries: Vec<Value> = entries
         .into_iter()
         .map(|entry| json!({ "path": entry.path, "directory": entry.is_directory }))
         .collect();
-    json!({ "typed": typed, "entries": entries, "completes": completes })
+    Ok(json!({ "typed": typed, "entries": entries, "completes": completes }))
 }
 
 /// The files `prompt` names with `@`, in the order written, each surveyed by the read a turn
@@ -65,4 +69,36 @@ pub fn named(workspace: &Workspace, prompt: &str) -> Result<Vec<String>, Failure
         })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::ErrorCode;
+    use std::cell::Cell;
+
+    /// The window asks about every line it holds, and opening the session's workspace for each one
+    /// made a turn waiting on an approval unable to be stopped. Only a name being typed needs it.
+    #[test]
+    fn a_line_naming_nothing_does_not_open_the_workspace() {
+        let asked = Cell::new(false);
+        let answer = offer(Path::new("."), "no reference here", 0, || {
+            asked.set(true);
+            Ok(Vec::new())
+        })
+        .expect("answers");
+        assert!(!asked.get(), "the workspace was opened for a plain line");
+        assert_eq!(answer["typed"], Value::Null);
+    }
+
+    /// A workspace that cannot be opened is the refusal of the request being typed towards a name,
+    /// not an empty list that looks like nothing matched.
+    #[test]
+    fn a_name_being_typed_reports_a_workspace_that_will_not_open() {
+        let refused = offer(Path::new("."), "read @par", 0, || {
+            Err(Failure::new(ErrorCode::Internal, "no workspace"))
+        })
+        .expect_err("refused");
+        assert_eq!(refused.message, "no workspace");
+    }
 }
