@@ -1458,6 +1458,18 @@ impl Workspace {
             });
         }
 
+        // A directory added here becomes a session directory, which a stage may read and write.
+        // The macOS profile lets a row at a credential location lift the refusal of it, so the
+        // location is refused here on every platform (SANDBOX-18).
+        if self.home.as_deref().is_some_and(|home| {
+            bravebot_sandbox::rules::inside_a_credential_location(&canonical, home)
+        }) {
+            return Err(WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason: "is or lies inside a credential location, which cannot be added",
+            });
+        }
+
         refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
 
         Ok(canonical)
@@ -6126,6 +6138,86 @@ mod tests {
             home.canonicalize().expect("canonical home"),
             project.canonicalize().expect("canonical project"),
         )
+    }
+
+    /// `/add-dir`, `--add-dir` and a name a settings file asked about all end in
+    /// `resolve_directory`, and a directory it accepts becomes a session directory, which a stage
+    /// may read and write. On macOS that row lifts the refusal of a credential location, so each
+    /// location is refused by name, at the directory and beneath it, and by where a link leads. A
+    /// directory beside a location, and the directory that holds one, is still accepted.
+    ///
+    /// The failure this rejects is a check against `~/.ssh` alone, or one that compares the name as
+    /// typed and not the directory it opens.
+    #[test]
+    fn a_directory_at_or_inside_a_credential_location_is_refused() {
+        let (home, project) = home_and_project("add-credential-location");
+        for row in [
+            ".ssh",
+            ".ssh/keys",
+            ".bravebot",
+            ".bravebot/profiles",
+            ".aws",
+            ".kube",
+            ".config/gcloud",
+            "Library/Keychains",
+            ".password-store",
+        ] {
+            std::fs::create_dir_all(home.join(row)).expect("a credential location");
+        }
+        for beside in [".sshfoo", ".config/helix"] {
+            std::fs::create_dir_all(home.join(beside)).expect("a neighbour");
+        }
+        let mut workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+
+        let refused = vec![
+            ".ssh",
+            ".ssh/keys",
+            ".bravebot",
+            ".bravebot/profiles",
+            ".aws",
+            ".kube",
+            ".config/gcloud",
+            "Library/Keychains",
+            ".password-store",
+        ]
+        .into_iter()
+        .map(|row| home.join(row))
+        .collect::<Vec<_>>();
+        #[cfg(unix)]
+        let refused = {
+            let mut refused = refused;
+            let link = project.join("innocent");
+            std::os::unix::fs::symlink(home.join(".ssh"), &link).expect("a link");
+            refused.push(link);
+            refused
+        };
+        for named in &refused {
+            let named = named.to_str().expect("utf-8 path");
+            for error in [
+                workspace
+                    .resolve_directory(named)
+                    .expect_err("a credential location must not resolve"),
+                workspace
+                    .add_directory(named)
+                    .expect_err("a credential location must not open"),
+            ] {
+                assert!(
+                    error.to_string().contains("credential location"),
+                    "{named}: {error}"
+                );
+            }
+        }
+        assert!(workspace.added_directories().is_empty());
+
+        for accepted in [".sshfoo", ".config/helix"] {
+            let beside = home.join(accepted);
+            workspace
+                .add_directory(beside.to_str().expect("utf-8 path"))
+                .unwrap_or_else(|error| panic!("{accepted} was refused: {error}"));
+        }
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }
 
     /// A caller that cannot resolve a path spells it out: only a whole first segment is the home,
