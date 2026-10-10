@@ -7122,7 +7122,8 @@ fn path_requests_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) ->
 /// `path` is routing: it decides what a program can touch, so it is read through the planner
 /// argument gate and judged by the rules an `allowWrite` entry meets. `why` is content, drawn for
 /// the person and recorded, and decides nothing. The reach is held by the workspace for the session
-/// and written nowhere, and the directory is not marked trusted.
+/// and written nowhere, and the directory is not marked trusted, unless the mode that answers every
+/// question granted it: that opens the directory for the file tools too (PATHREQ-7).
 fn request_path<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -7229,16 +7230,37 @@ fn request_path<S: Sink, C: Confirmer>(
         write,
         why: reason.clone(),
     };
+    let mode = tools.permission_mode.get();
+    let answered_by = mode.answers_a_run_unasked().then(|| mode.name());
     match confirmer.confirm_path(&request) {
         crate::confirm::Decision::Approve => {
             let shown = resolved.display().to_string();
+            let opened = answered_by.map(|mode| {
+                (
+                    mode,
+                    open_for_the_file_tools(policy, tools.workspace, &resolved, mode),
+                )
+            });
             tools.workspace.grant_path_reach(resolved, write, reason);
-            policy.record_path_reach(&shown, write);
+            policy.record_path_reach(&shown, write, answered_by);
             let access = if write { "read and write" } else { "read" };
+            let file_tools = match opened {
+                None => String::new(),
+                Some((_, Ok(true))) => " The file tools (read_file, edit_file, list_files, \
+                     search) reach it too, and no delegate is given a checkout while it is \
+                     open, so do not ask the person to run /add-dir for it."
+                    .to_string(),
+                Some((_, Ok(false))) => " The file tools (read_file, edit_file, list_files, \
+                     search) reach it too, so do not ask the person to run /add-dir for it."
+                    .to_string(),
+                Some((_, Err(reason))) => format!(
+                    " The file tools do not reach it: /add-dir would refuse it, because it {reason}."
+                ),
+            };
             Produced::new(
                 Labelled::trusted(format!(
                     "approved: programs you start with run may {access} {shown} for the rest of \
-                     this session. Run the command again."
+                     this session. Run the command again.{file_tools}"
                 )),
                 String::new(),
                 format!("programs may {access} {shown} this session"),
@@ -7248,6 +7270,29 @@ fn request_path<S: Sink, C: Confirmer>(
             "refused: the person declined, or nobody was there to ask. Nothing was granted.",
         ),
     }
+}
+
+/// Open `path` for the file tools in the way `/add-dir` does, for a mode that answers a
+/// `request_path` in the person's place (PATHREQ-7, TRUST-9).
+///
+/// `Ok` says whether the directory holds the working directory, which ends checkouts (CHECKOUT-7).
+/// `Err` is why `/add-dir` would refuse it, in words the driver wrote. A refusal leaves the grant
+/// for programs standing, and opens nothing.
+fn open_for_the_file_tools<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    path: &std::path::Path,
+    mode: &'static str,
+) -> Result<bool, &'static str> {
+    let opened =
+        workspace
+            .open_directory(&path.to_string_lossy())
+            .map_err(|error| match error {
+                crate::WorkspaceError::Invalid { reason, .. } => reason,
+                _ => "cannot be opened",
+            })?;
+    policy.vouch_for_opened_directory(&crate::workspace::key_of(&opened), mode);
+    Ok(workspace.ends_checkouts(&opened))
 }
 
 /// What a refused request says, whatever refused it: the planner learns that no credential was

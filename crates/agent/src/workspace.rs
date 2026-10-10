@@ -493,7 +493,11 @@ pub struct Workspace {
     /// Kept apart from `root` rather than being a list of equals, because the primary root is what
     /// relative paths mean, what the session record is keyed on, and where `AGENTS.md` is looked
     /// for. Making it one root among many would make all three ambiguous.
-    added: Vec<PathBuf>,
+    ///
+    /// Behind a lock and a handle because a turn holds a clone of the workspace, and a directory
+    /// bypass mode opens in the middle of a turn has to be reachable by the file tools in that turn
+    /// and listed by the session that outlives it. A delegate's checkout takes a copy instead.
+    added: Arc<Mutex<Vec<PathBuf>>>,
     /// The session's own directory outside the project, where it has one.
     ///
     /// Reachable by its absolute path, exactly as an added directory is, and kept apart from
@@ -1037,13 +1041,13 @@ fn overlaps(one: &Path, other: &Path) -> bool {
 ///
 /// An added directory is named because a person typed it, or accepted it from a settings file
 /// after being shown it, so saying it tells the planner nothing read from the repository.
-enum CheckoutOverlap<'a> {
+enum CheckoutOverlap {
     InsideWorkingDirectory,
-    AddedHoldsWorkingDirectory(&'a Path),
-    AddedHoldsCheckouts(&'a Path),
+    AddedHoldsWorkingDirectory(PathBuf),
+    AddedHoldsCheckouts(PathBuf),
 }
 
-impl CheckoutOverlap<'_> {
+impl CheckoutOverlap {
     fn cause(&self) -> CheckoutRefusal {
         match self {
             Self::InsideWorkingDirectory => CheckoutRefusal::InsideWorkingDirectory,
@@ -1212,7 +1216,7 @@ impl Workspace {
             #[cfg(test)]
             after_write: Arc::new(Mutex::new(None)),
             root: canonical,
-            added: Vec::new(),
+            added: Arc::default(),
             scratch: None,
             memories: None,
             search_files: MAX_SEARCH_FILES,
@@ -1334,8 +1338,11 @@ impl Workspace {
     /// opened at: one already open when the restriction was read, which a resume reopening its own
     /// record is, would otherwise stay reachable for the rest of the session.
     fn is_opened(&self, resolved: &Path) -> bool {
-        let added =
-            !self.reads_stay_inside && self.added.iter().any(|dir| resolved.starts_with(dir));
+        let added = !self.reads_stay_inside
+            && self
+                .added_directories()
+                .iter()
+                .any(|dir| resolved.starts_with(dir));
         added
             || self
                 .scratch
@@ -1459,10 +1466,18 @@ impl Workspace {
     /// user: the name they typed may be a symlink or contain `..`, and the rule has to be about the
     /// directory that was actually opened.
     pub fn add_directory(&mut self, directory: &str) -> Result<PathBuf, WorkspaceError> {
+        self.open_directory(directory)
+    }
+
+    /// [`Workspace::add_directory`] through a shared reference, for the one route that opens a
+    /// directory in the middle of a turn, where the turn holds a clone of the workspace and the
+    /// session's own copy has to see the directory after it (PATHREQ-7).
+    pub fn open_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
         let canonical = self.resolve_directory(directory)?;
 
-        if !self.added.contains(&canonical) {
-            self.added.push(canonical.clone());
+        let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
+        if !added.contains(&canonical) {
+            added.push(canonical.clone());
         }
         Ok(canonical)
     }
@@ -1531,9 +1546,10 @@ impl Workspace {
     /// A reference closed since, with `/add-dir close`, `/clear` or a `/cd` that overlapped it, is
     /// left out, so the planner is never told of a directory its file tools would refuse.
     pub fn references(&self) -> impl Iterator<Item = &Referenced> {
+        let added = self.added_directories();
         self.references
             .iter()
-            .filter(|reference| self.added.contains(&reference.path))
+            .filter(move |reference| added.contains(&reference.path))
     }
 
     /// The entries that did not open, with the alias each was written under (REFER-3).
@@ -1542,8 +1558,8 @@ impl Workspace {
     }
 
     /// The directories added by name, in the order they were added.
-    pub fn added_directories(&self) -> &[PathBuf] {
-        &self.added
+    pub fn added_directories(&self) -> Vec<PathBuf> {
+        self.added.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Let programs reach `path` for the rest of the session. A second grant of a path already
@@ -1654,11 +1670,14 @@ impl Workspace {
 
         // The old root among them: it is a directory that was open, and after this it is not.
         let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
-        let (overlapping, kept) = std::mem::take(&mut self.added)
-            .into_iter()
-            .partition(|open| overlaps(open, &canonical));
-        self.added = kept;
-        closed.extend(overlapping);
+        {
+            let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
+            let (overlapping, kept) = std::mem::take(&mut *added)
+                .into_iter()
+                .partition(|open| overlaps(open, &canonical));
+            *added = kept;
+            closed.extend(overlapping);
+        }
         // Whatever the new root is now reachable as itself, so it did not close.
         closed.retain(|open| *open != canonical);
 
@@ -1674,7 +1693,7 @@ impl Workspace {
     /// grants do. Leaving them open while the trust map that vouched for them was discarded would
     /// leave a tree reachable that nobody had vouched for.
     pub fn close_added_directories(&mut self) {
-        self.added.clear();
+        self.added.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     /// Close one directory added by name, and return the name it was open under (TRUST-9).
@@ -1696,19 +1715,19 @@ impl Workspace {
                 reason: "must be an absolute path",
             });
         }
-        let open = self
-            .added
+        let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
+        let open = added
             .iter()
             .position(|open| open == candidate)
             .or_else(|| {
                 let resolved = destination(candidate)?;
-                self.added.iter().position(|open| *open == resolved)
+                added.iter().position(|open| *open == resolved)
             })
             .ok_or_else(|| WorkspaceError::Invalid {
                 path: directory.to_string(),
                 reason: "is not a directory opened beside the working directory",
             })?;
-        Ok(self.added.remove(open))
+        Ok(added.remove(open))
     }
 
     /// Resolve a path against the workspace.
@@ -1909,7 +1928,7 @@ impl Workspace {
         }
         if let Some(below) = self
             .landed_in(&resolved)
-            .and_then(|opened| written_below(candidate, opened))
+            .and_then(|opened| written_below(candidate, &opened))
         {
             refuse_misleading_names(&below, named, false, cfg!(windows))?;
         }
@@ -4190,8 +4209,8 @@ impl Workspace {
             .find(|made| made.id == id && made.path.exists())
             .cloned()
             .ok_or(Unremoved::NoSuch)?;
-        if std::iter::once(&self.root)
-            .chain(&self.added)
+        if std::iter::once(self.root.clone())
+            .chain(self.added_directories())
             .any(|open| open.starts_with(&made.path))
         {
             return Err(Unremoved::WorkedFrom);
@@ -4497,17 +4516,18 @@ impl Workspace {
     /// Which tree the session opened keeps checkouts from being made under `directory`, if any
     /// does (CHECKOUT-7). A directory holding the working directory is named before one holding
     /// `directory`, since it is the one a person has to close in either case.
-    fn checkout_overlap(&self, directory: &Path) -> Option<CheckoutOverlap<'_>> {
+    fn checkout_overlap(&self, directory: &Path) -> Option<CheckoutOverlap> {
         if directory.starts_with(&self.root) {
             return Some(CheckoutOverlap::InsideWorkingDirectory);
         }
-        if let Some(dir) = self.added.iter().find(|dir| self.root.starts_with(dir)) {
-            return Some(CheckoutOverlap::AddedHoldsWorkingDirectory(dir));
+        let added = self.added_directories();
+        if let Some(dir) = added.iter().find(|dir| self.root.starts_with(dir)) {
+            return Some(CheckoutOverlap::AddedHoldsWorkingDirectory(dir.clone()));
         }
-        self.added
-            .iter()
+        added
+            .into_iter()
             .find(|dir| directory.starts_with(dir))
-            .map(|dir| CheckoutOverlap::AddedHoldsCheckouts(dir))
+            .map(CheckoutOverlap::AddedHoldsCheckouts)
     }
 
     /// Make a checkout for the delegate `made_for` and return the workspace it works in (CHECKOUT-1,
@@ -4669,6 +4689,7 @@ impl Workspace {
             .push(entry.clone());
 
         let mut delegate = self.clone();
+        delegate.added = Arc::new(Mutex::new(self.added_directories()));
         delegate.root = target;
         delegate.backups = Arc::new(Mutex::new(Vec::new()));
         delegate.rewind = Arc::default();
@@ -4968,7 +4989,7 @@ impl Workspace {
     /// directory named as itself has a recorded name to be asked about, so it gets one.
     fn recorded_name(&self, candidate: &Path) -> Option<String> {
         let opened = self.landed_in(&destination(candidate)?)?;
-        let below = written_below(candidate, opened)?;
+        let below = written_below(candidate, &opened)?;
         if opened == self.root {
             return (!below.as_os_str().is_empty()).then(|| below.to_string_lossy().to_string());
         }
@@ -4990,16 +5011,15 @@ impl Workspace {
     /// The session's own directory among them, on the same terms as one the user added: it is
     /// reached by its absolute name, so a name that reaches it by another spelling has to come back
     /// to the same rule as the canonical one, or one file there would hold two.
-    fn landed_in(&self, resolved: &Path) -> Option<&Path> {
+    fn landed_in(&self, resolved: &Path) -> Option<PathBuf> {
         if resolved.starts_with(&self.root) {
-            return Some(&self.root);
+            return Some(self.root.clone());
         }
-        self.added
-            .iter()
-            .chain(self.scratch.as_ref())
+        self.added_directories()
+            .into_iter()
+            .chain(self.scratch.clone())
             .filter(|dir| resolved.starts_with(dir))
             .max_by_key(|dir| dir.components().count())
-            .map(PathBuf::as_path)
     }
 }
 

@@ -47489,7 +47489,35 @@ fn path_turn<C: bravebot_agent::Confirmer + Send>(
     permissions: Option<bravebot_core::permissions::Permissions>,
     confirmer: &mut C,
 ) -> PathTurn {
+    path_turn_in(
+        name,
+        places,
+        calls,
+        mode,
+        permission,
+        trust,
+        permissions,
+        confirmer,
+        |_| {},
+    )
+}
+
+/// [`path_turn`], with `prepare` given the project's directory before the turn starts, for a test
+/// whose request names a place inside it or above it.
+#[allow(clippy::too_many_arguments)]
+fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
+    name: &str,
+    places: &PathPlaces,
+    calls: &[(&str, serde_json::Value)],
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: Option<bravebot_core::permissions::Permissions>,
+    confirmer: &mut C,
+    prepare: impl FnOnce(&std::path::Path),
+) -> PathTurn {
     let scratch = Scratch::new(name);
+    prepare(&scratch.path);
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let mut replies: Vec<String> = calls
         .iter()
@@ -47699,6 +47727,247 @@ fn a_yes_to_a_path_does_not_let_the_file_tools_touch_it() {
         "the read was not refused with the remedy: {read}"
     );
     assert!(!read.contains("NOTES-CONTENT"), "{read}");
+}
+
+/// A confirmer for a session in bypass mode: the mode answers every question, and the person behind
+/// `asked` would refuse, so a path that opens is opened by the mode and by no yes.
+fn bypassing(asked: &mut AskedAboutRuns) -> bravebot_agent::Confining<'_, AskedAboutRuns> {
+    bravebot_agent::Confining::new(asked, bravebot_agent::PermissionMode::Bypass, false)
+}
+
+/// PATHREQ-7, TRUST-10, MODE-4: in bypass mode a granted path is also open to the file tools, as
+/// `/add-dir` leaves it. Each tool is a separate call because a fault that opened the directory to
+/// reads alone would pass a test that only read. The planner is told so, which is what stops it
+/// asking the person for `/add-dir`.
+#[test]
+fn under_bypass_a_granted_path_is_open_to_the_file_tools() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("bypass-opens");
+    let target = places.beside.join("notes.txt");
+    std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let paths = asked.paths.clone();
+    let turn = path_turn(
+        "path-bypass-opens",
+        &places,
+        &[
+            asking_for(&places.beside, true),
+            (
+                "read_file",
+                serde_json::json!({ "path": target.display().to_string() }),
+            ),
+            (
+                "edit_file",
+                serde_json::json!({
+                    "path": target.display().to_string(),
+                    "old_text": "NOTES-CONTENT",
+                    "new_text": "NOTES-EDITED",
+                }),
+            ),
+            (
+                "list_files",
+                serde_json::json!({ "directory": places.beside.display().to_string() }),
+            ),
+            (
+                "search",
+                serde_json::json!({
+                    "pattern": "NOTES-EDITED",
+                    "directory": places.beside.display().to_string(),
+                }),
+            ),
+        ],
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypassing(&mut asked),
+    );
+    assert!(paths.lock().unwrap().is_empty(), "the person was asked");
+    let said = path_result(&turn.results[0]);
+    assert!(said.starts_with("approved"), "{said}");
+    assert!(
+        said.contains("file tools") && said.contains("do not ask the person to run /add-dir"),
+        "the planner was not told the directory is open: {said}"
+    );
+    assert!(
+        !said.contains("no delegate is given a checkout"),
+        "a directory beside the project ends no checkout: {said}"
+    );
+    let read = message_from(&turn.results[1], "Result of read_file");
+    assert!(read.contains("NOTES-CONTENT"), "read_file: {read}");
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "NOTES-EDITED",
+        "edit_file did not write the granted directory"
+    );
+    let listed = message_from(&turn.results[3], "Result of list_files");
+    assert!(listed.contains("notes.txt"), "list_files: {listed}");
+    let searched = message_from(&turn.results[4], "Result of search");
+    assert!(searched.contains("notes.txt"), "search: {searched}");
+
+    assert_eq!(
+        turn.workspace.added_directories(),
+        std::slice::from_ref(&places.beside)
+    );
+    assert!(
+        turn.trust.is_trusted(&places.beside.display().to_string()),
+        "/add-dir trusts the directory it opens, and so does bypass"
+    );
+    let at = gate_in(&turn.events, "path_reach");
+    assert!(at.contains("bypass mode"), "{at}");
+    assert!(at.contains("nobody was asked"), "{at}");
+    assert!(!at.contains("the user let"), "{at}");
+}
+
+/// PATHREQ-7: only the mode that answers every question opens the directory. A person's yes in the
+/// other modes stays reach for programs, so the same call is the control for the test above.
+#[test]
+fn outside_bypass_a_yes_to_a_path_opens_nothing_for_the_file_tools() {
+    if cannot_confine_here() {
+        return;
+    }
+    for permission in [
+        bravebot_agent::PermissionMode::Ask,
+        bravebot_agent::PermissionMode::AcceptEdits,
+    ] {
+        let places = PathPlaces::new("yes-opens-nothing");
+        let target = places.beside.join("notes.txt");
+        std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let turn = path_turn(
+            "path-yes-opens-nothing",
+            &places,
+            &[
+                asking_for(&places.beside, true),
+                (
+                    "read_file",
+                    serde_json::json!({ "path": target.display().to_string() }),
+                ),
+            ],
+            bravebot_sandbox::SandboxMode::Standard,
+            permission,
+            trusting_the_workspace(),
+            None,
+            &mut asked,
+        );
+        let said = path_result(&turn.results[0]);
+        assert!(said.starts_with("approved"), "{permission:?}: {said}");
+        assert!(!said.contains("/add-dir"), "{permission:?}: {said}");
+        assert_eq!(turn.workspace.path_reach().len(), 1, "{permission:?}");
+        assert!(
+            turn.workspace.added_directories().is_empty(),
+            "{permission:?}: a yes opened the directory"
+        );
+        assert!(!turn.trust.is_trusted(&places.beside.display().to_string()));
+        let read = message_from(&turn.results[1], "Result of read_file");
+        assert!(!read.contains("NOTES-CONTENT"), "{permission:?}: {read}");
+        let at = gate_in(&turn.events, "path_reach");
+        assert!(at.contains("the user let programs"), "{permission:?}: {at}");
+    }
+}
+
+/// PATHREQ-3: a path that is refused unasked is refused in bypass too. The mode answers a question
+/// that was asked, and these are never asked, so nothing is granted and nothing is opened.
+#[test]
+fn under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("bypass-refused");
+    let home = places.home.display().to_string();
+    for (at, named) in ["/".to_string(), "~".to_string(), format!("{home}/.ssh")]
+        .iter()
+        .enumerate()
+    {
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let turn = path_turn(
+            &format!("path-bypass-refused-{at}"),
+            &places,
+            &[asking_for(std::path::Path::new(named), true)],
+            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_agent::PermissionMode::Bypass,
+            trusting_the_workspace(),
+            None,
+            &mut bypassing(&mut asked),
+        );
+        let said = path_result(&turn.results[0]);
+        assert!(said.starts_with("refused"), "{named}: {said}");
+        assert!(turn.workspace.path_reach().is_empty(), "{named}");
+        assert!(turn.workspace.added_directories().is_empty(), "{named}");
+    }
+}
+
+/// PATHREQ-7: bypass opens a directory only where `/add-dir` would. A directory inside the project
+/// is reached by a relative name already, so it is not opened; the grant for programs stands and the
+/// planner is told the file tools were not given it.
+#[test]
+fn under_bypass_a_directory_inside_the_project_is_not_opened() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("bypass-inside");
+    let inside = std::env::temp_dir().join("bravebot-turn-path-bypass-inside/sub");
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let turn = path_turn_in(
+        "path-bypass-inside",
+        &places,
+        &[asking_for(&inside, true)],
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypassing(&mut asked),
+        |project| std::fs::create_dir_all(project.join("sub")).expect("a directory in the project"),
+    );
+    let said = path_result(&turn.results[0]);
+    assert!(said.starts_with("approved"), "{said}");
+    assert!(
+        said.contains("The file tools do not reach it") && said.contains("is already inside"),
+        "{said}"
+    );
+    assert!(!said.contains("do not ask the person"), "{said}");
+    assert_eq!(turn.workspace.path_reach().len(), 1, "the grant stands");
+    assert!(
+        turn.workspace.added_directories().is_empty(),
+        "a directory inside the project was opened"
+    );
+}
+
+/// CHECKOUT-7: a directory that holds the project ends checkouts while it is open, bypass or not,
+/// and the result says so as `/add-dir` does.
+#[test]
+fn under_bypass_a_directory_holding_the_project_says_it_ends_checkouts() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("bypass-holds");
+    let holder = std::env::temp_dir().join("bravebot-turn-path-bypass-holds");
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let turn = path_turn_in(
+        "path-bypass-holds/project",
+        &places,
+        &[asking_for(&holder, false)],
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypassing(&mut asked),
+        |_| {},
+    );
+    let _ = std::fs::remove_dir_all(&holder);
+    let said = path_result(&turn.results[0]);
+    assert!(
+        said.contains("no delegate is given a checkout while it is open"),
+        "{said}"
+    );
+    assert_eq!(turn.workspace.added_directories().len(), 1);
 }
 
 fn gate_in(events: &[Event], gate: &str) -> String {

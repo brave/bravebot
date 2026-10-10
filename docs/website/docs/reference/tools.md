@@ -914,7 +914,10 @@ answer yes or no. A yes lasts for this session, is not saved, and does **not** m
 trusted, as [`/add-dir`](commands.md) does. It does not let `read_file`, `write_file`, `edit_file`,
 `list_files` or `search` reach the path either: those are opened with `/add-dir`. `/reach paths` lists what you have allowed and
 `/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
-the answer is yes without a question.
+the answer is yes without a question, and the directory is also opened for those five tools and
+trusted, as `/add-dir` would: `/add-dir close` and `/clear` close it, and `--resume` carries it. A
+directory inside the working directory, or one that `/add-dir` would otherwise refuse, is not opened,
+and the planner is told so. One that holds the working directory ends checkouts while it is open.
 
 The same paths are refused as an `allowWrite` entry would be, whatever you would answer, and you are
 not asked: `~`, `/`, a drive root, your home directory and any directory above it, `~/.ssh`,

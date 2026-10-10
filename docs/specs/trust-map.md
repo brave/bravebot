@@ -444,6 +444,10 @@ about the place (TRUST-2) and the project is in it, so there is nothing to excep
 rules are the more specific ones and still decide wherever they exist, which is what keeps a no
 given inside the project from being undone by a yes given above it.
 
+In bypass mode a `request_path` that is granted opens its directory in the same way, with the same
+refusals and the same two halves ([PATHREQ-7](tools/request-path.md#PATHREQ-7)), and `/add-dir close`
+takes it back as it takes back one a person typed.
+
 Opening such a directory ends checkouts ([CHECKOUT-7](checkouts.md#CHECKOUT-7)), so `/add-dir` and
 `--add-dir` both say so when it opens, naming `/add-dir close` as the way back, rather than leaving a
 person to find out from a spawn refused after the turn is spent.
@@ -465,6 +469,7 @@ outlive the answer that allowed it. Closing one takes both halves for the same r
 `verified-by: bravebot_core::trust::withdrawing_trust_beneath_a_trusted_rule_leaves_the_path_undecided`
 `verified-by: bravebot_core::trust::withdrawing_trust_reaches_every_spelling_a_folding_volume_reads_as_one`
 `verified-by: bravebot_tui::app::add_dir_close_withdraws_the_reach_and_the_rule_together`
+`verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_tui::app::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
 `verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`
 `verified-by: bravebot_agent::workspace::a_new_file_can_be_created_in_an_added_directory`
@@ -511,9 +516,11 @@ since opening a directory would not make that path work: a climb that lands insi
 leaves no directory to open, one a link carries out, and an absolute path that lands inside the
 root, where no directory can be opened.
 
-`request_path` ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is not among these remedies. It
-reaches programs and not these tools, and `/add-dir` is the grant that reaches them, with the trust
-that comes with it ([TRUST-9](#TRUST-9)).
+`request_path` ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is not among these remedies. A
+person's yes to it reaches programs and not these tools, and `/add-dir` is the grant that reaches
+them, with the trust that comes with it ([TRUST-9](#TRUST-9)). In bypass mode, where nobody is there
+to run `/add-dir`, the grant of a `request_path` opens the directory as `/add-dir` would, and the
+refusal is not reached for it.
 
 Putting a file back is a write, and where it lands is decided when it is put back rather than when
 it was written. That holds for a rewind and for a file a command line wrote being put back as it was.

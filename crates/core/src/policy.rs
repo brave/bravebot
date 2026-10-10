@@ -514,15 +514,40 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.sink.emit(Event::GatePassed { gate, detail });
     }
 
-    /// Record that a person let programs reach `path` for the rest of the session (SANDBOX-28).
+    /// Record that programs may reach `path` for the rest of the session (SANDBOX-28).
     ///
-    /// Only a person's yes reaches here. The path is the one they were shown, and nothing is
-    /// marked trusted by it.
-    pub fn record_path_reach(&mut self, path: &str, write: bool) {
+    /// `mode` is the name of the mode that answered in the person's place, and `None` is a yes a
+    /// person gave. The path is the one the question showed, and nothing is marked trusted by it.
+    pub fn record_path_reach(&mut self, path: &str, write: bool, mode: Option<&'static str>) {
         let access = if write { "read and write" } else { "read" };
+        let detail = match mode {
+            Some(mode) => {
+                format!(
+                    "{mode} mode let programs {access} {path} for this session, nobody was asked"
+                )
+            }
+            None => format!("the user let programs {access} {path} for this session"),
+        };
+        self.allow("path_reach", detail);
+    }
+
+    /// Record that a mode that answers in the person's place opened `path` for the file tools and
+    /// vouched for it, as `/add-dir` does for a directory a person names (TRUST-9, PATHREQ-7).
+    ///
+    /// The path is one the question showed, resolved by the workspace, so nothing a file or a model
+    /// said decides it. Said even where a file effect keeps it untrusted, so the trail never shows
+    /// a directory opened without saying how it stands.
+    pub fn vouch_for_opened_directory(&mut self, path: &str, mode: &'static str) {
+        if !self.trust.publish(path, Integrity::Trusted) {
+            self.allow(
+                "trust",
+                format!("{path} remains untrusted while a file effect is active"),
+            );
+            return;
+        }
         self.allow(
-            "path_reach",
-            format!("the user let programs {access} {path} for this session"),
+            "trust",
+            format!("{path} trusted: {mode} mode opened it for the file tools, nobody was asked"),
         );
     }
 
