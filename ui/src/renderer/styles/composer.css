@@ -19,7 +19,8 @@
 /* The transcript scrolls to the dock's top edge. Rather than cut the text off there, the dock's
    ground is transparent at the top and reaches the panel colour a little way down, so the last
    lines fade out behind the box. It reaches up over the transcript by the fade's own height and
-   takes no clicks. */
+   takes no clicks, which is why the dock is marked data-veil: no hit test finds it, and a card's
+   row under the fade has not been read (shown.ts). */
 .composer-dock::before {
   content: '';
   position: absolute;

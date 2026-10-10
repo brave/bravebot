@@ -73,8 +73,9 @@ try {
   await emit('turn.started', { turn: 2 })
 
   // The check in the page. It finds each token's text in the card and counts it once the whole of
-  // it was inside every box that clips it and the point at its middle hit it. It knows nothing of
-  // `data-deciding` or of the card's own count, so a row the card forgot to mark still fails here.
+  // it was inside every box that clips it, its own included, and points across its middle hit it.
+  // It knows nothing of `data-deciding` or of the card's own count, so a row the card forgot to
+  // mark still fails here.
   const watch = (found) => page.evaluate(({ tokens, standing }) => {
     const all = [...tokens, ...standing]
     const state = { card: null, seen: new Set(), width: null, quiet: 0, violations: [], stopped: false }
@@ -97,16 +98,17 @@ try {
       const found = occurrence(token)
       if (!found) return false
       let clip = { top: 0, left: 0, right: innerWidth, bottom: innerHeight }
-      for (let at = found.element.parentElement; at; at = at.parentElement) {
+      for (let at = found.element; at; at = at.parentElement) {
         const style = getComputedStyle(at)
         if (style.overflowX === 'visible' && style.overflowY === 'visible') continue
         const box = at.getBoundingClientRect()
         clip = { top: Math.max(clip.top, box.top), left: Math.max(clip.left, box.left), right: Math.min(clip.right, box.right), bottom: Math.min(clip.bottom, box.bottom) }
       }
       const rects = [...found.range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0)
+      const hits = (rect) => [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]
+        .every((x) => found.element.contains(document.elementFromPoint(x, (rect.top + rect.bottom) / 2)))
       return rects.length > 0 && rects.every((rect) =>
-        rect.top >= clip.top - 1 && rect.bottom <= clip.bottom + 1 && rect.left >= clip.left - 1 && rect.right <= clip.right + 1 &&
-        found.element.contains(document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)))
+        rect.top >= clip.top - 1 && rect.bottom <= clip.bottom + 1 && rect.left >= clip.left - 1 && rect.right <= clip.right + 1 && hits(rect))
     }
     const tick = () => {
       if (state.stopped) return
@@ -239,6 +241,85 @@ try {
     console.log('SHOWN', name)
   }
 
+  // A veil takes no pointer, so no hit test finds it; the dock's fade over the foot of the
+  // transcript is one. A card swept through under a veil over the whole window is still unread.
+  {
+    await page.setViewportSize(SMALL)
+    const found = CASES.confirm
+    await emit(found.event, { ...found.request, request: 800 })
+    const card = page.locator('.confirm', { hasText: found.tokens[0] }).last()
+    await card.waitFor()
+    await page.evaluate(() => {
+      const style = document.createElement('style')
+      style.id = 'shown-veil'
+      style.textContent = '.shown-veil { position: fixed; inset: 0; pointer-events: none } .shown-veil::before { content: ""; position: absolute; inset: 0; background: rgb(0 0 0 / 0.05) }'
+      const veil = document.createElement('div')
+      veil.className = 'shown-veil'
+      veil.dataset.veil = 'before'
+      document.head.append(style)
+      document.body.append(veil)
+    })
+    await sweep(card)
+    const veiled = await states(card)
+    assert.ok(veiled.filter((button) => button.approve).every((button) => button.closed), `confirm: read under a veil, the approval opened: ${JSON.stringify(veiled)}`)
+    await page.evaluate(() => { document.querySelector('.shown-veil').remove(); document.querySelector('#shown-veil').remove() })
+    await sweep(card)
+    assert.ok((await states(card)).every((button) => !button.closed), 'confirm: closed after the veil lifted and the card was read')
+
+    // The count is a frame behind the window, so a press measures again: one in the same frame as
+    // a change of width is refused, though the button has not closed yet.
+    const sent = (await replies()).length
+    const pressed = await card.evaluate((card) => {
+      card.style.width = `${card.getBoundingClientRect().width - 40}px`
+      const approve = card.querySelector('.confirm-actions .approve')
+      const open = approve.getAttribute('aria-disabled') !== 'true'
+      approve.click()
+      return open
+    })
+    await frames(4)
+    assert.ok(pressed, 'confirm: the approval had closed before the press, so the press tests nothing')
+    assert.equal((await replies()).length, sent, 'confirm: a press in the frame the width changed sent a reply')
+    await card.evaluate((card) => { card.style.width = '' })
+    await sweep(card)
+    const ready = (await replies()).length
+    await card.locator('.confirm-actions .reject').click()
+    assert.equal((await replied(ready)).decision, 'reject', 'confirm: the refusal after the veil')
+  }
+
+  // A first row is the whole row, not the first run of text in it. The move card's opens with a
+  // label and the destination after it, and a veil over the destination alone leaves it unread.
+  // The card is whole on screen when it arrives, so a change of width clears what was counted.
+  {
+    const found = CASES['mcp-move']
+    await emit(found.event, { ...found.request, request: 801, destination: 'https://zqd02.example/mcp' })
+    const card = page.locator('.confirm', { hasText: found.tokens[0] }).last()
+    await card.waitFor()
+    const sharesRow = await card.evaluate((card) => {
+      const row = card.querySelector('[data-deciding="first"]')
+      const value = row.querySelector('code')
+      const veil = document.createElement('span')
+      veil.className = 'shown-veil'
+      veil.dataset.veil = 'own'
+      Object.assign(veil.style, { position: 'absolute', inset: '0', pointerEvents: 'none' })
+      Object.assign(value.style, { position: 'relative' })
+      value.append(veil)
+      card.style.width = `${card.getBoundingClientRect().width - 40}px`
+      const label = row.querySelector('strong').getBoundingClientRect()
+      const drawn = value.getClientRects()
+      return drawn.length === 1 && drawn[0].top < label.bottom && drawn[0].bottom > label.top
+    })
+    assert.ok(sharesRow, 'mcp-move: the destination is not on the row of its label, so the veil tests nothing')
+    await sweep(card)
+    const veiled = await states(card)
+    assert.ok(veiled.filter((button) => button.approve).every((button) => button.closed), `mcp-move: the destination was veiled, and the approval opened: ${JSON.stringify(veiled)}`)
+    await card.evaluate((card) => { card.querySelector('.shown-veil').remove(); card.style.width = '' })
+    await sweep(card)
+    assert.ok((await states(card)).every((button) => !button.closed), 'mcp-move: closed after the veil lifted and the card was read')
+    const ready = (await replies()).length
+    await card.locator('.confirm-actions .reject').click()
+    assert.equal((await replied(ready)).decision, 'reject', 'mcp-move: the refusal after the veil')
+  }
+
   // The card as it waits and once read, at the smallest and the default size, in both themes.
   const shots = []
   let next = 900
@@ -272,7 +353,7 @@ try {
 
   assert.deepEqual(errors, [])
   assert.deepEqual(await app.evaluate(() => globalThis.shown.thrown), [])
-  console.log(`PASS: ${answered.length} cards took no approval before every row they rest on was on screen, closed again on a change of width, refused a press while closed, and sent their reply once read. Screenshots in ${output}`)
+  console.log(`PASS: ${answered.length} cards took no approval before every row they rest on was on screen, closed again on a change of width, refused a press while closed, and sent their reply once read; a row read under a veil, a first row half veiled and a press in the frame of a change of width counted for nothing. Screenshots in ${output}`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'shown-failure.png') }).catch(() => undefined)
   console.error(error)

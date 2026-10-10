@@ -178,23 +178,24 @@ showing. On a smaller one the yes waits until those bytes have been drawn.
 
 In the desktop window, a card that asks for an approval takes none until each row that decides it
 has been on screen whole, at one moment or over several as the card is scrolled: inside every box
-that clips it, in a window that is showing, with nothing drawn over it. The rows are the ones the
-terminal waits on for the same question. For a write they are every credential the check found and
-the first row of the change. For a run they are the line the planner wrote, each stage, the files
-it writes, its input, the access it spends and each warning, and a remembered approval also waits
-on the row saying what it covers. For reading output, a vetting card and a vouch they are what the
-check said and the first row of the content, with the path for a vouch and all of the path to open
-for a vetted picture. For a language server they are the program and the folder it indexes; for an
-MCP server, what it runs or reaches, the program, what it receives, what it may read, where it runs
-and each warning; and for a plan, an exposure, a tool list and a call, the steps, the findings, the
-tools and the arguments. The terminal keeps the host of a fetch and of a moved server pinned, which
-a card that scrolls with the transcript cannot, so the card waits on them instead: for a fetch, the
-first row of the address, the host and the access it spends; for a moved server, where it was
-declared, the first row of where its reply points, the host it reaches and the warning. The
-planner's own questions approve nothing and wait on nothing. Until the rows have been on screen the
-row of answers says how many are left and an approval refuses a press, and a refusal is taken at
-once. Nothing counts before the card is first measured, and a change in the card's width, or in how
-many rows an element draws, starts the count again.
+that clips it, in a window that is showing, with nothing drawn over it, an overlay the pointer
+passes through included. The rows are the ones the terminal waits on for the same question. For a
+write, reading output, a vetting card and a vouch they are the head and every row above the content,
+and the content's first row; for a vetted picture they are all of it, down to the path to open. For
+a run they are the head and every row of the plan, down to the access the line spends and each
+warning, and a remembered approval also waits on the row saying what it covers. For a call they are
+the tool and every argument, and not the server's description of the tool. For a language server,
+an MCP server, a tool list, an exposure and a plan they are all of the card. The terminal keeps the
+host of a fetch and of a moved server pinned, which a card that scrolls with the transcript cannot,
+so the card waits on them instead: for a fetch, the first row of the address, the host and the
+access it spends; for a moved server, where it was declared, the first row of where its reply
+points, the host it reaches and the warning. A first row is the whole first line an element draws,
+whatever it is made of. What a card folds under Details, and the fixed sentence the window closes a
+card with, are not counted. The planner's own questions approve nothing and wait on nothing. Until
+the rows have been on screen the row of answers says how many are left and an approval refuses a
+press, and a refusal is taken at once. Nothing counts before the card is first measured, a press is
+measured again when it lands, and a change in the card's width, or in how many rows an element
+draws, starts the count again.
 
 **Why.** Reviewing a whole file body on a terminal is not review, which is why `edit_file` exists
 on a passage rather than a whole body. A prompt that scrolled the question away would be collecting a keypress, not a decision. A card

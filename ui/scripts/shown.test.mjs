@@ -7,7 +7,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildSync } from 'esbuild'
+import { build } from 'esbuild'
 import { createRequire } from 'node:module'
 import { CASES } from './shown-cases.mjs'
 
@@ -15,8 +15,25 @@ const require = createRequire(import.meta.url)
 const React = require('react')
 const { renderToStaticMarkup } = require('react-dom/server')
 
-function load(path) {
-  const source = buildSync({
+// `react-dom/server` draws a Leo button as a bare `<leo-button>`, with none of the props that shut
+// it, so here it is drawn as the plain button it stands for.
+const plainLeoButton = {
+  name: 'plain-leo-button',
+  setup(built) {
+    built.onResolve({ filter: /^@brave\/leo\/react\/button$/ }, () => ({ path: 'button', namespace: 'plain-leo-button' }))
+    built.onLoad({ filter: /.*/, namespace: 'plain-leo-button' }, () => ({
+      loader: 'js',
+      resolveDir: process.cwd(),
+      contents: `import { createElement } from 'react'
+        export default function Button({ className, isDisabled, onClick, children }) {
+          return createElement('button', { className, disabled: !!isDisabled, onClick }, children)
+        }`,
+    }))
+  },
+}
+
+async function load(path) {
+  const source = (await build({
     entryPoints: [path],
     bundle: true,
     write: false,
@@ -24,15 +41,16 @@ function load(path) {
     format: 'cjs',
     jsx: 'automatic',
     external: ['react', 'react-dom', 'react/jsx-runtime'],
-  }).outputFiles[0].text
+    plugins: [plainLeoButton],
+  })).outputFiles[0].text
   const module = { exports: {} }
   new Function('require', 'module', 'exports', source)(require, module, module.exports)
   return module.exports
 }
 
-const { Row } = load('src/renderer/components/Transcript.tsx')
-const t = load('src/renderer/transcript.ts')
-const { Ledger, rowsOf, mayAnswer, leftWords, NOT_MEASURED } = load('src/renderer/shown.ts')
+const { Row } = await load('src/renderer/components/Transcript.tsx')
+const t = await load('src/renderer/transcript.ts')
+const { Ledger, rowsOf, mayAnswer, leftWords, NOT_MEASURED } = await load('src/renderer/shown.ts')
 
 const ENTRY = {
   confirm: t.asked, run: t.askedRun, output: t.askedOutput, vet: t.askedVet, vouch: t.askedVouch, fetch: t.askedFetch,
@@ -94,7 +112,9 @@ test('before anything is measured no approval is open, and a refusal always is',
   for (const [name, found] of Object.entries(CASES)) {
     if (found.none) continue
     const markup = draw(ENTRY[found.kind](found.request))
-    for (const { attributes, label } of buttons(markup)) {
+    const drawn = buttons(markup)
+    assert.ok(drawn.some(({ attributes }) => /class="approve/.test(attributes)), `${name}: no approving button is drawn\n${markup}`)
+    for (const { attributes, label } of drawn) {
       const approving = /class="approve/.test(attributes)
       assert.equal(/ disabled=""/.test(attributes), approving, `${name}: "${label}" ${approving ? 'is open' : 'waits'}`)
     }
@@ -149,6 +169,15 @@ test('boxes that share most of their height are one row, and boxes that only tou
     { top: 2, bottom: 18, left: 50, right: 90 },
   ])
   assert.deepEqual(rows, [{ top: 0, bottom: 20, left: 0, right: 90 }, { top: 20, bottom: 40, left: 0, right: 30 }])
+})
+
+test('a row is hidden where any box in it is, so a clipped piece of it is not read', () => {
+  const rows = rowsOf([
+    { top: 0, bottom: 20, left: 0, right: 50 },
+    { top: 0, bottom: 20, left: 50, right: 90, hidden: true },
+    { top: 20, bottom: 40, left: 0, right: 30 },
+  ])
+  assert.deepEqual(rows.map((row) => !!row.hidden), [true, false])
 })
 
 test('an answer is open once measured with nothing left, and a standing one waits on its own rows too', () => {

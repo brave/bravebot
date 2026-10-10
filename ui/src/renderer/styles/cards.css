@@ -93,7 +93,7 @@
 /* An address or a path has no spaces to break at, so it breaks anywhere rather than run under the
    edge of the card, where the end of it would be the part nobody read. */
 .confirm.fetch .confirm-head .path,
-.confirm.vouch .confirm-head .path { white-space: normal; overflow-wrap: anywhere; }
+.confirm-head[data-deciding] .path { white-space: normal; overflow-wrap: anywhere; }
 .confirm.fetch .fetch-host { border-top: 0; color: var(--ink); }
 .confirm.fetch .fetch-host code { font-family: var(--mono); font-weight: 600; }
 /* A server that runs build tooling gets the warning border a command releasing private data gets. */

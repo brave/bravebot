@@ -277,6 +277,9 @@ LANES = (
 # The spec whose `governs` list is the terminal's prompts, and the function each of them asks with.
 PROMPT_SPEC = "PROMPT"
 ASKS = re.compile(r"^\s*pub(?:\([^)]*\))?\s+fn (ask(?:_\w+)?)\s*[<(]")
+# A desktop card is the `case` arm of the transcript's entry switch that draws one of these.
+CARD_CASE = re.compile(r"^\s*case '([\w-]+)':")
+CARD_DRAWS = re.compile(r"<(?:DecisionCard|YesOrNo|ThreeAnswers)\b")
 
 
 REPRODUCE = "python3 agents/skills/security-audit/security-audit.py --mechanical-only"
@@ -2163,13 +2166,27 @@ def prompt_spec_files(specs):
 
 
 def prompt_sites(sources, specs):
-    """Every function in the prompting spec's files that puts a question to the person."""
+    """Every function in the prompting spec's files that puts a question to the person, and every
+    desktop card by the `case` arm that draws it.
+
+    The sources are the Rust tree, so a governed file outside it is read from disk.
+    """
     found = []
     for path in prompt_files(specs):
-        for number, line in enumerate(sources.get(Path(path), []), start=1):
+        lines = sources.get(Path(path))
+        if lines is None and Path(path).is_file():
+            lines = Path(path).read_text(encoding="utf-8", errors="replace").split("\n")
+        arm = None
+        for number, line in enumerate(lines or [], start=1):
             match = ASKS.match(line)
+            case = CARD_CASE.match(line)
             if match:
                 found.append({"path": path, "line": number, "function": match.group(1)})
+            elif case:
+                arm = (number, case.group(1))
+            elif arm and CARD_DRAWS.search(line):
+                found.append({"path": path, "line": arm[0], "function": f"case '{arm[1]}'"})
+                arm = None
     return found
 
 

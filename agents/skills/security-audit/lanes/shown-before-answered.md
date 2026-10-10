@@ -30,7 +30,7 @@ The files the prompting spec governs:
 
 {prompt_files}
 
-Each terminal prompt, by the function that asks it:
+Each terminal prompt, by the function that asks it, and each desktop card, by the case that draws it:
 
 {prompt_sites}
 
@@ -55,7 +55,9 @@ another draw, a `Seen` that outlives its request, a draw that marks rows seen th
 whole, or an approving answer built where `take` never sees it is a finding. In the window, every
 button that approves has to be an `Approve` or an `ApproveButton` inside the card's `Answers`; a
 button that sends an approving reply without one, a count kept across a change of width, or a row
-counted while clipped, covered, faded or in a hidden window is a finding.
+counted while clipped, covered, faded or in a hidden window is a finding. An overlay that lets the
+pointer through, as the composer's fade does, is found by no hit test, so it has to carry
+`data-veil`; one drawn over the transcript without it is a finding.
 
 **Whether anything fails if it stops holding.** A kind of question with no row in the table or no case
 in `shown-cases.mjs`, a row whose content fits one screen, or a row that leaves a deciding line out

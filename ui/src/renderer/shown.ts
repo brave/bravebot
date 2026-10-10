@@ -3,14 +3,18 @@
  *
  * A card marks each element its answer rests on with `data-deciding`: `all` for every drawn row of
  * it, `first` for its first row only, and `standing` for a row only a standing answer waits on. A
- * row counts once all of it has been in view at some moment: inside every box that clips it, in a
- * window that is showing, and not covered by anything else in the window. A change in the card's
+ * row counts once all of it has been in view at some moment: inside every box that clips it, not
+ * faded out, in a window that is showing, and not covered by anything else in the window, a veil
+ * that takes no pointer included (`data-veil`). A change in the card's
  * width starts the count again, and so does a change in how many rows an element draws. Before the
  * first measurement nothing counts, so a card drawn where nothing measures takes no approval.
  */
-import { createContext, useEffect, useState, type RefObject } from 'react'
+import { createContext, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 
 export interface Box { top: number; right: number; bottom: number; left: number }
+
+/** A drawn line box; `hidden` where the element its text sits in fades it or clips it above or below. */
+export interface Line extends Box { hidden?: boolean }
 
 /** A row as measured once: its width, and the part of it in view, from its own left edge. */
 export interface Row { width: number; seen: readonly [number, number] | null }
@@ -77,8 +81,8 @@ export class Ledger<K> {
 }
 
 /** Line boxes grouped into rows: boxes that share most of their height are one row. */
-export function rowsOf(boxes: readonly Box[]): Box[] {
-  const rows: Box[] = []
+export function rowsOf(boxes: readonly Line[]): Line[] {
+  const rows: Line[] = []
   for (const box of [...boxes].sort((a, b) => a.top - b.top || a.left - b.left)) {
     const row = rows[rows.length - 1]
     const shared = row ? Math.min(row.bottom, box.bottom) - Math.max(row.top, box.top) : 0
@@ -87,6 +91,7 @@ export function rowsOf(boxes: readonly Box[]): Box[] {
       row.bottom = Math.max(row.bottom, box.bottom)
       row.left = Math.min(row.left, box.left)
       row.right = Math.max(row.right, box.right)
+      if (box.hidden) row.hidden = true
     } else {
       rows.push({ ...box })
     }
@@ -94,31 +99,40 @@ export function rowsOf(boxes: readonly Box[]): Box[] {
   return rows
 }
 
-/** The boxes the text in `element` is drawn in; for `first`, only its first line of text. */
-function lineBoxes(element: Element, first: boolean): Box[] {
+/**
+ * The boxes the text in `element` is drawn in; for `first`, those of its first line, which may run
+ * across several text nodes. Each box is hidden where the element holding its text hides it.
+ */
+function lineBoxes(element: Element, first: boolean, frameOf: (element: Element) => Frame): Line[] {
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
   const range = document.createRange()
-  const boxes: Box[] = []
+  const boxes: Line[] = []
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const text = node.nodeValue ?? ''
-    const start = text.search(/\S/)
-    if (start < 0) continue
+    let end = -1
     if (first) {
-      const end = text.indexOf('\n', start)
+      const start = boxes.length ? 0 : text.search(/\S/)
+      if (start < 0) continue
+      end = text.indexOf('\n', start)
       range.setStart(node, start)
       range.setEnd(node, end < 0 ? text.length : end)
     } else {
+      if (!/\S/.test(text)) continue
       range.selectNodeContents(node)
     }
+    const { clip, opaque } = frameOf(node.parentElement ?? element)
     for (const box of range.getClientRects()) {
-      if (box.width >= SLACK && box.height >= 2 * SLACK) boxes.push({ top: box.top, right: box.right, bottom: box.bottom, left: box.left })
+      if (box.width < SLACK || box.height < 2 * SLACK) continue
+      const hidden = !opaque || box.top < clip.top - SLACK || box.bottom > clip.bottom + SLACK
+      boxes.push({ top: box.top, right: box.right, bottom: box.bottom, left: box.left, hidden })
     }
-    if (first && boxes.length) break
+    const [head, last] = [boxes[0], boxes[boxes.length - 1]]
+    if (first && head && last && (end >= 0 || last.top >= head.bottom - SLACK)) break
   }
   return boxes
 }
 
-interface Frame { clip: Box; opaque: boolean }
+interface Frame { clip: Box; opacity: number; opaque: boolean }
 
 const meet = (a: Box, b: Box): Box => ({
   top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom), left: Math.max(a.left, b.left),
@@ -127,7 +141,7 @@ const meet = (a: Box, b: Box): Box => ({
 /** For an element, the part of the window its content can be drawn in, and whether it is opaque. */
 function frames(): (element: Element) => Frame {
   const root = document.documentElement
-  const view: Frame = { clip: { top: 0, left: 0, right: root.clientWidth, bottom: root.clientHeight }, opaque: true }
+  const view: Frame = { clip: { top: 0, left: 0, right: root.clientWidth, bottom: root.clientHeight }, opacity: 1, opaque: true }
   const known = new Map<Element, Frame>()
   const of = (element: Element | null): Frame => {
     if (!element) return view
@@ -144,24 +158,61 @@ function frames(): (element: Element) => Frame {
       if (style.overflowX !== 'visible') clip = meet(clip, { ...clip, left: inner.left, right: inner.right })
       if (style.overflowY !== 'visible') clip = meet(clip, { ...clip, top: inner.top, bottom: inner.bottom })
     }
-    const frame = { clip, opaque: above.opaque && Number(style.opacity) >= 0.9 && style.visibility === 'visible' }
+    const opacity = above.opacity * (style.display === 'contents' ? 1 : Number(style.opacity))
+    const frame = { clip, opacity, opaque: opacity >= 0.9 && style.visibility === 'visible' }
     known.set(element, frame)
     return frame
   }
   return of
 }
 
+/**
+ * What is drawn over the window without taking the pointer, which a hit test passes through: the
+ * absolutely placed `::before` of an element marked `data-veil="before"`, and for any other value
+ * the box the element is slotted into, or its own box where it is slotted nowhere.
+ */
+function veils(): Box[] {
+  const boxes: Box[] = []
+  for (const element of document.querySelectorAll('[data-veil]')) {
+    if (!element.getClientRects().length) continue
+    if (element.getAttribute('data-veil') === 'before') {
+      const style = getComputedStyle(element, '::before')
+      if (style.display === 'none' || style.content === 'none' || style.visibility !== 'visible') continue
+      const box = element.getBoundingClientRect()
+      const left = box.left + element.clientLeft
+      const top = box.top + element.clientTop
+      const inset = (value: string): number => Number.parseFloat(value) || 0
+      boxes.push({
+        top: top + inset(style.top), left: left + inset(style.left),
+        right: left + element.clientWidth - inset(style.right), bottom: top + element.clientHeight - inset(style.bottom),
+      })
+    } else {
+      const { top, right, bottom, left } = (element.assignedSlot?.parentElement ?? element).getBoundingClientRect()
+      boxes.push({ top, right, bottom, left })
+    }
+  }
+  return boxes
+}
+
+/** How far apart, in pixels, the points tested along a row are. */
+const STEP = 24
+
 /** The part of `row` in view and uncovered, from its left edge; null unless all its height is. */
-function sight(element: Element, row: Box, clip: Box): [number, number] | null {
+function sight(element: Element, row: Box, clip: Box, over: readonly Box[]): [number, number] | null {
   if (row.top < clip.top - SLACK || row.bottom > clip.bottom + SLACK) return null
   const from = Math.max(row.left, clip.left)
   const to = Math.min(row.right, clip.right)
   if (to - from < SLACK) return null
-  for (const x of [from + SLACK, (from + to) / 2, to - SLACK]) {
-    for (const y of [row.top + SLACK, (row.top + row.bottom) / 2, row.bottom - SLACK]) {
-      const hit = document.elementFromPoint(x, y)
-      if (!hit || !element.contains(hit)) return null
-    }
+  const veiled = (veil: Box): boolean =>
+    veil.left < to - SLACK && veil.right > from + SLACK && veil.top < row.bottom - SLACK && veil.bottom > row.top + SLACK
+  if (over.some(veiled)) return null
+  const middle = (row.top + row.bottom) / 2
+  const points: [number, number][] = []
+  for (const x of [from + SLACK, to - SLACK]) for (const y of [row.top + SLACK, middle, row.bottom - SLACK]) points.push([x, y])
+  for (let x = from + STEP; x < to - SLACK; x += STEP) points.push([x, middle])
+  for (const [x, y] of points) {
+    const hit = document.elementFromPoint(x, y)
+    if (!hit || !element.contains(hit)) return null
   }
   return [from - row.left, to - row.left]
 }
@@ -170,25 +221,29 @@ function sight(element: Element, row: Box, clip: Box): [number, number] | null {
 export function measure(card: Element, ledger: Ledger<Element>): { width: number; looked: Looked<Element>[] } {
   const width = card.getBoundingClientRect().width
   const frameOf = frames()
+  const over = veils()
   const looked = [...card.querySelectorAll('[data-deciding]')].map((element) => {
     const want = element.getAttribute('data-deciding')
-    const drawn = rowsOf(lineBoxes(element, want === 'first'))
+    const drawn = rowsOf(lineBoxes(element, want === 'first', frameOf))
     const boxes = want === 'first' ? drawn.slice(0, 1) : drawn
     const frame = frameOf(element)
     const rows = boxes.map((box, at): Row => {
       const span = box.right - box.left
       if (ledger.read(element, boxes.length, at, width, span)) return { width: span, seen: [0, span] }
-      return { width: span, seen: frame.opaque ? sight(element, box, frame.clip) : null }
+      return { width: span, seen: frame.opaque && !box.hidden ? sight(element, box, frame.clip, over) : null }
     })
     return { key: element, standing: want === 'standing', rows, hidden: !rows.length && !!element.textContent?.trim() }
   })
   return { width, looked }
 }
 
-/** What an answer row knows: whether anything was measured yet, and the rows left to read. */
-export interface OnScreen extends Left { measured: boolean; note: string }
+/** The rows left to read, and `now`, which measures again and says whether an answer may be given. */
+export interface Counted extends Left { measured: boolean; now: (standing: boolean) => boolean }
 
-export const NOT_MEASURED: OnScreen = { measured: false, left: 0, standing: 0, note: '' }
+/** What an answer row knows: whether anything was measured yet, and the rows left to read. */
+export interface OnScreen extends Counted { note: string }
+
+export const NOT_MEASURED: OnScreen = { measured: false, left: 0, standing: 0, note: '', now: () => false }
 
 export const ShownContext = createContext<OnScreen>(NOT_MEASURED)
 
@@ -199,42 +254,62 @@ export const mayAnswer = (shown: OnScreen, standing = false): boolean =>
 /** How often the rows are measured again when nothing has said the window changed. */
 const POLL_MS = 500
 
-/** The rows left to read in the card holding `answers`, kept current while it is mounted. */
-export function useShown(answers: RefObject<HTMLElement | null>): Left & { measured: boolean } {
+/**
+ * The rows left to read in the card holding `answers`, kept current while it is mounted. Once none
+ * are left, scrolling and animation stop measuring, since only a change of size can undo that.
+ */
+export function useShown(answers: RefObject<HTMLElement | null>): Counted {
   const [shown, setShown] = useState({ measured: false, left: 0, standing: 0 })
+  const check = useRef<(standing: boolean) => boolean>(() => false)
   useEffect(() => {
     const card = answers.current?.closest('.confirm')
     if (!card) return
     const ledger = new Ledger<Element>()
     let frame = 0
-    const update = (): void => {
-      frame = 0
-      if (document.visibilityState === 'hidden') return
+    let done = false
+    const count = (): Left | null => {
+      if (document.visibilityState === 'hidden') return null
       const { width, looked } = measure(card, ledger)
       const next = ledger.take(width, looked)
+      done = next.left === 0 && next.standing === 0
       setShown((last) => last.measured && last.left === next.left && last.standing === next.standing ? last : { measured: true, ...next })
+      return next
     }
+    check.current = (standing) => {
+      const next = count()
+      return !!next && next.left === 0 && (!standing || next.standing === 0)
+    }
+    const update = (): void => { frame = 0; count() }
     const soon = (): void => { if (!frame) frame = requestAnimationFrame(update) }
+    const moved = (event: Event): void => {
+      if (done) return
+      const at = event.target
+      if (event.type === 'scroll' && at instanceof Node && !at.contains(card) && !card.contains(at)) return
+      soon()
+    }
     const resized = new ResizeObserver(soon)
     resized.observe(card)
+    for (const element of card.querySelectorAll('[data-deciding]')) resized.observe(element)
     for (let at = card.parentElement; at; at = at.parentElement) {
       const { overflowX, overflowY } = getComputedStyle(at)
       if (overflowX !== 'visible' || overflowY !== 'visible') resized.observe(at)
     }
     const events = ['scroll', 'animationend', 'transitionend', 'visibilitychange'] as const
-    for (const event of events) document.addEventListener(event, soon, { capture: true, passive: true })
+    for (const event of events) document.addEventListener(event, moved, { capture: true, passive: true })
     window.addEventListener('resize', soon)
     const poll = setInterval(soon, POLL_MS)
     soon()
     return () => {
+      check.current = () => false
       cancelAnimationFrame(frame)
       clearInterval(poll)
       resized.disconnect()
-      for (const event of events) document.removeEventListener(event, soon, { capture: true })
+      for (const event of events) document.removeEventListener(event, moved, { capture: true })
       window.removeEventListener('resize', soon)
     }
   }, [answers])
-  return shown
+  const now = useCallback((standing: boolean) => check.current(standing), [])
+  return useMemo(() => ({ ...shown, now }), [shown, now])
 }
 
 /** What the answer row says while rows are left, or null once there are none. */

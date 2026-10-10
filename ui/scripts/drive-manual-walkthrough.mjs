@@ -328,7 +328,6 @@ try {
     const before = await send('Use an isolated processor to change blue to green in notes.txt and propose the write.')
     await leaveConfined()
     const card = page.locator('.confirm.untrusted').last()
-    await card.locator('.card-details summary').click()
     await card.getByText('Processor’s remark · untrusted', { exact: true }).waitFor()
     await card.getByText('Changed blue to green.', { exact: true }).waitFor()
     assert.equal(readFileSync(join(project, 'notes.txt'), 'utf8'), original, 'no write before approval')
