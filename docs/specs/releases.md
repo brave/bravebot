@@ -70,7 +70,10 @@ Choosing a version rewrites every file that states it, commits exactly those fil
 message naming the version, and stops. It pushes nothing and tags nothing. Where any of those
 files is already modified, it refuses rather than committing work it did not write. Before it
 changes anything it warns, and asks whether to go on, about open `release-blocking` issues,
-untranslated messages, and a peer advisory check not recorded in the last seven days.
+untranslated messages, and a peer advisory check that has not run in the last seven days. The
+date of the last run is the newest one recorded in a comment on issue #1901 by a person with
+write access, and the last commit to the vetted-advisories ledger where there is no such comment
+or it cannot be read. The warning says which of the two it used.
 
 **Why.** The files that state a version are only correct together, so a bump left uncommitted is
 one a lockfile can be dropped from, which is the disagreement [RELEASE-1](#RELEASE-1) exists to
@@ -79,7 +82,7 @@ adds a way to get it wrong without adding a decision. The review still happens: 
 read before it lands, and [RELEASE-4](#RELEASE-4) refuses to tag anything that is not on the
 trunk at the remote.
 
-`verified-by: by-construction (the bump target commits an explicit list of paths and contains no push or tag, and refuses when one of those paths is already modified; it runs contrib/release-preflight.py before changing any file, and make check-scripts runs that script's selftest, which pins each warning, that a declined prompt or no terminal without YES=1 stops the bump, and that YES=1 goes on)`
+`verified-by: by-construction (the bump target commits an explicit list of paths and contains no push or tag, and refuses when one of those paths is already modified; it runs contrib/release-preflight.py before changing any file, and make check-scripts runs that script's selftest, which pins each warning, that the advisory date comes from the issue comment when there is one and from the ledger otherwise, that a comment from someone without write access is ignored, that a declined prompt or no terminal without YES=1 stops the bump, and that YES=1 goes on)`
 
 <a id="RELEASE-3"></a>
 ### RELEASE-3: GitHub Actions does not publish a GitHub release

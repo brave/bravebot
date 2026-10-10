@@ -7,9 +7,12 @@
     python3 agents/skills/peer-advisories/peer-advisories.py post --work-dir DIR [--dry-run]
         [--assignee LOGIN] [--max N]
     python3 agents/skills/peer-advisories/peer-advisories.py record --work-dir DIR [--dry-run]
+    python3 agents/skills/peer-advisories/peer-advisories.py ran --work-dir DIR [--dry-run]
 
 docs/peer-advisories-vetted holds one line per advisory already vetted, keyed by its GHSA id, so a
-run reads only what is new. No model takes part in anything this script does.
+run reads only what is new. `ran` records the date of the run, which the ledger cannot do when a run
+vets nothing new, in a comment on issue #1901 that `make bump-version` reads. No model takes part in
+anything this script does.
 """
 
 import argparse
@@ -29,6 +32,9 @@ ROOT = HERE.parents[2]
 LEDGER = "docs/peer-advisories-vetted"
 RELEASE_BLOCKING = "release-blocking"
 REPO = "brave/bravebot"
+RUN_ISSUE = 1901
+# contrib/release-preflight.py reads this line back; selftest.py holds the two to one format.
+RUN_COMMENT = re.compile(r"peer-advisories ran (\d{4}-\d{2}-\d{2}) against ([0-9a-f]{12})")
 MAX = 8
 MAX_POSTS = 100
 
@@ -745,6 +751,32 @@ def record(args, today=None):
     return 0
 
 
+# Recording that a run happened.
+
+
+def ran(args, today=None):
+    manifest = manifest_of(args.work_dir)
+    today = today or datetime.date.today().isoformat()
+    body = f"peer-advisories ran {today} against {manifest['commit'][:12]}"
+    if args.dry_run:
+        print(f"would record on #{RUN_ISSUE}: {body}")
+        return 0
+    comments_url = f"repos/{args.repo}/issues/{RUN_ISSUE}/comments"
+    try:
+        me = gh(["api", "user", "--jq", ".login"]).strip()
+        listed = gh(["api", comments_url, "--paginate", "--jq", ".[] | {id, login: .user.login, body}"])
+        mine = [c for c in map(json.loads, listed.splitlines()) if c["login"] == me and RUN_COMMENT.fullmatch(c["body"].strip())]
+        if mine:
+            gh(["api", "--method", "PATCH", f"repos/{args.repo}/issues/comments/{mine[-1]['id']}", "-f", f"body={body}"])
+        else:
+            gh(["api", "--method", "POST", comments_url, "-f", f"body={body}"])
+    except (RuntimeError, ValueError, KeyError) as problem:
+        print(f"could not record the run on #{RUN_ISSUE}: {one_line(problem, 160)}", file=sys.stderr)
+        return 1
+    print(f"recorded on #{RUN_ISSUE}: {body}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -770,12 +802,17 @@ def main(argv=None):
     one.add_argument("--work-dir", required=True)
     one.add_argument("--dry-run", action="store_true")
 
+    one = commands.add_parser("ran", help="record the date of this run in a comment on the run-record issue")
+    one.add_argument("--work-dir", required=True)
+    one.add_argument("--repo", default=REPO)
+    one.add_argument("--dry-run", action="store_true")
+
     args = parser.parse_args(argv)
     for ghsa in getattr(args, "ids", []):
         if not GHSA.fullmatch(ghsa):
             parser.error(f"{ghsa!r} is not a GHSA id")
     try:
-        return {"pending": pending, "verify": verify, "draft": draft, "post": post, "record": record}[args.command](args)
+        return {"pending": pending, "verify": verify, "draft": draft, "post": post, "record": record, "ran": ran}[args.command](args)
     except Problem as problem:
         print(f"peer-advisories: {problem}", file=sys.stderr)
         return 2
