@@ -400,7 +400,8 @@ fn table(
             "Replace an exact passage of text in an existing workspace file. Prefer this to \
              write_file when changing part of a file: the user approves a diff, which is \
              easier to review than a whole body. The user must approve each edit before it \
-             happens, so explain what you are changing.",
+             happens, so explain what you are changing. To change several places in one \
+             file, give them together in edits: the user approves one diff.",
             json!({
                 "type": "object",
                 "properties": {
@@ -430,9 +431,25 @@ fn table(
                         "type": "boolean",
                         "description": "Replace every occurrence instead of requiring \
                                         exactly one. Defaults to false."
+                    },
+                    "edits": {
+                        "type": "array",
+                        "description": "Several passages to replace in this one file, \
+                                        instead of old_text and new_text. Applied in order, \
+                                        each to the text the one before left, and all or \
+                                        none: if one fails nothing is changed. The user \
+                                        approves one diff of the result.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_text": {"type": "string"},
+                                "new_text": {"type": "string"}
+                            },
+                            "required": ["old_text", "new_text"]
+                        }
                     }
                 },
-                "required": ["old_text", "new_text"]
+                "required": []
             }),
         ),
         Tool::function(
@@ -5482,6 +5499,38 @@ fn bring_back<S: Sink, C: Confirmer>(
     }
 }
 
+/// An `old_text` and the `new_text` that replaces it, as the planner wrote them.
+type EditPair = (Labelled<String>, Labelled<String>);
+
+/// The passages an `edit_file` call carries: the `edits` array, or the single `old_text` and
+/// `new_text` pair, never both.
+fn edit_pairs(arguments: &Value) -> Result<Vec<EditPair>, &'static str> {
+    let Some(edits) = arguments.get("edits") else {
+        let Some(old_text) = argument(arguments, "old_text") else {
+            return Err("error: 'old_text' is required and must be a string, or give 'edits'");
+        };
+        let Some(new_text) = argument(arguments, "new_text") else {
+            return Err("error: 'new_text' is required and must be a string");
+        };
+        return Ok(vec![(old_text, new_text)]);
+    };
+    if arguments.get("old_text").is_some() || arguments.get("new_text").is_some() {
+        return Err("error: give either 'edits' or 'old_text' and 'new_text', not both");
+    }
+    let Some(edits) = edits.as_array().filter(|edits| !edits.is_empty()) else {
+        return Err("error: 'edits' must be a non-empty array of old_text and new_text pairs");
+    };
+    edits
+        .iter()
+        .map(|pair| {
+            let old_text = argument(pair, "old_text");
+            let new_text = argument(pair, "new_text");
+            old_text.zip(new_text)
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or("error: every entry of 'edits' needs 'old_text' and 'new_text' strings")
+}
+
 /// Replace an exact passage in a file, after a person approves the diff.
 ///
 /// Same endorsement shape as [`write_file`], since the model never decides a write destination,
@@ -5516,11 +5565,9 @@ fn edit_file<S: Sink, C: Confirmer>(
     };
     let (proposed, destination, shown_path, proposed_path) =
         (found.path, found.destination, found.shown, found.released);
-    let Some(old_text) = argument(arguments, "old_text") else {
-        return Produced::problem("error: 'old_text' is required and must be a string");
-    };
-    let Some(new_text) = argument(arguments, "new_text") else {
-        return Produced::problem("error: 'new_text' is required and must be a string");
+    let pairs = match edit_pairs(arguments) {
+        Ok(pairs) => pairs,
+        Err(problem) => return Produced::problem(problem),
     };
     // Absent or non-boolean means the strict single-match behaviour, which is the safe
     // reading of an ambiguous argument.
@@ -5537,14 +5584,18 @@ fn edit_file<S: Sink, C: Confirmer>(
     // Asked before the file is opened. A refusal here means no edit is going to happen, and a
     // refusal that has already spent a read capability and put an observation in the trail is a
     // refusal that did something.
-    let old_text = match policy.read_planner_argument("edit_file", "old_text", &old_text) {
-        Ok(text) => text,
-        Err(denial) => return Produced::problem(format!("refused: {denial}")),
-    };
-    let new_text = match policy.read_planner_argument("edit_file", "new_text", &new_text) {
-        Ok(text) => text,
-        Err(denial) => return Produced::problem(format!("refused: {denial}")),
-    };
+    let mut passages = Vec::with_capacity(pairs.len());
+    for (old_text, new_text) in &pairs {
+        let old_text = match policy.read_planner_argument("edit_file", "old_text", old_text) {
+            Ok(text) => text,
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        };
+        let new_text = match policy.read_planner_argument("edit_file", "new_text", new_text) {
+            Ok(text) => text,
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        };
+        passages.push((old_text, new_text));
+    }
 
     // Reading to locate the passage is non-destructive and confined, so the path may be
     // promoted here exactly as it is for read_file. The write below is what needs a person.
@@ -5590,9 +5641,34 @@ fn edit_file<S: Sink, C: Confirmer>(
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
-    let replaced = match crate::replace::replace(&current, &old_text, &new_text, replace_all) {
-        Ok(r) => r,
-        Err(e) => return Produced::problem(format!("error: {e}")),
+    // In order, each on the text the one before it left (EDIT-6). Nothing is kept until every pair
+    // has applied, so a refusal part-way leaves the file as it was.
+    let total = passages.len();
+    let mut running = current.clone();
+    let mut occurrences = 0;
+    for (at, (old_text, new_text)) in passages.iter().enumerate() {
+        match crate::replace::replace(&running, old_text, new_text, replace_all) {
+            Ok(r) => {
+                running = r.contents;
+                occurrences += r.occurrences;
+            }
+            Err(e) if total == 1 => return Produced::problem(format!("error: {e}")),
+            Err(e) => {
+                return Produced::problem(format!(
+                    "error: edit {} of {total}: {e}. No edit in this call was applied",
+                    at + 1
+                ));
+            }
+        }
+    }
+    if running == current {
+        return Produced::problem(
+            "error: the edits together leave the file as it was, so this call would change nothing",
+        );
+    }
+    let replaced = crate::replace::Replaced {
+        contents: running,
+        occurrences,
     };
 
     // The result is the model's edit applied to trusted text, so its integrity is that of the

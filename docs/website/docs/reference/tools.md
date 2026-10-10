@@ -18,7 +18,7 @@ that is merely carried.
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
-| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
+| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text`, `edits` | **yes, every time** |
 | [`apply_checkout`](#apply_checkout) | `checkout`, `paths` | none | **yes, for every file** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset` | none | **yes, unless the planner may already read it** |
@@ -465,6 +465,11 @@ prefers this to rewriting a whole body.
 | `old_text` | the exact text to replace, matched byte for byte (a file whose lines all end in `\r\n` is the one exception, below) |
 | `new_text` | what goes in its place |
 | `replace_all` | replace every occurrence instead of requiring exactly one |
+| `edits` | instead of `old_text` and `new_text`: several pairs of them for this one file |
+
+`edits` is applied in order, each pair to the text the one before it left, and all or nothing: if
+one pair fails, the agent is told which and the file is not changed. You are asked once, about one
+diff of the combined result.
 
 `old_text` must occur exactly once unless `replace_all` is set. An edit **refuses rather than
 guesses**.
