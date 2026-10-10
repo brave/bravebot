@@ -602,6 +602,13 @@ pub struct Capabilities {
     /// backend rather than of the platform the build targets: a caller reading the platform
     /// instead pays one of those costs on the platform where neither was necessary.
     pub grants_paths_that_do_not_exist: bool,
+    /// Whether a path can be held back from a directory a policy grants.
+    ///
+    /// A backend that cannot starts no stage whose policy refuses a path inside a grant, since
+    /// nothing it could do would keep the program from the path. A caller reporting a person's
+    /// refusal asks this of the backend, so it does not say a refusal is in force where the stage
+    /// it applies to is refused.
+    pub subtracts_from_a_grant: bool,
 }
 
 #[cfg(test)]
@@ -730,6 +737,7 @@ mod tests {
             mechanisms: vec!["a mechanism"],
             network_denial_enforced: true,
             grants_paths_that_do_not_exist,
+            subtracts_from_a_grant: true,
         }
     }
 
@@ -741,6 +749,7 @@ mod tests {
             mechanisms: Vec::new(),
             network_denial_enforced: false,
             grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
         }
     }
 

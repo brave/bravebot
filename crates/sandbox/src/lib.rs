@@ -260,6 +260,7 @@ impl Sandbox for Unavailable {
             // Nothing is granted here at all, so claiming a kind of grant it installs
             // would be a claim about a process this backend never starts.
             grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
         }
     }
 

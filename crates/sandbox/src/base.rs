@@ -744,6 +744,7 @@ mod tests {
             mechanisms: vec!["a mechanism"],
             network_denial_enforced: true,
             grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
         }
     }
 

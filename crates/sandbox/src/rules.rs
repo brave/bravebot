@@ -255,6 +255,51 @@ impl Rules {
             .find(|item| item.list.is_a_denial())
     }
 
+    /// The denials in force that name a path beneath a row a stage is granted, which are the
+    /// `directory` every stage is granted and the allowances of the person's own.
+    ///
+    /// A backend that cannot subtract from a grant starts no stage whose policy holds one of
+    /// these, so each is a path the person meant to hold back and a stage there is refused. A
+    /// write is held back from a write row only, and a read from either. A denial of a grant
+    /// itself is not among them: it removes the row instead of cutting a path out of it. The rows a
+    /// stage brings for itself and the directories added to a session are not known here.
+    pub fn denials_beneath_a_grant(&self, directory: &Path) -> Vec<&Item> {
+        let directory = resolved(directory);
+        let grants = |writes: bool| -> Vec<PathBuf> {
+            let mut grants = vec![directory.clone()];
+            for item in self.in_force() {
+                let grants_it = match item.list {
+                    List::AllowWrite => true,
+                    List::AllowRead => !writes,
+                    List::DenyRead | List::DenyWrite => false,
+                };
+                if let (true, State::InForce(paths)) = (grants_it, &item.state) {
+                    grants.extend(paths.iter().cloned());
+                }
+            }
+            grants
+        };
+        let (reads, writes) = (grants(false), grants(true));
+        self.in_force()
+            .filter(|item| item.list.is_a_denial())
+            .filter(|item| match &item.state {
+                State::InForce(paths) => {
+                    let grants = if item.list.is_a_write() {
+                        &writes
+                    } else {
+                        &reads
+                    };
+                    paths.iter().any(|path| {
+                        grants
+                            .iter()
+                            .any(|grant| under(path, grant) && !same_path(path, grant))
+                    })
+                }
+                State::Refused(_) => false,
+            })
+            .collect()
+    }
+
     /// `policy` with these rules in it.
     ///
     /// A refusal of a person's beats the rows a stage brings of its own at or beneath it, scope and
@@ -1517,6 +1562,101 @@ mod tests {
                 assert!(refusal_for(&held).is_some(), "{grant} {denied}");
             }
         }
+    }
+
+    /// A denial beneath the directory every stage is granted is one a backend that cannot subtract
+    /// from a grant refuses a stage for, so it is found however the directory and the denial are
+    /// each spelled. Neither the directory itself, a path beside it, nor an entry that adds reach
+    /// is one.
+    #[test]
+    fn a_denial_beneath_a_grant_is_found_whichever_way_each_is_spelled() {
+        for (directory, denied) in [
+            (GRANT, SECRET),
+            (GRANT, SECRET_VERBATIM),
+            (GRANT_VERBATIM, SECRET),
+            (GRANT_VERBATIM, SECRET_VERBATIM),
+        ] {
+            for list in [List::DenyRead, List::DenyWrite] {
+                let rules = denial(list, denied);
+                let found = rules.denials_beneath_a_grant(Path::new(directory));
+                assert_eq!(found.len(), 1, "{list:?} {directory} {denied}");
+                assert_eq!(found[0].entry.path, denied);
+            }
+            for list in [List::AllowRead, List::AllowWrite] {
+                let rules = denial(list, denied);
+                assert!(
+                    rules
+                        .denials_beneath_a_grant(Path::new(directory))
+                        .is_empty(),
+                    "{list:?} {directory} {denied}"
+                );
+            }
+        }
+        for (directory, denied) in [
+            (GRANT, GRANT_VERBATIM),
+            (GRANT_VERBATIM, GRANT),
+            (GRANT, r"C:\workshop/secret.env"),
+            (GRANT_VERBATIM, r"\\?\C:\elsewhere/secret.env"),
+        ] {
+            let rules = denial(List::DenyWrite, denied);
+            assert!(
+                rules
+                    .denials_beneath_a_grant(Path::new(directory))
+                    .is_empty(),
+                "{directory} {denied}"
+            );
+        }
+    }
+
+    /// An allowance of the person's is a grant a stage holds too, so a denial beneath it is one a
+    /// backend that cannot subtract refuses a stage for even where the session directory is
+    /// elsewhere. A write is held back from a write row only: a denial of writing beneath an
+    /// `allowRead` cuts nothing out, since nothing there is writable.
+    #[test]
+    fn a_denial_beneath_a_persons_allowance_is_found_for_the_kind_of_row_it_cuts() {
+        let rules = |allow: List, deny: List| Rules {
+            items: vec![
+                Item {
+                    list: allow,
+                    entry: entry(GRANT),
+                    state: State::InForce(vec![PathBuf::from(GRANT)]),
+                },
+                Item {
+                    list: deny,
+                    entry: entry(SECRET_VERBATIM),
+                    state: State::InForce(vec![PathBuf::from(SECRET_VERBATIM)]),
+                },
+            ],
+        };
+        let elsewhere = Path::new(r"C:\session");
+        for (allow, deny, found) in [
+            (List::AllowWrite, List::DenyWrite, true),
+            (List::AllowWrite, List::DenyRead, true),
+            (List::AllowRead, List::DenyRead, true),
+            (List::AllowRead, List::DenyWrite, false),
+        ] {
+            let held = rules(allow, deny);
+            let denials = held.denials_beneath_a_grant(elsewhere);
+            assert_eq!(!denials.is_empty(), found, "{allow:?} {deny:?}");
+        }
+        let refused = Rules {
+            items: vec![
+                Item {
+                    list: List::AllowWrite,
+                    entry: entry(GRANT),
+                    state: State::Refused(Reason::TooBroad),
+                },
+                Item {
+                    list: List::DenyWrite,
+                    entry: entry(SECRET),
+                    state: State::InForce(vec![PathBuf::from(SECRET)]),
+                },
+            ],
+        };
+        assert!(
+            refused.denials_beneath_a_grant(elsewhere).is_empty(),
+            "an allowance that is not in force grants nothing"
+        );
     }
 
     /// The spelling is only compared, so a refusal in another directory is still not inside the

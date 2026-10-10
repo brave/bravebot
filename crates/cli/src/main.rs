@@ -3502,6 +3502,42 @@ fn trust_already_answered(root: &Path) -> bravebot_core::TrustStore {
     .0
 }
 
+/// What `doctor` says about each entry of the four filesystem lists: the entry with the file or
+/// flag that wrote it, and for one that is not in force, why.
+///
+/// `capabilities` is what the backend a stage would run under reports, so an entry that backend
+/// cannot hold back is reported as the refusal a stage meets and not as one in force.
+fn sandbox_filesystem_lines(
+    rules: &bravebot_sandbox::rules::Rules,
+    directory: &Path,
+    capabilities: Option<&Capabilities>,
+) -> Vec<String> {
+    let source = |entry: &bravebot_sandbox::rules::Entry| match &entry.by {
+        Some(path) => path.display().to_string(),
+        None => t!(doctor_sandbox_filesystem_source_flag).to_string(),
+    };
+    bravebot_agent::permissions::filesystem_standing(rules, directory, capabilities)
+        .into_iter()
+        .map(|(item, why)| match why {
+            None => t!(
+                doctor_sandbox_filesystem_entry,
+                key = item.list.key(),
+                path = item.entry.path.clone(),
+                source = source(&item.entry)
+            )
+            .to_string(),
+            Some(reason) => t!(
+                doctor_sandbox_filesystem_refused,
+                key = item.list.key(),
+                path = item.entry.path.clone(),
+                reason = reason,
+                source = source(&item.entry)
+            )
+            .to_string(),
+        })
+        .collect()
+}
+
 /// Report whether configuration is usable, without revealing the signing key.
 /// The `doctor` facts for `sandbox.filesystem`: each entry of the four lists with the file or flag
 /// that wrote it, and the ones that are not in force with why.
@@ -3522,32 +3558,10 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
     let profile = bravebot_agent::home::profile();
     let directory = std::env::current_dir().unwrap_or_default();
     let rules = bravebot_sandbox::rules::resolve(&settled.lists, profile.as_deref(), &directory);
-    let source = |entry: &bravebot_sandbox::rules::Entry| match &entry.by {
-        Some(path) => path.display().to_string(),
-        None => t!(doctor_sandbox_filesystem_source_flag).to_string(),
-    };
-    for item in rules.items() {
-        match item.state {
-            bravebot_sandbox::rules::State::InForce(_) => fact(
-                t!(doctor_sandbox_filesystem),
-                t!(
-                    doctor_sandbox_filesystem_entry,
-                    key = item.list.key(),
-                    path = item.entry.path.clone(),
-                    source = source(&item.entry)
-                ),
-            ),
-            bravebot_sandbox::rules::State::Refused(reason) => fact(
-                t!(doctor_sandbox_filesystem),
-                t!(
-                    doctor_sandbox_filesystem_refused,
-                    key = item.list.key(),
-                    path = item.entry.path.clone(),
-                    reason = bravebot_tui::status::filesystem_reason(reason),
-                    source = source(&item.entry)
-                ),
-            ),
-        }
+    let backend = bravebot_sandbox::for_current_platform().ok();
+    let capabilities = backend.as_ref().map(|backend| backend.capabilities());
+    for line in sandbox_filesystem_lines(&rules, &directory, capabilities.as_ref()) {
+        fact(t!(doctor_sandbox_filesystem), line);
     }
     let managed_file = bravebot_config::managed_file().display().to_string();
     for (list, entry) in &settled.unread {
@@ -5322,6 +5336,7 @@ mod tests {
             network_denial_enforced,
             // Nothing `doctor` prints depends on this, so the report reads the same either way.
             grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
         }))
         .lines
     }
@@ -8139,6 +8154,61 @@ mod tests {
         let file = dir.join("managed.json");
         std::fs::write(&file, text).expect("managed file");
         Managed::at(&file)
+    }
+
+    /// SANDBOX-25: where the backend cannot hold a path back from the session directory, `doctor`
+    /// says a denial inside it is not in force and why, so the report does not call "in force" an
+    /// entry whose only effect is that every stage is refused. The regression it rejects is the line
+    /// a stage that would run with the file reachable gets today: the bare entry.
+    #[test]
+    fn doctor_reports_a_denial_the_backend_cannot_subtract_as_not_in_force() {
+        use bravebot_sandbox::rules::{Entry, Lists, resolve};
+        let directory = scratch("cannot-subtract").canonicalize().unwrap();
+        let entry = |path: &str| Entry {
+            path: path.to_string(),
+            by: None,
+            pinned: false,
+        };
+        let outside = directory.parent().unwrap().join("outside.env");
+        let outside = outside.to_str().unwrap();
+        let lists = Lists {
+            deny_read: vec![entry("secret.env")],
+            deny_write: vec![entry("secret.env"), entry(outside)],
+            ..Lists::default()
+        };
+        let rules = resolve(&lists, None, &directory);
+        let backend = |subtracts_from_a_grant| Capabilities {
+            level: ConfinementLevel::Partial,
+            mechanisms: vec!["a mechanism"],
+            network_denial_enforced: true,
+            grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant,
+        };
+        let cannot = t!(sandbox_rule_cannot_subtract).to_string();
+        let flag = t!(doctor_sandbox_filesystem_source_flag);
+
+        let refused = sandbox_filesystem_lines(&rules, &directory, Some(&backend(false)));
+        assert_eq!(
+            refused,
+            [
+                format!("denyRead secret.env is not in force: {cannot} ({flag})"),
+                format!("denyWrite secret.env is not in force: {cannot} ({flag})"),
+                format!("denyWrite {outside} ({flag})"),
+            ]
+        );
+        for held in [
+            sandbox_filesystem_lines(&rules, &directory, Some(&backend(true))),
+            sandbox_filesystem_lines(&rules, &directory, None),
+        ] {
+            assert_eq!(
+                held,
+                [
+                    format!("denyRead secret.env ({flag})"),
+                    format!("denyWrite secret.env ({flag})"),
+                    format!("denyWrite {outside} ({flag})"),
+                ]
+            );
+        }
     }
 
     /// SANDBOX-22 and SANDBOX-10: `doctor` names the mode and where it came from, and names the

@@ -3227,6 +3227,7 @@ mod tests {
             mechanisms: Vec::new(),
             network_denial_enforced,
             grants_paths_that_do_not_exist: true,
+            subtracts_from_a_grant: true,
         };
         let (cannot, can) = (backend(false), backend(true));
 

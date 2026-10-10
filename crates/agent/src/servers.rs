@@ -3040,6 +3040,7 @@ mod tests {
             mechanisms: vec!["test"],
             network_denial_enforced: false,
             grants_paths_that_do_not_exist: grants,
+            subtracts_from_a_grant: true,
         }
     }
 

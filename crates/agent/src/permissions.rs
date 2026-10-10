@@ -105,6 +105,41 @@ pub fn filesystem_reason(reason: bravebot_sandbox::rules::Reason) -> &'static st
     }
 }
 
+/// Every entry of the four filesystem lists with why it is not in force, or `None` where it is.
+///
+/// An entry that resolved is still not in force where the backend cannot subtract from a grant and
+/// the entry is a denial beneath `directory`, which every stage is granted, or beneath an allowance
+/// of the person's: each such stage is refused. `capabilities` is `None` where no backend is available, and then nothing starts at all.
+pub fn filesystem_standing<'a>(
+    rules: &'a bravebot_sandbox::rules::Rules,
+    directory: &std::path::Path,
+    capabilities: Option<&bravebot_sandbox::policy::Capabilities>,
+) -> Vec<(&'a bravebot_sandbox::rules::Item, Option<&'static str>)> {
+    use bravebot_sandbox::rules::State;
+    let unsubtractable = match capabilities {
+        Some(capabilities) if !capabilities.subtracts_from_a_grant => {
+            rules.denials_beneath_a_grant(directory)
+        }
+        _ => Vec::new(),
+    };
+    rules
+        .items()
+        .iter()
+        .map(|item| {
+            let why = match item.state {
+                State::Refused(reason) => Some(filesystem_reason(reason)),
+                State::InForce(_)
+                    if unsubtractable.iter().any(|held| std::ptr::eq(*held, item)) =>
+                {
+                    Some(t!(sandbox_rule_cannot_subtract))
+                }
+                State::InForce(_) => None,
+            };
+            (item, why)
+        })
+        .collect()
+}
+
 /// What was wrong, as a clause to follow the entry.
 ///
 /// One arm per reason and no catch-all, so a reason added to the kernel does not compile until it
@@ -333,6 +368,119 @@ mod tests {
     use super::*;
     use bravebot_core::permissions::{Decision, Ruling, Subject};
     use std::path::{Path, PathBuf};
+
+    /// A backend that reports whether it can hold a path back from a directory it grants.
+    fn backend(subtracts_from_a_grant: bool) -> bravebot_sandbox::policy::Capabilities {
+        bravebot_sandbox::policy::Capabilities {
+            level: bravebot_sandbox::policy::ConfinementLevel::Partial,
+            mechanisms: vec!["a mechanism"],
+            network_denial_enforced: true,
+            grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant,
+        }
+    }
+
+    /// A denial inside the session directory is not in force where the backend cannot hold it
+    /// back, since every stage there is refused. Where it can, and for every entry the backend
+    /// has no part in, the answer is what the entry resolved to.
+    #[test]
+    fn a_denial_the_backend_cannot_subtract_is_not_in_force_and_nothing_else_changes() {
+        use bravebot_sandbox::rules::{Entry, Lists, resolve};
+        let root = crate::testutil::scratch_dir("Permissions-Cannot-Subtract");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("inside")).unwrap();
+        std::fs::create_dir_all(root.join("beside")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let session = root.join("inside");
+        let entry = |path: &str| Entry {
+            path: path.to_string(),
+            by: None,
+            pinned: false,
+        };
+        let beside = root.join("beside").join("secret.env");
+        let beside = beside.to_str().unwrap();
+        let lists = Lists {
+            allow_read: vec![entry("notes.txt")],
+            deny_read: vec![entry("secret.env"), entry(beside)],
+            deny_write: vec![entry("secret.env"), entry("../../outside-the-root")],
+            ..Lists::default()
+        };
+        let rules = resolve(&lists, None, &session);
+        let cannot = t!(sandbox_rule_cannot_subtract);
+        let climbs = filesystem_reason(bravebot_sandbox::rules::Reason::Climbs);
+        let standing = |capabilities: Option<&bravebot_sandbox::policy::Capabilities>| {
+            filesystem_standing(&rules, &session, capabilities)
+                .into_iter()
+                .map(|(item, why)| (item.list.key(), item.entry.path.as_str(), why))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            standing(Some(&backend(false))),
+            [
+                ("allowRead", "notes.txt", None),
+                ("denyRead", "secret.env", Some(cannot)),
+                ("denyRead", beside, None),
+                ("denyWrite", "secret.env", Some(cannot)),
+                ("denyWrite", "../../outside-the-root", Some(climbs)),
+            ]
+        );
+        for held in [standing(Some(&backend(true))), standing(None)] {
+            assert_eq!(
+                held,
+                [
+                    ("allowRead", "notes.txt", None),
+                    ("denyRead", "secret.env", None),
+                    ("denyRead", beside, None),
+                    ("denyWrite", "secret.env", None),
+                    ("denyWrite", "../../outside-the-root", Some(climbs)),
+                ]
+            );
+        }
+    }
+
+    /// The denial is judged against the allowances too: one beneath an `allowWrite` entry is not in
+    /// force where the backend cannot subtract, though the session directory is somewhere else.
+    #[test]
+    fn a_denial_beneath_an_allowance_is_not_in_force_where_the_backend_cannot_subtract() {
+        use bravebot_sandbox::rules::{Entry, Lists, resolve};
+        let root = crate::testutil::scratch_dir("Permissions-Cannot-Subtract-Allowance");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("inside")).unwrap();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let session = root.join("inside");
+        let shared = root.join("shared");
+        let secret = shared.join("secret.env");
+        let entry = |path: &std::path::Path| Entry {
+            path: path.to_str().unwrap().to_string(),
+            by: None,
+            pinned: false,
+        };
+        let lists = Lists {
+            allow_write: vec![entry(&shared)],
+            deny_write: vec![entry(&secret)],
+            ..Lists::default()
+        };
+        let rules = resolve(&lists, None, &session);
+        let why = |capabilities: &bravebot_sandbox::policy::Capabilities| {
+            filesystem_standing(&rules, &session, Some(capabilities))
+                .into_iter()
+                .map(|(item, why)| (item.list.key(), why))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            why(&backend(false)),
+            [
+                ("allowWrite", None),
+                ("denyWrite", Some(t!(sandbox_rule_cannot_subtract)))
+            ]
+        );
+        assert_eq!(
+            why(&backend(true)),
+            [("allowWrite", None), ("denyWrite", None)]
+        );
+    }
 
     /// The rules take the answer of the volume the workspace is on, and a workspace that cannot be
     /// read gets byte comparison: a rule about `Docs` covers `docs` only where the two are one file.

@@ -321,6 +321,9 @@ fn capabilities() -> Capabilities {
         // An entry is written onto an object, and there is nothing at a path that is not
         // on disk to write one onto.
         grants_paths_that_do_not_exist: false,
+        // A grant is written onto an object with everything beneath it, and nothing narrower
+        // than the grant can be taken from it, so `refusal_for` starts no stage holding a refusal.
+        subtracts_from_a_grant: false,
     }
 }
 
@@ -998,6 +1001,7 @@ mod tests {
         assert_eq!(reported.level, ConfinementLevel::Partial);
         assert!(reported.network_denial_enforced);
         assert!(!reported.grants_paths_that_do_not_exist);
+        assert!(!reported.subtracts_from_a_grant);
         assert!(reported.mechanisms.contains(&"appcontainer"));
     }
 
