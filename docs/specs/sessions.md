@@ -1288,6 +1288,9 @@ stay behind because they were given for work that the brief describes only in wo
 `verified-by: bravebot_tui::app::enter_on_a_proposed_brief_starts_a_session_from_the_edited_text`
 `verified-by: bravebot_tui::app::a_prompt_typed_after_the_brief_was_wiped_out_is_sent_as_a_prompt`
 `verified-by: bravebot_tui::app::a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief`
+`verified-by: bravebot_tui::app::a_handoff_with_no_goal_or_no_ended_turn_is_refused_with_a_line_saying_why`
+`verified-by: bravebot_tui::app::a_brief_from_an_exchange_that_met_something_untrusted_is_not_offered`
+`verified-by: bravebot_tui::app::a_brief_the_planner_could_have_held_is_offered_and_a_failed_request_offers_nothing`
 `verified-by: bravebot_session::sessions::the_list_carries_the_session_a_handoff_came_from_and_only_where_it_is_an_id`
 `verified-by: bravebot_session::sessions::a_handed_off_session_keeps_its_source_across_a_resume`
 `verified-by: bravebot_tui::resume::a_handed_off_session_names_its_source_on_its_row`

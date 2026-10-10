@@ -4823,10 +4823,10 @@ fn event_loop(
                 needs_draw = true;
             }
             Action::Handoff(goal) => {
-                if goal.is_empty() {
-                    session.note(t!(handoff_needs_a_goal));
-                } else if session.turns == 0 || stored.to_resume().is_none() {
-                    session.note(t!(handoff_nothing_to_hand_off));
+                if let Some(refusal) =
+                    handoff_refusal(&goal, session.turns, stored.to_resume().is_some())
+                {
+                    session.note(refusal);
                 } else {
                     // Closed for the reason an aside closes it: the request is charged to a turn
                     // the snapshot predates.
@@ -4845,27 +4845,7 @@ fn event_loop(
                         &workspace,
                     )?;
                     stored.append_audit(session.turns, &events);
-                    match done {
-                        // Only a brief the planner could have held is offered. Where the exchange
-                        // has met something untrusted it is on no screen but this note, and a
-                        // person reading it is not a gate.
-                        Ok(answered) if answered.kept.is_some() => {
-                            session.end_aside(answered.usage.total());
-                            session.propose_handoff(&bravebot_agent::aside::handoff_prompt(
-                                &answered.shown,
-                                &goal,
-                            ));
-                            session.note(t!(handoff_ready));
-                        }
-                        Ok(answered) => {
-                            session.end_aside(answered.usage.total());
-                            session.note(t!(handoff_untrusted));
-                        }
-                        Err(message) => {
-                            session.end_aside(0);
-                            session.note(t!(handoff_failed, problem = message));
-                        }
-                    }
+                    handoff_answered(&mut session, &goal, done);
                 }
                 needs_draw = true;
             }
@@ -7483,6 +7463,54 @@ fn ask_animated(
     }
 
     Ok((done, sink.events().to_vec()))
+}
+
+/// Why `/handoff` asks for nothing, as the line to tell the person, where it does not.
+///
+/// SESSION-34: with no goal there is nothing for the brief to be written for, and before a turn
+/// has ended the session has no record for the new one to link back to. `recorded` is whether the
+/// session has one. Nothing here reads the conversation, so a refusal is decided before any
+/// request is made.
+fn handoff_refusal(goal: &str, turns: usize, recorded: bool) -> Option<&'static str> {
+    if goal.is_empty() {
+        Some(t!(handoff_needs_a_goal))
+    } else if turns == 0 || !recorded {
+        Some(t!(handoff_nothing_to_hand_off))
+    } else {
+        None
+    }
+}
+
+/// Take what the request for a `/handoff` brief came back with.
+///
+/// SESSION-34: only a brief the planner could have held is offered. Where the exchange has met
+/// something untrusted the answer is on no screen but a note, and a person reading it is not a
+/// gate. Whether it could have been held is [`bravebot_agent::aside::Answered::kept`] being
+/// present, which the aside's own policy decided from the labels; the brief's bytes are not
+/// looked at here. Apart from [`ask_animated`] so a test can call it without a backend.
+fn handoff_answered(
+    session: &mut Session,
+    goal: &str,
+    done: Result<bravebot_agent::aside::Answered, String>,
+) {
+    match done {
+        Ok(answered) if answered.kept.is_some() => {
+            session.end_aside(answered.usage.total());
+            session.propose_handoff(&bravebot_agent::aside::handoff_prompt(
+                &answered.shown,
+                goal,
+            ));
+            session.note(t!(handoff_ready));
+        }
+        Ok(answered) => {
+            session.end_aside(answered.usage.total());
+            session.note(t!(handoff_untrusted));
+        }
+        Err(message) => {
+            session.end_aside(0);
+            session.note(t!(handoff_failed, problem = message));
+        }
+    }
 }
 
 /// Take what a question asked beside the work came back with.
@@ -16864,6 +16892,99 @@ mod tests {
             Some(Action::Submit("the brief".to_string()))
         );
         assert_eq!(queued_next(&mut next), None, "it was sent twice");
+    }
+
+    /// Each way `/handoff` is refused says so and asks for nothing. Dropping the goal check, the
+    /// turn check or the record check would send a request for a brief that has nothing to link
+    /// back to, or nothing to be written for.
+    #[test]
+    fn a_handoff_with_no_goal_or_no_ended_turn_is_refused_with_a_line_saying_why() {
+        assert_eq!(
+            handoff_refusal("", 3, true),
+            Some(t!(handoff_needs_a_goal)),
+            "no goal was not refused as such"
+        );
+        assert_eq!(
+            handoff_refusal("port the parser", 0, true),
+            Some(t!(handoff_nothing_to_hand_off)),
+            "a session whose first turn has not ended was not refused"
+        );
+        assert_eq!(
+            handoff_refusal("port the parser", 3, false),
+            Some(t!(handoff_nothing_to_hand_off)),
+            "a session with no record to link back to was not refused"
+        );
+        assert_eq!(
+            handoff_refusal("", 0, false),
+            Some(t!(handoff_needs_a_goal)),
+            "the missing goal is the first thing said"
+        );
+        assert_eq!(
+            handoff_refusal("port the parser", 3, true),
+            None,
+            "a goal, an ended turn and a record were refused"
+        );
+    }
+
+    /// A brief the planner could not have held (`kept` is `None`) is never put in the box, however
+    /// readable it is, because the person reading it is not a gate. Removing the `kept` guard would
+    /// offer text the exchange's untrusted content may have shaped.
+    #[test]
+    fn a_brief_from_an_exchange_that_met_something_untrusted_is_not_offered() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        handoff_answered(
+            &mut session,
+            "port the parser",
+            Ok(bravebot_agent::aside::Answered {
+                shown: "a brief an attacker may have shaped".to_string(),
+                kept: None,
+                usage: Default::default(),
+            }),
+        );
+
+        assert!(
+            session.input().is_empty(),
+            "the brief was put in the box: {:?}",
+            session.input()
+        );
+        assert!(!session.handoff_pending(), "Enter would start a session");
+        assert_eq!(last_note(&session), t!(handoff_untrusted));
+        assert!(
+            session
+                .transcript
+                .iter()
+                .all(|entry| !entry.text.contains("an attacker may have shaped")),
+            "the withheld brief was written to the transcript"
+        );
+    }
+
+    /// The same request over an exchange that held nothing untrusted does put the brief in the box,
+    /// so the refusal above is the labels' doing and not a brief that is never offered. A failed
+    /// request offers nothing and says it failed.
+    #[test]
+    fn a_brief_the_planner_could_have_held_is_offered_and_a_failed_request_offers_nothing() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        handoff_answered(
+            &mut session,
+            "port the parser",
+            Ok(bravebot_agent::aside::Answered {
+                shown: "where things stand".to_string(),
+                kept: Some("where things stand".to_string()),
+                usage: Default::default(),
+            }),
+        );
+        assert!(session.handoff_pending(), "the brief was not offered");
+        assert!(session.input().contains("where things stand"));
+        assert_eq!(last_note(&session), t!(handoff_ready));
+
+        let mut session = Session::new("none");
+        session.begin_aside();
+        handoff_answered(&mut session, "port the parser", Err("offline".to_string()));
+        assert!(!session.handoff_pending());
+        assert!(session.input().is_empty());
+        assert_eq!(last_note(&session), t!(handoff_failed, problem = "offline"));
     }
 
     /// The focus is what the person wants the summary to keep, so the whole of it has to arrive,
