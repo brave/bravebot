@@ -1600,6 +1600,56 @@ fn a_read_climbing_into_an_opened_sibling_directory_reads_it_and_names_the_absol
     );
 }
 
+/// A search of a `../<name>` directory in an opened sibling searches it, and a failure names the
+/// absolute path the search was made in, as a read's does (TRUST-10).
+#[cfg(unix)]
+#[test]
+fn a_search_climbing_into_an_opened_sibling_directory_searches_it_and_names_the_absolute_path() {
+    let sibling = Scratch::new("climb-search-sibling");
+    std::fs::write(sibling.path.join("policy.rs"), "fn policy() {}").unwrap();
+    let name = sibling.path.file_name().unwrap().to_str().unwrap();
+
+    let scratch = Scratch::new("climb-search");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(sibling.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+
+    let missing = format!("../{name}/missing");
+    let bodies = run_calls_under(
+        &workspace,
+        rules(&[], &[], &[]),
+        trust,
+        &[
+            (
+                "search",
+                &format!(r#"{{"pattern":"policy","directory":"../{name}"}}"#),
+            ),
+            (
+                "search",
+                &format!(r#"{{"pattern":"policy","directory":"{missing}"}}"#),
+            ),
+        ],
+    );
+
+    let last = bodies.last().expect("the last request");
+    assert!(
+        last.contains("fn policy() {}"),
+        "the directory was not searched: {last}"
+    );
+    let absolute = added.join("missing").display().to_string();
+    assert!(
+        last.contains(&format!("'{absolute}'")),
+        "the failure did not name the absolute path the search was made in: {last}"
+    );
+    assert!(
+        !last.contains(&format!("'{missing}'")),
+        "the failure kept the spelling with the `..` in it: {last}"
+    );
+}
+
 /// A rule is about the file, so the `..` spelling of a file that a `deny` rule names by its
 /// absolute path is refused as the absolute spelling is, for a read and for a listing.
 #[cfg(unix)]

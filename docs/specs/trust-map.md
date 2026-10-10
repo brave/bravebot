@@ -564,6 +564,7 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_climb_through_a_link_or_back_into_the_working_directory_is_not_taken_out`
 `verified-by: bravebot_agent::workspace::a_climb_onto_a_name_that_is_not_text_is_not_taken_as_its_lookalike`
 `verified-by: bravebot_agent::turn::a_read_climbing_into_an_opened_sibling_directory_reads_it_and_names_the_absolute_path`
+`verified-by: bravebot_agent::turn::a_search_climbing_into_an_opened_sibling_directory_searches_it_and_names_the_absolute_path`
 `verified-by: bravebot_agent::turn::a_deny_rule_on_the_absolute_path_covers_the_spelling_that_climbs_to_it`
 `verified-by: bravebot_agent::workspace::a_path_climbing_out_under_reads_stay_in_workspace_is_not_told_to_open_a_directory`
 `verified-by: bravebot_agent::workspace::a_path_climbing_after_a_link_is_not_told_to_use_the_absolute_spelling`
