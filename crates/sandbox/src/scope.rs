@@ -754,7 +754,9 @@ mod tests {
     /// lookup would accept and so lend a credential the planner did not name.
     #[test]
     fn a_request_is_a_word_of_the_menu_and_nothing_near_it() {
-        for word in ["root", "Remote", "", " aws", "aws ", "all", "*", "ssh"] {
+        for word in [
+            "root", "Remote", "Loopback", "", " aws", "aws ", "all", "*", "ssh",
+        ] {
             assert_eq!(Requested::named(word), None, "{word:?} named a request");
         }
         for word in Requested::MENU {

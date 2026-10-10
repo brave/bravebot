@@ -2160,8 +2160,11 @@ mod tests {
             .with_network(Network::Closed);
         let work = Path::new("/work/project");
 
+        let told = "a step that asked for `loopback` could listen on and connect to this machine's \
+                    own ports";
         let none = closed.policy(&plain, work, &[]);
         assert!(!none.allow_loopback && !none.allow_network);
+        assert!(!closed.profile(&[&plain]).contains(told));
 
         let asked = closed.with_requested(&[Requested::Loopback]);
         let lent = asked.policy(&plain, work, &[]);
@@ -2169,6 +2172,8 @@ mod tests {
         assert!(!lent.allow_network, "loopback opened the network");
         assert!(!asked.egress(&plain), "loopback is not a reason for egress");
         assert!(!asked.policy(&assigned, work, &[]).allow_loopback);
+        assert!(asked.profile(&[&plain]).contains(told));
+        assert!(!asked.profile(&[&assigned]).contains(told));
         assert_eq!(
             asked.network_for_the_trail(&[&plain]),
             Some("the network was closed for every stage of this run".to_string())
