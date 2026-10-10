@@ -443,10 +443,14 @@ lists the jobs a turn has started and stops one.
 the part before it, and nothing waits here; a redirection names a destination nothing is reading.
 Both are refused rather than half-honoured.
 
-**A job cannot outlive the turn that started it.** The turn owns the pipeline and ending the turn
-kills it. A background program still running afterwards would be an effect nobody is watching,
-nobody is being asked about, and nobody can stop. The terminal shows each job while it runs and says
-when the turn stopped one ([Moving a command to the
+**In the terminal interface a job outlives its turn.** The session owns the pipeline: a server
+started in one turn is still running when you ask the next question, and the model is told at the
+start of each turn which jobs are still going and under which names. A job ends when it exits, when
+you or the model stops it, when you `/clear` the conversation, or when the session ends. A job that
+finishes between turns is reported at the next turn's first round. `/jobs stop` between turns stops
+the job at once, since no turn is there to read it. A one-shot run (`-p`), an incognito session and
+a delegate keep the older rule: the turn owns the pipeline and ending the turn kills it. The terminal
+shows each job while it runs ([Moving a command to the
 background](../using/interactive-mode.md#moving-a-command-to-the-background)).
 
 ## Moving a running command to the background

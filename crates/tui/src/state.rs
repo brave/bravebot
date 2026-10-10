@@ -1478,6 +1478,12 @@ pub struct Session {
     /// The language servers this session has started, which the turns' servers report to and the
     /// info panel reads.
     language_servers: bravebot_agent::lsp::Roster,
+    /// The background jobs the session keeps between its turns, where it does (RUN-15).
+    ///
+    /// `None` until the interface that owns the session says it keeps them, which an incognito
+    /// session never does: there a job still ends with the turn that started it. Dropping the
+    /// value kills whatever is running, so the session ending or being cleared ends them.
+    kept_jobs: Option<bravebot_agent::tools::SessionJobs>,
     /// How much this session asks before it acts, which one key cycles.
     ///
     /// Not persisted, like `shell` and unlike the trust map: a mode is a standing answer somebody
@@ -1975,6 +1981,7 @@ impl Session {
             confinement: confinement.into(),
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
+            kept_jobs: None,
             // Asking, which is what a session has always done. `starting_in_bypass` moves it; the
             // key reaches bypass from there unless a layer made it unreachable (MODE-5).
             permission_mode: bravebot_agent::LiveMode::default(),
@@ -2596,6 +2603,11 @@ impl Session {
         // commands openable is the one case the view could show work from a session that is gone.
         self.outputs.clear();
         self.jobs_from = 0;
+        // The jobs of the conversation that is gone are ended with it, by dropping the set that
+        // held them (RUN-15). A new set is the new conversation's, and names start again.
+        if self.kept_jobs.is_some() {
+            self.kept_jobs = Some(bravebot_agent::tools::SessionJobs::new());
+        }
         // An aside is a question about a particular exchange, asked over a copy of it. The
         // exchange is gone, so the question no longer has anything to be about, and a row that
         // outlived it would offer an answer to a conversation nobody can read.
@@ -8450,6 +8462,20 @@ impl Session {
             },
         };
         self.note(said);
+        // Between turns nothing reads the token, so the stop is carried out here and the row says
+        // so. The planner is told at the next turn's first round, as it is of any finish (RUN-27).
+        if asked
+            && !self.a_turn_is_running()
+            && let Some(kept) = &self.kept_jobs
+        {
+            let stopped = kept.stop_requested();
+            for (name, ran_for) in stopped {
+                self.job(bravebot_agent::report::JobEvent::Ended {
+                    name,
+                    outcome: bravebot_agent::report::Outcome::StoppedByTheUser(ran_for),
+                });
+            }
+        }
         asked
     }
 
@@ -8756,8 +8782,17 @@ impl Session {
         self.movable = None;
         self.started = Some(Instant::now());
         // The last turn's jobs ended with it, and the rows stay in the list; what the hint line
-        // and `/status` say about jobs is about this turn's from here on.
-        self.jobs_from = self.outputs.len();
+        // and `/status` say about jobs is about this turn's from here on. Where the session keeps
+        // its jobs, one still going from an earlier turn is this turn's too, and the list starts
+        // at the first of them (RUN-15).
+        self.jobs_from = match self.kept_jobs {
+            Some(_) => self
+                .outputs
+                .iter()
+                .position(|row| row.job.as_ref().is_some_and(JobView::is_running))
+                .unwrap_or(self.outputs.len()),
+            None => self.outputs.len(),
+        };
         prompt
     }
 
@@ -8786,10 +8821,13 @@ impl Session {
         self.streaming.clear();
         self.composing = None;
         // The driver says which jobs the turn stopped before it says the turn is over. A worker
-        // that ended without saying so stopped them all the same, since none outlives its turn.
-        for row in &mut self.outputs[self.jobs_from..] {
-            if let Some(job) = row.job.as_mut().filter(|job| job.is_running()) {
-                job.state = JobState::EndedWithTurn;
+        // that ended without saying so stopped them all the same, since none outlives its turn,
+        // except where the session keeps them: those are still running (RUN-15).
+        if self.kept_jobs.is_none() {
+            for row in &mut self.outputs[self.jobs_from..] {
+                if let Some(job) = row.job.as_mut().filter(|job| job.is_running()) {
+                    job.state = JobState::EndedWithTurn;
+                }
             }
         }
     }
@@ -9512,6 +9550,16 @@ impl Session {
         let changed = self.identity != identity;
         self.identity = identity;
         changed && self.panel
+    }
+
+    /// Keep the session's background jobs between turns (RUN-15).
+    pub fn keep_jobs_between_turns(&mut self) {
+        self.kept_jobs = Some(bravebot_agent::tools::SessionJobs::new());
+    }
+
+    /// The jobs the session keeps between turns, for the next turn to be given, where it keeps any.
+    pub fn kept_jobs(&self) -> Option<&bravebot_agent::tools::SessionJobs> {
+        self.kept_jobs.as_ref()
     }
 
     /// Where the language servers this session starts report themselves, for the turns to hand to
@@ -11123,6 +11171,81 @@ mod tests {
                 1,
                 "the last turn's row left the list"
             );
+        }
+
+        /// RUN-15. A session that keeps its jobs has one still running when its turn ends, and the
+        /// next turn lists it and counts it, so a person can see and stop it there. A turn ending
+        /// that marked it ended with the turn, or a next turn that dropped its row, fails here.
+        #[test]
+        fn a_kept_job_is_still_running_and_listed_in_the_next_turn() {
+            let mut session = session();
+            session.keep_jobs_between_turns();
+            session.type_char('a');
+            session.submit();
+            job_started(&mut session, "job:1", "sleep 600");
+            session.complete("an answer", Vec::new(), 0);
+
+            let (_, job) = session
+                .jobs()
+                .next()
+                .expect("the job was dropped at the turn end");
+            assert_eq!(job.state, JobState::Running);
+            assert_eq!(session.jobs_running(), 1);
+
+            session.type_char('b');
+            session.submit();
+            assert_eq!(
+                session.jobs().count(),
+                1,
+                "the next turn did not list the job"
+            );
+            assert_eq!(session.jobs_running(), 1);
+
+            session.job(bravebot_agent::report::JobEvent::Ended {
+                name: "job:1".to_string(),
+                outcome: bravebot_agent::report::Outcome::Succeeded,
+            });
+            assert_eq!(
+                session.jobs_running(),
+                0,
+                "the finish did not reach the kept row"
+            );
+        }
+
+        /// RUN-15. A job that ended before a turn began no longer counts, and a session that does
+        /// not keep jobs is unchanged by the keeping of others.
+        #[test]
+        fn a_kept_jobs_session_lists_only_what_is_still_running_in_the_next_turn() {
+            let mut session = session();
+            session.keep_jobs_between_turns();
+            session.type_char('a');
+            session.submit();
+            job_started(&mut session, "job:1", "make");
+            session.job(bravebot_agent::report::JobEvent::Ended {
+                name: "job:1".to_string(),
+                outcome: bravebot_agent::report::Outcome::Succeeded,
+            });
+            session.complete("an answer", Vec::new(), 0);
+
+            session.type_char('b');
+            session.submit();
+            assert_eq!(session.jobs().count(), 0, "a finished job was listed again");
+            assert!(session.kept_jobs().is_some());
+        }
+
+        /// RUN-15. `/clear` ends the conversation the jobs belonged to, and the session still keeps
+        /// jobs for the one that begins.
+        #[test]
+        fn clearing_the_session_empties_the_job_list_and_goes_on_keeping_jobs() {
+            let mut session = session();
+            session.keep_jobs_between_turns();
+            session.type_char('a');
+            session.submit();
+            job_started(&mut session, "job:1", "sleep 600");
+            session.complete("an answer", Vec::new(), 0);
+            session.clear();
+            assert_eq!(session.jobs().count(), 0);
+            assert!(session.kept_jobs().is_some());
         }
 
         /// A row keeps what one look keeps and no more, and adds nothing after a look that left

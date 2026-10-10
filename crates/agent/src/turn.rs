@@ -705,6 +705,11 @@ pub struct SystemPrompts {
 #[derive(Debug, Clone)]
 pub struct Task {
     pub(crate) file_authority: Option<bravebot_core::file_authority::FileAuthority>,
+    /// The session's background jobs, where the session keeps them between turns (RUN-15).
+    ///
+    /// `None` for a one-shot run, an incognito session and every delegate, whose jobs end with
+    /// the turn that started them.
+    pub(crate) jobs: Option<tools::SessionJobs>,
     /// The user's instruction. The only trusted input.
     pub prompt: String,
     /// Why this prompt exists, where nobody typed it.
@@ -1058,6 +1063,7 @@ impl Task {
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
             file_authority: None,
+            jobs: None,
             prompt: prompt.into(),
             // A line somebody typed until a caller says what composed it.
             composed: None,
@@ -1344,6 +1350,16 @@ impl Task {
     /// Retain live file decisions after success, failure or cancellation.
     /// The caller seeds this from its current map and reads it after the turn has joined
     /// its children. This authority replaces the file map passed to the run.
+    /// Keep this turn's background jobs with the session, so they are running when the next turn
+    /// begins and end when the session does (RUN-15).
+    ///
+    /// Only an interactive session says so. A delegate ignores it, since what it starts has to end
+    /// before the turn that spawned it can.
+    pub fn keeping_jobs(mut self, jobs: tools::SessionJobs) -> Self {
+        self.jobs = Some(jobs);
+        self
+    }
+
     pub fn with_file_authority(
         mut self,
         authority: bravebot_core::file_authority::FileAuthority,
@@ -2968,6 +2984,33 @@ fn collect_jobs<S: Sink, R: Reporter>(
     Ok(())
 }
 
+/// Say which jobs the session kept from an earlier turn are still running, and under which names
+/// (RUN-15).
+///
+/// The planner's account of an earlier turn says a job was started, and nothing in the conversation
+/// says it is still going. Names the driver minted and a count read off a clock, so the sentence is
+/// the driver's own: nothing a job printed reaches it, and what a job printed is read only through
+/// `job_output`, at the label its start gave it (RUN-16).
+fn tell_of_kept_jobs(jobs: &mut tools::Jobs, conversation: &mut Conversation) {
+    let running = jobs.running_now();
+    if running.is_empty() {
+        return;
+    }
+    let list = running
+        .iter()
+        .map(|(name, ran_for)| format!("{name} (running for {}s)", ran_for.as_secs()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    conversation.push_from(
+        Message::user(format!(
+            "{TOOL_BUDGET_SPENT} Background jobs from earlier in this session are still running: \
+             {list}. Call job_output with a name to see what it has printed since you last looked, \
+             or with kill set to stop it. Do not start one again that is already running."
+        )),
+        Provenance::Driver,
+    );
+}
+
 /// Run the hooks a person attached to `moment`, and answer with what went wrong where something
 /// did.
 ///
@@ -3978,7 +4021,18 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // The pipelines this turn leaves running. Held here so they end here: dropping this kills
         // whatever is still going, which is what keeps a background job from outliving the turn that
         // started it and becoming an effect nobody is watching.
-        let mut jobs = crate::tools::Jobs::new();
+        //
+        // Where the session keeps its jobs between turns (RUN-15) these are the session's, borrowed
+        // for the length of the turn and left running at its end. A delegate never borrows them.
+        let kept = task.jobs.as_ref().filter(|_| task.delegate.is_none());
+        let mut borrowed = kept.map(tools::SessionJobs::lock);
+        let mut owned = crate::tools::Jobs::new();
+        let jobs: &mut tools::Jobs = match borrowed.as_deref_mut() {
+            Some(held) => held,
+            None => &mut owned,
+        };
+        // Said to the planner on the first round only, and not at all where nothing is kept.
+        let mut told_of_kept_jobs = !jobs.is_kept();
         // Where the next command line runs, absent one naming its own directory (CMDLINE-12).
         //
         // Per turn rather than per session, which is short of what the clause asks for: it says a line
@@ -4043,13 +4097,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // the finish of a background job is news the turn is told rather than something the
                     // planner has to remember to ask about (CMDLINE-14).
                     collect_jobs(
-                        &mut jobs,
+                        jobs,
                         task.output_cap.unwrap_or(tools::OUTPUT_CAP),
                         reads_unasked(),
                         &mut policy,
                         conversation,
                         &mut reporter,
                     )?;
+
+                    // Once, after the finishes above, so what is left is what is still going: a job
+                    // the session kept from an earlier turn is something the planner has no other way
+                    // to know is there (RUN-15).
+                    if !std::mem::replace(&mut told_of_kept_jobs, true) {
+                        tell_of_kept_jobs(jobs, conversation);
+                    }
 
                     // Before anything new is sent, compaction included, since a summary is a request that
                     // spends tokens (TURN-8). A delegate's own task carries no limit: what it spends
@@ -4663,7 +4724,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 confined_to: addressed.as_ref().map(|addressed| addressed.tools()),
                                 servers: servers.as_deref_mut(),
                                 mcp: mcp.as_ref().map(|(offer, _)| offer),
-                                jobs: &mut jobs,
+                                jobs: &mut *jobs,
                                 permission_mode: task.permission_mode.clone(),
                                 auto_vetting: task.auto_vetting,
                                 run_directory: &mut run_directory,
@@ -5573,7 +5634,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         });
         // Whatever way the rounds ended, a stop and a failed request included: each leaves the jobs
         // to die with the turn, and the person is told which ones before they do.
-        jobs.stop_all(&mut policy, &mut reporter);
+        //
+        // Except where the session keeps them: those are left running for the next turn to find, and
+        // are ended by the session ending (RUN-15).
+        if !jobs.is_kept() {
+            jobs.stop_all(&mut policy, &mut reporter);
+        }
         *rounds_taken = steps;
         spent.wall = began.elapsed();
         reporter.spent(crate::outcome::Spent {

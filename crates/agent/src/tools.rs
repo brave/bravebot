@@ -904,7 +904,8 @@ fn table(
              output is watched here: start it with background: true and call job_output with \
              wait_seconds, which is one call covering a window rather than a look per turn. \
              Neither reaches past this turn by itself: a background job is killed when the turn \
-             ends, and comparing a token needs a later look. "
+             ends unless the account of its start says the session keeps it, and comparing a token \
+             needs a later look. "
                 + look_again_after_a_run
                 + " And say which window you watched, or which looks you compared, rather than \
                    a time of day, which you have no clock for; where you have scheduled no \
@@ -1009,8 +1010,8 @@ fn table(
              Use wait_seconds to wait for the job rather than asking it again and again. Without \
              it a wait costs a whole turn per look: you call, are told nothing has happened, and \
              answer only to be asked the same question. It is still a wait inside this turn, so it \
-             cannot tell you about anything that happens after the turn ends, and the job is \
-             killed then as it always was.",
+             cannot tell you about anything that happens after the turn ends, and the account of the \
+             job's start says whether it is killed then or kept.",
             json!({
                 "type": "object",
                 "properties": {
@@ -1970,8 +1971,56 @@ pub struct Jobs {
     /// How many have been started, so each gets a name of its own.
     ///
     /// Never reused within a turn, so a name cannot come to mean a second pipeline after the
-    /// planner has been told what it means.
+    /// planner has been told what it means. Never reused within a session either where the jobs
+    /// are kept between turns, since the set is then the session's.
     started: usize,
+    /// Whether these belong to a session and survive the turn that started them (RUN-15).
+    ///
+    /// Said to the planner in the account of each start, because what a job does when the turn ends
+    /// is the one thing it cannot work out for itself.
+    kept: bool,
+}
+
+/// The background jobs of an interactive session, kept between its turns (RUN-15).
+///
+/// A turn borrows them for as long as it runs and leaves them running when it ends. Dropping the
+/// last handle kills whatever is still going, so the session ending, being cleared or being
+/// replaced by another is the end of them, and a one-shot run or an incognito session, which never
+/// make one, keep the rule that the turn owns its jobs.
+#[derive(Debug, Clone, Default)]
+pub struct SessionJobs(std::sync::Arc<std::sync::Mutex<Jobs>>);
+
+impl SessionJobs {
+    pub fn new() -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(Jobs {
+            kept: true,
+            ..Jobs::default()
+        })))
+    }
+
+    /// Hold the jobs for the length of a turn.
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Jobs> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Carry out every stop the person has asked for, between turns, and name each job it reached.
+    ///
+    /// No turn is there to read the token at its next step, and a job nobody can stop between turns
+    /// would be the effect nobody can stop that RUN-15 exists to prevent. Each is killed and keeps
+    /// what it printed, and how it ended is told the planner at the next turn's first round as any
+    /// finish is, as the person's stop. Reads a token and a clock, nothing a job printed.
+    pub fn stop_requested(&self) -> Vec<(String, std::time::Duration)> {
+        let mut jobs = self.lock();
+        let mut stopped = Vec::new();
+        for (name, job) in jobs.running.iter_mut() {
+            if !job.reported && job.stopped_by_the_person.is_none() && job.stop_asked() {
+                stopped.push((name.clone(), job.stop_for_the_person()));
+            }
+        }
+        stopped
+    }
 }
 
 /// One background pipeline, and what it was started as.
@@ -2091,6 +2140,27 @@ impl Jobs {
         self.running.is_empty()
     }
 
+    /// Whether these belong to a session and outlive each turn (RUN-15).
+    pub fn is_kept(&self) -> bool {
+        self.kept
+    }
+
+    /// The jobs still running that the planner has not been told the end of, with how long each
+    /// has run.
+    ///
+    /// Names the driver minted and a count read off a clock, so what is said of them is the
+    /// driver's own words. A job whose steps have exited is left out: its finish is the news, and
+    /// the turn reports it as one.
+    pub fn running_now(&mut self) -> Vec<(String, std::time::Duration)> {
+        self.running
+            .iter_mut()
+            .filter_map(|(name, job)| {
+                (!job.reported && !job.running.steps_exited())
+                    .then(|| (name.clone(), job.running.ran_for()))
+            })
+            .collect()
+    }
+
     /// Take a background pipeline and hand back the name the planner will call it by, with the
     /// token that stops it.
     fn keep(
@@ -2154,7 +2224,10 @@ impl Jobs {
             if job.reported {
                 continue;
             }
-            let outcome = if job.stop_asked() {
+            let outcome = if let Some(ran_for) = job.stopped_by_the_person {
+                // Carried out between turns, where no round was there to read the token.
+                crate::report::Outcome::StoppedByTheUser(ran_for)
+            } else if job.stop_asked() {
                 crate::report::Outcome::StoppedByTheUser(job.stop_for_the_person())
             } else if job.running.ended() {
                 how_it_ended(job.running.codes(), job.confinement.as_deref())
@@ -2226,6 +2299,20 @@ impl Jobs {
             reporter.job(event);
         }
         self.running.clear();
+    }
+}
+
+/// What the planner is told happens to a job when the turn ends.
+///
+/// The driver's own words either way: which of the two holds is a fact about how the session was
+/// started and says nothing about what any program printed.
+fn what_becomes_of_a_job(kept: bool) -> &'static str {
+    if kept {
+        "It keeps running after this turn ends, until it exits, you or the user stops it, or the \
+         session ends, and you are told at the start of each later turn which jobs are still \
+         running."
+    } else {
+        "It is killed when this turn ends."
     }
 }
 
@@ -2548,13 +2635,13 @@ impl Produced {
     ///
     /// It says the finish arrives by itself, because it does (CMDLINE-14), and a planner that does
     /// not know that spends a round per look asking whether a build has finished.
-    fn started_in_the_background(mut self, job: String) -> Self {
+    fn started_in_the_background(mut self, job: String, kept: bool) -> Self {
         self.text = Labelled::trusted(format!(
             "started in the background as {job}. Nothing has been read from it yet. If it ends \
              while this turn is still going you are told so, with how it ended and what it \
              printed, without having to ask; call job_output with \"{job}\" before then to see \
-             what it has printed so far, and again later for what is new. It is killed when this \
-             turn ends."
+             what it has printed so far, and again later for what is new. {}",
+            what_becomes_of_a_job(kept)
         ));
         self
     }
@@ -2564,15 +2651,21 @@ impl Produced {
     /// Whose choice it was comes first, because a planner that reads this as its own line coming
     /// back early will run it again. Driver-made text, like [`Produced::started_in_the_background`]:
     /// a name minted here and a count of seconds read off a clock.
-    fn moved_to_the_background(mut self, job: String, after: std::time::Duration) -> Self {
+    fn moved_to_the_background(
+        mut self,
+        job: String,
+        after: std::time::Duration,
+        kept: bool,
+    ) -> Self {
         self.text = Labelled::trusted(format!(
             "the user moved this command to the background after {:.1}s, and it is still running \
              as {job}. Do not run it again. Nothing has been read from it yet, including what it \
              printed before the move. If it ends while this turn is still going you are told so, \
              with how it ended and what it printed, without having to ask; call job_output with \
              \"{job}\" before then to see what it has printed so far. It no longer has a \
-             deadline, and it is killed when this turn ends.",
-            after.as_secs_f64()
+             deadline. {}",
+            after.as_secs_f64(),
+            what_becomes_of_a_job(kept)
         ));
         self
     }
@@ -7610,7 +7703,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                     format!("`{displayed}` started in the background"),
                     format!("started as {name}"),
                 )
-                .started_in_the_background(name)
+                .started_in_the_background(name, tools.jobs.is_kept())
                 .having_run_a_program()
             }
             Err(error) => Produced::problem(format!("error: `{displayed}` did not start: {error}"))
@@ -7696,7 +7789,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                         moved.after.as_secs_f64()
                     ),
                 )
-                .moved_to_the_background(name, moved.after)
+                .moved_to_the_background(name, moved.after, tools.jobs.is_kept())
                 .having_run_a_program();
             }
             Ok(crate::exec::Waited::Ran(ran)) => Ok(ran),

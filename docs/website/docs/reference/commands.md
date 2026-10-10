@@ -587,8 +587,8 @@ Lists the turn's [background jobs](run-tool.md#leaving-a-pipeline-running), and 
 /jobs stop 1 d2       # stop job:1 of delegate d2
 ```
 
-The list is the jobs of the turn running, or of the last turn when none is, so it is empty once the
-next turn starts. Each delegate numbers its own jobs from 1, so a delegate's job takes the delegate's
+The list is the jobs of the turn running, or of the last turn when none is, with any job an earlier
+turn left running, since a terminal session keeps its jobs until it ends. Each delegate numbers its own jobs from 1, so a delegate's job takes the delegate's
 number after the name, and a name alone is the turn's own job. The list names a delegate's job the
 same way, as `job:1 d2`, and says which delegate started it.
 
@@ -600,8 +600,9 @@ says `being stopped` until then. The model is told you stopped it and after how 
 had printed by then, and is told not to start it again unless you ask.
 The rest of the turn goes on. The stop is recorded in the session's trail as yours.
 
-`/jobs` is carried out as you type it while a turn runs, since a job ends with its turn and a stop
-that waited would find nothing left to stop.
+`/jobs` is carried out as you type it while a turn runs, since a stop that waited would find nothing
+left to stop. Between turns nothing reads the flag, so a stop kills the job at once and the model is
+told at the next turn's first round that you stopped it.
 
 ## `/panel`
 

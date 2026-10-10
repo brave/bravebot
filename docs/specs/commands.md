@@ -554,7 +554,8 @@ session starts. While it is on, the platform's inhibitor runs whenever the sessi
 and is ended once it has none. Work is pending while a turn is in flight and while a loop has a tick
 to come, which includes the wait a turn asked for with `schedule_next`
 ([tools/schedule-next.md](tools/schedule-next.md#SCHED-1)). A background job is covered by its turn,
-since none outlives it ([tools/run.md](tools/run.md#RUN-15)). A watch waiting on a file holds
+and a job the session keeps past its turn ([tools/run.md](tools/run.md#RUN-15)) holds nothing
+between turns, since the person can see it and stop it there. A watch waiting on a file holds
 nothing, and neither does an idle session.
 
 The first `/caffeinate` in a person's state directory turns nothing on. It says what the command

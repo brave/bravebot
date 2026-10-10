@@ -34639,6 +34639,209 @@ fn a_turn_ending_with_a_job_running_says_so_before_it_stops_it() {
     );
 }
 
+/// A script that records its pid, renamed into place so `pid` never exists half written, and then
+/// sits for thirty seconds.
+#[cfg(unix)]
+fn write_serve(dir: &std::path::Path) {
+    let script = dir.join("serve");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho $$ > pid.part\nmv pid.part pid\nsleep 30\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Run one turn of a session that keeps its jobs, in the conversation the session holds.
+#[cfg(unix)]
+fn a_turn_of_a_session_keeping_its_jobs(
+    config: &bravebot_config::Config,
+    workspace: &Workspace,
+    jobs: &bravebot_agent::tools::SessionJobs,
+    conversation: &mut bravebot_agent::Conversation,
+    reporter: &mut bravebot_agent::report::RecordingReporter,
+    prompt: &str,
+) {
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        config,
+        &egress,
+        workspace,
+        &Task::new(prompt).keeping_jobs(jobs.clone()),
+        conversation,
+        &mut confirmer,
+        reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+}
+
+/// RUN-15. A session that keeps its jobs leaves one running when the turn ends, tells the planner
+/// of it when the next turn begins, and ends it when the session does. A turn that killed the job
+/// at its end, or never named it to the next one, or outlived the session, fails here.
+#[cfg(unix)]
+#[test]
+fn a_job_a_session_keeps_is_running_in_the_next_turn_and_ends_with_the_session() {
+    let scratch = Scratch::new("background-kept-by-the-session");
+    write_serve(&scratch.path);
+    write_wait_for(&scratch.path);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let pid = scratch.path.join("pid");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./serve","background":true}"#),
+        tool_request("run", r#"{"command":"./wait-for pid"}"#),
+        reply_with("started"),
+        reply_with("still going"),
+    ]);
+    let config = config_for(&endpoint);
+    let jobs = bravebot_agent::tools::SessionJobs::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let mut first = bravebot_agent::report::RecordingReporter::default();
+    a_turn_of_a_session_keeping_its_jobs(
+        &config,
+        &workspace,
+        &jobs,
+        &mut conversation,
+        &mut first,
+        "start it",
+    );
+    assert!(
+        process_is_alive(&pid),
+        "the job was killed when its turn ended"
+    );
+    assert!(
+        !first
+            .jobs
+            .iter()
+            .any(|event| matches!(event, bravebot_agent::report::JobEvent::Dropped { .. })),
+        "the person was told the turn stopped a job it kept: {:?}",
+        first.jobs
+    );
+
+    let mut second = bravebot_agent::report::RecordingReporter::default();
+    a_turn_of_a_session_keeping_its_jobs(
+        &config,
+        &workspace,
+        &jobs,
+        &mut conversation,
+        &mut second,
+        "is it still up",
+    );
+    assert!(process_is_alive(&pid), "the second turn ended the job");
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let last = bodies.last().expect("the second turn sent a request");
+    assert!(
+        last.contains(
+            "Background jobs from earlier in this session are still running: job:1 (running for"
+        ),
+        "the second turn's first request does not name the job: {last}"
+    );
+    assert!(
+        !bodies[..bodies.len() - 1]
+            .iter()
+            .any(|body| body.contains("from earlier in this session")),
+        "the first turn was told of a job before one had been kept"
+    );
+
+    drop(jobs);
+    assert!(
+        !process_is_alive(&pid),
+        "the job outlived the session that held it"
+    );
+}
+
+/// RUN-27. A stop asked for between turns is carried out then, since no turn is there to read the
+/// token, and the next turn tells the planner that the person stopped it. A stop that waited for a
+/// turn would leave the program running, and one carried out silently would leave the planner
+/// believing the job was still going.
+#[cfg(unix)]
+#[test]
+fn a_stop_asked_for_between_turns_ends_the_job_and_the_next_turn_says_who_stopped_it() {
+    let scratch = Scratch::new("background-stopped-between-turns");
+    write_serve(&scratch.path);
+    write_wait_for(&scratch.path);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let pid = scratch.path.join("pid");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./serve","background":true}"#),
+        tool_request("run", r#"{"command":"./wait-for pid"}"#),
+        reply_with("started"),
+        reply_with("noted"),
+    ]);
+    let config = config_for(&endpoint);
+    let jobs = bravebot_agent::tools::SessionJobs::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut first = bravebot_agent::report::RecordingReporter::default();
+    a_turn_of_a_session_keeping_its_jobs(
+        &config,
+        &workspace,
+        &jobs,
+        &mut conversation,
+        &mut first,
+        "start it",
+    );
+    assert!(process_is_alive(&pid), "the job did not outlive the turn");
+
+    let Some(bravebot_agent::report::JobEvent::Started { stop, .. }) = first.jobs.first() else {
+        panic!("no job started: {:?}", first.jobs);
+    };
+    stop.request();
+    let stopped = jobs.stop_requested();
+    assert_eq!(stopped.len(), 1, "the stop reached {stopped:?}");
+    assert_eq!(stopped[0].0, "job:1");
+    assert!(
+        !process_is_alive(&pid),
+        "the stop left the program running between turns"
+    );
+    assert!(
+        jobs.stop_requested().is_empty(),
+        "a stop already carried out was carried out again"
+    );
+
+    let mut second = bravebot_agent::report::RecordingReporter::default();
+    a_turn_of_a_session_keeping_its_jobs(
+        &config,
+        &workspace,
+        &jobs,
+        &mut conversation,
+        &mut second,
+        "anything",
+    );
+    assert!(
+        matches!(
+            second.jobs.as_slice(),
+            [bravebot_agent::report::JobEvent::Ended {
+                name,
+                outcome: bravebot_agent::report::Outcome::StoppedByTheUser(_)
+            }] if name == "job:1"
+        ),
+        "the person was not told it was their stop: {:?}",
+        second.jobs
+    );
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let last = bodies.last().expect("the second turn sent a request");
+    assert!(
+        last.contains("The background job you started as job:1 has finished")
+            && last.contains("stopped"),
+        "the planner was not told the person stopped the job: {last}"
+    );
+    assert!(
+        !last.contains("still running: job:1"),
+        "the planner was told a stopped job was still running: {last}"
+    );
+}
+
 /// Sets the first job's stop token as `/jobs stop` does, once the job has written its pid: as the
 /// job starts where `on_tool` is `None`, or as the planner's call to `on_tool` starts. Records
 /// whether the job's process is still alive when told the person's stop ended it, and at each call

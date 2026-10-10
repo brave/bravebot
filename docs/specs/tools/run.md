@@ -683,7 +683,7 @@ is not inferring it: the planner still cannot vouch for anything, and a person s
 `verified-by: bravebot_agent::turn::what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching`
 
 <a id="RUN-15"></a>
-### RUN-15: a pipeline may be left running, and the turn that started it ends it
+### RUN-15: a pipeline may be left running, and what started it ends it
 
 `background: true` starts the line and does not wait for it, handing back a job name. The name is
 the driver's own, minted here and looked up in this module's own map, so it is trusted and public
@@ -699,9 +699,28 @@ on the part before it, and nothing waits here; a redirection names a destination
 no reader for. Both are refused rather than half-honoured, and so is a redirection that opens no
 file: what a background run cannot honour is a route, whether or not it names one.
 
-**The turn owns it.** Dropping the handle kills the pipeline, so a job cannot outlive the turn that
-started one. A background program still running after its turn ended would be an effect nobody is
-watching, nobody is being asked about, and nobody can stop.
+**The turn owns it, or the session does.** Dropping the handle kills the pipeline. A one-shot run, an
+incognito session and a delegate own their jobs per turn, so a job cannot outlive the turn that
+started one: a background program still running after its turn ended would be an effect nobody is
+watching, nobody is being asked about, and nobody can stop. An interactive session in the terminal
+interface owns them instead, so a job survives the end of its turn and is killed when the session
+ends, when `/clear` begins another conversation, or when the person stops it.
+
+**What makes that watched.** The person can see a job between turns, on the hint line and in the
+rows of [RUN-26](#RUN-26), and stop it with `/jobs stop` ([RUN-27](#RUN-27)), which is carried out
+at once when no turn is there to read it. The planner cannot see a job it has no record of, so the
+first round of each turn tells it, in the driver's own words, which jobs are still running and
+under which names: names the driver minted and a count of seconds read off a clock, nothing a job
+printed. A job that ended between turns is told as any finish is ([CMDLINE-14](command-line.md#CMDLINE-14)),
+at that same first round. A job's name is never reused within a session. What the planner is told
+when a job starts says which of the two rules holds, so it does not promise a later look it will
+not get.
+
+**Known cost: a signal skips the cleanup.** A job is killed by dropping its handle, so a session
+that ends by returning ends its jobs, and one that is killed by a signal does not run the drop. A
+job kept past its turn is exposed to that for the length of the session, where a turn's job was
+exposed only for the length of the turn. Ending jobs on a terminal hangup needs the process to
+handle the signal, which no code here does yet.
 
 **Ended means the account is complete.** A job is reported as ended once every step has exited and
 every pipe has reached its end, which are not the same moment: a step can print and exit with its
@@ -733,6 +752,10 @@ the job names the driver minted.
 `verified-by: bravebot_agent::exec::background_stages_are_chained_so_one_feeds_the_next`
 `verified-by: bravebot_agent::exec::dropping_a_background_pipeline_kills_it`
 `verified-by: bravebot_agent::exec::a_background_pipeline_with_missing_resolutions_does_not_start`
+`verified-by: bravebot_agent::turn::a_job_a_session_keeps_is_running_in_the_next_turn_and_ends_with_the_session`
+`verified-by: bravebot_tui::state::a_kept_job_is_still_running_and_listed_in_the_next_turn`
+`verified-by: bravebot_tui::state::a_kept_jobs_session_lists_only_what_is_still_running_in_the_next_turn`
+`verified-by: bravebot_tui::state::clearing_the_session_empties_the_job_list_and_goes_on_keeping_jobs`
 `verified-by: bravebot_agent::turn::a_background_server_is_still_running_when_the_next_call_is_made`
 `verified-by: bravebot_agent::turn::a_background_command_must_be_one_pipeline`
 `verified-by: bravebot_agent::turn::a_background_line_is_refused_for_any_redirection_it_carries`
@@ -799,10 +822,10 @@ exited zero reports a red build as green, and where the output is quarantined th
 whole account of the build the planner ever gets. The codes are structure this driver kept about a
 pipeline it started, so saying them reads nothing of what was printed.
 
-**This still cannot outlive the turn.** [RUN-15](#RUN-15) is unchanged: the handle is dropped at the
-end of the turn and the pipeline dies with it. A wait is a way to spend part of one turn watching,
-not a way to be told about something later, and the tool says so where it offers it. Watching that
-has to survive a turn is [loop.md](../loop.md) and nothing here.
+**A wait stays inside the turn.** A wait is a way to spend part of one turn watching, not a way to
+be told about something later, and the tool says so where it offers it. Where [RUN-15](#RUN-15)
+leaves the job running past the turn it is still there to look at in the next one, but the wait
+itself ends with this turn. Watching that has to survive a turn is [loop.md](../loop.md).
 
 **Nothing of the output is read.** Both things the wait watches are counts this driver kept about a
 pipeline it started: how many bytes have arrived, and which steps have exited. That is the
@@ -1581,9 +1604,10 @@ label.
 **The deadline goes with the wait.** A moved line has no deadline, as no job has: [RUN-11](#RUN-11)'s
 limit bounds how long the turn waits on one command, and the turn no longer waits on this one.
 
-**The turn still owns it.** A moved line is ended when the turn ends, like any job. Moving it is a
-way to get on with the turn, never a way to leave something running after it. The person is told it
-is a job from the moment it moves, and told when the turn stops it ([RUN-26](#RUN-26)).
+**It is a job like any other.** A moved line is ended when the turn ends where [RUN-15](#RUN-15)
+gives the turn the job, and goes on past it where the session does. Moving it is a way to get on
+with the turn. The person is told it is a job from the moment it moves, and told when the turn
+stops it ([RUN-26](#RUN-26)).
 
 **Cancellation wins.** The press and the stop are read on the same pass, the stop first, so a stop
 asked for in the same moment as a move ends the line rather than keeping it. The press is read off
@@ -1710,9 +1734,12 @@ depends on it and nothing else in the session says it was the person's doing. It
 at whichever step read it. It asserts nothing about what the job printed, so it is not one of
 [TRACE-3](../trace.md#TRACE-3)'s assertions and moves no label.
 
-**It answers while the turn runs.** A job runs only while its turn does, so `/jobs` in every form is
-carried out mid-turn ([CMD-8](../commands.md#CMD-8)). Waiting for the turn to end would leave
-nothing to stop.
+**It answers while the turn runs, and between turns.** `/jobs` in every form is carried out mid-turn
+([CMD-8](../commands.md#CMD-8)). Waiting for the turn to end would leave nothing to stop. Where
+[RUN-15](#RUN-15) keeps jobs past the turn, `/jobs` lists the ones still running with the next turn's
+list, and a stop asked for when no turn is in flight kills the job there and then, since nothing
+would read the token. It keeps what it printed, and the next turn's first round tells the planner
+the person stopped it, after how long, as a stop read mid-turn is told.
 
 **Why.** The planner could stop a job with `job_output` and `kill`, and the turn stopped every job
 when it ended, but a person who saw one job going wrong, a server on the wrong port or a build of
@@ -1735,6 +1762,9 @@ the wrong target, could only stop the whole turn and lose the rest of its work.
 `verified-by: bravebot_tui::state::a_stop_reaches_the_job_of_the_delegate_it_names_and_no_other`
 `verified-by: bravebot_tui::state::a_stop_of_a_job_that_is_not_running_says_so_and_sets_nothing`
 `verified-by: bravebot_tui::app::jobs_stop_typed_mid_turn_sets_the_token_of_the_job_it_names`
+`verified-by: bravebot_agent::turn::a_stop_asked_for_between_turns_ends_the_job_and_the_next_turn_says_who_stopped_it`
+`verified-by: bravebot_tui::kept_jobs_tests::a_stop_between_turns_ends_the_program_and_the_row`
+`verified-by: bravebot_tui::kept_jobs_tests::a_stop_during_a_turn_leaves_the_stop_to_the_turn`
 
 <a id="RUN-28"></a>
 ### RUN-28: an entry in a person's list may be a pattern over variable names
