@@ -90,6 +90,9 @@ impl Confirmer for Asked {
     fn confirm_exposing_read(&mut self, _: &ExposureRequest) -> Decision {
         Decision::Reject
     }
+    fn confirm_path(&mut self, _: &PathRequest) -> Decision {
+        Decision::Reject
+    }
     fn ask_user(&mut self, _: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
         Vec::new()
     }
