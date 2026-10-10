@@ -329,6 +329,123 @@ fn a_confined_program_cannot_write_outside_the_session() {
     assert!(!target.exists());
 }
 
+/// SANDBOX-22 under bypass: a stage writes beside the working directory with no request, which is
+/// where a run failed before the planner could ask. The regression it rejects is the flag never
+/// reaching the profile, so the write is refused as it is without bypass; the stage without the
+/// flag is the control that the same line is refused.
+#[cfg(unix)]
+#[test]
+fn a_bypass_stage_writes_beside_the_working_directory_without_a_request() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("unasked-beside");
+    let target = places.beside.join("made.txt");
+    let line = format!("touch '{}'", target.display());
+
+    let control = places.run(&line, Some(&places.confinement()));
+    assert!(
+        !control.ended_well && !target.exists(),
+        "the write is allowed without bypass, so the test shows nothing: {control:?}"
+    );
+    let bypass = places.run(&line, Some(&places.confinement().with_unasked_writes(true)));
+    assert!(bypass.ended_well && target.exists(), "{bypass:?}");
+}
+
+/// SANDBOX-22 under bypass: what a `request_path` would never be granted is still refused. The
+/// regression it rejects is a row wide enough to cover a credential location, the home directory's
+/// own entries, or the directory above it. The first write is the control that the stage can write
+/// at all.
+#[cfg(unix)]
+#[test]
+fn a_bypass_stage_still_cannot_write_a_credential_or_a_new_entry_in_the_home_directory() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("unasked-refused");
+    std::fs::create_dir_all(places.home.join(".config/gcloud")).expect("a credential directory");
+    let confinement = places.confinement().with_unasked_writes(true);
+    let top = places.home.parent().expect("a parent").to_path_buf();
+    let attempt = |path: PathBuf| {
+        let ran = places.run(&format!("touch '{}'", path.display()), Some(&confinement));
+        (ran.ended_well, path.exists())
+    };
+
+    let beside = attempt(places.beside.join("control.txt"));
+    let existing = places.run(
+        &format!("tee -a '{}'", places.home.join(".gitconfig").display()),
+        Some(&confinement),
+    );
+    let new_in_existing_dir = attempt(places.home.join(".config/other.txt"));
+    let refused = [
+        ("ssh", places.home.join(".ssh/planted")),
+        ("state directory", places.home.join(".bravebot/planted")),
+        ("aws", places.home.join(".aws/planted")),
+        ("gcloud", places.home.join(".config/gcloud/planted")),
+        ("new entry in home", places.home.join("planted")),
+        ("new entry above home", top.join("planted")),
+    ]
+    .map(|(what, path)| (what, attempt(path)));
+
+    assert_eq!(beside, (true, true), "the stage could not write at all");
+    assert!(
+        existing.ended_well,
+        "an existing file in home is writable: {existing:?}"
+    );
+    assert!(
+        !new_in_existing_dir.0,
+        "a directory holding a credential is treated as home: its new entries are refused"
+    );
+    for (what, (ended_well, exists)) in refused {
+        assert!(!ended_well && !exists, "{what} was written");
+    }
+}
+
+/// SANDBOX-22 under bypass: the person's `denyWrite` outranks the grant, and `strict` keeps the
+/// per-path request. The regression it rejects is a grant applied after the lists, which lets a
+/// stage write a path the person refused, and a mode check that reads bypass alone.
+#[cfg(unix)]
+#[test]
+fn a_bypass_stage_keeps_a_denied_write_and_strict_keeps_the_request() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("unasked-denied");
+    let locked = places.beside.join("locked");
+    std::fs::create_dir_all(&locked).expect("a directory");
+    let free = places.run(
+        &format!("touch '{}'", places.beside.join("free.txt").display()),
+        Some(&places.confinement().with_unasked_writes(true)),
+    );
+    let listed = places
+        .confinement()
+        .with_unasked_writes(true)
+        .with_filesystem(&written(&[], &[], &[], &[&locked.display().to_string()]));
+    let refused = places.run(
+        &format!("touch '{}'", locked.join("planted.txt").display()),
+        Some(&listed),
+    );
+    let strict = places.run(
+        &format!("touch '{}'", places.beside.join("strict.txt").display()),
+        Some(
+            &places
+                .confinement()
+                .with_mode(bravebot_sandbox::SandboxMode::Strict)
+                .with_unasked_writes(true),
+        ),
+    );
+
+    assert!(free.ended_well, "{free:?}");
+    assert!(
+        !refused.ended_well && !locked.join("planted.txt").exists(),
+        "{refused:?}"
+    );
+    assert!(
+        !strict.ended_well && !places.beside.join("strict.txt").exists(),
+        "{strict:?}"
+    );
+}
+
 /// The regression it rejects: the background path spawning the plain command. A job left running
 /// is the one nobody is watching.
 #[test]

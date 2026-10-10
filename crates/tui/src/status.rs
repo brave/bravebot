@@ -295,6 +295,29 @@ fn network_line(
     )
 }
 
+/// The line saying programs write what a request would be granted, where the session is in bypass
+/// under `standard` on a platform that confines by what a program reaches. Only there, for the
+/// reason the network line is: the ordinary session writes the directories it was opened on, and a
+/// line saying so on each would be skimmed past.
+fn programs_write_line(
+    permission: bravebot_agent::PermissionMode,
+    mode: bravebot_sandbox::SandboxMode,
+    prelude: Option<bravebot_sandbox::base::Prelude>,
+) -> Option<Line> {
+    use bravebot_sandbox::base::Prelude;
+    let reads_the_machine = matches!(prelude, Some(Prelude::Linux | Prelude::MacOs));
+    (permission == bravebot_agent::PermissionMode::Bypass
+        && mode == bravebot_sandbox::SandboxMode::Standard
+        && reads_the_machine)
+        .then(|| {
+            Line::new(
+                t!(status_programs_write),
+                t!(status_programs_write_anywhere),
+            )
+            .with_note(t!(status_programs_write_except))
+        })
+}
+
 /// The line for the person's own filesystem lists, where any has an entry: how many each holds and
 /// the files that wrote them, never an entry, since a path is for `doctor` and a glob's matches are
 /// the machine's.
@@ -608,6 +631,12 @@ pub fn report(facts: &Facts<'_>) -> Report {
         lines
             .push(Line::new(t!(status_permissions), named).with_note(t!(status_permissions_cycle)));
     }
+
+    lines.extend(programs_write_line(
+        facts.permission_mode,
+        facts.sandbox_mode,
+        bravebot_sandbox::base::Prelude::current(),
+    ));
 
     // Beside it for the same reason, and only where it is on: this is the other standing answer
     // that stops a prompt appearing, and the only record of it otherwise is a note at the top of
@@ -2232,6 +2261,35 @@ mod tests {
         facts.began_in_bypass = false;
         let shown = rendered(&report(&facts));
         assert!(!shown.contains(asking), "{shown}");
+    }
+
+    /// SANDBOX-22: a session whose programs write what a request would be granted says so, and a
+    /// session that does not is silent. The regression it rejects is a line shown in `strict`, in
+    /// `off`, outside bypass or on a platform that lists what a program reaches, where it would
+    /// claim a reach the stage does not have.
+    #[test]
+    fn the_report_says_programs_write_what_a_request_would_be_granted_only_where_they_do() {
+        use bravebot_agent::PermissionMode::{Ask, Bypass};
+        use bravebot_sandbox::SandboxMode::{Off, Standard, Strict};
+        use bravebot_sandbox::base::Prelude::{Linux, MacOs, Windows};
+
+        for prelude in [Linux, MacOs] {
+            let line = programs_write_line(Bypass, Standard, Some(prelude))
+                .unwrap_or_else(|| panic!("{prelude:?} says nothing"));
+            assert_eq!(line.label, t!(status_programs_write));
+        }
+        for (permission, mode, prelude) in [
+            (Ask, Standard, Some(MacOs)),
+            (Bypass, Strict, Some(MacOs)),
+            (Bypass, Off, Some(MacOs)),
+            (Bypass, Standard, Some(Windows)),
+            (Bypass, Standard, None),
+        ] {
+            assert!(
+                programs_write_line(permission, mode, prelude).is_none(),
+                "{permission:?} {mode:?} {prelude:?}"
+            );
+        }
     }
 
     fn rendered(report: &Report) -> String {

@@ -10,7 +10,9 @@
 //! what a glob names is decided by the directory entries' names alone.
 
 use crate::base::STATE_DIRECTORY;
-use crate::policy::{SandboxPolicy, names_a_filesystem_root};
+use crate::policy::{
+    SandboxPolicy, names_a_filesystem_root, spread_around, with_their_resolved_spelling,
+};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -492,6 +494,34 @@ pub fn judged_request(
         true => Err(RequestRefusal::Denied),
         false => Ok(path),
     }
+}
+
+/// The rows that reach every path a request for writing would be granted for, which is every path
+/// on the machine except the ones [`judged_request`] refuses (SANDBOX-28).
+///
+/// A row is the whole of a path with nothing refused beneath it. Where a refusal lies beneath a
+/// directory, that directory is its entries, each judged the same way, so `/`, the directories
+/// above `home`, `home` itself and each directory that holds a credential location keep their
+/// entries writable and take no new entry of their own. The refusals are each credential location,
+/// `~/.ssh` and the state directory among them, in the spelling `home` has and where its links
+/// lead. A link is not a row: it is judged where it leads, which is a row or a refusal in its own right.
+///
+/// Decided from the names in the directories it lists and from `home`. Nothing a program wrote or
+/// printed is among its inputs, and what the person's own `denyRead` and `denyWrite` lists cover is
+/// taken out afterwards by [`Rules::apply`].
+pub fn writable_without_a_request(home: &Path) -> Vec<PathBuf> {
+    let mut held: Vec<PathBuf> = Vec::new();
+    for home in [home.to_path_buf(), resolved(home)] {
+        held.extend(credential_rows(&home));
+    }
+    held.sort();
+    held.dedup();
+    let held = with_their_resolved_spelling(&held);
+    let mut rows = Vec::new();
+    spread_around(Path::new("/"), &held, &mut rows);
+    rows.sort();
+    rows.dedup();
+    rows
 }
 
 /// Every credential location the base refuses on any platform: the rows of the three tables under
@@ -1236,6 +1266,61 @@ mod tests {
         let policy = rules.apply(SandboxPolicy::strict().allow_read("/usr"));
         assert!(policy.unreadable.is_empty() && policy.unwritable.is_empty());
         assert!(policy.is_meaningful());
+    }
+
+    /// What a stage is given without a request leaves out the home directory as a whole and each
+    /// location that holds a credential.
+    #[cfg(unix)]
+    #[test]
+    fn what_is_written_without_a_request_leaves_out_the_home_directory_and_what_holds_a_credential()
+    {
+        let top = fresh("unasked-rows");
+        let home = top.join("home");
+        for directory in [
+            ".ssh",
+            ".bravebot",
+            ".aws",
+            ".config/gcloud",
+            ".config/other",
+            "project",
+        ] {
+            fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        fs::write(home.join(".gitconfig"), "").unwrap();
+        fs::create_dir_all(top.join("beside")).unwrap();
+        let home = home.canonicalize().unwrap();
+        let top = top.canonicalize().unwrap();
+
+        let rows = writable_without_a_request(&home);
+        let granted = |path: &Path| rows.iter().any(|row| path.starts_with(row));
+
+        for written in [
+            top.join("beside/new.txt"),
+            home.join("project/new.txt"),
+            home.join(".gitconfig"),
+            home.join(".config/other/new.txt"),
+        ] {
+            assert!(granted(&written), "{} is not writable", written.display());
+        }
+        for refused in [
+            home.join(".ssh/id"),
+            home.join(".bravebot/keys"),
+            home.join(".aws/credentials"),
+            home.join(".config/gcloud/x"),
+            home.join(".config/new"),
+            home.join("new"),
+            top.join("new"),
+            PathBuf::from("/new"),
+        ] {
+            assert!(!granted(&refused), "{} is writable", refused.display());
+        }
+        for whole in [Path::new("/"), top.as_path(), home.as_path()] {
+            assert!(
+                !rows.iter().any(|row| row == whole),
+                "{} is a row as a whole",
+                whole.display()
+            );
+        }
     }
 
     /// A write row above a location the base refuses is not a way to write there.

@@ -20,6 +20,16 @@ use std::sync::Mutex;
 /// the lookup runs far from the code that opens one.
 static WRITABLE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
+/// Directories a stage may write only where the account itself can, for the life of the process.
+///
+/// A stage given every path the account can write ([SANDBOX-28]) holds `/usr` as a row though the
+/// account owns none of it. Recording the row as a writable directory would leave `/usr/bin`
+/// out of every search, and a clipboard tool with it. What a stage can plant is what the account
+/// can write, so these are compared with that.
+///
+/// [SANDBOX-28]: ../../../docs/specs/sandboxing.md
+static WRITABLE_WHERE_THE_ACCOUNT_CAN: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
 /// Record a directory a confined stage may write.
 ///
 /// Both the path as given and its resolved form are kept, because a `PATH` entry may reach the
@@ -33,13 +43,29 @@ pub fn keep_out(directory: &Path) {
     }
 }
 
+/// Record a path a stage may write wherever the account can, in both of its spellings.
+pub fn keep_out_where_writable(directory: &Path) {
+    let mut held = WRITABLE_WHERE_THE_ACCOUNT_CAN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for form in forms(directory) {
+        if !held.contains(&form) {
+            held.push(form);
+        }
+    }
+}
+
 /// The program as an absolute path, or `None` when the only one `PATH` offers is in a directory
 /// a stage may write. A name that is already an absolute path is returned as it is.
 pub fn find(program: &OsStr) -> Option<PathBuf> {
-    find_in(
+    find_in_with(
         program,
         &std::env::var_os("PATH").unwrap_or_default(),
         &registered(),
+        &WRITABLE_WHERE_THE_ACCOUNT_CAN
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
     )
 }
 
@@ -52,6 +78,24 @@ pub fn registered() -> Vec<PathBuf> {
 ///
 /// The system temp directory is always among the writable ones: a stage is granted it.
 pub fn find_in(program: &OsStr, path: &OsStr, writable: &[PathBuf]) -> Option<PathBuf> {
+    find_in_with(program, path, writable, &[])
+}
+
+/// [`find_in`] with the directories a stage may write only where the account can as well.
+///
+/// A directory, or a program in it, is left out when it lies within one of `where_the_account_can`
+/// and the account can write it or the directory holding it.
+pub fn find_in_with(
+    program: &OsStr,
+    path: &OsStr,
+    writable: &[PathBuf],
+    where_the_account_can: &[PathBuf],
+) -> Option<PathBuf> {
+    let planted = |candidate: &Path| {
+        within_any(candidate, where_the_account_can)
+            && (the_account_can_write(candidate)
+                || candidate.parent().is_some_and(the_account_can_write))
+    };
     // An absolute path is the caller's own choice and `PATH` cannot redirect it. Any other name
     // with a separator is relative to wherever the process happens to be, which is no choice at all.
     if Path::new(program).is_absolute() {
@@ -67,7 +111,7 @@ pub fn find_in(program: &OsStr, path: &OsStr, writable: &[PathBuf]) -> Option<Pa
     out.extend(forms(&temporary));
 
     for entry in std::env::split_paths(path) {
-        if !entry.is_absolute() || within_any(&entry, &out) {
+        if !entry.is_absolute() || within_any(&entry, &out) || planted(&entry) {
             continue;
         }
         for name in names(program) {
@@ -76,13 +120,33 @@ pub fn find_in(program: &OsStr, path: &OsStr, writable: &[PathBuf]) -> Option<Pa
                 continue;
             };
             // A link in a safe directory that points into a writable one is the writable file.
-            if !usable(&resolved) || within_any(&resolved, &out) {
+            if !usable(&resolved) || within_any(&resolved, &out) || planted(&resolved) {
                 continue;
             }
             return Some(candidate);
         }
     }
     None
+}
+
+/// Whether the account this process runs as can write `path`.
+///
+/// Asked of the platform and not read from the mode bits, which leave out ownership, access lists
+/// and a read-only volume.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn the_account_can_write(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(name) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    unsafe { libc::access(name.as_ptr(), libc::W_OK) == 0 }
+}
+
+#[cfg(not(unix))]
+fn the_account_can_write(_path: &Path) -> bool {
+    true
 }
 
 /// The path, and its resolved form where that differs and can be had.
@@ -412,5 +476,40 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_in_a_row_the_account_can_write_is_not_found() {
+        let session = scratch_dir("programs-where-it-can");
+        executable(&session.join("bin"), "aws");
+        let path = path_of(&[&session.join("bin")]);
+
+        assert_eq!(
+            find_in_with(
+                OsStr::new("aws"),
+                &path,
+                &[],
+                std::slice::from_ref(&session)
+            ),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_in_a_row_the_account_cannot_write_is_still_found() {
+        let system = Path::new("/bin");
+        if the_account_can_write(system) {
+            return;
+        }
+        let found = find_in_with(
+            OsStr::new("sh"),
+            &path_of(&[system]),
+            &[],
+            &[PathBuf::from("/")],
+        );
+
+        assert_eq!(found, Some(system.join("sh")));
     }
 }

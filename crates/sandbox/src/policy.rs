@@ -410,7 +410,7 @@ impl SandboxPolicy {
 
 /// `paths` and, for each that is on disk, where it leads, so a refusal written as a link is
 /// held where the link goes as well as where it stands.
-fn with_their_resolved_spelling(paths: &[PathBuf]) -> Vec<PathBuf> {
+pub(crate) fn with_their_resolved_spelling(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut all = paths.to_vec();
     all.extend(paths.iter().filter_map(|path| fs::canonicalize(path).ok()));
     all
@@ -484,7 +484,7 @@ pub struct Resolution {
 /// not, is each of its entries, descended into the same way, so only the entries on the way to a
 /// refusal are listed. A directory this cannot list contributes nothing, since a process that
 /// could not list it has no entries to name.
-fn spread_around(path: &Path, refused: &[PathBuf], granted: &mut Vec<PathBuf>) {
+pub(crate) fn spread_around(path: &Path, refused: &[PathBuf], granted: &mut Vec<PathBuf>) {
     if !refused
         .iter()
         .any(|refusal| refusal.starts_with(path) && refusal != path)

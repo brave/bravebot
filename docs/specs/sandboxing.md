@@ -1283,15 +1283,21 @@ name the mode in force after the command. The desktop has no such command: it of
 has a line that shows the mode.
 
 The mode is chosen separately from the permission mode ([MODE-1](permission-modes.md#MODE-1))
-and from `--dangerously-skip-permissions`: neither widens it. One line may start with no profile
-where a person approves it ([SANDBOX-29](#SANDBOX-29)), which is the mode `off` for that line only.
+and from `--dangerously-skip-permissions`: neither changes which mode is in force. One line may
+start with no profile where a person approves it ([SANDBOX-29](#SANDBOX-29)), which is the mode
+`off` for that line only. Under `standard` the permission mode that answers every question
+([MODE-4](permission-modes.md#MODE-4)) does decide one thing inside the profile: the stages of the
+lead session's `run` are given at the start what a `request_path` for writing would be granted
+([SANDBOX-28](#SANDBOX-28)), so a run does not fail before the planner can ask.
 
 Under `off` the opening screen and `/status` do not report a closed network, since nothing then holds
 a program to it.
 
 Each `run` on a session that confines records a gate, `sandbox`, whose detail names the mode
 the programs ran in ([TRACE-1](trace.md#TRACE-1)), or `unconfined` for a line that asked to start
-with no profile ([SANDBOX-29](#SANDBOX-29)).
+with no profile ([SANDBOX-29](#SANDBOX-29)). A run whose stages were given
+what a `request_path` for writing would be granted ([SANDBOX-28](#SANDBOX-28)) records a second
+`sandbox` entry saying so.
 
 **Why.** A program that is refused a read or a write is a program the person wanted to run, and
 having no way to say "not under this" sends them to a wrapper script outside the tool that confines
@@ -1334,6 +1340,7 @@ the command line prints it on its opening line.
 `verified-by: bravebot_agent::turn::a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it`
 `verified-by: bravebot_agent::turn::a_delegate_of_a_strict_turn_cannot_read_what_a_standard_one_reads`
 `verified-by: bravebot_core::policy::the_trail_says_which_sandbox_mode_the_programs_ran_in`
+`verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_reads_off_as_standard`
 `verified-by: bravebot_config::settings::a_session_moving_its_mode_meets_the_floor_start_up_applies`
 `verified-by: bravebot_tui::sandbox_command::a_named_mode_is_the_mode_the_next_turn_is_built_with`
@@ -1902,6 +1909,23 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   as an unknown name ([DELEGATE-12](delegation.md#DELEGATE-12)), since a path asked for from inside
   a sub-task is reach the person never set up.
 - The desktop shows no card for it and refuses, which grants nothing.
+- **Under bypass, nothing needs asking for.** Where the permission mode answers every question
+  ([MODE-4](permission-modes.md#MODE-4)), the mode is `standard`, and the platform is macOS or
+  Linux, the stages of the lead session's `run` are given at the start what a request for writing
+  would be granted: every path the account can write, except `/`, a drive root, the home
+  directory and any directory above it as a whole (the entries already in them stay writable, and
+  no new entry is made directly in one), `~/.ssh`, `~/.bravebot` and everything inside either, each
+  credential location of the table ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one,
+  and every path the person's `denyRead` or `denyWrite` covers. Paths are judged where they lead,
+  through links. It is for programs only: the file tools keep the reach
+  [TRUST-10](trust-map.md#TRUST-10) gives them, and a `request_path` under bypass still opens a
+  directory for them ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). Under `strict` each path is
+  still requested, under `off` there is no profile, in a delegate's `run` nothing is added
+  ([DELEGATE-12](delegation.md#DELEGATE-12)), and on Windows, where a grant is an
+  access-control entry written onto each directory, each path is still requested. Nothing a
+  program wrote or printed decides which rows exist. The trace's `sandbox` gate says the stages
+  were given what a request would be granted, `/status` says it in its `Programs write` line, and
+  the profile line a failed step carries names it.
 
 **Why.** A stage that cannot write a path the work needs fails with `Operation not permitted`, and
 the planner has no way to say which path it needed. Without a per-path request, the only way to let
@@ -1909,6 +1933,22 @@ a build write one file is `/add-dir`, which marks the whole directory trusted. A
 path, with the same refusals as the rows a person can write, lets them say yes to that path for a
 single session. What the planner supplies decides nothing: the path is routing and is judged by the
 rules, and the reason is drawn for the person and recorded.
+
+Under bypass nobody is there to answer, and a run that fails with `Operation not permitted` on a
+sibling directory costs the planner a turn to learn what the profile already knows it will be
+granted. Giving those stages the rows a yes would have given them removes the failed run and
+widens nothing: the same refusals hold, and the permission mode already answers the request with
+a yes.
+
+**What it costs.** A program that writes anywhere the account can reaches more than the session's
+directories, including a unix socket under such a row on macOS, where a network-outbound row
+follows a write row. A program directory the account can write, such as a Homebrew prefix, is
+left out of the places bravebot finds its own helpers ([SANDBOX-30](#SANDBOX-30)) once a stage's
+policy holds it, and stays left out for the life of the process, after the permission mode
+changes. The rows are read from the directories as they are when a stage's policy is built, so a
+directory made inside a directory spread around a refusal by an earlier stage of the same run is
+not covered until the next. The existing files and directories a request would be granted include
+the ones a shell reads at start; the refusals above are the whole of what is held back.
 
 `verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
 `verified-by: bravebot_sandbox::rules::a_request_at_inside_or_above_a_credential_location_is_refused`
@@ -1923,6 +1963,19 @@ rules, and the reason is drawn for the person and recorded.
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
+`verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_the_home_directory_and_what_holds_a_credential`
+`verified-by: bravebot_agent::confine::a_bypass_stage_holds_the_rows_a_request_would_be_granted_and_not_the_home_directory`
+`verified-by: bravebot_agent::confine::a_stage_outside_standard_bypass_on_the_lead_session_is_given_no_extra_row`
+`verified-by: bravebot_agent::confine::a_bypass_stage_keeps_the_persons_denied_write_and_says_what_it_writes`
+`verified-by: bravebot_agent::confine::a_bypass_stage_cannot_write_where_the_person_denied_a_read`
+`verified-by: bravebot_agent::tools::only_the_lead_session_in_bypass_is_given_what_a_request_would_be`
+`verified-by: bravebot_agent::confine::a_bypass_stage_writes_beside_the_working_directory_without_a_request`
+`verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_or_a_new_entry_in_the_home_directory`
+`verified-by: bravebot_agent::confine::a_bypass_stage_keeps_a_denied_write_and_strict_keeps_the_request`
+`verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
+`verified-by: bravebot_agent::turn::a_delegate_of_a_confining_turn_cannot_write_outside_the_session`
+`verified-by: bravebot_core::policy::the_trail_says_the_programs_were_given_what_a_request_would_be`
+`verified-by: bravebot_tui::status::the_report_says_programs_write_what_a_request_would_be_granted_only_where_they_do`
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_marks_nothing_trusted_and_is_recorded`
 `verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
 `verified-by: bravebot_agent::turn::a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace`
@@ -1994,7 +2047,9 @@ absolute entries of `PATH` that lie outside every directory a confined stage may
 
 - **Those directories are the session's.** Each directory the session was opened on, added, or
   moved to, its scratch directory, the system temporary directory, and every row a stage's policy
-  grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it. A directory is added to the
+  grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it. A row that came with the
+  whole machine ([SANDBOX-28](#SANDBOX-28), under bypass) counts only where the account itself
+  can write the directory or the program, so `/usr/bin` stays searched. A directory is added to the
   set when it is opened or first granted, and is never removed from it, because closing a
   directory does not remove a file already written there.
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
@@ -2024,6 +2079,8 @@ the person's access, which the confinement exists to deny it.
 `verified-by: bravebot_sandbox::programs::a_link_inside_a_writable_directory_to_a_safe_program_is_not_found`
 `verified-by: bravebot_sandbox::programs::a_path_entry_that_links_into_a_writable_directory_is_not_searched`
 `verified-by: bravebot_sandbox::programs::a_sibling_directory_sharing_a_name_prefix_is_not_writable`
+`verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_can_write_is_not_found`
+`verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_cannot_write_is_still_found`
 `verified-by: bravebot_sandbox::programs::a_registered_directory_is_kept_out_of_the_search`
 `verified-by: bravebot_sandbox::programs::an_absolute_path_is_the_callers_own_choice`
 `verified-by: bravebot_bedrock::credentials::an_aws_a_confined_stage_wrote_at_the_front_of_path_is_not_the_one_run`

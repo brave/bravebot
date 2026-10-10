@@ -6384,6 +6384,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("sandbox", format!("the programs ran in {mode} mode"));
     }
 
+    /// Record that the programs of a `run` were given every path a `request_path` for writing would
+    /// be granted, without the planner asking (SANDBOX-28).
+    ///
+    /// The text is fixed. It names no path, since the rows come from the mode and the fixed
+    /// refusals and nothing a turn read.
+    pub fn record_sandbox_unasked_writes(&mut self) {
+        self.allow(
+            "sandbox",
+            "the programs were given every path a request_path with write set would be granted"
+                .to_string(),
+        );
+    }
+
     /// Record who answered a prompt the policy had decided to put.
     ///
     /// The `approval` entry before it says the line was being asked about; in a mode that answers
@@ -12320,6 +12333,24 @@ five
                 "{mode}: {recorded}"
             );
         }
+    }
+
+    /// SANDBOX-22, SANDBOX-28: a `run` given every path a request would be granted leaves a
+    /// `sandbox` entry saying so, in fixed words that name no path. The regression it rejects is a
+    /// bypass run whose wider reach the trail does not mention.
+    #[test]
+    fn the_trail_says_the_programs_were_given_what_a_request_would_be() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        policy.record_sandbox_unasked_writes();
+        let recorded = format!("{:?}", sink.events());
+        assert!(recorded.contains("sandbox"), "{recorded}");
+        assert!(
+            recorded.contains(
+                "the programs were given every path a request_path with write set would be granted"
+            ),
+            "{recorded}"
+        );
     }
 
     /// Auto-vetting changes who answers and nothing about what an answer is worth. The bytes come

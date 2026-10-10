@@ -48523,6 +48523,65 @@ fn a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not() {
     assert!(held[0].write);
 }
 
+/// SANDBOX-22, SANDBOX-28, MODE-4: under bypass a `standard` stage writes beside the session with no
+/// request, and the trail says it was given what a request would be granted. The regression it
+/// rejects is a run that fails before the planner asks. The same line under `strict`, and under the
+/// default permission mode, are the controls that the write is refused without it.
+#[test]
+fn a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("unasked");
+    let turn_in = |name: &str, mode, permission| {
+        let _ = std::fs::remove_file(places.lands());
+        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        let turn = path_turn(
+            name,
+            &places,
+            &[running(&places.writing_line())],
+            mode,
+            permission,
+            trusting_the_workspace(),
+            None,
+            &mut asked,
+        );
+        (turn, places.lands().exists())
+    };
+    let said = "the programs were given every path a request_path with write set would be granted";
+    let recorded = |turn: &PathTurn| {
+        turn.events.iter().any(|event| {
+            matches!(event, Event::GatePassed { gate, detail }
+                if *gate == "sandbox" && detail.contains(said))
+        })
+    };
+
+    let (turn, landed) = turn_in(
+        "path-unasked-bypass",
+        bravebot_sandbox::SandboxMode::Standard,
+        bravebot_agent::PermissionMode::Bypass,
+    );
+    assert!(landed, "the line did not write beside the session");
+    assert!(recorded(&turn), "{:?}", turn.events);
+
+    for (name, mode, permission) in [
+        (
+            "path-unasked-default",
+            bravebot_sandbox::SandboxMode::Standard,
+            bravebot_agent::PermissionMode::default(),
+        ),
+        (
+            "path-unasked-strict",
+            bravebot_sandbox::SandboxMode::Strict,
+            bravebot_agent::PermissionMode::Bypass,
+        ),
+    ] {
+        let (turn, landed) = turn_in(name, mode, permission);
+        assert!(!landed, "{name}: the line wrote with no request");
+        assert!(!recorded(&turn), "{name}: {:?}", turn.events);
+    }
+}
+
 /// SANDBOX-28, TRUST-9: a yes is reach and not trust. The trust map comes back as it went in, and
 /// the trail records the reach under the gate that names it.
 #[test]

@@ -151,6 +151,15 @@ make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)). Whether a 
 where its reply pointed is not answered: a yes would rewrite the person's declaration to a url the
 server wrote, so the hop is refused unasked ([SERVERS-11](mcp-servers.md#SERVERS-11)).
 
+**A program's write is answered in advance.** Under the sandbox mode `standard` on macOS and Linux,
+the stages of the lead session's `run` are given at the start every path a `request_path` for
+writing would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), so a run does not fail on a
+sibling directory before the planner can ask. The refusals of that request hold: the home directory
+and the directories above it as wholes, `~/.ssh`, `~/.bravebot`, the credential locations and the
+person's `denyRead` and `denyWrite`. The mode never changes which sandbox mode is in force, so
+`strict` keeps the per-path request, and bypass does not approve a line that asks to start with no
+profile ([SANDBOX-29](sandboxing.md#SANDBOX-29)). A delegate's programs are not given it.
+
 **A write that would create a credential is answered too.** A value the credential scan inferred is
 a question for the person under MODE-2, and here the flag is the person's answer to it, as it is to
 every other question the scan raises: the write lands, with nobody asked and in an unattended run as
@@ -206,6 +215,9 @@ prompts, which in practice means a container with no network and nothing in it w
 the wrong mode everywhere else, and it is named `--dangerously-skip-permissions` for that reason.
 
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
+`verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
+`verified-by: bravebot_agent::confine::a_stage_outside_standard_bypass_on_the_lead_session_is_given_no_extra_row`
+`verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_or_a_new_entry_in_the_home_directory`
 `verified-by: bravebot_agent::permission_mode::bypassing_promotes_quarantined_content_where_nothing_screens_it`
 `verified-by: bravebot_agent::permission_mode::an_unscreened_unattended_release_is_credited_to_the_mode`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_the_output`

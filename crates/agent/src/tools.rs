@@ -2024,7 +2024,10 @@ impl<'a> Tools<'a> {
                 )
                 .with_mode(self.sandbox)
                 .with_filesystem(&bravebot_config::sandbox_filesystem())
-                .with_path_reach(&self.workspace.path_reach());
+                .with_path_reach(&self.workspace.path_reach())
+                .with_unasked_writes(
+                    !self.delegated && self.permission_mode.get() == crate::PermissionMode::Bypass,
+                );
         // Read only where a person is there to see the row it adds: a session with nobody to put
         // a prompt to reads no record, for the reason a remembered line is not read there.
         let grants = match (self.home, self.remembering) {
@@ -7833,6 +7836,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         policy.record_sandbox_mode("unconfined");
     } else if tools.confine_runs {
         policy.record_sandbox_mode(tools.sandbox.name());
+        if confinement
+            .as_ref()
+            .is_some_and(|confinement| confinement.writes_without_a_request())
+        {
+            policy.record_sandbox_unasked_writes();
+        }
     }
 
     let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
@@ -16117,6 +16126,38 @@ mod tests {
                     policy.writable.iter().any(|row| row.path == root),
                     "{root:?} is not written in {policy:?}"
                 );
+            }
+        }
+
+        /// SANDBOX-22: a stage writes what a request would be granted only on the lead session, in
+        /// bypass. The regressions it rejects are a delegate given it because the permission mode
+        /// it was lent is bypass, and a session outside bypass given it.
+        #[cfg(unix)]
+        #[test]
+        fn only_the_lead_session_in_bypass_is_given_what_a_request_would_be() {
+            use crate::PermissionMode::{AcceptEdits, Ask, Bypass};
+            let scratch = Scratch::new("unasked-lead");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let profile: &'static std::path::Path =
+                Box::leak(scratch.path.clone().into_boxed_path());
+
+            for (mode, delegated, given) in [
+                (Bypass, false, true),
+                (Bypass, true, false),
+                (Ask, false, false),
+                (AcceptEdits, false, false),
+            ] {
+                let said = with_tools(&workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.profile = Some(profile);
+                    tools.delegated = delegated;
+                    tools.permission_mode = crate::LiveMode::new(mode);
+                    tools
+                        .confinement()
+                        .expect("a platform with a base")
+                        .writes_without_a_request()
+                });
+                assert_eq!(said, given, "{mode:?}, delegated {delegated}");
             }
         }
 
