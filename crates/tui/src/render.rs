@@ -1936,6 +1936,29 @@ fn request_lines(
             }),
             dim(),
         )),
+        Line::from(Span::styled(
+            printable(&{
+                let loaded = view.instruction_files();
+                if loaded.is_empty() {
+                    t!(request_no_instruction_files).to_string()
+                } else {
+                    t!(
+                        request_instruction_files,
+                        files = loaded
+                            .iter()
+                            .map(|(path, bytes)| t!(
+                                request_instruction_file,
+                                path = *path,
+                                bytes = *bytes
+                            )
+                            .to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            }),
+            dim(),
+        )),
     ];
     let mut headers = Vec::new();
     for span in &view.spans {
@@ -5355,6 +5378,70 @@ mod tests {
             assert!(drawn.contains("-- tool · ref:1"), "{drawn}");
             assert!(drawn.contains("ref:1 stands for a file"), "{drawn}");
             assert!(drawn.contains("read_file"), "{drawn}");
+        }
+
+        /// The row names every instruction file the system prompt carried, with its bytes, so a
+        /// person can see what loaded without reading the prompt.
+        #[test]
+        fn the_request_view_names_the_instruction_files_loaded_with_their_lengths() {
+            let mut session = Session::new("kernel-enforced");
+            session.note_layout(Laid {
+                width: 90,
+                height: 24,
+                rows: 24,
+                ..Laid::default()
+            });
+            session.set_last_request(bravebot_agent::request_view::RequestView {
+                model: "m".to_string(),
+                spans: vec![
+                    bravebot_agent::request_view::Span {
+                        role: "system",
+                        provenance: bravebot_agent::request_view::Provenance::TrustedFile(
+                            "AGENTS.md".to_string(),
+                        ),
+                        text: "Use tabs.".to_string(),
+                    },
+                    bravebot_agent::request_view::Span {
+                        role: "system",
+                        provenance: bravebot_agent::request_view::Provenance::Trusted("skill list"),
+                        text: "- design".to_string(),
+                    },
+                ],
+                tools: vec![],
+                tools_bytes: 0,
+            });
+            session.show_request();
+            let (drawn, _) = screen(&session);
+            assert!(
+                drawn.contains("Instruction files loaded: AGENTS.md (9 bytes)"),
+                "{drawn}"
+            );
+        }
+
+        /// A request built with no instruction file says none loaded, rather than leaving the row
+        /// out and reading as though the question had not been answered.
+        #[test]
+        fn the_request_view_says_so_when_no_instruction_file_loaded() {
+            let mut session = Session::new("kernel-enforced");
+            session.note_layout(Laid {
+                width: 90,
+                height: 24,
+                rows: 24,
+                ..Laid::default()
+            });
+            session.set_last_request(bravebot_agent::request_view::RequestView {
+                model: "m".to_string(),
+                spans: vec![bravebot_agent::request_view::Span {
+                    role: "system",
+                    provenance: bravebot_agent::request_view::Provenance::Driver,
+                    text: "You are careful.".to_string(),
+                }],
+                tools: vec![],
+                tools_bytes: 0,
+            });
+            session.show_request();
+            let (drawn, _) = screen(&session);
+            assert!(drawn.contains("Instruction files loaded: none"), "{drawn}");
         }
 
         /// A session reading back over a quarantined block whose one preview line is `preview`,

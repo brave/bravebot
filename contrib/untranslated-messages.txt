@@ -58,6 +58,9 @@ fr:path-why
 fr:path-writes
 fr:path-yes
 fr:reply-stopping
+fr:request-instruction-file
+fr:request-instruction-files
+fr:request-no-instruction-files
 fr:status-requested-paths
 fr:status-requested-paths-note
 fr:summary-model-needs-sign-in

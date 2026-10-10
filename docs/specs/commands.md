@@ -727,7 +727,8 @@ decide, so the command only says which one the person meant.
 ### CMD-15: `/request` opens the last request built, and takes no argument
 
 `/request` opens a read-only view of the last request a turn built for the planner, which
-[TRACE-9](trace.md#TRACE-9) states. It takes no argument, so `/request` followed by words is a
+[TRACE-9](trace.md#TRACE-9) states, including which instruction files were loaded into it and how
+many bytes each contributed. It takes no argument, so `/request` followed by words is a
 prompt (CMD-2). It reads what the session already holds in memory, so it is carried out as it is
 typed while a turn runs (CMD-8), and it starts no turn and sends nothing. It is a command, so only a
 line a person typed reaches it (CMD-1).

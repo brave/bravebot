@@ -248,6 +248,15 @@ content let through from a reference, `typed, with dropped files` for a line sen
 `unrecorded` where nothing recorded it. Other results are named by what they are, as in
 `shell output (trusted)`.
 
+The view also names, above the spans, every instruction file the system prompt was built from, each
+with the bytes it contributed, and says none loaded where there were none. The list is read back out
+of the system prompt's own `trusted file <path>` spans, so it cannot name a file whose words are not
+in the request, and it holds only those: a trusted file sent with a prompt is a message rather than
+an instruction, and the skill list and the driver's paragraphs are not files. The path is the one
+the composing code recorded when it put the file into the prompt
+([INSTR-5](instructions.md#INSTR-5)) and the length is of what was sent, counted and never read, so
+no branch is taken on the bytes of a file.
+
 The view is read from the request value handed to the backend, in memory, and never rebuilt from
 the transcript or the saved record. The pieces of the system prompt are the text sent, joined, and
 a prompt that cannot be shown in pieces that join to what was sent is shown whole as `unrecorded`.
@@ -277,7 +286,11 @@ label is a claim about authority, so it comes from where the text was composed.
 `verified-by: bravebot_tui::state::clearing_the_conversation_forgets_the_request_it_sent`
 `verified-by: bravebot_agent::conversation::a_message_is_labelled_by_what_was_recorded_and_never_guessed_at`
 `verified-by: bravebot_agent::request_view::pieces_that_are_not_the_prompt_sent_are_not_trusted_to_describe_it`
+`verified-by: bravebot_agent::request_view::the_instruction_files_are_the_trusted_files_the_system_prompt_was_built_from`
+`verified-by: bravebot_agent::request_view::a_prompt_with_no_instruction_file_names_none`
 `verified-by: bravebot_tui::render::the_request_view_draws_each_span_under_its_provenance`
+`verified-by: bravebot_tui::render::the_request_view_names_the_instruction_files_loaded_with_their_lengths`
+`verified-by: bravebot_tui::render::the_request_view_says_so_when_no_instruction_file_loaded`
 `verified-by: bravebot_tui::state::the_request_view_opens_on_the_last_request_and_closing_restores_the_transcript`
 `verified-by: bravebot_tui::app::the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view`
 
