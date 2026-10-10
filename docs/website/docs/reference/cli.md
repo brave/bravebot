@@ -30,6 +30,7 @@ Usage:
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
   bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
+  bravebot permissions check <call>      Report which permission rule decides a tool call
   bravebot completion <bash|zsh|fish>    Print a shell completion script
   bravebot shell-init <bash|zsh|fish>    Print the shell hook that gives @bravebot the commands you ran
 ```
@@ -61,6 +62,7 @@ Usage:
 | `bravebot sessions import claude-code` | copy Claude Code's sessions for this directory in as words to read ([Sessions](../using/sessions.md#importing-sessions-from-claude-code)) |
 | `bravebot sessions search [workspace:<dir>] [since:<n>h\|d\|w] <text>` | print the ids and titles of past sessions that said it ([Sessions](../using/sessions.md#picking-one-back-up)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
+| `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
 | `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
 | `bravebot shell-init <shell>` | print a shell hook that gives `@bravebot` the commands you ran ([below](#shell-init)) |
 | `bravebot --version`, `-V` | print the build |
@@ -363,7 +365,7 @@ standing is better piped in, where it is quarantined.
 
 A flag with no words after it, a blank one, or one whose words open with `-` and hold no space is
 refused with status 2. A sentence opening with `-` is words. If a flag is given twice, the last is
-used. Both are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`,
+used. Both are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`,
 `import-leo-creds`, `import-providers`, `completion` and `shell-init`. There is no settings key for them: words a checkout
 always wants belong in its `AGENTS.md`.
 
@@ -748,6 +750,33 @@ machine-level file beside a server it
 standing answers recorded for a project, the current directory unless a path is given, so its
 servers and tools are asked about again. `add`, `approve`, `enable`, `disable`, `remove` and
 `forget` are refused in an incognito session. See [MCP servers](../customize/mcp-servers.md).
+
+## `permissions check`
+
+```sh
+bravebot permissions check Bash git push origin main
+bravebot permissions check Read src/secret.env
+bravebot permissions check WebFetch https://api.example.com/v1
+bravebot permissions check Mcp weather:get_forecast
+```
+
+Loads the [`permissions` rules](../customize/configuration.md#permissions) as a session started in
+this directory would and says which of deny, ask or allow decides the call, which rule, and which
+settings file wrote it. The first of deny, then ask, then allow that matches decides, however
+specific a later rule is. `Read` and `Edit` take one path, `Bash` a program and its arguments as
+separate words, `WebFetch` a host or a URL (only the host is matched) and `Mcp` a `server:tool`.
+
+```text
+decision: ask
+rule: Bash(git commit *)
+file: /work/app/.bravebot/settings.json
+```
+
+When no rule matches, it says so and the ordinary approval gates decide. An `allow` rule from a
+checkout's settings is not in force until you grant it at the question a session asks, so it is
+never reported as the rule that decides: a line says it would allow the call and is not in force.
+It starts nothing and changes nothing. It checks the rules only, not the
+[permission modes](../security/permissions.md), and a command line that names no call exits 2.
 
 ## `completion`
 

@@ -10,6 +10,7 @@ governs:
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
   - crates/agent/src/output_schema.rs
+  - crates/cli/src/permissions_check.rs
   - crates/cli/src/plain.rs
   - crates/cli/src/update.rs
   - crates/config/src/keys.rs
@@ -1079,7 +1080,7 @@ The flags are refused, with the status for an argument (CLI-6), when no words fo
 words are blank, and when they open with `-` and hold no whitespace, since that is the next flag:
 taken as the words, `--json` would be removed and the run would answer in the other format. A
 sentence that opens with `-` holds a space and is words. If a flag is given twice, the last is used.
-They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `import-leo-creds`,
+They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`, `import-leo-creds`,
 `import-providers`, `completion` and `shell-init`, which start neither a session nor a task. A refusal writes the
 result object of CLI-12 if one was asked for, sends nothing, and says why through the catalogue
 ([LOCALE-2](localization.md#LOCALE-2)).
@@ -1117,7 +1118,7 @@ because no part of `auth` would use them.
 ### CLI-20: `completion <shell>` prints a completion script and does nothing else
 
 `bravebot completion bash`, `zsh` or `fish` writes a script to stdout that completes the
-subcommands, the words after `auth`, `mcp` and `completion`, and every flag in the usage table.
+subcommands, the words after `auth`, `mcp`, `permissions` and `completion`, and every flag in the usage table.
 Anything else completes as a file path. The script is the whole of stdout and stderr is empty:
 CLI-5 says stdout carries the reply, and for this command the script is the reply.
 
@@ -1377,7 +1378,7 @@ the status for an argument (CLI-6), when no list follows it, when the list is bl
 in it is not a tool, so a typo is not read as a smaller list than its author meant. If it is given
 twice, the last is used. Both are refused with `--mode manifest`, whose steps are planned and run
 from the plan, with `--bg`, which starts the session in another process that would not carry them,
-and with `doctor`, `auth`, `mcp`, `sessions`, `attach`, `reply`, `import-leo-creds`,
+and with `doctor`, `auth`, `mcp`, `permissions`, `sessions`, `attach`, `reply`, `import-leo-creds`,
 `import-providers`, `completion` and `shell-init`, which start neither a session nor a task.
 
 **Why.** A harness running the agent on a shared machine needs to say what a run may reach without
@@ -1506,3 +1507,43 @@ the startup notice already follows by saying nothing to such a copy
 `verified-by: bravebot_cli::running::update_says_there_is_no_command_for_a_build_from_source`
 `verified-by: bravebot_cli::running::update_takes_no_argument`
 `verified-by: bravebot_config::install::each_installation_is_updated_the_way_it_was_installed`
+
+<a id="CLI-30"></a>
+### CLI-30: `permissions check` reports which rule decides a call, and starts nothing
+
+`bravebot permissions check <Family> <what>` loads the `permissions` rules the way a session started in
+this directory loads them, and prints which of deny, ask or allow decides the call, the rule that
+decides it as its file spelled it, and the file that wrote it. The family is `Read`, `Edit`, `Bash`,
+`WebFetch` or `Mcp`. `Read` and `Edit` take one path, `Bash` takes a program and its arguments as
+separate words, as a stage is matched ([PERM-5](permissions.md#PERM-5)), `WebFetch` takes a host or a
+URL and is decided on the host alone, and `Mcp` takes `server:tool`. The rule named is the one
+[PERM-2](permissions.md#PERM-2)'s order picks: the first match in deny, then ask, then allow. Where
+no rule matches, the line says so and no rule is named, since the ordinary gates decide.
+
+It reads the rules and nothing else: nothing is opened, fetched or started, no server is
+contacted, and no file is written. The words are typed by the person and matched on routing alone
+([PERM-1](permissions.md#PERM-1)), so no content decides anything. The exit status is success for
+any call that names one; a command line that names none is refused with the status for an argument
+(CLI-6), says why on stderr and prints nothing on stdout.
+
+An `allow` rule a checkout wrote is not in force until the person grants it at the question
+[PERM-15](permissions.md#PERM-15) puts, so it is never named as the rule that decides. Where one
+would have allowed the call, a further line names it and the file that proposed it and says it is not
+in force; where the person granted it, the file line says it was granted for this workspace. It
+reports the rules of the `permissions` block only: the modes of [permission-modes.md](permission-modes.md),
+`readsStayInWorkspace` and `bypassUnreachable` ([PERM-16](permissions.md#PERM-16),
+[PERM-17](permissions.md#PERM-17)) are not consulted, and a manifest run reads no rule.
+
+**Why.** A person finds out whether a rule works by hitting the prompt or the refusal, and when two
+layers disagree the precedence is the thing they cannot see. Naming the file is what narrows a
+surprising answer to one place to edit, and naming a checkout's ungranted allow rule says why a rule
+that is written down is still asking.
+
+`verified-by: bravebot_core::permissions::the_deciding_rule_is_the_one_the_order_picks`
+`verified-by: bravebot_core::permissions::the_deciding_rule_is_named_for_a_host_and_for_a_tool`
+`verified-by: bravebot_config::settings::a_rule_is_traced_to_the_file_and_list_that_wrote_it`
+`verified-by: bravebot_config::settings::a_checkouts_allow_rule_is_traced_to_no_file`
+`verified-by: bravebot_cli::running::permissions_check_names_the_rule_and_the_file_that_decide`
+`verified-by: bravebot_cli::running::permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names`
+`verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
+`verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`

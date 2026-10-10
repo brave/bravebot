@@ -10713,3 +10713,229 @@ fn an_output_schema_that_cannot_be_honoured_is_refused_before_the_run() {
         "a chat request was sent by a run that was refused"
     );
 }
+
+/// A home layer and a checkout layer holding rules that overlap, for the `permissions check` tests.
+///
+/// The home allows every `git` command and refuses `git push`; the checkout asks about `git commit`
+/// and proposes an `allow` for `make`, which it cannot grant.
+fn rules_in_two_layers(name: &str) -> (Scratch, PathBuf) {
+    let scratch = Scratch::new(name).with_settings(
+        r#"{"permissions": {
+            "deny": ["Bash(git push *)", "WebFetch(domain:example.com)"],
+            "ask": ["Mcp(weather:get)"],
+            "allow": ["Bash(git *)", "Bash(ls)"]
+        }}"#,
+    );
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("create the checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"permissions": {"ask": ["Bash(git commit *)", "Read(./.env)"], "allow": ["Bash(make *)"]}}"#,
+    )
+    .expect("write the checkout's settings");
+    (scratch, checkout)
+}
+
+/// What `permissions check` printed for a call, as its stdout lines.
+fn permissions_check(scratch: &Scratch, checkout: &Path, call: &[&str]) -> Vec<String> {
+    let mut arguments = vec!["permissions", "check"];
+    arguments.extend_from_slice(call);
+    let output = bravebot_started_in(&scratch.path, checkout, &[], &arguments);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{call:?}: {stderr}");
+    stdout.lines().map(str::to_string).collect()
+}
+
+/// CLI-30: the rule named is the one PERM-2's order picks, and the file is the layer that wrote it.
+///
+/// `git push` matches the home's broad allow and its deny: the report names the deny. `git commit`
+/// matches the home's allow and the checkout's ask: the report names the ask and the checkout's
+/// file, where an implementation that took the first layer, or the allow, would name the home's.
+#[test]
+fn permissions_check_names_the_rule_and_the_file_that_decide() {
+    let (scratch, checkout) = rules_in_two_layers("cli-running-permissions-check");
+    let home = scratch.settings().display().to_string();
+    let project = checkout
+        .join(".bravebot")
+        .join("settings.json")
+        .display()
+        .to_string();
+
+    assert_eq!(
+        permissions_check(
+            &scratch,
+            &checkout,
+            &["Bash", "git", "push", "origin", "main"]
+        ),
+        [
+            "decision: deny".to_string(),
+            "rule: Bash(git push *)".to_string(),
+            format!("file: {home}"),
+        ]
+    );
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Bash", "git", "commit", "-m", "x"]),
+        [
+            "decision: ask".to_string(),
+            "rule: Bash(git commit *)".to_string(),
+            format!("file: {project}"),
+        ]
+    );
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Bash", "git", "status"]),
+        [
+            "decision: allow".to_string(),
+            "rule: Bash(git *)".to_string(),
+            format!("file: {home}"),
+        ]
+    );
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Read", ".env"]),
+        [
+            "decision: ask".to_string(),
+            "rule: Read(./.env)".to_string(),
+            format!("file: {project}"),
+        ]
+    );
+}
+
+/// CLI-30: a URL is decided on its host and a server's tool on its two names, and a call no rule
+/// covers says so and names no rule.
+#[test]
+fn permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names() {
+    let (scratch, checkout) = rules_in_two_layers("cli-running-permissions-check-families");
+    let home = scratch.settings().display().to_string();
+
+    assert_eq!(
+        permissions_check(
+            &scratch,
+            &checkout,
+            &["WebFetch", "https://api.example.com/v1?q=1"]
+        ),
+        [
+            "decision: deny".to_string(),
+            "rule: WebFetch(domain:example.com)".to_string(),
+            format!("file: {home}"),
+        ]
+    );
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Mcp", "weather:get"]),
+        [
+            "decision: ask".to_string(),
+            "rule: Mcp(weather:get)".to_string(),
+            format!("file: {home}"),
+        ]
+    );
+    for unmatched in [
+        &["WebFetch", "https://notexample.com/"][..],
+        &["Mcp", "weather:set"],
+        &["Edit", "src/lib.rs"],
+        &["Bash", "curl", "https://example.com"],
+    ] {
+        assert_eq!(
+            permissions_check(&scratch, &checkout, unmatched),
+            ["decision: no rule matches, so the ordinary gates decide"],
+            "{unmatched:?}"
+        );
+    }
+}
+
+/// CLI-30: an `allow` rule a checkout wrote is not in force until it is granted, so the call is
+/// reported as decided by no rule and the checkout's rule is named as waiting. Reporting it as the
+/// deciding allow rule would tell a person the prompt they hit was a fault.
+#[test]
+fn permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force() {
+    let (scratch, checkout) = rules_in_two_layers("cli-running-permissions-check-ungranted");
+    let project = checkout
+        .join(".bravebot")
+        .join("settings.json")
+        .display()
+        .to_string();
+
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Bash", "make", "test"]),
+        [
+            "decision: no rule matches, so the ordinary gates decide".to_string(),
+            format!(
+                "not in force: Bash(make *) in {project} would allow this once it is granted at the question"
+            ),
+        ]
+    );
+}
+
+/// CLI-30: the same rule once the person granted it at the question is in force, so it decides as
+/// the allow it is, names the grant as the place it came from, and is not also reported as waiting.
+///
+/// The record is seeded rather than written by a session, because the answer is the person's and
+/// the question that collects it needs a terminal.
+#[test]
+fn permissions_check_counts_a_checkouts_allow_rule_the_person_granted() {
+    let (scratch, checkout) = rules_in_two_layers("cli-running-permissions-check-granted");
+    let settings = checkout.join(".bravebot").join("settings.json");
+    let workspace = checkout.canonicalize().expect("canonical checkout");
+    let granted = scratch.path.join(".bravebot").join("granted");
+    std::fs::create_dir_all(&granted).expect("create the record directory");
+    // Written out rather than encoded, since this crate's tests carry no JSON library. A path that
+    // needed escaping would produce a line the record skips, so it is refused here instead.
+    for path in [&workspace, &settings] {
+        let shown = path.display().to_string();
+        assert!(
+            !shown.contains(['"', '\\']),
+            "the scratch path needs JSON escaping, so this test would seed an unreadable line: {shown}"
+        );
+    }
+    std::fs::write(
+        granted.join(format!(
+            "{}.jsonl",
+            bravebot_agent::home::key_for(&workspace)
+        )),
+        format!(
+            concat!(
+                r#"{{"workspace":"{}","session":"an-earlier-session","#,
+                r#""rule":"Bash(make *)","path":"{}"}}"#,
+                "\n"
+            ),
+            workspace.display(),
+            settings.display(),
+        ),
+    )
+    .expect("seed the record");
+
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["Bash", "make", "test"]),
+        [
+            "decision: allow".to_string(),
+            "rule: Bash(make *)".to_string(),
+            format!(
+                "file: granted at the question for this workspace, written in {}",
+                settings.display()
+            ),
+        ]
+    );
+}
+
+/// CLI-30: a command line that names no call is refused with the status for an argument, and
+/// nothing is printed on stdout for a script to take as an answer.
+#[test]
+fn permissions_check_refuses_a_command_line_that_names_no_call() {
+    let scratch = Scratch::new("cli-running-permissions-check-refused");
+    for typed in [
+        &["permissions"][..],
+        &["permissions", "check"],
+        &["permissions", "list"],
+        &["permissions", "check", "Read"],
+        &["permissions", "check", "Read", "a", "b"],
+        &["permissions", "check", "Delete", "a"],
+        &["permissions", "check", "Mcp", "no-colon"],
+        &["permissions", "check", "Bash"],
+    ] {
+        let output = bravebot(&scratch.path, &[], typed);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{typed:?}: {stderr}");
+        assert!(stdout.is_empty(), "{typed:?}: {stdout}");
+        assert!(
+            stderr.contains("permissions check takes"),
+            "{typed:?}: {stderr}"
+        );
+    }
+}

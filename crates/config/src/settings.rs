@@ -341,6 +341,11 @@ pub struct Settings {
     /// into a checkout and is still asked has to be told it was dropped rather than conclude the
     /// rule is in force and the prompt is a separate fault.
     allow_ignored: Vec<(PathBuf, String)>,
+    /// Each rule in force and the file that wrote it, in the order the layers were read.
+    ///
+    /// Kept because the merged lists cannot say which file an entry came from, and a report of
+    /// which rule decided a call has to name the file to edit (CLI-30).
+    rule_sources: Vec<RuleSource>,
     /// The layers that named a `provider` block and were not obeyed, weakest first, for `doctor`.
     ///
     /// Kept for the reason `vetting_ignored` is kept: a provider block decides where a request is
@@ -542,6 +547,15 @@ impl RunDeadlines {
     }
 }
 
+/// One rule in force, with the file that wrote it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuleSource {
+    list: &'static str,
+    anchored: String,
+    written: String,
+    file: PathBuf,
+}
+
 /// The `permissions` block, as text, exactly as the file spelled it.
 ///
 /// Rule text rather than parsed rules, because reading a rule needs to know where the settings
@@ -683,6 +697,7 @@ impl Settings {
         // the person wrote in their own file. See [`Settings::allow_ignored`].
         let mut allow = Vec::new();
         let mut allow_ignored = Vec::new();
+        let mut rule_sources = Vec::new();
         // Settled per layer for the same reason: which file chose a mode decides whether it binds.
         let mut sandbox_chosen = None;
         let mut sandbox_asked_strict = Vec::new();
@@ -856,7 +871,16 @@ impl Settings {
                 // reporting it here would say a rule was withheld where PERM-11 is already about
                 // to say there was no rule.
                 match granting || rule.trim().is_empty() {
-                    true => allow.push(anchor_slash_rule(&rule, &directory)),
+                    true => {
+                        let anchored = anchor_slash_rule(&rule, &directory);
+                        rule_sources.push(RuleSource {
+                            list: "allow",
+                            anchored: anchored.clone(),
+                            written: rule,
+                            file: path.clone(),
+                        });
+                        allow.push(anchored);
+                    }
                     false => allow_ignored.push((path.clone(), rule)),
                 }
             }
@@ -876,8 +900,23 @@ impl Settings {
             for key in unread_keys(&root) {
                 unread.push((path.clone(), key));
             }
-            found.push(path);
+            let written = permission_lists(&root);
+            found.push(path.clone());
             root.anchor_slash_rules(&directory);
+            let anchored = permission_lists(&root);
+            for (list, written, anchored) in [
+                ("deny", written.deny, anchored.deny),
+                ("ask", written.ask, anchored.ask),
+            ] {
+                rule_sources.extend(written.into_iter().zip(anchored).map(
+                    |(written, anchored)| RuleSource {
+                        list,
+                        anchored,
+                        written,
+                        file: path.clone(),
+                    },
+                ));
+            }
             merge(&mut merged, root.take());
         }
 
@@ -918,6 +957,7 @@ impl Settings {
         // to the entries a layer entitled to grant wrote.
         settings.permissions.allow = allow;
         settings.allow_ignored = allow_ignored;
+        settings.rule_sources = rule_sources;
         settings.misshapen = misshapen;
         settings.mcp_declared = mcp_declared;
         settings.mcp_requested = mcp_requested;
@@ -1044,6 +1084,7 @@ impl Settings {
             // not say which file it was read out of, and that is the whole of what decides whether
             // an `allow` entry in it grants anything.
             allow_ignored: Vec::new(),
+            rule_sources: Vec::new(),
             // Filled by [`Settings::layered`], which knows which file each key was written in.
             misshapen: Vec::new(),
             mcp_declared: Vec::new(),
@@ -1323,6 +1364,19 @@ impl Settings {
         self.allow_ignored
             .iter()
             .map(|(path, rule)| (path.as_path(), rule.as_str()))
+    }
+
+    /// The file that wrote the rule `anchored` in `list` (`deny`, `ask` or `allow`), and the
+    /// rule as that file spelled it, or `None` where no layer wrote it.
+    ///
+    /// `anchored` is the text [`Settings::permissions`] holds, which differs from what the file
+    /// said for a `Read` or `Edit` rule written with a single leading slash. Where two layers wrote
+    /// the same rule, the weakest layer that did is named.
+    pub fn rule_source(&self, list: &str, anchored: &str) -> Option<(&Path, &str)> {
+        self.rule_sources
+            .iter()
+            .find(|source| source.list == list && source.anchored == anchored)
+            .map(|source| (source.file.as_path(), source.written.as_str()))
     }
 
     /// The `permissions` blocks and `deny`, `ask` and `allow` values that were not the shape rules
@@ -4079,6 +4133,50 @@ mod tests {
             .project(HOSTS_WIDE)
             .read();
         assert!(settings.sandbox_hosts().allowed.is_none());
+    }
+
+    /// A rule is traced to the layer that wrote it, in the list it was written in, so a report of
+    /// which rule decided can name the file to edit (CLI-30). The same text in two lists and two
+    /// layers is where a lookup on the text alone would name the wrong file.
+    #[test]
+    fn a_rule_is_traced_to_the_file_and_list_that_wrote_it() {
+        let layers = Layers::new("rule-sources")
+            .global(r#"{"permissions": {"deny": ["Bash(rm *)"], "allow": ["Bash(git *)", "Read(/notes.md)"]}}"#)
+            .project(r#"{"permissions": {"ask": ["Bash(git *)"], "deny": ["Read(/secret)"]}}"#);
+        let settings = layers.read();
+        let global = layers.home.join(SETTINGS_FILE);
+        let project = layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE);
+
+        let source = |list, rule| settings.rule_source(list, rule).map(|(file, _)| file);
+        assert_eq!(source("deny", "Bash(rm *)"), Some(global.as_path()));
+        assert_eq!(source("allow", "Bash(git *)"), Some(global.as_path()));
+        assert_eq!(source("ask", "Bash(git *)"), Some(project.as_path()));
+        assert_eq!(source("deny", "Bash(git *)"), None);
+
+        // A single leading slash is anchored where the file sits, and the file's own spelling is
+        // what comes back for the person to search for.
+        let anchored = settings
+            .permissions()
+            .deny
+            .iter()
+            .find(|rule| rule.contains("secret"))
+            .expect("the anchored rule")
+            .clone();
+        assert_ne!(anchored, "Read(/secret)");
+        assert_eq!(
+            settings.rule_source("deny", &anchored),
+            Some((project.as_path(), "Read(/secret)"))
+        );
+    }
+
+    /// An `allow` rule a checkout wrote is not in force, so it is traced to no file: nothing could
+    /// be said to have decided on its account.
+    #[test]
+    fn a_checkouts_allow_rule_is_traced_to_no_file() {
+        let settings = Layers::new("rule-sources-ignored")
+            .project(r#"{"permissions": {"allow": ["Bash(make *)"]}}"#)
+            .read();
+        assert!(settings.rule_source("allow", "Bash(make *)").is_none());
     }
 
     /// A file the command line named outside the workspace is the person's act; one inside is a
