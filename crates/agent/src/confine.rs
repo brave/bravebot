@@ -21,6 +21,7 @@ use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base, credential_locations, run_base, with_security_cache};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
+use bravebot_sandbox::proxy::Proxy;
 use bravebot_sandbox::rules::{Lists, Rules, without_verbatim_prefix};
 use bravebot_sandbox::scope::{Reach, Requested, Scope, environment_reach, requested_reach};
 use bravebot_sandbox::signing;
@@ -28,6 +29,7 @@ use bravebot_sandbox::toolchain::Toolchain;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 /// What a `run` program may reach in this session, before any step is read.
 #[derive(Debug, Clone)]
@@ -131,18 +133,19 @@ impl Confinement {
         self
     }
 
-    /// The proxy variables the stage `step` is started with, or none where it is not filtered.
+    /// The proxy the stage `step` is held to, or none where it is not filtered.
     ///
-    /// Applied after the person's environment and the step's own assignments, so an assignment a
-    /// model wrote cannot point the stage at another proxy. A stage with no egress is given none:
-    /// it reaches nothing. Where the proxy cannot be started the stage is refused, since starting
-    /// it without the filter is the unfiltered reach the list exists to remove.
-    fn host_environment(&self, step: &Step) -> Result<Vec<(String, String)>, String> {
+    /// Its variables are applied after the person's environment and the step's own assignments, so
+    /// an assignment a model wrote cannot point the stage at another proxy, and its port is the
+    /// only one the stage's policy reaches by IP. A stage with no egress is given none: it reaches
+    /// nothing. Where the proxy cannot be started the stage is refused, since starting it without
+    /// the filter is the unfiltered reach the list exists to remove.
+    fn host_proxy(&self, step: &Step) -> Result<Option<Arc<Proxy>>, String> {
         let Some(hosts) = &self.hosts else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
         if !self.egress(step) {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         let spelled = |entries: &[bravebot_config::sandbox_network::HostEntry]| {
             entries
@@ -172,9 +175,9 @@ impl Confinement {
             remote,
             &toolchains,
         )?;
-        let proxy = crate::host_proxy::proxy_for(&list)
-            .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))?;
-        Ok(proxy.environment())
+        crate::host_proxy::proxy_for(&list)
+            .map(Some)
+            .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))
     }
 
     /// This confinement with the person's own filesystem lists (`sandbox.filesystem`), resolved
@@ -718,6 +721,14 @@ impl Confinement {
             Network::Open => "open".to_string(),
             Network::Closed => format!("closed, kept only by steps with: {}", named(reaching),),
         };
+        let network = match self.hosts {
+            Some(_) => format!(
+                "{network}; a step with network access is held to the hosts \
+                 sandbox.network.allowedHosts names, and refused where the platform cannot hold it \
+                 to them"
+            ),
+            None => network,
+        };
         // The count of each list and never an entry: a path a person wrote is not text this line
         // has any use for repeating to the planner, and a glob's matches are the machine's.
         let rules = self.filesystem.counts();
@@ -822,7 +833,8 @@ impl Confinement {
                 location.display()
             )));
         }
-        let proxied = self.host_environment(step).map_err(not_confined)?;
+        let proxy = self.host_proxy(step).map_err(not_confined)?;
+        let proxied = proxy.as_deref().map(Proxy::environment).unwrap_or_default();
         let environment = overlay(
             effective_environment(command),
             proxied
@@ -851,8 +863,13 @@ impl Confinement {
                 item.entry.path
             )));
         }
-        let wanted = self.policy(step, directory, &readable);
-        if let Some(detail) = cannot_close_the_network(&wanted, &capabilities) {
+        let mut wanted = self.policy(step, directory, &readable);
+        if let Some(proxy) = &proxy {
+            wanted = wanted.allow_network_egress_only_to(proxy.addr().port());
+        }
+        if let Some(detail) = cannot_close_the_network(&wanted, &capabilities)
+            .or_else(|| cannot_hold_to_the_proxy(&wanted, &capabilities))
+        {
             return Err(not_confined(detail));
         }
         let _ = wanted.create_missing_write_rows(&capabilities);
@@ -1123,6 +1140,23 @@ fn cannot_close_the_network(
     (!policy.allow_network && !capabilities.network_denial_enforced).then(|| {
         "the network is closed for this session (run.network) and this platform cannot deny it \
          to a program that does not need it"
+            .to_string()
+    })
+}
+
+/// Why a backend cannot hold `policy` to the proxy that applies the host list, where the policy
+/// limits egress to the proxy's port and the backend cannot, or `None`.
+///
+/// Refused with the setting named for the reason the closed network is: a backend that applied
+/// the rest and left egress open would give a program the proxy variables and a way around them,
+/// and a person who set a host list would be told only that confinement failed.
+fn cannot_hold_to_the_proxy(
+    policy: &SandboxPolicy,
+    capabilities: &bravebot_sandbox::policy::Capabilities,
+) -> Option<String> {
+    (policy.egress_only_to.is_some() && !capabilities.egress_limited_to_a_port).then(|| {
+        "the allowed hosts are set for this session (sandbox.network.allowedHosts) and this \
+         platform cannot hold a program to the proxy that applies them"
             .to_string()
     })
 }
@@ -3131,6 +3165,51 @@ mod tests {
         assert!(open.profile(&[&make]).contains("Network: open."));
     }
 
+    /// The profile line a stage's planner reads says when a host list limits the network, naming
+    /// the setting and no host, and says nothing of one when no list is set. The regression it
+    /// rejects is a line claiming `Network: open.` over a session whose stages are held to a list.
+    #[test]
+    fn the_profile_line_names_the_host_list_setting_and_no_host() {
+        let make = step("/usr/bin/make", &[]);
+        let plain = confinement(&["/work/project"]);
+        let listed = plain
+            .clone()
+            .with_hosts(Some(&hosts_listing(Some(&["secret-name.example"]))));
+
+        let line = listed.profile(&[&make]);
+        assert!(line.contains("sandbox.network.allowedHosts"), "{line}");
+        assert!(!line.contains("secret-name.example"), "{line}");
+        assert!(!plain.profile(&[&make]).contains("allowedHosts"));
+    }
+
+    /// A stage under a host list is prepared with a policy limited to the proxy's port, and one
+    /// with no list is not. The regression it rejects is the list applied through the variables
+    /// alone, which a program that ignores them walks around.
+    #[test]
+    fn a_stage_under_a_host_list_is_prepared_limited_to_the_proxy_port() {
+        let (session, plain) = a_session("host-list-port");
+        let listed = plain
+            .clone()
+            .with_hosts(Some(&hosts_listing(Some(&["a.example"]))));
+        let curl = step("/usr/bin/curl", &["https://a.example"]);
+        let Ok(sandbox) = bravebot_sandbox::for_current_platform() else {
+            return;
+        };
+
+        let free = plain
+            .prepared(&Command::new("/usr/bin/curl"), &curl, &session)
+            .expect("an unlisted session is confined");
+        assert_eq!(free.policy.egress_only_to, None);
+
+        match listed.prepared(&Command::new("/usr/bin/curl"), &curl, &session) {
+            Ok(held) => {
+                let proxy = listed.host_proxy(&curl).unwrap().expect("a proxy");
+                assert_eq!(held.policy.egress_only_to, Some(proxy.addr().port()));
+            }
+            Err(error) => assert!(!sandbox.capabilities().egress_limited_to_a_port, "{error}"),
+        }
+    }
+
     /// A file the plan could have written, under a directory it may write to, gets no network by
     /// being named `curl` or `cargo`: the reasons are read from the file name.
     #[test]
@@ -3226,6 +3305,7 @@ mod tests {
             level: bravebot_sandbox::policy::ConfinementLevel::Kernel,
             mechanisms: Vec::new(),
             network_denial_enforced,
+            egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: true,
             subtracts_from_a_grant: true,
         };
@@ -3489,15 +3569,43 @@ mod tests {
         let lost = step("/bin/cat", &["a"]);
 
         assert!(closed.egress(&kept) && !closed.egress(&lost));
-        assert!(filtered.host_environment(&lost).unwrap().is_empty());
-        let told = filtered.host_environment(&kept).unwrap();
+        assert!(filtered.host_proxy(&lost).unwrap().is_none());
+        let told = filtered
+            .host_proxy(&kept)
+            .unwrap()
+            .expect("a stage with egress is held to the proxy")
+            .environment();
         assert!(
             told.iter().any(|(name, _)| name == "HTTPS_PROXY"),
             "{told:?}"
         );
-        assert!(closed.host_environment(&kept).unwrap().is_empty());
+        assert!(closed.host_proxy(&kept).unwrap().is_none());
         let no_list = closed.with_hosts(Some(&hosts_listing(None)));
-        assert!(no_list.host_environment(&kept).unwrap().is_empty());
+        assert!(no_list.host_proxy(&kept).unwrap().is_none());
+    }
+
+    /// A policy limited to the proxy's port is refused where the platform cannot hold a program to
+    /// one port, with the setting named, and accepted where it can. The regression it rejects is a
+    /// platform that applies the rest and leaves egress open, which hands a program the proxy
+    /// variables and a route around them.
+    #[test]
+    fn a_platform_that_cannot_hold_a_program_to_the_proxy_is_refused_naming_the_setting() {
+        let limited = SandboxPolicy::strict().allow_network_egress_only_to(3128);
+        let open = SandboxPolicy::strict().allow_network_egress();
+        let backend = |egress_limited_to_a_port| bravebot_sandbox::policy::Capabilities {
+            level: bravebot_sandbox::policy::ConfinementLevel::Kernel,
+            mechanisms: Vec::new(),
+            network_denial_enforced: true,
+            egress_limited_to_a_port,
+            grants_paths_that_do_not_exist: true,
+            subtracts_from_a_grant: true,
+        };
+        let (unable, able) = (backend(false), backend(true));
+
+        let detail = cannot_hold_to_the_proxy(&limited, &unable).expect("refused");
+        assert!(detail.contains("sandbox.network.allowedHosts"), "{detail}");
+        assert!(cannot_hold_to_the_proxy(&limited, &able).is_none());
+        assert!(cannot_hold_to_the_proxy(&open, &unable).is_none());
     }
 
     /// A home on disk with the files `files` and a `.gitconfig` holding `gitconfig`, and a

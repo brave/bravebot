@@ -38,6 +38,12 @@ pub struct SandboxPolicy {
     /// process needs no network of its own, and without a socket, an instruction to
     /// exfiltrate data has nowhere to send it.
     pub allow_network: bool,
+    /// The one loopback TCP port egress is limited to, where `allow_network` is true and the
+    /// caller means a proxy on that port to be the only thing the process reaches by IP.
+    ///
+    /// `None` is egress to any address. A unix socket under a write row is reached as before, and
+    /// no resolver is granted: the proxy resolves the names it is asked for.
+    pub egress_only_to: Option<u16>,
     /// Whether the process may spawn children. False stops a confined process from
     /// launching an unconfined helper.
     pub allow_subprocesses: bool,
@@ -62,6 +68,7 @@ impl SandboxPolicy {
             unwritable: Vec::new(),
             writable: Vec::new(),
             allow_network: false,
+            egress_only_to: None,
             allow_subprocesses: false,
             starting_in: None,
             git_directories_writable: false,
@@ -133,10 +140,23 @@ impl SandboxPolicy {
         self
     }
 
+    /// Permit network access to one loopback TCP port and nothing else by IP, for a stage whose
+    /// hosts a proxy on that port decides.
+    ///
+    /// Named to be conspicuous in review: a backend that cannot hold a process to one port does
+    /// not report [`Capabilities::egress_limited_to_a_port`] and refuses the policy, since
+    /// falling back to open egress would leave the proxy something a program may go around.
+    pub fn allow_network_egress_only_to(mut self, port: u16) -> Self {
+        self.allow_network = true;
+        self.egress_only_to = Some(port);
+        self
+    }
+
     /// Take the network back from a policy that granted it, for a stage a closed session gives
     /// none. Whatever resolver or socket the backend ties to egress goes with it.
     pub fn without_network_egress(mut self) -> Self {
         self.allow_network = false;
+        self.egress_only_to = None;
         self
     }
 
@@ -199,6 +219,7 @@ impl SandboxPolicy {
                 unwritable: self.unwritable.clone(),
                 writable,
                 allow_network: self.allow_network,
+                egress_only_to: self.egress_only_to,
                 allow_subprocesses: self.allow_subprocesses,
                 starting_in: self.starting_in.clone(),
                 git_directories_writable: self.git_directories_writable,
@@ -592,6 +613,10 @@ pub struct Capabilities {
     pub mechanisms: Vec<&'static str>,
     /// Whether network denial is enforced by the kernel rather than by convention.
     pub network_denial_enforced: bool,
+    /// Whether egress can be limited to one loopback port
+    /// ([`SandboxPolicy::allow_network_egress_only_to`]), so that a program which ignores a
+    /// proxy's variables cannot connect around it.
+    pub egress_limited_to_a_port: bool,
     /// Whether a grant may name a path that does not exist yet.
     ///
     /// A caller assembling a policy out of paths whose existence is not its own to decide
@@ -736,6 +761,7 @@ mod tests {
             level: ConfinementLevel::Kernel,
             mechanisms: vec!["a mechanism"],
             network_denial_enforced: true,
+            egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist,
             subtracts_from_a_grant: true,
         }
@@ -748,6 +774,7 @@ mod tests {
             level: ConfinementLevel::None,
             mechanisms: Vec::new(),
             network_denial_enforced: false,
+            egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
         }
@@ -806,6 +833,36 @@ mod tests {
         assert_eq!(
             written_paths(&resolved.policy),
             vec![a_path_that_is_there()]
+        );
+    }
+
+    /// The port egress is limited to is carried like the grant it narrows. Dropping it hands the
+    /// backend a policy with egress to everywhere, and keeping it after the network is taken back
+    /// leaves a port named on a policy that grants no egress.
+    #[test]
+    fn the_port_egress_is_limited_to_is_carried_and_goes_with_the_network() {
+        let limited = SandboxPolicy::strict()
+            .allow_read(a_path_that_is_there())
+            .allow_network_egress_only_to(8123);
+        assert!(limited.allow_network);
+        assert_eq!(limited.egress_only_to, Some(8123));
+        assert_eq!(
+            limited
+                .nameable_under(&capabilities(false))
+                .policy
+                .egress_only_to,
+            Some(8123)
+        );
+
+        let taken_back = limited.without_network_egress();
+        assert!(!taken_back.allow_network);
+        assert_eq!(taken_back.egress_only_to, None);
+        assert_eq!(SandboxPolicy::strict().egress_only_to, None);
+        assert_eq!(
+            SandboxPolicy::strict()
+                .allow_network_egress()
+                .egress_only_to,
+            None
         );
     }
 

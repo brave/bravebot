@@ -160,6 +160,16 @@ pub(crate) fn refusal_for(policy: &SandboxPolicy) -> Option<SandboxError> {
         });
     }
 
+    if policy.egress_only_to.is_some() {
+        return Some(SandboxError::SetupFailed {
+            mechanism: "appcontainer",
+            detail: "a container holds the internet capability or does not, so egress cannot be \
+                     limited to one port here; refusing rather than reporting confinement that \
+                     is not applied"
+                .into(),
+        });
+    }
+
     if !policy.allow_subprocesses {
         return Some(SandboxError::SetupFailed {
             mechanism: "appcontainer",
@@ -318,6 +328,7 @@ fn capabilities() -> Capabilities {
         level: ConfinementLevel::Partial,
         mechanisms: vec!["appcontainer"],
         network_denial_enforced: true,
+        egress_limited_to_a_port: false,
         // An entry is written onto an object, and there is nothing at a path that is not
         // on disk to write one onto.
         grants_paths_that_do_not_exist: false,
@@ -803,6 +814,20 @@ mod tests {
         assert!(refusal.to_string().contains("write refusal"));
     }
 
+    /// A container holds the internet capability or not, so a policy limiting egress to a proxy's
+    /// port is refused rather than applied with egress to everywhere. The policy is otherwise
+    /// one this backend applies, so the limit is the only reason.
+    #[test]
+    fn a_policy_limiting_egress_to_one_port_is_refused() {
+        assert!(refusal_for(&a_policy_this_backend_applies()).is_none());
+        let policy = a_policy_this_backend_applies().allow_network_egress_only_to(8123);
+
+        let refusal = refusal_for(&policy).expect("a port limit is not enforceable here");
+
+        assert!(matches!(refusal, SandboxError::SetupFailed { .. }));
+        assert!(refusal.to_string().contains("one port"));
+    }
+
     /// A container does not stop a process creating children, so a policy asking for that
     /// denial is refused. Applying the rest would run the program with the record saying
     /// children were denied.
@@ -1000,6 +1025,7 @@ mod tests {
         let reported = capabilities();
         assert_eq!(reported.level, ConfinementLevel::Partial);
         assert!(reported.network_denial_enforced);
+        assert!(!reported.egress_limited_to_a_port);
         assert!(!reported.grants_paths_that_do_not_exist);
         assert!(!reported.subtracts_from_a_grant);
         assert!(reported.mechanisms.contains(&"appcontainer"));

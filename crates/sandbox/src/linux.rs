@@ -198,6 +198,7 @@ impl Sandbox for LandlockSandbox {
             level: ConfinementLevel::Partial,
             mechanisms: vec!["landlock"],
             network_denial_enforced: false,
+            egress_limited_to_a_port: false,
             // A rule is a right attached to an open descriptor, so a path nothing can
             // open cannot be named in one and a policy naming one is refused.
             grants_paths_that_do_not_exist: false,
@@ -249,6 +250,18 @@ impl LandlockSandbox {
                 mechanism: "landlock",
                 detail: "network denial is not implemented on Linux yet; refusing rather \
                          than reporting confinement that is not applied"
+                    .into(),
+            });
+        }
+
+        // Landlock's network rules filter TCP connects by port and leave UDP alone, and this
+        // backend installs none, so a policy limiting egress to a proxy's port would run with
+        // egress to everywhere.
+        if policy.egress_only_to.is_some() {
+            return Err(SandboxError::SetupFailed {
+                mechanism: "landlock",
+                detail: "limiting egress to one port is not implemented on Linux yet; refusing \
+                         rather than reporting confinement that is not applied"
                     .into(),
             });
         }
@@ -531,7 +544,36 @@ mod tests {
             !caps.network_denial_enforced,
             "network denial is not implemented on Linux yet"
         );
+        assert!(
+            !caps.egress_limited_to_a_port,
+            "limiting egress to one port is not implemented on Linux yet"
+        );
         assert_eq!(caps.level, ConfinementLevel::Partial);
+    }
+
+    /// A policy that limits egress to a proxy's port has nothing to stop a program connecting
+    /// around the proxy here, so it is refused and not run with open egress. Subprocesses are
+    /// allowed so the egress limit is the only reason for the refusal.
+    #[test]
+    fn a_policy_limiting_egress_to_one_port_is_refused() {
+        let err = LandlockSandbox
+            .spawn(
+                OsStr::new("/bin/true"),
+                &[],
+                &SandboxPolicy::strict()
+                    .allow_network_egress_only_to(8123)
+                    .allow_subprocesses(),
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect_err("must refuse rather than under-enforce");
+        match err {
+            SandboxError::SetupFailed { mechanism, detail } => {
+                assert_eq!(mechanism, "landlock");
+                assert!(detail.contains("one port"), "unexpected detail: {detail}");
+            }
+            other => panic!("expected SetupFailed for the egress limit, got: {other:?}"),
+        }
     }
 
     /// Until network denial is implemented, asking for it must be an error rather than
