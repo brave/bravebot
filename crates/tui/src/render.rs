@@ -7560,6 +7560,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
     }
 
+    /// What the half-typed line could still become is drawn last. A prompt already queued is
+    /// something the person believes they have sent, and a list opened by typing `?` over it must
+    /// not push it out of sight.
+    #[test]
+    fn what_is_waiting_is_drawn_above_what_the_half_typed_line_could_become() {
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit();
+        for c in "the waiting prompt".chars() {
+            session.type_char(c);
+        }
+        assert!(session.queue(), "nothing was queued");
+        session.type_char('?');
+
+        let output = rendered_at(&session, 120, 40);
+        let waiting = output.find("QUEUED").expect("nothing said it was waiting");
+        let offered = output
+            .find("run a shell command")
+            .expect("the shortcut list was not offered");
+        assert!(
+            waiting < offered,
+            "the queue was drawn under the list the line could become: {output}"
+        );
+    }
+
     /// The key took a line off the screen, so something has to say where it went. Without the row,
     /// a press that emptied the box is indistinguishable from one that threw the words away, and the
     /// only way to find out which it was is to press again and hope.

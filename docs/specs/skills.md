@@ -273,6 +273,7 @@ unless its own definition names one.
 `verified-by: bravebot_agent::skills::a_model_that_names_nothing_leaves_the_session_its_own`
 `verified-by: bravebot_agent::skills::a_skill_carries_the_model_and_the_effort_its_file_named`
 `verified-by: bravebot_agent::turn::a_loaded_skill_asks_the_rounds_after_it_of_its_own_model_and_effort`
+`verified-by: bravebot_agent::turn::a_delegate_spawned_after_a_skill_switched_the_model_is_asked_of_that_model`
 `verified-by: bravebot_agent::turn::a_skill_naming_neither_key_leaves_the_session_its_own_choice`
 `verified-by: bravebot_agent::turn::a_skill_loaded_by_an_addressed_definition_keeps_the_definitions_model`
 `verified-by: bravebot_agent::turn::a_skill_under_a_definition_the_command_line_outranked_switches_the_model`

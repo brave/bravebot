@@ -4570,6 +4570,95 @@ mod tests {
         }
     }
 
+    /// A fork is a record of its own that carries the conversation, the spend and the trail of the
+    /// session it was cut from and starts its own clock. A fork that kept the source's id would
+    /// overwrite it, one that kept the source's start time would age as the source does, and one
+    /// that left the spend or the trail behind would report a conversation that cost nothing.
+    #[test]
+    fn a_fork_is_a_new_record_with_the_conversation_the_spend_and_the_trail() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-fork-record");
+        let mut source = Handle::begin(&root, Front::Terminal, A_BUILD);
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        source.save(
+            "what do the specs say",
+            Standing {
+                history: None,
+                conversation: &snapshot,
+                turns: 3,
+                tokens: 99,
+                spend: &BTreeMap::from([(1, 42), (2, 7)]),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &TrustStore::new("/work"),
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            },
+        );
+        source.append_audit(
+            1,
+            &[crate::audit::Stamped {
+                at: 1,
+                from: None,
+                event: bravebot_core::event::Event::GatePassed {
+                    gate: "file_read",
+                    detail: "notes.txt".to_string(),
+                },
+            }],
+        );
+        let source_id = source.id().to_string();
+        let path = project_directory(&root)
+            .expect("a directory")
+            .join(format!("{source_id}.json"));
+        let mut aged = load(&root, &source_id).expect("the source record");
+        aged.started = 1_000;
+        aged.conversation.references = 4;
+        std::fs::write(&path, serde_json::to_vec_pretty(&aged).unwrap()).expect("age the record");
+        let before = std::fs::read(&path).expect("the source record");
+
+        let forked = fork(&root, &source_id).expect("the session forks");
+
+        assert_ne!(forked.id, source_id, "the fork kept the source's id");
+        assert!(
+            forked.started > aged.started,
+            "the fork kept the source's start time: {}",
+            forked.started
+        );
+        assert_eq!(forked.title, "what do the specs say (fork)");
+        assert_eq!(forked.turns, 3, "the fork lost the turns");
+        assert_eq!(forked.tokens, 99, "the fork lost the tokens");
+        assert_eq!(
+            forked.spend,
+            BTreeMap::from([(1, 42), (2, 7)]),
+            "the fork lost the spend"
+        );
+        assert_eq!(
+            forked.conversation.references, 4,
+            "the fork lost the conversation"
+        );
+        assert_eq!(
+            audit_of(&root, &forked.id),
+            audit_of(&root, &source_id),
+            "the fork did not copy the trail"
+        );
+        assert!(
+            !audit_of(&root, &forked.id).is_empty(),
+            "the source had no trail to copy"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("the source record"),
+            before,
+            "the source record changed"
+        );
+    }
+
     #[test]
     fn forking_a_manifest_session_is_refused() {
         if !in_isolated_profile() {

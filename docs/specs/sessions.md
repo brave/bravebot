@@ -528,6 +528,7 @@ context already built up without polluting the original session. Refusing manife
 the invariant that finished autonomous runs have a definite end.
 
 `verified-by: bravebot_session::sessions::forking_a_manifest_session_is_refused`
+`verified-by: bravebot_session::sessions::a_fork_is_a_new_record_with_the_conversation_the_spend_and_the_trail`
 `verified-by: bravebot_tui::undo_tests::terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions`
 
 <a id="SESSION-19"></a>
