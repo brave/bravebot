@@ -375,12 +375,19 @@ pub(crate) struct Hosting {
     pub(crate) watch: Box<dyn Watcher>,
     /// The process that ran this session before ended in the middle of a turn (BG-12).
     pub(crate) after_an_interruption: bool,
+    /// The mode every turn of this process runs under, fixed for its life (BG-8).
+    pub(crate) mode: Mode,
 }
 
 impl Hosting {
     pub(crate) fn of(shared: &Arc<Shared>) -> Self {
+        let (id, mode) = {
+            let inner = shared.locked();
+            (inner.job.id.clone(), inner.job.mode)
+        };
         Self {
-            id: shared.locked().job.id.clone(),
+            id,
+            mode,
             input: Intake {
                 shared: Arc::clone(shared),
                 current: Vec::new(),
@@ -400,18 +407,18 @@ impl Hosting {
     }
 }
 
-/// The entry for a session about to start: asking, in the directory this runs in.
+/// The entry for a session about to start, in the directory this runs in and in `mode`.
 ///
 /// A session started again keeps the name and the last prompt its entry had, and the time of its
 /// last turn, so the list does not forget what it was doing.
-pub(crate) fn entry(roster: &Roster, id: &str, first: Option<&str>) -> Job {
+pub(crate) fn entry(roster: &Roster, id: &str, first: Option<&str>, mode: Mode) -> Job {
     let directory = std::env::current_dir().unwrap_or_default();
     let earlier = roster.get(id).map(|seen| seen.job);
     let prompt = first
         .map(str::to_string)
         .or_else(|| earlier.as_ref().map(|job| job.prompt.clone()))
         .unwrap_or_default();
-    let mut job = Job::starting(id.to_string(), &directory, &prompt, Mode::Ask);
+    let mut job = Job::starting(id.to_string(), &directory, &prompt, mode);
     if let Some(earlier) = earlier {
         job.name = earlier.name;
         job.last_turn = earlier.last_turn;
@@ -453,7 +460,7 @@ mod socket {
     }
 
     /// Run the session for `id` in this process, until it is stopped.
-    pub(crate) fn host(id: &str) -> ExitCode {
+    pub(crate) fn host(id: &str, mode: Mode) -> ExitCode {
         // First, so everything below is in a group of its own that one signal reaches.
         bravebot_session::jobs::leave_the_terminal();
         let Some(roster) = Roster::writable() else {
@@ -474,7 +481,7 @@ mod socket {
         let Ok(Some(_lease)) = roster.claim(id) else {
             return ExitCode::FAILURE;
         };
-        let job = entry(&roster, id, first.as_deref());
+        let job = entry(&roster, id, first.as_deref(), mode);
         if roster.publish(&job).is_err() {
             return ExitCode::FAILURE;
         }
@@ -849,17 +856,44 @@ mod tests {
         earlier.is(State::Stopped, None);
         roster.publish(&earlier).expect("the entry is written");
 
-        let attached = entry(&roster, ID, None);
+        let attached = entry(&roster, ID, None, Mode::Ask);
         assert_eq!(attached.name, earlier.name);
         assert_eq!(attached.prompt, "and the tests");
         assert_eq!(attached.state, State::Working);
 
-        let replied = entry(&roster, ID, Some("and the docs"));
+        let replied = entry(&roster, ID, Some("and the docs"), Mode::Ask);
         assert_eq!(replied.name, earlier.name);
         assert_eq!(replied.prompt, "and the docs");
 
-        let fresh = entry(&roster, "22222222-2222-4222-8222-222222222222", Some("new"));
+        let fresh = entry(
+            &roster,
+            "22222222-2222-4222-8222-222222222222",
+            Some("new"),
+            Mode::Ask,
+        );
         assert_eq!(fresh.prompt, "new");
+    }
+
+    /// BG-8: the process runs in the mode it was started in, and an entry made for a process
+    /// started again is the one the caller names, not the one an earlier entry had.
+    #[test]
+    fn the_hosting_carries_the_mode_the_entry_was_made_in() {
+        let roster = Roster::at(a_root());
+        let mut earlier = Job::starting(
+            ID.to_string(),
+            std::path::Path::new("/work"),
+            "fix the build",
+            Mode::AcceptEdits,
+        );
+        earlier.is(State::Stopped, None);
+        roster.publish(&earlier).expect("the entry is written");
+
+        let started_again = entry(&roster, ID, None, Mode::Ask);
+        assert_eq!(started_again.mode, Mode::Ask);
+
+        let handed_over = entry(&roster, ID, None, Mode::Plan);
+        let shared = Shared::new(Roster::at(a_root()), handed_over, None);
+        assert_eq!(Hosting::of(&shared).mode, Mode::Plan);
     }
 
     #[derive(Clone, Default)]

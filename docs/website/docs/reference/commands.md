@@ -31,6 +31,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/handoff` | `<next goal>` | Start a new session from a brief you can edit, written for the next goal |
 | `/branch` | `[<name>]` | Copy this session and carry on in the copy, keeping the original to return to |
 | `/resume` | `[<id>]` | Pick up another session of this directory, by id or from a list |
+| `/bg` | | Hand this session to a background process that keeps running after the terminal closes |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
 | `/sandbox` | `[strict \| standard \| off]` | Show the sandbox mode, or change it from the next turn |
@@ -966,6 +967,25 @@ session already open, for a [manifest run](../using/sessions.md#a-manifest-run-i
 and for a session a running background session holds. Where this directory records no other session
 it says so. Typed while a turn runs it waits for the turn to end. The word takes an id and nothing
 else, and none of what you type after it is sent to the planner.
+
+## `/bg`
+
+Hands this session to a background process and leaves the screen. The process resumes the record
+the session has written, opens idle in the same directory and in the permission mode this session
+was in (asking, accepting edits or planning), and keeps running after the terminal closes. The
+terminal prints the id to join it with: `bravebot attach <id>` draws the session as this screen
+does, and `bravebot reply <id> "text"` sends it its next prompt. `bravebot sessions` lists it.
+
+A background session holds a question it would ask until someone attaches, and a rule in a settings
+file that allows something does not answer for you there. Stopping it, or leaving it idle for an
+hour, ends the process and keeps the record, and the next `attach` or `reply` starts it again in the
+mode every session opens in.
+
+It is refused, with a line saying why and the session carrying on, in bypass, in an incognito
+session, before the session has a record to hand over (send a prompt first), in a session started
+with an option `--bg` also refuses (such as `--no-shell` or `--settings`), and while a loop, a goal
+or a watch is running, which the background session does not run. Typed while a turn runs it
+waits for the turn to end. The word takes nothing after it: `/bg now` is sent as a prompt.
 
 ## `/export [path]`
 
