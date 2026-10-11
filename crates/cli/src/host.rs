@@ -131,6 +131,7 @@ impl Shared {
         inner.phase = Phase::Working;
         inner.job.is(State::Stopped, None);
         let _ = self.roster.publish(&inner.job);
+        self.roster.withdraw_attach_token(&inner.job.id);
     }
 
     /// Keep what the session wrote, and give it to the terminal attached, if one is.
@@ -488,7 +489,12 @@ mod socket {
         let Some(socket) = roster.socket_of(id) else {
             return ExitCode::FAILURE;
         };
+        // A socket left by a process that died is removed first, so one that exists is one this
+        // process bound, after the secret it is opened with was made (BG-15).
         let _ = std::fs::remove_file(&socket);
+        let Ok(token) = roster.issue_attach_token(id) else {
+            return ExitCode::FAILURE;
+        };
         let Ok(listener) = UnixListener::bind(&socket) else {
             return ExitCode::FAILURE;
         };
@@ -499,7 +505,8 @@ mod socket {
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 let shared = Arc::clone(&serving);
-                std::thread::spawn(move || serve(stream, &shared));
+                let token = token.clone();
+                std::thread::spawn(move || serve(stream, &shared, &token));
             }
         });
         let code = crate::plain::hosted(Hosting::of(&shared).after_an_interruption(interrupted));
@@ -507,8 +514,13 @@ mod socket {
         code
     }
 
-    /// One client: it says `reply` and sends a line, or says `attach` and talks until it goes.
-    fn serve(stream: UnixStream, shared: &Arc<Shared>) {
+    /// One client: it sends the secret of the session, and then says `reply` and sends a line, or
+    /// says `attach` and talks until it goes.
+    ///
+    /// A client whose first line is not the secret is closed without an answer, before anything it
+    /// sends is read as a request or an attach is registered for it (BG-15). The mode of the
+    /// socket is not enough: below Landlock ABI 9 a confined program can connect to it.
+    pub(super) fn serve(stream: UnixStream, shared: &Arc<Shared>, token: &str) {
         let _ = stream.set_read_timeout(Some(PATIENCE));
         let _ = stream.set_write_timeout(Some(PATIENCE));
         let Ok(reading) = stream.try_clone() else {
@@ -516,6 +528,11 @@ mod socket {
         };
         let mut from = BufReader::new(reading);
         let mut to = stream;
+        let opened = bounded_line(&mut from)
+            .is_some_and(|given| bravebot_session::jobs::is_the_attach_token(token, &given));
+        if !opened {
+            return;
+        }
         match bounded_line(&mut from).as_deref() {
             Some("reply") => {
                 let Some(text) = bounded_line(&mut from) else {
@@ -962,5 +979,81 @@ mod tests {
             Some("ok")
         );
         assert_eq!(bounded_line(&mut "".as_bytes()), None);
+    }
+
+    #[cfg(unix)]
+    const SECRET: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// What a client that sends `sent` and then stops sending is told by `serve`.
+    #[cfg(unix)]
+    fn served(shared: &Arc<Shared>, sent: &str) -> String {
+        use std::io::Read;
+        use std::net::Shutdown;
+        use std::os::unix::net::UnixStream;
+
+        let (mut client, server) = UnixStream::pair().expect("a pair");
+        let shared = Arc::clone(shared);
+        let serving = std::thread::spawn(move || socket::serve(server, &shared, SECRET));
+        client
+            .set_read_timeout(Some(LONG_ENOUGH))
+            .expect("a timeout");
+        client.write_all(sent.as_bytes()).expect("sent");
+        client.shutdown(Shutdown::Write).expect("done sending");
+        let mut told = String::new();
+        client.read_to_string(&mut told).expect("closed");
+        serving.join().expect("serve ended");
+        told
+    }
+
+    /// BG-15: a client whose first line is not the secret is closed without an answer, and what it
+    /// sent after that line is not read as a request: no reply is queued and nothing is attached.
+    #[cfg(unix)]
+    #[test]
+    fn a_client_without_the_secret_is_closed_unanswered_and_unread() {
+        let shared = an_idle_session(Duration::from_secs(3600));
+        let nearly = &SECRET[..63];
+        let longer = format!("{SECRET}0");
+        let upper = SECRET.to_uppercase();
+        let mut other = String::from(&SECRET[..63]);
+        other.push('e');
+        for first in ["", "reply", "attach", nearly, &longer, &upper, &other] {
+            for request in ["reply\nsneaked in\n", "attach\ny\n"] {
+                let told = served(&shared, &format!("{first}\n{request}"));
+                assert!(told.is_empty(), "{first:?} then {request:?}: {told:?}");
+            }
+        }
+        let told = served(&shared, "reply\nsneaked in\n");
+        assert!(told.is_empty(), "{told:?}");
+        assert!(queued(&shared).is_empty(), "{:?}", queued(&shared));
+        assert!(
+            shared.attach(Box::new(Kept::default())).is_some(),
+            "a client with no secret took the place of the terminal"
+        );
+    }
+
+    /// BG-15: with the secret first, a reply is taken and an attach is registered, as before.
+    #[cfg(unix)]
+    #[test]
+    fn a_client_with_the_secret_is_served() {
+        let shared = an_idle_session(Duration::from_secs(3600));
+        assert_eq!(
+            served(&shared, &format!("{SECRET}\nreply\nand the tests\n")),
+            "ok\n"
+        );
+        assert_eq!(queued(&shared), ["and the tests"]);
+
+        let told = served(&shared, &format!("{SECRET}\nattach\n"));
+        assert!(told.starts_with("ok\n"), "{told:?}");
+    }
+
+    /// BG-15: the secret is gone once the session has ended, so a stopped session leaves no way in
+    /// for the next process to inherit.
+    #[test]
+    fn a_session_that_has_ended_leaves_no_secret_behind() {
+        let shared = a_shared();
+        shared.roster.issue_attach_token(ID).expect("issued");
+        assert!(shared.roster.attach_token(ID).is_some());
+        shared.finish();
+        assert_eq!(shared.roster.attach_token(ID), None);
     }
 }

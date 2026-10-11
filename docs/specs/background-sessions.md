@@ -263,7 +263,7 @@ else: a turn that is running keeps running, and a held prompt stays held. The li
 sent to the session.
 
 The channel between the terminal and the process is local to the machine. It is restricted to the
-person's account and carries content with the label it was released under, so the terminal marks
+person's account, and to a program that holds the session's secret ([BG-15](#BG-15)), and carries content with the label it was released under, so the terminal marks
 quarantined bytes as it would in a foreground session. The attached terminal is handed what a
 foreground terminal would be handed, and nothing the session holds beyond that.
 
@@ -374,6 +374,35 @@ report failures the other caused. A session that nobody is watching is the one w
 person has not seen arrive in their tree.
 
 `verified-by: none`
+
+<a id="BG-15"></a>
+### BG-15: the socket answers only a client that holds the session's secret
+
+The process makes a secret of 256 random bits before it binds its socket, and keeps it in a file
+beside the socket that only the person's account can read. The first line a client sends is that
+secret. A connection whose first line is anything else, whole or part of it, longer than it or empty,
+is closed without an answer, before another line is read as a request and before an attach is
+registered for it. The secret is new for every process. It is removed when the process ends of its
+own accord, and one that is killed leaves it until the next process for the session replaces it.
+`bravebot attach` and `bravebot reply` read it and send it. The comparison looks at every byte of
+the secret whatever the first difference is.
+
+The mode of the socket is not what keeps a program out. Where the kernel cannot stop a confined
+program from connecting to a socket by its path (Landlock below ABI 9, [SANDBOX-3](sandboxing.md#SANDBOX-3)),
+a program confined to its working directory could otherwise send `reply` and have a line
+taken as the person's next prompt, or `attach` and answer a held prompt. The state directory is
+denied to every stage on every platform ([SANDBOX-12](sandboxing.md#SANDBOX-12)), so a confined
+program cannot read the secret.
+
+**Why.** A file mode applies to the file, and a program of the same user that is allowed to connect
+passes it. Only a thing the confined program cannot read can tell the person's terminal from it.
+
+`verified-by: bravebot_cli::running::a_connection_without_the_sessions_secret_gets_nothing_from_it`
+`verified-by: bravebot_cli::host::a_client_without_the_secret_is_closed_unanswered_and_unread`
+`verified-by: bravebot_cli::host::a_client_with_the_secret_is_served`
+`verified-by: bravebot_cli::host::a_session_that_has_ended_leaves_no_secret_behind`
+`verified-by: bravebot_session::jobs::the_secret_of_a_process_is_random_private_and_replaced_each_time`
+`verified-by: bravebot_session::jobs::only_the_whole_secret_is_the_secret`
 
 ## What this changes in other specs
 
