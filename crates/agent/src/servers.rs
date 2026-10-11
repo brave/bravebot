@@ -211,15 +211,31 @@ pub fn reach<A: Asker + ?Sized>(
     if !moving.is_empty() {
         let plans = moving
             .iter()
-            .map(|moving| {
-                let plan = Plan::Http {
-                    url: moving.url.clone(),
-                    declared: moving.declaration.digest(),
-                    timeouts: moving.declaration.timeouts(),
-                    tools: moving.declaration.tools().to_vec(),
-                    exclude_tools: moving.declaration.exclude_tools().to_vec(),
-                };
-                (moving.alias.clone(), plan)
+            .filter_map(|moving| {
+                match planned(&moving.declaration, &|name| std::env::var_os(name)) {
+                    Ok(Plan::Http {
+                        headers,
+                        timeouts,
+                        tools,
+                        exclude_tools,
+                        ..
+                    }) => {
+                        let plan = Plan::Http {
+                            url: moving.url.clone(),
+                            headers,
+                            declared: moving.declaration.digest(),
+                            timeouts,
+                            tools,
+                            exclude_tools,
+                        };
+                        Some((moving.alias.clone(), plan))
+                    }
+                    Ok(other) => Some((moving.alias.clone(), other)),
+                    Err(reason) => {
+                        notes.push(format!("{}: {reason}", moving.alias));
+                        None
+                    }
+                }
             })
             .collect();
         let mut again = Vec::new();
@@ -404,6 +420,7 @@ enum Plan {
     },
     Http {
         url: String,
+        headers: Vec<(String, String)>,
         declared: Digest,
         timeouts: Timeouts,
         tools: Vec<String>,
@@ -748,12 +765,33 @@ fn planned(
     let (argv, names, env, reads, directory, tools, exclude_tools) = match declaration {
         Declaration::Http {
             url,
+            env_http_headers,
+            bearer_env,
             timeouts,
             tools,
             exclude_tools,
         } => {
+            let mut headers = Vec::new();
+            let bearer = bearer_env
+                .as_ref()
+                .and_then(|var| environment(var).map(|token| (var, token)));
+            if let Some((var, token)) = bearer {
+                let token_str = token
+                    .to_str()
+                    .ok_or_else(|| problem(&Problem::Value(var.clone())))?;
+                headers.push(("Authorization".to_string(), format!("Bearer {token_str}")));
+            }
+            for (header, var) in env_http_headers {
+                if let Some(val) = environment(var) {
+                    let val_str = val
+                        .to_str()
+                        .ok_or_else(|| problem(&Problem::Value(var.clone())))?;
+                    headers.push((header.clone(), val_str.to_string()));
+                }
+            }
             return Ok(Plan::Http {
                 url: url.clone(),
+                headers,
                 declared: declaration.digest(),
                 timeouts: *timeouts,
                 tools: tools.clone(),
@@ -1176,6 +1214,19 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
             t!(mcp_directory, path = shown(directory))
         ));
     }
+    let mut header_items: Vec<String> = Vec::new();
+    if let Some(bearer) = declaration.bearer_env() {
+        header_items.push(format!("Authorization: Bearer ${bearer}"));
+    }
+    for (header, var) in declaration.env_http_headers() {
+        header_items.push(format!("{header}: ${var}"));
+    }
+    if !header_items.is_empty() {
+        lines.push(format!(
+            "{indent}{}",
+            t!(mcp_headers, headers = header_items.join(", "))
+        ));
+    }
     let timeouts = declaration.timeouts();
     if !timeouts.is_default() {
         lines.push(format!(
@@ -1230,6 +1281,7 @@ pub fn problem(found: &Problem) -> String {
         Problem::Directory => t!(mcp_problem_directory).to_string(),
         Problem::Url => t!(mcp_problem_url).to_string(),
         Problem::Credentials => t!(mcp_problem_credentials).to_string(),
+        Problem::Header(name) => t!(mcp_problem_header, name = name).to_string(),
         Problem::Remote(key) => t!(mcp_problem_remote, key = *key).to_string(),
         Problem::Timeout(key) => t!(
             mcp_problem_timeout,
@@ -1641,6 +1693,7 @@ fn start_under(
             }
             Plan::Http {
                 url,
+                headers,
                 declared,
                 timeouts,
                 tools,
@@ -1651,6 +1704,7 @@ fn start_under(
                     let (outcome, hop) = handshake_remote(
                         &alias,
                         url.clone(),
+                        headers,
                         declared,
                         timeouts,
                         &tools,
@@ -1758,6 +1812,7 @@ fn handshake_local(
 fn handshake_remote(
     alias: &str,
     url: String,
+    headers: Vec<(String, String)>,
     declared: Digest,
     timeouts: Timeouts,
     tools: &[String],
@@ -1784,6 +1839,7 @@ fn handshake_remote(
         &egress,
         alias,
         url,
+        headers,
         declared,
         timeouts,
         tools,
@@ -1802,12 +1858,15 @@ fn handshake_at(
     egress: &bravebot_net::Egress,
     alias: &str,
     url: String,
+    headers: Vec<(String, String)>,
     declared: Digest,
     timeouts: Timeouts,
     tools: &[String],
     exclude_tools: &[String],
 ) -> McpResult<crate::mcp::Reached> {
-    let mut server = HttpServer::new(alias, url).starting_within(timeouts.startup());
+    let mut server = HttpServer::new(alias, url)
+        .with_headers(headers)
+        .starting_within(timeouts.startup());
     server.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
     let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(policy, egress))?
         .filtered(tools, exclude_tools);
@@ -3232,6 +3291,93 @@ mod tests {
         );
     }
 
+    /// SERVERS-17: header names and environment variable names are drawn,
+    /// and secret values are never read or shown.
+    #[test]
+    fn a_declarations_headers_are_drawn_with_variable_names_and_without_secrets() {
+        let mut headers = std::collections::BTreeMap::new();
+        headers.insert("X-Api-Key".to_string(), "SECRET_KEY".to_string());
+        let declared = Declaration::http("https://api.example.com".into())
+            .expect("declaration")
+            .heading(headers, Some("TOKEN".into()))
+            .expect("heading");
+
+        let lines = drawn("api", &declared, "abcd1234");
+        let header_line = lines
+            .iter()
+            .find(|line| line.contains("headers:"))
+            .expect("headers line");
+        assert!(
+            header_line.contains("Authorization: Bearer $TOKEN"),
+            "{header_line}"
+        );
+        assert!(
+            header_line.contains("X-Api-Key: $SECRET_KEY"),
+            "{header_line}"
+        );
+
+        let env_fn = |var: &str| match var {
+            "TOKEN" => Some("secret-token-123".into()),
+            "SECRET_KEY" => Some("secret-key-456".into()),
+            _ => None,
+        };
+        let plan = planned(&declared, &env_fn).expect("planned");
+        match plan {
+            Plan::Http { headers, .. } => {
+                assert_eq!(
+                    headers,
+                    vec![
+                        (
+                            "Authorization".to_string(),
+                            "Bearer secret-token-123".to_string()
+                        ),
+                        ("X-Api-Key".to_string(), "secret-key-456".to_string()),
+                    ]
+                );
+            }
+            _ => panic!("expected Plan::Http"),
+        }
+
+        // Unset variables are omitted without error
+        let env_unset = |_var: &str| None;
+        let plan_unset = planned(&declared, &env_unset).expect("planned with unset vars");
+        match plan_unset {
+            Plan::Http { headers, .. } => {
+                assert!(
+                    headers.is_empty(),
+                    "unset variables omit headers: {headers:?}"
+                );
+            }
+            _ => panic!("expected Plan::Http"),
+        }
+
+        // Invalid UTF-8 values are refused rather than dropped
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let bad_bytes = std::ffi::OsString::from_vec(vec![0xFF, 0xFE]);
+            let env_bad_token = |var: &str| {
+                if var == "TOKEN" {
+                    Some(bad_bytes.clone())
+                } else {
+                    None
+                }
+            };
+            let err = planned(&declared, &env_bad_token).unwrap_err();
+            assert_eq!(err, problem(&Problem::Value("TOKEN".into())));
+
+            let env_bad_header = |var: &str| {
+                if var == "SECRET_KEY" {
+                    Some(bad_bytes.clone())
+                } else {
+                    None
+                }
+            };
+            let err2 = planned(&declared, &env_bad_header).unwrap_err();
+            assert_eq!(err2, problem(&Problem::Value("SECRET_KEY".into())));
+        }
+    }
+
     /// One per declaration, so what a runner fetched is there on its next launch and a declaration
     /// edited to run something else starts with nothing the one before it wrote.
     #[test]
@@ -4082,7 +4228,16 @@ done
     ) -> McpResult<crate::mcp::Reached> {
         let (url, _bodies) = serving_holding(weather, String::new(), method, hold);
         let declared = Declaration::http(url.clone()).expect("declaration");
-        handshake_remote("weather", url, declared.digest(), timeouts, &[], &[]).0
+        handshake_remote(
+            "weather",
+            url,
+            Vec::new(),
+            declared.digest(),
+            timeouts,
+            &[],
+            &[],
+        )
+        .0
     }
 
     /// A remote server that does not answer its handshake within the startup bound its declaration

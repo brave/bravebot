@@ -873,6 +873,8 @@ mcp-two-transports = add prend un programme après -- ou --http, pas les deux
 mcp-stdio-needs-a-program =
     un programme et ses arguments viennent après un -- seul, comme dans -- npx -y weather-mcp
 mcp-http-needs-a-url = --http a besoin d'une url
+mcp-bearer-env-needs-a-name = --bearer-env nécessite le nom d'une variable d'environnement
+mcp-header-env-needs-a-pair = --header-env nécessite <EN_TÊTE>=<VARIABLE_D_ENVIRONNEMENT>
 mcp-env-needs-a-name =
     -e a besoin de NOM=valeur, ou du nom d'une variable lue dans votre environnement
 mcp-env-after-the-alias =
@@ -911,6 +913,7 @@ mcp-problem-directory = le répertoire n'est pas un chemin absolu
 mcp-problem-url = l'url n'est pas en http ou en https avec un hôte
 mcp-problem-credentials =
     l'url porte un utilisateur ou un mot de passe, ce qui garderait un identifiant en clair
+mcp-problem-header = { $name } n'est pas un jeton d'en-tête HTTP valide
 mcp-problem-remote = un serveur distant ne prend pas de { $key }
 mcp-problem-timeout = { $key } n'est pas un nombre entier de secondes de 1 à { $most }
 mcp-problem-tool = { $name } n'est pas un nom d'outil
@@ -931,6 +934,7 @@ mcp-no-state-directory =
 mcp-not-written = { $path } n'a pas pu être écrit ({ $error })
 mcp-declared = { $alias } déclaré dans { $path }
 mcp-variables = variables : { $names }
+mcp-headers = en-têtes : { $headers }
 mcp-variable-stored = { $name } (enregistrée)
 mcp-may-read = peut lire : { $path }
 mcp-directory = répertoire, où il peut écrire : { $path }
