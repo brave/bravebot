@@ -900,6 +900,8 @@ mcp-problem-credentials =
     l'url porte un utilisateur ou un mot de passe, ce qui garderait un identifiant en clair
 mcp-problem-remote = un serveur distant ne prend pas de { $key }
 mcp-problem-timeout = { $key } n'est pas un nombre entier de secondes de 1 à { $most }
+mcp-problem-tool = { $name } n'est pas un nom d'outil
+mcp-problem-tools = { $key } n'est pas une liste de noms d'outils
 mcp-unreadable = { $path } ne peut pas être lu : { $reason }
 mcp-unreadable-too-large = il est plus gros qu'un fichier de déclarations n'a de raison de l'être
 mcp-unreadable-not-read = il n'a pas pu être lu comme du texte

@@ -139,6 +139,19 @@ pub fn is_alias(alias: &str) -> bool {
         && characters.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// Whether `name` may name a tool in a tool allow or deny filter.
+///
+/// Either a tool word alone, or qualified under an alias as `alias:tool`.
+pub fn is_tool_filter_name(name: &str) -> bool {
+    if is_tool_word(name) {
+        return true;
+    }
+    if let Some((alias, word)) = name.split_once(':') {
+        return is_alias(alias) && is_tool_word(word);
+    }
+    false
+}
+
 /// Whether `name` is a variable name.
 ///
 /// The portable spelling, a letter or `_` and then letters, digits and `_`. Anything else is not
@@ -188,6 +201,10 @@ pub enum Problem {
     /// A timeout, by the key the file spells it with, is not a whole number of seconds from one to
     /// [`MAX_TIMEOUT_SECS`].
     Timeout(&'static str),
+    /// A tool name in a tool filter is not accepted by [`is_tool_filter_name`].
+    Tool(String),
+    /// `tools` or `exclude_tools` is not a list of tool names.
+    Tools(&'static str),
 }
 
 /// How long a server has for its handshake and for each call, where a declaration says.
@@ -276,6 +293,11 @@ pub enum Declaration {
         directory: Option<String>,
         /// How long it has for its handshake and for each call.
         timeouts: Timeouts,
+        /// The tools this server offers where a filter was given, each once. Empty where every
+        /// tool is offered.
+        tools: Vec<String>,
+        /// The tools withheld from this server where a filter was given, each once.
+        exclude_tools: Vec<String>,
     },
     /// A server somewhere else, reached over HTTP.
     Http {
@@ -283,6 +305,11 @@ pub enum Declaration {
         url: String,
         /// How long it has for its handshake and for each call.
         timeouts: Timeouts,
+        /// The tools this server offers where a filter was given, each once. Empty where every
+        /// tool is offered.
+        tools: Vec<String>,
+        /// The tools withheld from this server where a filter was given, each once.
+        exclude_tools: Vec<String>,
     },
 }
 
@@ -296,6 +323,8 @@ impl std::fmt::Debug for Declaration {
                 reads,
                 directory,
                 timeouts,
+                tools,
+                exclude_tools,
             } => f
                 .debug_struct("Stdio")
                 .field("argv", argv)
@@ -304,11 +333,20 @@ impl std::fmt::Debug for Declaration {
                 .field("reads", reads)
                 .field("directory", directory)
                 .field("timeouts", timeouts)
+                .field("tools", tools)
+                .field("exclude_tools", exclude_tools)
                 .finish(),
-            Self::Http { url, timeouts } => f
+            Self::Http {
+                url,
+                timeouts,
+                tools,
+                exclude_tools,
+            } => f
                 .debug_struct("Http")
                 .field("url", url)
                 .field("timeouts", timeouts)
+                .field("tools", tools)
+                .field("exclude_tools", exclude_tools)
                 .finish(),
         }
     }
@@ -326,6 +364,8 @@ pub enum Field {
     Reads,
     Directory,
     Url,
+    Tools,
+    ExcludeTools,
 }
 
 impl Field {
@@ -339,6 +379,8 @@ impl Field {
             Self::Reads => "reads",
             Self::Directory => "directory",
             Self::Url => "url",
+            Self::Tools => "tools",
+            Self::ExcludeTools => "exclude_tools",
         }
     }
 }
@@ -364,6 +406,8 @@ impl Declaration {
             reads: Vec::new(),
             directory,
             timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         })
     }
 
@@ -378,6 +422,8 @@ impl Declaration {
             reads,
             directory,
             timeouts,
+            tools,
+            exclude_tools,
             ..
         } = self
         else {
@@ -404,6 +450,8 @@ impl Declaration {
             reads,
             directory,
             timeouts,
+            tools,
+            exclude_tools,
         })
     }
 
@@ -415,6 +463,8 @@ impl Declaration {
             env,
             directory,
             timeouts,
+            tools,
+            exclude_tools,
             ..
         } = self
         else {
@@ -439,6 +489,8 @@ impl Declaration {
             reads: kept,
             directory,
             timeouts,
+            tools,
+            exclude_tools,
         })
     }
 
@@ -451,6 +503,8 @@ impl Declaration {
                 env,
                 reads,
                 directory,
+                tools,
+                exclude_tools,
                 ..
             } => Self::Stdio {
                 argv,
@@ -459,9 +513,73 @@ impl Declaration {
                 reads,
                 directory,
                 timeouts,
+                tools,
+                exclude_tools,
             },
-            Self::Http { url, .. } => Self::Http { url, timeouts },
+            Self::Http {
+                url,
+                tools,
+                exclude_tools,
+                ..
+            } => Self::Http {
+                url,
+                timeouts,
+                tools,
+                exclude_tools,
+            },
         }
+    }
+
+    /// The tool names this server offers where a filter was given, or empty where every tool is
+    /// offered.
+    pub fn tools(&self) -> &[String] {
+        match self {
+            Self::Stdio { tools, .. } | Self::Http { tools, .. } => tools,
+        }
+    }
+
+    /// The tool names withheld from this server where a filter was given.
+    pub fn exclude_tools(&self) -> &[String] {
+        match self {
+            Self::Stdio { exclude_tools, .. } | Self::Http { exclude_tools, .. } => exclude_tools,
+        }
+    }
+
+    /// This declaration with `tools` as the allowed tool names and `exclude_tools` as the denied
+    /// tool names.
+    pub fn filtering(
+        self,
+        tools: Vec<String>,
+        exclude_tools: Vec<String>,
+    ) -> Result<Self, Problem> {
+        let tools = tool_filters(tools, "tools")?;
+        let exclude_tools = tool_filters(exclude_tools, "exclude_tools")?;
+        Ok(match self {
+            Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                timeouts,
+                ..
+            } => Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                timeouts,
+                tools,
+                exclude_tools,
+            },
+            Self::Http { url, timeouts, .. } => Self::Http {
+                url,
+                timeouts,
+                tools,
+                exclude_tools,
+            },
+        })
     }
 
     /// How long this server has for its handshake and for each call.
@@ -477,6 +595,8 @@ impl Declaration {
         Ok(Self::Http {
             url,
             timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         })
     }
 
@@ -530,6 +650,8 @@ impl Declaration {
                 env,
                 reads,
                 directory,
+                tools,
+                exclude_tools,
                 ..
             } => {
                 let variables: BTreeSet<&String> = variables.iter().collect();
@@ -546,9 +668,31 @@ impl Declaration {
                     let reads: BTreeSet<&String> = reads.iter().collect();
                     form.push(serde_json::json!({ "env": env, "reads": reads }));
                 }
+                if !tools.is_empty() || !exclude_tools.is_empty() {
+                    let tools: BTreeSet<&String> = tools.iter().collect();
+                    let exclude_tools: BTreeSet<&String> = exclude_tools.iter().collect();
+                    form.push(
+                        serde_json::json!({ "tools": tools, "exclude_tools": exclude_tools }),
+                    );
+                }
                 serde_json::Value::Array(form)
             }
-            Self::Http { url, .. } => serde_json::json!([DIGEST_FORM, "http", url]),
+            Self::Http {
+                url,
+                tools,
+                exclude_tools,
+                ..
+            } => {
+                let mut form = vec![DIGEST_FORM.into(), "http".into(), serde_json::json!(url)];
+                if !tools.is_empty() || !exclude_tools.is_empty() {
+                    let tools: BTreeSet<&String> = tools.iter().collect();
+                    let exclude_tools: BTreeSet<&String> = exclude_tools.iter().collect();
+                    form.push(
+                        serde_json::json!({ "tools": tools, "exclude_tools": exclude_tools }),
+                    );
+                }
+                serde_json::Value::Array(form)
+            }
         };
         Digest(Sha256::digest(form.to_string().as_bytes()).into())
     }
@@ -566,6 +710,8 @@ impl Declaration {
                     env,
                     reads,
                     directory,
+                    tools,
+                    exclude_tools,
                     ..
                 },
                 Self::Stdio {
@@ -574,6 +720,8 @@ impl Declaration {
                     env: other_env,
                     reads: other_reads,
                     directory: other_directory,
+                    tools: other_tools,
+                    exclude_tools: other_exclude_tools,
                     ..
                 },
             ) => {
@@ -592,15 +740,43 @@ impl Declaration {
                     (!restored.is_empty(), Field::Env(restored)),
                     (set(reads) != set(other_reads), Field::Reads),
                     (directory != other_directory, Field::Directory),
+                    (set(tools) != set(other_tools), Field::Tools),
+                    (
+                        set(exclude_tools) != set(other_exclude_tools),
+                        Field::ExcludeTools,
+                    ),
                 ]
                 .into_iter()
                 .filter_map(|(changed, field)| changed.then_some(field))
                 .collect()
             }
-            (Self::Http { url, .. }, Self::Http { url: other_url, .. }) => match url == other_url {
-                true => Vec::new(),
-                false => vec![Field::Url],
-            },
+            (
+                Self::Http {
+                    url,
+                    tools,
+                    exclude_tools,
+                    ..
+                },
+                Self::Http {
+                    url: other_url,
+                    tools: other_tools,
+                    exclude_tools: other_exclude_tools,
+                    ..
+                },
+            ) => {
+                let set = |names: &[String]| names.iter().cloned().collect::<BTreeSet<_>>();
+                let mut changed = Vec::new();
+                if url != other_url {
+                    changed.push(Field::Url);
+                }
+                if set(tools) != set(other_tools) {
+                    changed.push(Field::Tools);
+                }
+                if set(exclude_tools) != set(other_exclude_tools) {
+                    changed.push(Field::ExcludeTools);
+                }
+                changed
+            }
             _ => vec![Field::Transport],
         }
     }
@@ -640,6 +816,12 @@ impl Declaration {
                 entry.insert("url".into(), url.clone().into());
             }
         }
+        if !self.tools().is_empty() {
+            entry.insert("tools".into(), self.tools().to_vec().into());
+        }
+        if !self.exclude_tools().is_empty() {
+            entry.insert("exclude_tools".into(), self.exclude_tools().to_vec().into());
+        }
         self.timeouts().write_into(&mut entry);
         serde_json::Value::Object(entry)
     }
@@ -656,12 +838,16 @@ impl Declaration {
                 "env",
                 "reads",
                 "directory",
+                "tools",
+                "exclude_tools",
                 Timeouts::STARTUP_KEY,
                 Timeouts::TOOL_KEY,
             ],
             Some("http") => &[
                 "transport",
                 "url",
+                "tools",
+                "exclude_tools",
                 Timeouts::STARTUP_KEY,
                 Timeouts::TOOL_KEY,
             ],
@@ -677,9 +863,27 @@ impl Declaration {
             });
         }
         let timeouts = Timeouts::from_entry(entry)?;
+        let parse_tools = |key: &'static str| -> Result<Vec<String>, Problem> {
+            match entry.get(key) {
+                None => Ok(Vec::new()),
+                Some(serde_json::Value::Array(names)) => {
+                    let mut list = Vec::new();
+                    for name in names {
+                        let text = name.as_str().ok_or(Problem::Tools(key))?;
+                        list.push(text.to_string());
+                    }
+                    Ok(list)
+                }
+                Some(_) => Err(Problem::Tools(key)),
+            }
+        };
+        let tools = parse_tools("tools")?;
+        let exclude_tools = parse_tools("exclude_tools")?;
         if allowed.contains(&"url") {
             let url = entry.get("url").and_then(|url| url.as_str());
-            return Ok(Self::http(url.ok_or(Problem::Url)?.to_string())?.timing(timeouts));
+            return Ok(Self::http(url.ok_or(Problem::Url)?.to_string())?
+                .filtering(tools, exclude_tools)?
+                .timing(timeouts));
         }
         let argv = match entry.get("argv") {
             Some(serde_json::Value::Array(words)) => words
@@ -729,8 +933,23 @@ impl Declaration {
         Ok(Self::stdio(argv, variables, directory)?
             .storing(env)?
             .reading(reads)?
+            .filtering(tools, exclude_tools)?
             .timing(timeouts))
     }
+}
+
+/// Validate and deduplicate tool filter names.
+fn tool_filters(names: Vec<String>, _key: &'static str) -> Result<Vec<String>, Problem> {
+    let mut kept: Vec<String> = Vec::with_capacity(names.len());
+    for name in names {
+        if !is_tool_filter_name(&name) {
+            return Err(Problem::Tool(name));
+        }
+        if !kept.contains(&name) {
+            kept.push(name);
+        }
+    }
+    Ok(kept)
 }
 
 /// A program to run is a non-empty argument vector whose first word is not blank.
@@ -2149,5 +2368,129 @@ mod tests {
         std::fs::write(tools_file(&home), [0xff, 0xfe, b'\n']).unwrap();
         assert_eq!(Standing::to_change(&home), Err(Unreadable::NotRead));
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_tool_filter_name_is_a_tool_word_or_alias_qualified() {
+        for valid in [
+            "get_current_conditions",
+            "weather:get_forecast",
+            "fetch-data_1",
+            "srv:tool-name",
+        ] {
+            assert!(is_tool_filter_name(valid), "{valid} should be valid");
+        }
+        for invalid in [
+            "",
+            "not a tool",
+            "alias:tool:extra",
+            "alias:",
+            ":tool",
+            "tool@name",
+        ] {
+            assert!(!is_tool_filter_name(invalid), "{invalid} should be invalid");
+        }
+    }
+
+    #[test]
+    fn a_digest_covers_tool_filters_and_order_does_not_matter() {
+        let base = weather();
+        let with_tools = base
+            .clone()
+            .filtering(words(&["get_weather", "get_alerts"]), Vec::new())
+            .unwrap();
+        let with_tools_reordered = base
+            .clone()
+            .filtering(words(&["get_alerts", "get_weather"]), Vec::new())
+            .unwrap();
+        let with_exclude = base
+            .clone()
+            .filtering(Vec::new(), words(&["get_alerts"]))
+            .unwrap();
+        let with_both = base
+            .clone()
+            .filtering(words(&["get_weather"]), words(&["get_alerts"]))
+            .unwrap();
+
+        assert_ne!(base.digest(), with_tools.digest());
+        assert_ne!(base.digest(), with_exclude.digest());
+        assert_ne!(with_tools.digest(), with_exclude.digest());
+        assert_ne!(with_tools.digest(), with_both.digest());
+        assert_eq!(with_tools.digest(), with_tools_reordered.digest());
+    }
+
+    #[test]
+    fn a_declaration_with_no_tool_filters_digests_as_it_did_before() {
+        let plain_stdio = Declaration::stdio(words(&["server"]), Vec::new(), None).unwrap();
+        let filtered_empty_stdio = plain_stdio
+            .clone()
+            .filtering(Vec::new(), Vec::new())
+            .unwrap();
+        assert_eq!(plain_stdio.digest(), filtered_empty_stdio.digest());
+
+        let plain_http = Declaration::http("https://example.com/mcp".into()).unwrap();
+        let filtered_empty_http = plain_http
+            .clone()
+            .filtering(Vec::new(), Vec::new())
+            .unwrap();
+        assert_eq!(plain_http.digest(), filtered_empty_http.digest());
+    }
+
+    #[test]
+    fn tool_filters_are_read_written_and_roundtripped() {
+        let text = r#"{"servers": {
+            "stdio": {
+                "transport": "stdio",
+                "argv": ["weather-mcp"],
+                "tools": ["get_forecast", "get_alerts"],
+                "exclude_tools": ["get_radar"]
+            },
+            "http": {
+                "transport": "http",
+                "url": "https://api.github.com/mcp",
+                "tools": ["create_issue"],
+                "exclude_tools": ["delete_repo"]
+            }
+        }}"#;
+        let declarations = Declarations::parse(text).unwrap();
+        let stdio = declarations.get("stdio").unwrap().declaration.unwrap();
+        assert_eq!(stdio.tools(), ["get_forecast", "get_alerts"]);
+        assert_eq!(stdio.exclude_tools(), ["get_radar"]);
+
+        let http = declarations.get("http").unwrap().declaration.unwrap();
+        assert_eq!(http.tools(), ["create_issue"]);
+        assert_eq!(http.exclude_tools(), ["delete_repo"]);
+
+        let serialized = declarations.to_text();
+        let parsed = Declarations::parse(&serialized).unwrap();
+        assert_eq!(parsed, declarations);
+    }
+
+    #[test]
+    fn tool_filter_changes_are_named_by_field() {
+        let base = weather();
+        let with_tools = base
+            .clone()
+            .filtering(words(&["get_forecast"]), Vec::new())
+            .unwrap();
+        let with_exclude = base
+            .clone()
+            .filtering(Vec::new(), words(&["get_alerts"]))
+            .unwrap();
+
+        assert_eq!(base.changes(&with_tools), vec![Field::Tools]);
+        assert_eq!(base.changes(&with_exclude), vec![Field::ExcludeTools]);
+
+        let remote = Declaration::http("https://example.com/mcp".into()).unwrap();
+        let remote_tools = remote
+            .clone()
+            .filtering(words(&["create_issue"]), Vec::new())
+            .unwrap();
+        let remote_exclude = remote
+            .clone()
+            .filtering(Vec::new(), words(&["delete_repo"]))
+            .unwrap();
+        assert_eq!(remote.changes(&remote_tools), vec![Field::Tools]);
+        assert_eq!(remote.changes(&remote_exclude), vec![Field::ExcludeTools]);
     }
 }

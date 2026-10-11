@@ -740,7 +740,7 @@ fn planned(
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Plan, String> {
     let (argv, names, env, reads, directory) = match declaration {
-        Declaration::Http { url, timeouts } => {
+        Declaration::Http { url, timeouts, .. } => {
             return Ok(Plan::Http {
                 url: url.clone(),
                 declared: declaration.digest(),
@@ -1202,6 +1202,8 @@ pub fn problem(found: &Problem) -> String {
             most = mcp::MAX_TIMEOUT_SECS
         )
         .to_string(),
+        Problem::Tool(name) => t!(mcp_problem_tool, name = name).to_string(),
+        Problem::Tools(key) => t!(mcp_problem_tools, key = *key).to_string(),
     }
 }
 

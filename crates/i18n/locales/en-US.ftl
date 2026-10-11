@@ -1055,6 +1055,8 @@ mcp-problem-credentials =
     the url carries a user or a password, which would keep a credential in plain text
 mcp-problem-remote = a remote server takes no { $key }
 mcp-problem-timeout = { $key } is not a whole number of seconds from 1 to { $most }
+mcp-problem-tool = { $name } is not a tool name
+mcp-problem-tools = { $key } is not a list of tool names
 mcp-unreadable = { $path } cannot be read: { $reason }
 mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
 mcp-unreadable-not-read = it could not be read as text
