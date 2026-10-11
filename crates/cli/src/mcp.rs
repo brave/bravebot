@@ -123,8 +123,8 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push('\n');
     said.push_str(t!(mcp_forms_heading));
     for form in [
-        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--stdio] -- <program> [args...]",
-        "bravebot mcp add <alias> [-s <scope>] --http <url>",
+        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--tools <list>] [--exclude-tools <list>] [--stdio] -- <program> [args...]",
+        "bravebot mcp add <alias> [-s <scope>] [--tools <list>] [--exclude-tools <list>] --http <url>",
         "bravebot mcp enable <alias> [-s <scope>]",
         "bravebot mcp disable <alias> [-s <scope>]",
         "bravebot mcp get <alias>",
@@ -315,6 +315,8 @@ fn declared(
     let mut transport = None;
     let mut startup = None;
     let mut tool = None;
+    let mut tools = Vec::new();
+    let mut exclude_tools = Vec::new();
     let mut index = 0;
     while index < flags.len() {
         let flag = flags[index].as_str();
@@ -349,6 +351,78 @@ fn declared(
             "--dir" => {
                 let path = value.ok_or_else(|| argument(t!(mcp_dir_needs_a_path)))?;
                 directory = Some(place(path)?);
+            }
+            "--tools" => {
+                let run = flags[index + 1..]
+                    .iter()
+                    .take_while(|word| !word.starts_with('-'))
+                    .count();
+                if run == 0 {
+                    return Err(argument(t!(mcp_tools_needs_a_list)).into());
+                }
+                let before = tools.len();
+                for word in &flags[index + 1..index + 1 + run] {
+                    for item in word.split(',') {
+                        let trimmed = item.trim();
+                        if !trimmed.is_empty() {
+                            tools.push(trimmed.to_string());
+                        }
+                    }
+                }
+                if tools.len() == before {
+                    return Err(argument(t!(mcp_tools_needs_a_list)).into());
+                }
+                taken = 1 + run;
+            }
+            joined if joined.starts_with("--tools=") => {
+                let word = joined.strip_prefix("--tools=").unwrap_or_default();
+                let before = tools.len();
+                for item in word.split(',') {
+                    let trimmed = item.trim();
+                    if !trimmed.is_empty() {
+                        tools.push(trimmed.to_string());
+                    }
+                }
+                if tools.len() == before {
+                    return Err(argument(t!(mcp_tools_needs_a_list)).into());
+                }
+                taken = 1;
+            }
+            "--exclude-tools" => {
+                let run = flags[index + 1..]
+                    .iter()
+                    .take_while(|word| !word.starts_with('-'))
+                    .count();
+                if run == 0 {
+                    return Err(argument(t!(mcp_exclude_tools_needs_a_list)).into());
+                }
+                let before = exclude_tools.len();
+                for word in &flags[index + 1..index + 1 + run] {
+                    for item in word.split(',') {
+                        let trimmed = item.trim();
+                        if !trimmed.is_empty() {
+                            exclude_tools.push(trimmed.to_string());
+                        }
+                    }
+                }
+                if exclude_tools.len() == before {
+                    return Err(argument(t!(mcp_exclude_tools_needs_a_list)).into());
+                }
+                taken = 1 + run;
+            }
+            joined if joined.starts_with("--exclude-tools=") => {
+                let word = joined.strip_prefix("--exclude-tools=").unwrap_or_default();
+                let before = exclude_tools.len();
+                for item in word.split(',') {
+                    let trimmed = item.trim();
+                    if !trimmed.is_empty() {
+                        exclude_tools.push(trimmed.to_string());
+                    }
+                }
+                if exclude_tools.len() == before {
+                    return Err(argument(t!(mcp_exclude_tools_needs_a_list)).into());
+                }
+                taken = 1;
             }
             "--startup-timeout" => {
                 startup = Some(seconds(value, Timeouts::STARTUP_KEY)?);
@@ -402,6 +476,7 @@ fn declared(
             }
             Declaration::stdio(argv, variables, directory)
                 .and_then(|declaration| declaration.storing(env))
+                .and_then(|declaration| declaration.filtering(tools, exclude_tools))
                 .map(|declaration| declaration.timing(timeouts))
                 .map_err(Refusal::Problem)
         }
@@ -415,6 +490,7 @@ fn declared(
             Err(Refusal::Problem(Problem::Remote("directory")))
         }
         Some(Transport::Http(url)) => Declaration::http(url)
+            .and_then(|declaration| declaration.filtering(tools, exclude_tools))
             .map(|declaration| declaration.timing(timeouts))
             .map_err(Refusal::Problem),
     }
@@ -2225,6 +2301,115 @@ mod tests {
         assert_eq!(
             found(&["--startup-timeout", "0", "--", "/opt/srv"]),
             Problem::Timeout("startup_timeout_secs")
+        );
+    }
+
+    /// `--tools` and `--exclude-tools` set tool allow and deny lists on either transport, and
+    /// empty lists or invalid tool names are refused.
+    #[test]
+    fn the_tool_filter_flags_set_allow_and_deny_lists_and_refuse_invalid_inputs() {
+        let declared_by = |flags: &[&str]| declared(&words(flags), 1, &mut None).ok();
+
+        let local = declared_by(&[
+            "--tools",
+            "weather,forecast",
+            "--exclude-tools",
+            "alerts",
+            "--",
+            "/opt/srv",
+        ])
+        .unwrap();
+        assert_eq!(local.tools(), &["weather", "forecast"]);
+        assert_eq!(local.exclude_tools(), &["alerts"]);
+
+        let remote = declared_by(&[
+            "--http",
+            "https://mcp.example.com/mcp",
+            "--tools=search,get",
+            "--exclude-tools=delete",
+        ])
+        .unwrap();
+        assert_eq!(remote.tools(), &["search", "get"]);
+        assert_eq!(remote.exclude_tools(), &["delete"]);
+
+        let spaced = declared_by(&[
+            "--tools",
+            "tool1",
+            "tool2",
+            "--exclude-tools",
+            "tool3",
+            "tool4",
+            "--",
+            "/opt/srv",
+        ])
+        .unwrap();
+        assert_eq!(spaced.tools(), &["tool1", "tool2"]);
+        assert_eq!(spaced.exclude_tools(), &["tool3", "tool4"]);
+
+        let refused = |flags: &[&str]| match declared(&words(flags), 1, &mut None) {
+            Err(Refusal::Said((Ending::Argument, said))) => said,
+            _ => panic!("{flags:?} was not refused as an argument"),
+        };
+        assert_eq!(
+            refused(&["--tools", "--", "/opt/srv"]),
+            t!(mcp_tools_needs_a_list).to_string()
+        );
+        assert_eq!(
+            refused(&["--tools=", "--", "/opt/srv"]),
+            t!(mcp_tools_needs_a_list).to_string()
+        );
+        assert_eq!(
+            refused(&["--tools", "", "--", "/opt/srv"]),
+            t!(mcp_tools_needs_a_list).to_string()
+        );
+        assert_eq!(
+            refused(&["--exclude-tools", "--", "/opt/srv"]),
+            t!(mcp_exclude_tools_needs_a_list).to_string()
+        );
+        assert_eq!(
+            refused(&["--exclude-tools=", "--", "/opt/srv"]),
+            t!(mcp_exclude_tools_needs_a_list).to_string()
+        );
+        assert_eq!(
+            refused(&["--exclude-tools", "", "--", "/opt/srv"]),
+            t!(mcp_exclude_tools_needs_a_list).to_string()
+        );
+
+        let problem = |flags: &[&str]| match declared(&words(flags), 1, &mut None) {
+            Err(Refusal::Problem(problem)) => problem,
+            _ => panic!("{flags:?} did not fail with a problem"),
+        };
+        assert_eq!(
+            problem(&["--tools", "not a valid tool name", "--", "/opt/srv"]),
+            Problem::Tool("not a valid tool name".to_string())
+        );
+    }
+
+    #[test]
+    fn the_question_shows_tool_allow_and_deny_filters() {
+        let directory = scratch("cli-mcp-filter-shown");
+        let args = [
+            "add",
+            "srv",
+            "--tools",
+            "fetch,search",
+            "--exclude-tools",
+            "delete",
+            "--",
+            "/opt/srv",
+        ];
+        let (_, screen) = typing(&directory, &args, "n\n");
+        assert!(
+            screen
+                .lines()
+                .any(|line| line.trim() == "tools: fetch, search"),
+            "{screen}"
+        );
+        assert!(
+            screen
+                .lines()
+                .any(|line| line.trim() == "exclude tools: delete"),
+            "{screen}"
         );
     }
 

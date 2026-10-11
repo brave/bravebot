@@ -870,6 +870,8 @@ mcp-env-word-refused =
     le mot { $position } après add n'est pas NOM=valeur, et n'est pas répété car il peut être une
     valeur : un nom seul n'est lu dans votre environnement que s'il est le seul mot que prend son -e
 mcp-dir-needs-a-path = --dir a besoin d'un répertoire
+mcp-tools-needs-a-list = --tools a besoin d'un nom d'outil ou d'une liste de noms d'outils séparés par des virgules
+mcp-exclude-tools-needs-a-list = --exclude-tools a besoin d'un nom d'outil ou d'une liste de noms d'outils séparés par des virgules
 mcp-dir-not-a-directory = { $path } n'est pas un répertoire
 mcp-dir-not-a-directory-unshown =
     le mot après --dir n'est pas un répertoire, et n'est pas répété car il peut être une valeur
@@ -922,6 +924,8 @@ mcp-variable-stored = { $name } (enregistrée)
 mcp-may-read = peut lire : { $path }
 mcp-directory = répertoire, où il peut écrire : { $path }
 mcp-timeouts = temps accordé : { $startup } secondes pour démarrer, { $tool } secondes par appel
+mcp-declaration-tools = outils : { $names }
+mcp-declaration-exclude-tools = outils exclus : { $names }
 mcp-digest = empreinte : { $digest }
 mcp-changed = champs modifiés : { $fields }
 mcp-question = Utiliser ce serveur MCP ?

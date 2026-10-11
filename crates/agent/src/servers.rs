@@ -1187,6 +1187,24 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
             )
         ));
     }
+    if !declaration.tools().is_empty() {
+        lines.push(format!(
+            "{indent}{}",
+            t!(
+                mcp_declaration_tools,
+                names = declaration.tools().join(", ")
+            )
+        ));
+    }
+    if !declaration.exclude_tools().is_empty() {
+        lines.push(format!(
+            "{indent}{}",
+            t!(
+                mcp_declaration_exclude_tools,
+                names = declaration.exclude_tools().join(", ")
+            )
+        ));
+    }
     lines.push(format!("{indent}{}", t!(mcp_digest, digest = digest)));
     lines
 }

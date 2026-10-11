@@ -1026,6 +1026,8 @@ mcp-env-word-refused =
     word { $position } after add is not NAME=value, and is not repeated since it may be a value: a
     name alone is read from your environment only as the one word its -e takes
 mcp-dir-needs-a-path = --dir needs a directory
+mcp-tools-needs-a-list = --tools needs a tool name or a comma-separated list of tool names
+mcp-exclude-tools-needs-a-list = --exclude-tools needs a tool name or a comma-separated list of tool names
 mcp-dir-not-a-directory = { $path } is not a directory
 mcp-dir-not-a-directory-unshown =
     the word after --dir is not a directory, and is not repeated since it may be a value
@@ -1079,6 +1081,8 @@ mcp-may-read = may read: { $path }
 mcp-directory = directory, which it may write: { $path }
 # The seconds a server has for its handshake and for each call, where a declaration gives either.
 mcp-timeouts = time allowed: { $startup } seconds to start, { $tool } seconds for each call
+mcp-declaration-tools = tools: { $names }
+mcp-declaration-exclude-tools = exclude tools: { $names }
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
 mcp-changed = changed: { $fields }
