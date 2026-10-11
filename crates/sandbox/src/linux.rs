@@ -5,7 +5,8 @@
 //! container that masks the syscall, means confinement is unavailable and the process
 //! is refused instead of run unconfined.
 //!
-//! Landlock governs the filesystem only. Network denial and subprocess denial need
+//! Landlock governs the filesystem, and with it the connect to a socket that has a path and
+//! to an abstract one. Network denial and subprocess denial need
 //! separate mechanisms (e.g. an empty network namespace, or seccomp filtering),
 //! which are not implemented yet, so [`Capabilities::network_denial_enforced`] is
 //! `false` and the reported level is [`ConfinementLevel::Partial`]. Claiming
@@ -17,7 +18,7 @@ use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 use landlock::{
     ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, RulesetAttr,
-    RulesetCreatedAttr, RulesetError, RulesetStatus, path_beneath_rules,
+    RulesetCreatedAttr, RulesetError, RulesetStatus, Scope, path_beneath_rules,
 };
 use std::ffi::{OsStr, OsString};
 use std::os::unix::process::CommandExt;
@@ -321,6 +322,10 @@ impl LandlockSandbox {
                 let mut ruleset = landlock::Ruleset::default()
                     .set_compatibility(CompatLevel::BestEffort)
                     .handle_access(AccessFs::from_all(HANDLED_ABI))
+                    // A connect to an abstract socket made outside this domain. The socket has
+                    // no path, so no filesystem right sees it, and `BestEffort` drops the scope
+                    // on a kernel below Landlock ABI 6.
+                    .and_then(|r| r.scope(Scope::AbstractUnixSocket))
                     .and_then(|r| r.create())
                     .map_err(|e| Error::other(format!("landlock: {e}")))?;
 
@@ -407,6 +412,9 @@ mod tests {
     /// this backend refuses a kernel below.
     const TRUNCATE_ABI_VERSION: libc::c_long = 3;
     const IOCTL_ABI_VERSION: libc::c_long = 5;
+
+    /// The version carrying the scopes, which is what bounds a connect to an abstract socket.
+    const SCOPE_ABI_VERSION: libc::c_long = 6;
 
     /// What a file a test reads back is filled with, so that an emptied one is a length
     /// rather than an absence.
@@ -1600,6 +1608,108 @@ mod tests {
             "a device granted for reading was driven, so the right that governs an ioctl \
              is granted by a read or handled by nothing"
         );
+    }
+
+    /// An abstract socket has no path, so no filesystem grant names it and none can withhold
+    /// it: the session bus, the X server and every daemon that listens in the abstract
+    /// namespace are reachable from a confined process unless the ruleset scopes the connect.
+    ///
+    /// The listener belongs to this test process, which is outside the confined domain. Three
+    /// connects run from one witness: an unconfined run reaches the listener, which shows the
+    /// witness and the address are sound; the confined run first connects to a listener it
+    /// made itself, which shows the scope leaves its own domain alone and that sockets as a
+    /// whole were not refused; and then to the one outside, which is the denial. A ruleset
+    /// that scopes nothing reaches the listener, and one that refuses every socket fails the
+    /// control, so neither passes.
+    #[test]
+    fn a_confined_process_cannot_connect_to_an_abstract_socket_made_outside_it() {
+        use std::os::linux::net::SocketAddrExt;
+        use std::os::unix::net::{SocketAddr, UnixListener};
+
+        /// The witness's exit codes. A script that stopped for a reason of its own exits with
+        /// 1 or by signal, and neither says anything about a scope.
+        const REACHED: i32 = 0;
+        const REFUSED: i32 = 3;
+        const OWN_SOCKET_UNREACHABLE: i32 = 4;
+        const FAILED_FOR_ANOTHER_REASON: i32 = 5;
+
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        if !kernel_governs(
+            "a connect to an abstract socket",
+            SCOPE_ABI_VERSION,
+            "6.12+",
+        ) {
+            return;
+        }
+
+        let name = format!("bravebot-landlock-scope-{}", std::process::id());
+        let outside = UnixListener::bind_addr(
+            &SocketAddr::from_abstract_name(name.as_bytes()).expect("an abstract address"),
+        )
+        .expect("this process can listen on an abstract address");
+
+        let witness = "import socket, sys\n\
+                       own = socket.socket(socket.AF_UNIX)\n\
+                       own.bind(b'\\0' + sys.argv[1].encode() + b'-own')\n\
+                       own.listen(1)\n\
+                       try:\n\
+                       \x20   socket.socket(socket.AF_UNIX).connect(b'\\0' + sys.argv[1].encode() + b'-own')\n\
+                       except OSError:\n\
+                       \x20   sys.exit(4)\n\
+                       try:\n\
+                       \x20   socket.socket(socket.AF_UNIX).connect(b'\\0' + sys.argv[1].encode())\n\
+                       except PermissionError:\n\
+                       \x20   sys.exit(3)\n\
+                       except OSError:\n\
+                       \x20   sys.exit(5)\n";
+        let arguments =
+            || -> Vec<OsString> { vec!["-c".into(), witness.into(), name.clone().into()] };
+
+        let unconfined = Command::new("/usr/bin/python3")
+            .args(arguments())
+            .env_clear()
+            .status()
+            .expect("python runs")
+            .code();
+        assert_eq!(
+            unconfined,
+            Some(REACHED),
+            "the witness did not reach a listener nothing confines, so the refusal below means \
+             nothing"
+        );
+
+        let confined = sandbox
+            .spawn(
+                OsStr::new("/usr/bin/python3"),
+                &arguments(),
+                &loadable_policy(),
+                nothing_attached(),
+                Environment::Empty,
+            )
+            .expect("python starts under the policy")
+            .wait()
+            .expect("should wait")
+            .code();
+        assert_ne!(
+            confined,
+            Some(OWN_SOCKET_UNREACHABLE),
+            "the confined process could not reach a socket it made itself, so the scope refuses \
+             more than the sockets made outside it"
+        );
+        assert_ne!(
+            confined,
+            Some(FAILED_FOR_ANOTHER_REASON),
+            "the connect to the outside socket failed, but not with a refusal"
+        );
+        assert_eq!(
+            confined,
+            Some(REFUSED),
+            "the abstract socket made outside the confined process was reachable, or the \
+             witness stopped for a reason of its own"
+        );
+        drop(outside);
     }
 
     /// Emptying a file and writing it again is what every `>` redirect, every
