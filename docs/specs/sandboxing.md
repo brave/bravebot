@@ -129,8 +129,13 @@ where a policy asks for it, is to IP addresses. A unix socket that has a path is
 a path the policy names for writing, and not under one it names for reading. On macOS a connect to
 a socket counts as egress, so there a write row reaches a socket only while egress is granted, and
 egress also reaches the resolver's socket, which every host name lookup goes through. On Linux the
-socket rule holds on a kernel carrying Landlock ABI version 9, and a socket in the abstract
-namespace, which has no path, is reachable whatever the policy names. A backend that cannot
+socket rule holds on a kernel carrying Landlock ABI version 9. Below it every socket that has a
+path is reachable whatever the policy names, which includes the user's D-Bus (where
+`systemd-run --user` starts a program outside the sandbox), the agent `SSH_AUTH_SOCK` names (every
+key it holds) and `docker.sock`. A connect to a socket in the abstract namespace, which has no path,
+is refused when the socket was made outside the confined process's Landlock domain, on a kernel
+carrying ABI version 6, and is reachable below it. The domain is that of one stage, so a socket made
+by the session or by another stage is refused too. Signals are not scoped. A backend that cannot
 enforce the network denial refuses the policy instead, so the guarantee never degrades into one
 that is not in force. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
 
@@ -168,6 +173,7 @@ one rule to a connect.
 `verified-by: bravebot_sandbox::linux::a_confined_process_can_truncate_a_file_inside_its_grants`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_drive_a_device_it_was_granted_for_reading`
 `verified-by: bravebot_sandbox::linux::the_ruleset_handles_every_right_this_crate_knows_of`
+`verified-by: bravebot_sandbox::linux::a_confined_process_cannot_connect_to_an_abstract_socket_made_outside_it`
 `verified-by: bravebot_sandbox::windows::a_policy_that_did_not_ask_for_the_network_asks_for_no_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_withholding_the_network_is_applied_rather_than_refused`
