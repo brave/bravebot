@@ -4,8 +4,8 @@
 // The real app and the real bridge, against a home of this script's own. Nothing is started and
 // nothing is paid for: connecting writes files, and the servers start with a conversation.
 //
-// Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`), which
-// `npm run drive:connectors` does first.
+// Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
+// `pnpm run drive:connectors` does first.
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'

@@ -289,6 +289,8 @@ def test_the_resolved_files_choose_the_checks_and_a_file_no_rule_names_chooses_n
         assert plan("crates/i18n/locales/fr.ftl") == [["make", "-k", "check-locales"]]
         assert plan("Cargo.lock") == [rebase.LOCK_RESOLVES, ["make", "-k", "check-versions"]]
         assert plan(".github/workflows/ci.yml") == [["make", "-k", "check-security"]]
+        assert plan("ui/package.json") == [["make", "-k", "check-versions"]]
+        assert plan("ui/pnpm-lock.yaml", "package-lock.json") == [], "no lockfile states the version"
 
         rust = plan("crates/agent/src/lib.rs", "crates/agent/tests/exec.rs", "crates/tui/src/view.rs")
         assert rust == [

@@ -32,5 +32,5 @@ test('CI skip avoids invoking the installer', (t) => {
 
 test('an installer failure fails setup with a recovery command', (t) => {
   const { root } = fixture(t, 'process.exit(1)')
-  assert.throws(() => setupElectron({ root, env: {} }), /retry npm run setup:electron/)
+  assert.throws(() => setupElectron({ root, env: {} }), /retry pnpm run setup:electron/)
 })

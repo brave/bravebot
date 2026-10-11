@@ -5,11 +5,11 @@
 // window, same class names — but paced in beats rather than in milliseconds, with a pointer
 // drawn into the page (CDP moves no cursor) and a caption naming each feature as it plays.
 //
-//   npm run demo                       the whole thing, no model calls
-//   npm run demo -- --live             plus a real turn, an approval card and a question
-//   npm run demo -- --only 08-fork     one scene, for a retake
-//   npm run demo -- --list             what it would film, in order
-//   npm run demo -- --rebuild          throw the demo world away and build it again
+//   pnpm run demo                       the whole thing, no model calls
+//   pnpm run demo -- --live             plus a real turn, an approval card and a question
+//   pnpm run demo -- --only 08-fork     one scene, for a retake
+//   pnpm run demo -- --list             what it would film, in order
+//   pnpm run demo -- --rebuild          throw the demo world away and build it again
 //
 // Nothing real is filmed. The run launches with `$HOME` pointed at a demo world — two invented
 // checkouts and the sessions the demo earned in them — so the session list, the paths, the

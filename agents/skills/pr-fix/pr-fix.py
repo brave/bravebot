@@ -328,7 +328,7 @@ def plan(tree, files):
             targets.add("check-security")
         if path.name in ("Cargo.toml", "Makefile") or path.name.startswith("Dockerfile"):
             targets.add("check-security")
-        if path.name in ("Cargo.toml", "Cargo.lock", "package.json", "package-lock.json"):
+        if path.name in ("Cargo.toml", "Cargo.lock", "package.json"):
             targets.add("check-versions")
         if path.name in ("Cargo.toml", "Cargo.lock") and LOCK_RESOLVES not in commands:
             commands.append(LOCK_RESOLVES)

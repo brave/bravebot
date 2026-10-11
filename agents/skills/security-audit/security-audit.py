@@ -248,19 +248,57 @@ GATES_A_PULL_REQUEST = ("fails a pull request", "fails rather than")
 # a block, an inline map, a quoted value, and `write-all`, which grants this along with the rest.
 GRANT = re.compile(r"""id-token\s*:\s*["']?write\b|\bwrite-all\b""")
 SECRET = re.compile(r"\bsecrets\.[A-Za-z_]")
+# A command is read as the manager, then any options, then the subcommand, because `npm --prefix ui ci`
+# and `pnpm --dir ui install` are the same commands as the ones without the option, and a pattern that
+# needs the subcommand next to the manager misses them.
+PACKAGE_MANAGER = re.compile(r"(?:^|[\s;&|(])(npm|pnpm|yarn)(?=\s|$)([^;&|()#]*)")
+# A bare `pnpm build` runs the script `build`. Only a manager at the start of a command is read that
+# way, so prose such as `pnpm and the cache` in a step name or an echo is not.
+COMMAND_START = re.compile(r"(?:^|[;&|(]\s*|\brun:\s*|\bsudo\s+|\bcorepack\s+)$")
+# Options whose next token is their value, not the subcommand. `-w` is a flag for pnpm (the workspace
+# root) and a value for npm, so it is not listed.
+OPTIONS_WITH_A_VALUE = {"--prefix", "--dir", "-C", "--filter", "-F", "--workspace", "--cwd"}
+INSTALLS = {"ci", "install", "i", "add", "rebuild", "rb", "approve-builds"}
+RUNS = {"run", "run-script", "exec", "x", "dlx", "test", "t", "start"}
+# pnpm subcommands that run no package code. Any other word after pnpm is a script name.
+PNPM_RUNS_NOTHING = {
+    "publish", "pack", "config", "c", "get", "set", "view", "audit", "outdated", "list", "ls", "ll",
+    "why", "root", "bin", "store", "env", "setup", "self-update", "licenses", "deprecate",
+    "unpublish", "patch", "patch-commit", "remove", "rm", "uninstall", "un", "unlink", "prune",
+    "link", "ln", "version", "help", "update", "up", "upgrade", "dedupe", "fetch", "import",
+}
 DEPENDENCY = (
     (
-        re.compile(r"(?:^|[\s;&|(])(?:npm|pnpm|yarn)\s+(?:ci|install|i|add)\b"),
-        "installs a dependency",
-    ),
-    (
         re.compile(
-            r"(?:^|[\s;&|(])(?:(?:npm|pnpm|yarn)\s+(?:run|exec|test|start|dlx)\b|npx\b"
-            r"|\.?/?node_modules/\.bin/)"
+            r"(?:^|[\s;&|(])(?:npx|pnpx)(?=\s|$)|(?:^|[\s;&|(])\.?/?node_modules/\.bin/"
         ),
         "runs a dependency",
     ),
 )
+
+
+def package_manager_verb(tool, rest, at_command_start):
+    """What one `npm`, `pnpm` or `yarn` command does with dependencies, or None if nothing."""
+    tokens = rest.split()
+    index = 0
+    while index < len(tokens) and tokens[index].startswith("-"):
+        index += 2 if tokens[index] in OPTIONS_WITH_A_VALUE else 1
+    if index >= len(tokens):
+        return None
+    word = tokens[index]
+    if word in INSTALLS:
+        return "installs a dependency"
+    if word in RUNS:
+        return "runs a dependency"
+    if (
+        tool == "pnpm"
+        and at_command_start
+        and word not in PNPM_RUNS_NOTHING
+        and re.fullmatch(r"[A-Za-z0-9:_-]+", word)
+    ):
+        return "runs a dependency"
+    return None
+
 
 LANES = (
     "laundering",
@@ -1602,10 +1640,17 @@ def dependency_commands(body):
         line = raw.strip()
         if line.startswith("#"):
             continue
-        for pattern, verb in DEPENDENCY:
-            if pattern.search(line):
-                found.append((verb, line[:120]))
-                break
+        verbs = [
+            package_manager_verb(
+                match.group(1), match.group(2), bool(COMMAND_START.search(line[: match.start(1)]))
+            )
+            for match in PACKAGE_MANAGER.finditer(line)
+        ]
+        verbs += [verb for pattern, verb in DEPENDENCY if pattern.search(line)]
+        verbs = [verb for verb in verbs if verb]
+        if verbs:
+            verb = "installs a dependency" if "installs a dependency" in verbs else verbs[0]
+            found.append((verb, line[:120]))
     return found
 
 
@@ -1613,14 +1658,14 @@ def check_privileged_job_runs_only_its_own_code():
     """A job that can mint a credential installs and runs nothing from `node_modules`.
 
     A grant or a secret is readable by every step of the job holding it, so a job is the smallest
-    boundary either has. A step that installs from `package-lock.json` and then runs what it
+    boundary either has. A step that installs from `pnpm-lock.yaml` and then runs what it
     installed executes bytes nobody here wrote, deliberately: that is what a lint is. In a job
     holding `id-token: write` those bytes can exchange the runner's OIDC token for a publishing
     credential at the registry and ship a tarball with this repository's provenance on it, and the
     same two commands in a job holding `contents: read` reach a green check and nothing else. So the
     finding is the pairing rather than either half.
 
-    What it reads is the npm tree, which is the third-party code a workflow here installs and runs by
+    What it reads is the npm and pnpm tree, which is the third-party code a workflow here installs and runs by
     name. A job that compiled the tree would run a crate's build script in the same environment and
     this says nothing about that, which is a widening of this check rather than a second one.
     """

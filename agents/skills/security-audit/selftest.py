@@ -1027,6 +1027,26 @@ def test_privileged_job_runs_only_its_own_code():
     for name, command in (
         ("npm exec", "npm exec -- lockfile-lint"),
         ("yarn install", "yarn install --frozen-lockfile"),
+        ("npm with an option first", "npm --prefix ui ci"),
+        ("pnpm install", "pnpm install --frozen-lockfile"),
+        ("pnpm i", "pnpm i"),
+        ("pnpm add", "pnpm add left-pad"),
+        ("pnpm run", "pnpm run lint"),
+        ("pnpm run-script", "pnpm run-script lint"),
+        ("pnpm exec", "pnpm exec lockfile-lint"),
+        ("pnpm dlx", "pnpm dlx lockfile-lint"),
+        ("pnpm x", "pnpm x lockfile-lint"),
+        ("pnpm with a script name", "pnpm lint:lockfile"),
+        ("pnpm test", "pnpm test"),
+        ("pnpm start", "pnpm start"),
+        ("pnpm rebuild", "pnpm rebuild"),
+        ("pnpm approve-builds", "pnpm approve-builds"),
+        ("pnpm --dir before the subcommand", "pnpm --dir ui install"),
+        ("pnpm -C before the subcommand", "pnpm -C ui run build"),
+        ("pnpm --filter before the subcommand", "pnpm --filter app exec tsc"),
+        ("pnpm -r before the subcommand", "pnpm -r run build"),
+        ("pnpm -w before the subcommand", "pnpm -w test"),
+        ("corepack pnpm", "corepack pnpm install --frozen-lockfile"),
     ):
         other = in_tree(
             {
@@ -1045,6 +1065,25 @@ def test_privileged_job_runs_only_its_own_code():
             kinds(found) == ["privileged-job-runs-dependencies"],
             str(kinds(found)),
         )
+
+    for name, command in (
+        ("pnpm publish", "pnpm publish --provenance"),
+        ("pnpm config", "pnpm config set registry https://registry.npmjs.org/"),
+        ("a sentence that names pnpm", "echo pnpm build is not run here"),
+    ):
+        other = in_tree(
+            {
+                ".github/workflows/publish-npm.yml": "jobs:\n"
+                "  publish:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+                "    steps:\n"
+                f"      - run: {command}\n"
+            }
+        )
+        found = with_cwd(other, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+        check(f"{name} runs no dependency code", kinds(found) == [], str(kinds(found)))
 
     # The publish workflow holds the one grant in this tree, and this is what keeps the install out of
     # the job that holds it.

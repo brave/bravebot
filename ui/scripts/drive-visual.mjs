@@ -5,7 +5,7 @@
 // changes to anybody's projects. Screenshots land in VISUAL_OUTPUT (default: a temp folder) and
 // the run fails if any scene could not be drawn or the renderer threw.
 //
-//   npx electron-vite build && node scripts/drive-visual.mjs
+//   pnpm exec electron-vite build && node scripts/drive-visual.mjs
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

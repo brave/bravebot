@@ -20,15 +20,15 @@ permissions:
   contents: read
 
 jobs:
-  # lockfile-lint and the packages under it are code nobody here wrote, and the step
-  # below runs them by design. They run in this job, which can read nothing but the
-  # tree, rather than beside the token the publish job mints.
+  # The wrapper declares no dependency, so there is nothing to install here and no
+  # third-party code to run: the lint is a script in this tree and the check reads
+  # package.json. It stays a job of its own, under `contents: read`, so the publish job
+  # does not run repository scripts beside the token it mints.
   #
-  # Not left to ci.yml's npm-lockfile job, which runs the same two commands: nothing
-  # here requires that job to have passed, so a tag moved after it ran would be
-  # linted nowhere.
+  # Not left to ci.yml's npm-lockfile job, which runs the same lint: nothing here
+  # requires that job to have passed, so a tag moved after it ran would be linted nowhere.
   lint:
-    name: Lint the lockfile
+    name: Lint the lockfiles
     if: github.repository == 'brave/bravebot'
     runs-on: ubuntu-latest
     steps:
@@ -40,16 +40,21 @@ jobs:
         with:
           ref: refs/tags/${{ inputs.tag }}
 
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: "24"
-          package-manager-cache: false
+      - name: Refuse a dependency in the published package
+        run: |
+          set -eu
+          node -e '
+            const pkg = require("./package.json");
+            const declared = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]
+              .filter((key) => Object.keys(pkg[key] || {}).length > 0);
+            if (declared.length > 0) {
+              console.error("error: package.json declares " + declared.join(", ") + "; the wrapper has none");
+              process.exit(1);
+            }
+          '
 
-      - name: Install from the lockfile
-        run: npm ci --ignore-scripts
-
-      - name: Lint the lockfile
-        run: npm run lint:lockfile
+      - name: Lint the pnpm lockfiles
+        run: python3 contrib/check-pnpm-lockfiles.py
 
   # The trusted publisher on npmjs.com keys on this repository and this filename, not
   # on a job name, so publishing is unaffected by which job here holds the grant.

@@ -7,8 +7,8 @@
 // directory the person did not trust, so every write would be asked about. Nothing is paid for.
 // Whether a write landed is read off the disk.
 //
-// Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`), which
-// `npm run drive:permission-mode` does first.
+// Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
+// `pnpm run drive:permission-mode` does first.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync } from 'node:fs'

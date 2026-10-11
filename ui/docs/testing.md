@@ -47,33 +47,33 @@ matter:
   card through first, or waits for `.approve:not([aria-disabled="true"])`.
 
 
-- `npm run drive:manual-walkthrough`: the manual 0.9 verification through the real app
+- `pnpm run drive:manual-walkthrough`: the manual 0.9 verification through the real app
   and backend, with a local model fixture. Runs in CI; detailed coverage is below.
 - After building, `node scripts/drive-agent-settings.mjs`: 0.9 settings, hook forms and
   conflicts, watch controls, approval evidence, background cancellation, context/failure
   states, focus restoration and narrow layouts. Uses deterministic IPC fixtures.
-- `npm run drive:fetch`: a fetch the planner asks for, through the real app and bridge,
+- `pnpm run drive:fetch`: a fetch the planner asks for, through the real app and bridge,
   against a model service and a website the script serves itself. The website is the
   witness: an approval sends one request to the host the card showed, a refusal sends none,
   and an earlier approval does not answer a later fetch. No paid inference.
-- `npm run drive:language-server`: a language server the planner asks for, through the real
+- `pnpm run drive:language-server`: a language server the planner asks for, through the real
   app and bridge, against a model service and a server the script supplies. The server is
   the witness: an approval starts one process, the next message asks nobody and starts none,
   and the process has ended once the app has closed. No paid inference. Not for Windows.
-- `npm run drive:plan`: a manifest run started from the composer, through the real app and
+- `pnpm run drive:plan`: a manifest run started from the composer, through the real app and
   bridge, against a model service the script serves itself. The plan writes one file, so
   whether it ran is read off the disk. Covers an approved plan, a declined plan, and a turn
   taken afterwards, which is sent nothing the run said. Then reads both runs' records from
   the session list, and checks that a record has no message box. No paid inference.
-- `npm run drive:exposure`: a read of a file holding a credential, through the real app and
+- `pnpm run drive:exposure`: a read of a file holding a credential, through the real app and
   bridge, against a model service the script serves itself. An approval hands the model the
   file, a refusal keeps it back, and a new conversation asks again. The script checks that
   the value is nowhere in the window's markup at any point. No paid inference.
-- `npm run drive:rules`: permission rules from settings files, through the real app and
+- `pnpm run drive:rules`: permission rules from settings files, through the real app and
   bridge, against a model service and a website the script serves itself. A host the person's
   file allows is fetched with no card, a host a rule refuses is neither asked about nor
   fetched, and the banner names what is not in force. No paid inference.
-- `npm run drive:permission-mode`: the composer's permission mode, through the real app and
+- `pnpm run drive:permission-mode`: the composer's permission mode, through the real app and
   bridge, against a model service the script serves itself, in a directory nobody trusted.
   Accepting edits writes with no card and still asks about a command, the control works while a
   turn runs, plan mode writes nothing and asks nothing, and the Chat menu item walks the
@@ -81,7 +81,7 @@ matter:
 - After building, `node scripts/drive-agent-rpc.mjs`: an actual automatic watch turn against
   a local fake gateway, real lifecycle hook subprocesses, context measurements and stop/close.
   Uses an isolated agent home; no paid inference or real credentials.
-- `npm run build`: bridge and secure-file helper builds, TypeScript, and Electron bundles.
+- `pnpm run build`: bridge and secure-file helper builds, TypeScript, and Electron bundles.
 - `make check-ui` from the repository root, or `node --test scripts/*.test.mjs` here after an
   install and a `cargo build -p bravebot-ui-files`: renderer state, models, file access,
   memory retention, bot grounding, avatar motion and traits. File tests use the actual
@@ -135,34 +135,34 @@ at, that a control keeps keyboard focus through an animation.
 
 | Command | Covers |
 | --- | --- |
-| `npm run drive` | Launch, list sessions, filter them by title and project, group them by checkout, fold one away, start one from a heading, open one |
-| `npm run drive:session-list` | A list of 260 sessions: that it draws a page and a **Show more** row that moves focus to the first row it drew, that search reaches past the page, that the open session and a working one stay drawn past the page, that grouped every checkout keeps a heading counting all its sessions and a **Show more** row of its own, that the archive has its own page, and that a row's actions menu is mounted only while open and opens, shuts and returns focus by mouse and keyboard |
-| `npm run drive:resize` | Divider drags, the clamps, keyboard resizing, persistence |
-| `npm run drive:columns` | Folding each side column, and what is remembered |
-| `npm run drive:panels` | The context panels, the row of buttons that turns them on and off, and the transcript's tool runs |
-| `npm run drive:markdown` | Markdown rendering, light and dark |
-| `npm run drive:models` | Model defaults, composer placement, search and keyboard selection, turn payload, per-conversation persistence, and discovery error recovery. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
-| `npm run drive:run` | Approving a command from the window, end to end through a live turn |
-| `npm run drive:fetch` | Approving and refusing a fetch from the window, end to end, against a local model service and website |
-| `npm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
-| `npm run drive:plan` | Starting a manifest run from the composer, approving and declining its plan, that the run stays out of the conversation, and that its record is read and cannot be typed into |
-| `npm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |
-| `npm run drive:shown` | That no decision card takes an approval before the rows it rests on have been on screen: every kind drawn too tall for a 900x560 window, shut until scrolled through, shut again on a change of width, deaf to a press while shut, and a refusal taken at once. Screenshots of a card waiting and read, light and dark |
-| `npm run drive:rules` | Permission rules from settings files: what is refused, what is not asked, and what is reported as not in force |
-| `npm run drive:permission-mode` | The composer's permission mode: accepting edits, plan mode, a change while a turn runs, and the menu shortcut |
-| `npm run drive:ask` | Answering a series of questions the planner asks, likewise live |
-| `npm run drive:menu` | The application menu: what it offers, what it greys, and what it refuses to offer |
-| `npm run drive:export` | Exporting a conversation to text, Markdown and PDF — with and without the tool calls, and what the file leaves out either way |
-| `npm run drive:fork` | Cutting a session in two: that the fork holds the right half and the session it came from is untouched |
-| `npm run drive:rewind` | Undo and rewind from each entry point against the real bridge: the file back on disk, the turn gone from the transcript, its prompt in the composer, the coverage warning for a command, and every entry point greyed while a turn runs |
-| `npm run drive:tree` | The file tree: listing, expanding, the dotfile toggle, the name filter, and that a session with no root and a symlink out of the project both list nothing |
-| `npm run drive:theme` | Appearance: System / Light / Dark painting and persistence, legacy palette fallback, and the export renderer's light-only guarantee |
-| `npm run drive:bots` | Bots: that the column has two lists and remembers which, that a bot survives a relaunch with what was typed into it, and that two bots have different faces while one bot keeps its own across a rename — asserted on the *form* the seed built, since the face is turning while it is looked at. Also the archive: that a bot put away survives field-for-field and comes back as itself, and that deleting one asks before it does anything |
-| `npm run drive:packaged` | A built `.app`: that a release hides the developer items and finds its agent |
-| `npm run drive:bot-turn` | A live turn as a bot: that a purpose nobody typed reaches the model, that the memory file is real and in the checkout, and that reopening the bot resumes the same session |
-| `npm run drive:bot-memory` | That a bot is asked to keep its memory current without anybody asking it to: that one which has gone quiet is handed its briefing again with a line saying so, that the count resets on the nudge rather than on every turn, and that a prompt somebody typed to read like the app's own house-keeping is drawn as a prompt in a reopened transcript, with its words and the cut that is taken on its ordinal |
-| `npm run drive:visual` | The gallery: every surface as screenshots, in light and dark, with a hit-target audit and forced-colours captures; see [below](#the-visual-gallery) |
-| `npm run drive:perf` | The performance budgets on a 1,000-session list and a 500-entry transcript; see [below](#performance-budgets) |
+| `pnpm run drive` | Launch, list sessions, filter them by title and project, group them by checkout, fold one away, start one from a heading, open one |
+| `pnpm run drive:session-list` | A list of 260 sessions: that it draws a page and a **Show more** row that moves focus to the first row it drew, that search reaches past the page, that the open session and a working one stay drawn past the page, that grouped every checkout keeps a heading counting all its sessions and a **Show more** row of its own, that the archive has its own page, and that a row's actions menu is mounted only while open and opens, shuts and returns focus by mouse and keyboard |
+| `pnpm run drive:resize` | Divider drags, the clamps, keyboard resizing, persistence |
+| `pnpm run drive:columns` | Folding each side column, and what is remembered |
+| `pnpm run drive:panels` | The context panels, the row of buttons that turns them on and off, and the transcript's tool runs |
+| `pnpm run drive:markdown` | Markdown rendering, light and dark |
+| `pnpm run drive:models` | Model defaults, composer placement, search and keyboard selection, turn payload, per-conversation persistence, and discovery error recovery. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
+| `pnpm run drive:run` | Approving a command from the window, end to end through a live turn |
+| `pnpm run drive:fetch` | Approving and refusing a fetch from the window, end to end, against a local model service and website |
+| `pnpm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
+| `pnpm run drive:plan` | Starting a manifest run from the composer, approving and declining its plan, that the run stays out of the conversation, and that its record is read and cannot be typed into |
+| `pnpm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |
+| `pnpm run drive:shown` | That no decision card takes an approval before the rows it rests on have been on screen: every kind drawn too tall for a 900x560 window, shut until scrolled through, shut again on a change of width, deaf to a press while shut, and a refusal taken at once. Screenshots of a card waiting and read, light and dark |
+| `pnpm run drive:rules` | Permission rules from settings files: what is refused, what is not asked, and what is reported as not in force |
+| `pnpm run drive:permission-mode` | The composer's permission mode: accepting edits, plan mode, a change while a turn runs, and the menu shortcut |
+| `pnpm run drive:ask` | Answering a series of questions the planner asks, likewise live |
+| `pnpm run drive:menu` | The application menu: what it offers, what it greys, and what it refuses to offer |
+| `pnpm run drive:export` | Exporting a conversation to text, Markdown and PDF, with and without the tool calls, and what the file leaves out either way |
+| `pnpm run drive:fork` | Cutting a session in two: that the fork holds the right half and the session it came from is untouched |
+| `pnpm run drive:rewind` | Undo and rewind from each entry point against the real bridge: the file back on disk, the turn gone from the transcript, its prompt in the composer, the coverage warning for a command, and every entry point greyed while a turn runs |
+| `pnpm run drive:tree` | The file tree: listing, expanding, the dotfile toggle, the name filter, and that a session with no root and a symlink out of the project both list nothing |
+| `pnpm run drive:theme` | Appearance: System / Light / Dark painting and persistence, legacy palette fallback, and the export renderer's light-only guarantee |
+| `pnpm run drive:bots` | Bots: that the column has two lists and remembers which, that a bot survives a relaunch with what was typed into it, and that two bots have different faces while one bot keeps its own across a rename, asserted on the *form* the seed built, since the face is turning while it is looked at. Also the archive: that a bot put away survives field-for-field and comes back as itself, and that deleting one asks before it does anything |
+| `pnpm run drive:packaged` | A built `.app`: that a release hides the developer items and finds its agent |
+| `pnpm run drive:bot-turn` | A live turn as a bot: that a purpose nobody typed reaches the model, that the memory file is real and in the checkout, and that reopening the bot resumes the same session |
+| `pnpm run drive:bot-memory` | That a bot is asked to keep its memory current without anybody asking it to: that one which has gone quiet is handed its briefing again with a line saying so, that the count resets on the nudge rather than on every turn, and that a prompt somebody typed to read like the app's own house-keeping is drawn as a prompt in a reopened transcript, with its words and the cut that is taken on its ordinal |
+| `pnpm run drive:visual` | The gallery: every surface as screenshots, in light and dark, with a hit-target audit and forced-colours captures; see [below](#the-visual-gallery) |
+| `pnpm run drive:perf` | The performance budgets on a 1,000-session list and a 500-entry transcript; see [below](#performance-budgets) |
 | `node scripts/drive-turn.mjs` | A live inference request through the window, to prove the binary carries its credentials rather than inheriting them |
 | `node scripts/drive-models-live.mjs` | Live inference before and after changing the conversation model, checking which model the agent actually used |
 | `scripts/smoke-turn.sh` | A live turn straight through `bravebot-rpc`, no app |
@@ -232,7 +232,7 @@ It launches the built app with a temporary profile and a mocked bridge (IPC fixt
 `drive-models.mjs`), so it is deterministic and makes no requests:
 
 ```bash
-npx electron-vite build && node scripts/drive-visual.mjs
+pnpm exec electron-vite build && node scripts/drive-visual.mjs
 ```
 
 Screenshots go to `VISUAL_OUTPUT`, or `bravebot-visual/` under the system temp folder when it is
@@ -285,7 +285,7 @@ that makes a keystroke re-render the transcript is the regression this catches.
 
 ## Automated 0.9 manual walkthrough
 
-Run `npm run drive:manual-walkthrough` to build and exercise the manual verification
+Run `pnpm run drive:manual-walkthrough` to build and exercise the manual verification
 steps through the real Electron app, preload, main process, Rust bridge, file helper,
 watch poller, and hook subprocesses. It uses a disposable HOME, app profile and project;
 it neither reads your credentials nor changes your hooks. A local HTTP model fixture
@@ -328,9 +328,9 @@ isolated files on exit. On Linux it needs a display; use
 `.github/workflows/ci.yml` is the gate on a pull request, and it is not the same set as the
 table above. Two jobs:
 
-- **Typecheck** — `npm ci` with `ELECTRON_SKIP_BINARY_DOWNLOAD=1` (the Electron *package* is
-  needed for types; the 100 MB binary is not, since nothing here launches a window) and then
-  `npm run typecheck`.
+- **Typecheck**: `pnpm install --frozen-lockfile` with `ELECTRON_SKIP_BINARY_DOWNLOAD=1` (the Electron
+  *package* is needed for types; the 100 MB binary is not, since nothing here launches a
+  window) and then `pnpm run typecheck`.
 - **Lint and test the bridge** is the repository's own `check` job, which runs
   `cargo clippy --all-targets --all-features -- -D warnings` and `cargo test --all --locked`
   over every workspace member. The `Front end` job adds the desktop build, Node regression tests, and

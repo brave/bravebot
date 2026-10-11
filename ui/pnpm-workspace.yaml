@@ -1,0 +1,16 @@
+allowBuilds:
+  "@brave/leo@https://codeload.github.com/brave/leo/tar.gz/3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d": true
+  electron-winstaller: false
+  esbuild: false
+  svelte-preprocess: false
+
+# Known high advisories the dependency tree still carries; braces has no patched release.
+# Any other high or critical advisory fails `pnpm audit --audit-level=high` in CI.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-ch52-4w7c-c8xp
+    - GHSA-vfj7-8cjw-p6xm
+
+# @electron/packager walks dependencies from node_modules/<name> without following symlinks, so
+# pnpm's default layout fails it on packages whose own dependencies sit beside them in .pnpm.
+nodeLinker: hoisted

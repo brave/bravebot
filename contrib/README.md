@@ -69,9 +69,9 @@ left behind is an app bundle naming a release that was never made.
 
 A refusal at the tag reports that on release day. This reports it in the pull request that caused
 it, which is why CI has a job for it and why `make bump-version` runs it over its own work before
-committing. Six files state a version: the workspace manifest, the published wrapper and its
-lockfile, and the application and its lockfile, where a lockfile states it twice, in its own
-header and in the entry for the package it locks.
+committing. Four files state a version: the workspace manifest, the published wrapper's manifest, the
+application's manifest and `Cargo.lock`. pnpm's lockfiles do not record the version of the project
+they lock, so they are not read.
 
 ```sh
 make check-versions       # or contrib/check-versions.py
@@ -81,13 +81,13 @@ make check-versions       # or contrib/check-versions.py
 scope: it is a documentation site whose package version names nothing anybody installs.
 
 `--set <version>` is the writing half, and `make bump-version` is the only thing that calls it:
-it puts a version into the four JSON files, or into none of them where one of them could not be
+it puts a version into the two JSON files, or into none of them where one of them could not be
 written back as it was found. Reading and writing are the same file so that a bump and a check
 cannot disagree about where a version is stated. Cargo's two are cargo's, rewritten by the bump
 target itself.
 
 `--selftest` checks both halves against trees whose answer is known and reads no tree;
-`make check-versions` runs it first, because a version check that reads four of the six files
+`make check-versions` runs it first, because a version check that reads one of the manifests
 passes on this tree today and would have passed on the tree that shipped the front end at 0.1.0.
 `--root` points it at another tree, which is what the selftest uses.
 

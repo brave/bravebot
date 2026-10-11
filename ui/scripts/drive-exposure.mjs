@@ -4,8 +4,8 @@
 // The real app and the real bridge, against a model service this script serves itself. Nothing
 // is paid for. The key is AWS's documented example, which is no credential.
 //
-// Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`), which
-// `npm run drive:exposure` does first.
+// Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
+// `pnpm run drive:exposure` does first.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'

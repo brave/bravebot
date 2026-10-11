@@ -499,8 +499,8 @@ reads it from the running bundle's `CFBundleName` before any JavaScript runs, an
 built from, so using it would move `bravebot-ui.json` and orphan every remembered column.
 
 Unpackaged, the running bundle is Electron's own, so `scripts/name-dev-app.mjs` renames it.
-It runs from `npm run dev` and from `postinstall`, because an `npm install` restores the
-original. If the menu bar ever says "Electron" again, `npm run name-dev-app` puts it back.
+It runs from `pnpm run dev` and from `postinstall`, because an `pnpm install` restores the
+original. If the menu bar ever says "Electron" again, `pnpm run name-dev-app` puts it back.
 
 In a release there is no hack: `scripts/package.mjs` names the bundle `Brave Bot`, and AppKit
 reads that. See [packaging](development.md#packaging).
