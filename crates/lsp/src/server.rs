@@ -833,26 +833,30 @@ impl Server {
             command.env(name, value);
         }
 
-        let mut child = command
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            // A server's diagnostics are noisy and are not this process's business.
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    LspError::NoBinary {
-                        language: served.clone(),
-                        program: program.clone(),
-                    }
-                } else {
-                    LspError::Start {
-                        language: served.clone(),
-                        detail: e.to_string(),
-                    }
+        // Under the gate every start of a program in this process shares with the creation of a
+        // control channel, so a server started on another thread holds neither end of one.
+        let mut child = bravebot_sandbox::process::starting_a_program(|| {
+            command
+                .current_dir(root)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                // A server's diagnostics are noisy and are not this process's business.
+                .stderr(Stdio::null())
+                .spawn()
+        })
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                LspError::NoBinary {
+                    language: served.clone(),
+                    program: program.clone(),
                 }
-            })?;
+            } else {
+                LspError::Start {
+                    language: served.clone(),
+                    detail: e.to_string(),
+                }
+            }
+        })?;
 
         let stdin = child.stdin.take().ok_or_else(|| LspError::Start {
             language: served.clone(),

@@ -992,8 +992,7 @@ fn launch(
                 .stdin(Stdio::from(stdin))
                 .stdout(Stdio::from(stdout))
                 .stderr(Stdio::from(stderr));
-            command
-                .spawn()
+            bravebot_sandbox::process::starting_a_program(|| command.spawn())
                 .map(Process::Plain)
                 .map_err(|e| ExecError::NotStarted {
                     program: step.program.clone(),
