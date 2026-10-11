@@ -3055,7 +3055,7 @@ fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
                 input_history_narrow,
                 chord = session.bindings().scope_name()
             ))
-        } else if session.history.can_widen(false) {
+        } else if session.history.can_widen() {
             Some(t!(
                 input_history_widen,
                 chord = session.bindings().scope_name()
@@ -4016,18 +4016,6 @@ fn note_at_the_right(session: &Session) -> Option<String> {
     // said nothing, and the next press of it ends the session.
     if session.cleared_by_interrupt {
         return Some("ctrl-c again to exit  ".to_string());
-    }
-
-    // Up found nothing this session sent. The earlier ones are stored, and which key reaches them
-    // is what the press has to say, or it reads as a key that does nothing.
-    if session.offered_all_prompts && !session.history.is_browsing() {
-        return Some(format!(
-            "{}  ",
-            t!(
-                input_history_none_here,
-                chord = session.bindings().scope_name()
-            )
-        ));
     }
 
     // The same sentence for the same reason, on the rung where there was no line to take. Without
@@ -8798,6 +8786,7 @@ mod tests {
         session.submit().expect("the prompt is sent");
         session.complete("ok", Vec::new(), 0);
         session.recall_older();
+        session.narrow_history();
         let position = t!(
             input_history_position,
             scope = t!(input_history_this_session),
@@ -8817,46 +8806,45 @@ mod tests {
         assert!(!none.contains("ctrl-r"), "{none}");
     }
 
-    /// The border says which scope Up is walking and the key that changes it; the hint line says
-    /// why Up recalled nothing in a session that has sent nothing.
+    /// The border says which scope Up is walking and the key that changes it, and offers the key
+    /// only where it does something: never before this session has sent a prompt.
     #[test]
-    fn the_border_names_the_scope_and_the_hint_line_the_way_to_earlier_prompts() {
+    fn the_border_names_the_scope_and_offers_the_switch_only_where_it_works() {
         let mut session = Session::new("none");
         session.history =
             crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
                 "old one", None,
             )]);
         session.recall_older();
-        let hint = rendered_at(&session, 120, 12);
-        assert!(
-            hint.contains(&t!(input_history_none_here, chord = "ctrl-n")),
-            "{hint}"
-        );
+        let none_sent = rendered_at(&session, 120, 12);
+        assert!(none_sent.contains("All 1/1"), "{none_sent}");
+        assert!(!none_sent.contains("ctrl-n"), "{none_sent}");
 
+        session.history.leave();
         session.type_char('x');
         session.submit().expect("the prompt is sent");
         session.complete("ok", Vec::new(), 0);
         session.recall_older();
-        let narrow = rendered_at(&session, 120, 12);
-        assert!(narrow.contains("This session 1/1"), "{narrow}");
-        assert!(
-            narrow.contains(&t!(input_history_widen, chord = "ctrl-n")),
-            "{narrow}"
-        );
-
-        session.widen_history();
         let wide = rendered_at(&session, 120, 12);
         assert!(wide.contains("All 2/2"), "{wide}");
         assert!(
             wide.contains(&t!(input_history_narrow, chord = "ctrl-n")),
             "{wide}"
         );
+
+        session.narrow_history();
+        let narrow = rendered_at(&session, 120, 12);
+        assert!(narrow.contains("This session 1/1"), "{narrow}");
+        assert!(
+            narrow.contains(&t!(input_history_widen, chord = "ctrl-n")),
+            "{narrow}"
+        );
     }
 
-    /// The scope key is a setting, so the border and the hint line name the key a settings file
-    /// moved it to rather than the default, or they would advertise a key that does nothing.
+    /// The scope key is a setting, so the border names the key a settings file moved it to rather
+    /// than the default, or it would advertise a key that does nothing.
     #[test]
-    fn the_border_and_hint_name_the_scope_chord_a_settings_file_moved() {
+    fn the_border_names_the_scope_chord_a_settings_file_moved() {
         let mut moved = std::collections::BTreeMap::new();
         moved.insert("scope".to_string(), "alt-n".to_string());
 
@@ -8866,30 +8854,22 @@ mod tests {
             crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
                 "old one", None,
             )]);
-        session.recall_older();
-        let hint = rendered_at(&session, 120, 12);
-        assert!(
-            hint.contains(&t!(input_history_none_here, chord = "alt-n")),
-            "{hint}"
-        );
-        assert!(!hint.contains("ctrl-n"), "{hint}");
-
         session.type_char('x');
         session.submit().expect("the prompt is sent");
         session.complete("ok", Vec::new(), 0);
         session.recall_older();
-        let narrow = rendered_at(&session, 120, 12);
-        assert!(
-            narrow.contains(&t!(input_history_widen, chord = "alt-n")),
-            "{narrow}"
-        );
-        assert!(!narrow.contains("ctrl-n"), "{narrow}");
-
-        session.widen_history();
         let wide = rendered_at(&session, 120, 12);
         assert!(
             wide.contains(&t!(input_history_narrow, chord = "alt-n")),
             "{wide}"
+        );
+        assert!(!wide.contains("ctrl-n"), "{wide}");
+
+        session.narrow_history();
+        let narrow = rendered_at(&session, 120, 12);
+        assert!(
+            narrow.contains(&t!(input_history_widen, chord = "alt-n")),
+            "{narrow}"
         );
     }
 
@@ -10825,7 +10805,7 @@ mod tests {
 
         let output = rendered_at(&session, 60, 10);
         assert!(
-            output.contains("This session 78/83"),
+            output.contains("All 78/83"),
             "the position is not shown: {output}"
         );
         assert!(

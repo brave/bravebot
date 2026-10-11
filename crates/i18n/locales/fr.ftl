@@ -1290,7 +1290,6 @@ input-history-this-session = Cette session
 input-history-all = Tout
 input-history-widen = { $chord } tous les prompts
 input-history-narrow = { $chord } cette session
-input-history-none-here = rien envoyé dans cette session  ·  { $chord } pour les précédents
 input-history-search = { $chord } pour rechercher
 input-history-scope = { $chord } ce projet
 resume-heading = Reprendre une session

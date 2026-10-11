@@ -1490,7 +1490,6 @@ input-history-this-session = This session
 input-history-all = All
 input-history-widen = { $chord } all prompts
 input-history-narrow = { $chord } this session
-input-history-none-here = nothing sent this session  ·  { $chord } for earlier ones
 # At the other end of that same border, the ways in: the search over every prompt, and the search
 # narrowed to the ones sent from this project. The narrower one is dropped where the row will not
 # hold both beside the position, and then the other one is, so a longer wording is one that fewer
