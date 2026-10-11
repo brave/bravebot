@@ -26,7 +26,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::mem::ManuallyDrop;
 use std::net::TcpListener;
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -68,6 +68,7 @@ fn attacker_entry() {
 
     let mut sockets_held = 0;
     let mut socket_fds = Vec::new();
+    let mut other_sockets = Vec::new();
     let mut reached = Vec::new();
     let mut stolen = 0;
     for fd in 0..256 {
@@ -75,6 +76,13 @@ fn attacker_entry() {
         let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd) });
         let Ok(meta) = file.metadata() else { continue };
         if meta.file_type().is_socket() {
+            let kind = socket_kind(fd);
+            if kind != "channel" {
+                // Not one end of an unnamed pair, so not a control channel: something this
+                // process inherited from wherever it was started.
+                other_sockets.push(format!("fd {fd}: {kind}"));
+                continue;
+            }
             sockets_held += 1;
             socket_fds.push(fd);
             let stream = ManuallyDrop::new(unsafe { UnixStream::from_raw_fd(fd) });
@@ -108,7 +116,9 @@ fn attacker_entry() {
             .open(path)
         {
             let kind = file.metadata().map(|m| m.file_type());
-            if kind.is_ok_and(|t| t.is_socket() || (*pipe_counts && t.is_fifo())) {
+            let channel_socket = kind.as_ref().is_ok_and(|t| t.is_socket())
+                && socket_kind(file.as_raw_fd()) == "channel";
+            if channel_socket || kind.is_ok_and(|t| *pipe_counts && t.is_fifo()) {
                 reached.push(format!("open {}", path.display()));
                 let _ = (&file).write_all(forged.as_bytes());
             }
@@ -124,6 +134,7 @@ fn attacker_entry() {
         "pid": std::process::id(),
         "sockets_held": sockets_held,
         "socket_fds": socket_fds,
+        "other_sockets": other_sockets,
         "reached": reached,
         "stolen": stolen,
         "existing_paths": existing,
@@ -216,6 +227,65 @@ fn a_descriptor_copied_out_of_the_bridge_is_a_breach_whatever_else_happened() {
         judge_pidfd(&json!({"control": null, "target": 1})),
         Pidfd::Breached(1)
     );
+}
+
+/// What the socket at `fd` is: `"channel"` for one end of an unnamed pair, which is what a control
+/// channel is, `"named"` for a connection to a named Unix socket, and `"other"` for a socket that
+/// is not a Unix one. A system library or the program that started this one can leave the last
+/// two open, and neither is a control channel.
+fn socket_kind(fd: i32) -> &'static str {
+    let stream = ManuallyDrop::new(unsafe { UnixStream::from_raw_fd(fd) });
+    match stream.peer_addr() {
+        Ok(peer) if peer.is_unnamed() => "channel",
+        Ok(_) => "named",
+        Err(_) => "other",
+    }
+}
+
+/// Lists what this process holds, for the programs a host starts to run: how many descriptors, and
+/// which of them are control channels. Does nothing in an ordinary run.
+#[test]
+fn list_my_sockets() {
+    if std::env::var_os(LIST_SOCKETS).is_none() {
+        return;
+    }
+    let mut open = 0;
+    for fd in 0..256 {
+        let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd) });
+        let Ok(meta) = file.metadata() else { continue };
+        open += 1;
+        if meta.file_type().is_socket() && socket_kind(fd) == "channel" {
+            println!("CHANNEL fd {fd}");
+        }
+    }
+    println!("DESCRIPTORS {open}");
+}
+
+const LIST_SOCKETS: &str = "CONTROL_BOUNDARY_LIST_SOCKETS";
+
+/// The command line that runs [`list_my_sockets`] in a program a host starts.
+fn list_sockets_command() -> String {
+    let exe = std::env::current_exe().expect("the test binary");
+    format!(
+        "{LIST_SOCKETS}=1 '{}' --exact list_my_sockets --nocapture",
+        exe.display()
+    )
+}
+
+/// Reads the output of [`list_my_sockets`]: how many descriptors the program held, and the lines
+/// that say it held a control channel.
+fn read_listing(output: &str) -> (usize, Vec<String>) {
+    let open = output
+        .lines()
+        .find_map(|line| line.strip_prefix("DESCRIPTORS "))
+        .and_then(|n| n.trim().parse().ok())
+        .unwrap_or(0);
+    let channels = output
+        .lines()
+        .filter(|line| line.starts_with("CHANNEL"))
+        .map(str::to_owned)
+        .collect();
+    (open, channels)
 }
 
 /// Writes the forgery and a marker to `stream` and reads what it can, returning how many bytes it
@@ -835,6 +905,26 @@ fn a_launch_waits_for_a_program_being_started() {
 /// Programs started on one thread while another keeps creating channels hold no socket.
 #[test]
 fn programs_started_while_channels_are_created_hold_no_socket() {
+    let list = || {
+        let out = bravebot_sandbox::process::starting_a_program(|| {
+            Command::new("/bin/ls")
+                .args(["-l", "/dev/fd/"])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+        })
+        .expect("ls runs");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|line| line.starts_with('s'))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    // Sockets this process was started with are held by every program it starts. Only one that
+    // appears afterwards, at a descriptor number this process did not hold, was made by the test.
+    let descriptor = |line: &str| line.split_whitespace().last().unwrap_or("").to_string();
+    let inherited: Vec<String> = list().iter().map(|line| descriptor(line)).collect();
+
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let creating = {
         let stop = Arc::clone(&stop);
@@ -848,19 +938,10 @@ fn programs_started_while_channels_are_created_hold_no_socket() {
     };
     let mut leaked = Vec::new();
     for _ in 0..RACE_STARTS {
-        let out = bravebot_sandbox::process::starting_a_program(|| {
-            Command::new("/bin/ls")
-                .args(["-l", "/dev/fd/"])
-                .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output()
-        })
-        .expect("ls runs");
         leaked.extend(
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter(|line| line.starts_with('s'))
-                .map(str::to_owned),
+            list()
+                .into_iter()
+                .filter(|line| !inherited.contains(&descriptor(line))),
         );
     }
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -887,16 +968,9 @@ fn programs_a_host_starts_hold_no_end_of_the_channels_it_created() {
     for client in &mut clients {
         assert_eq!(round_trip(&mut client.channel, "up"), "up");
     }
-    let sockets = |listing: &str| -> Vec<String> {
-        listing
-            .lines()
-            .filter(|line| line.starts_with('s'))
-            .map(str::to_owned)
-            .collect()
-    };
     let hooks = Hooks::parse(
         &json!({"hooks": [{"on": "turn-started",
-            "run": ["/bin/sh", "-c", "ls -l /dev/fd/ > hook-fds.txt"]}]})
+            "run": ["/bin/sh", "-c", format!("{} > hook-fds.txt", list_sockets_command())]}]})
         .to_string(),
     );
     let fired = hooks::fire(&hooks, Moment::TurnStarted, None, &scratch.project());
@@ -904,22 +978,30 @@ fn programs_a_host_starts_hold_no_end_of_the_channels_it_created() {
     let listed = scratch
         .written("hook-fds.txt")
         .expect("the hook listed its descriptors");
+    let (open, channels) = read_listing(&listed);
     assert!(
-        listed.lines().count() >= 3 && sockets(&listed).is_empty(),
-        "a hook holds a socket: {listed}"
+        open >= 3 && channels.is_empty(),
+        "a hook holds a control channel: {listed}"
     );
 
+    let sh = Path::new("/bin/sh")
+        .canonicalize()
+        .expect("/bin/sh resolves");
     let ran = exec::run(
-        &Pipeline::new(vec![Stage::new("ls", vec!["-l".into(), "/dev/fd/".into()])]),
-        &[PathBuf::from("/bin/ls")],
+        &Pipeline::new(vec![Stage::new(
+            "sh",
+            vec!["-c".into(), list_sockets_command()],
+        )]),
+        &[sh],
         &scratch.project(),
         &Cancel::new(),
         None,
     )
-    .expect("ls runs");
+    .expect("the program runs");
+    let (open, channels) = read_listing(&ran.stdout);
     assert!(
-        ran.stdout.lines().count() >= 3 && sockets(&ran.stdout).is_empty(),
-        "a run program holds a socket: {}",
+        open >= 3 && channels.is_empty(),
+        "a run program holds a control channel: {}",
         ran.stdout
     );
 
