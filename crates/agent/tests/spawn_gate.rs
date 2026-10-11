@@ -86,7 +86,13 @@ fn a_hook_waits_for_a_channel_being_created() {
 #[test]
 fn a_run_stage_waits_for_a_channel_being_created() {
     let pipeline = Pipeline::new(vec![Stage::new("sh", vec!["-c".into(), "true".into()])]);
-    let resolved = vec![std::path::PathBuf::from("/bin/sh")];
+    // The path the run was approved for, with links followed: `/bin/sh` is a link on many Linux
+    // systems, and a run refuses a path that leads somewhere other than where it was approved.
+    let resolved = vec![
+        Path::new("/bin/sh")
+            .canonicalize()
+            .expect("/bin/sh resolves"),
+    ];
     start_waits_for_the_gate(move || {
         let ran = exec::run(&pipeline, &resolved, Path::new("/"), &Cancel::new(), None)
             .expect("the program runs");
