@@ -427,6 +427,25 @@ mod tests {
         assert_eq!(history.older("").as_deref(), Some("first"));
     }
 
+    /// Cancelling the only prompt this session sent while narrowed would leave Up with nothing to
+    /// walk, and no prompt on screen to offer the scope chord from, so the walk goes back to every
+    /// stored prompt.
+    #[test]
+    fn withdrawing_the_last_prompt_of_this_session_widens_the_scope() {
+        let mut history = stored(&["old"]);
+        history.push("new", None);
+        history.older("");
+        assert_eq!(history.narrow().as_deref(), Some("new"));
+        assert_eq!(history.scope(), Scope::Session);
+
+        assert!(history.withdraw(history.ticket()));
+
+        assert_eq!(history.scope(), Scope::All);
+        assert!(!history.can_narrow());
+        assert!(history.can_recall());
+        assert_eq!(history.older("").as_deref(), Some("old"));
+    }
+
     /// Browsing then submitting a new prompt must not corrupt the position, which is why the
     /// distance is stored rather than an index.
     #[test]
