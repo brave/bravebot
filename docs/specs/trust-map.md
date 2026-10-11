@@ -483,14 +483,23 @@ outlive the answer that allowed it. Closing one takes both halves for the same r
 ### TRUST-10: no rule extends reach; reading, writing and listing stay confined
 
 Reading, writing, editing, listing and searching are confined to the working directory and to
-whatever has been opened beside it, the directory the session was given among them (TRUST-16). `..`
-and an absolute path outside those are refused rather than resolved, in an added directory exactly as
-in the project, and a symlink leaving one is refused.
-A relative path always means the project, so no file has two spellings. A path whose first segment
+whatever has been opened beside it, the directory the session was given among them (TRUST-16). An
+absolute path outside those is refused, in an added directory exactly as in the project, and a
+symlink leaving one is refused. A path with `..` in it is resolved only where it lands in a
+directory that is open, and then as the absolute path it lands on, with the `..` taken out of the
+text; any other `..` is refused. A relative path means the project, so no file has two spellings
+except by `..` into an opened directory and `~`. A path whose first segment
 is exactly `~` is read as the person's home directory, the one a command line's `~` stands for
 ([CMDLINE-4](tools/command-line.md#CMDLINE-4)), and is expanded before any check, so it is then an
 absolute path like any other, reachable only inside an opened directory, and the trust key and the
-trail see the expanded spelling. `~notes/x` is a relative path. Where there is no home the `~` is
+trail see the expanded spelling. A `..` into an opened directory is treated the same way: it
+becomes the absolute path it lands on before anything else asks about it, so the trail, the trust
+key and the permission rules see only that spelling ([PERM-7](permissions.md#PERM-7)), and a
+failure or a result that names the path names that one. The `..` is taken out of the text only
+where nothing on the way is a link, since the file system follows a link and its `..` is the
+parent of the target; a climb through a link is refused. A climb that lands on a name that is not
+UTF-8 is refused as well, since the trust key, the rules and the result carry the absolute spelling
+as text, and a lossy rendering of it names a different file. `~notes/x` is a relative path. Where there is no home the `~` is
 refused and named, never read as a directory called `~`. A missing relative path says what it was
 joined to. Naming a directory includes nothing, since a directory is somewhere to type through rather than a file to read.
 [CHECKOUT-7](checkouts.md#CHECKOUT-7) gives a delegate a checkout of its
@@ -507,14 +516,14 @@ the window ([DROP-3](dropping.md#DROP-3)), which a call that writes, edits, list
 since a drop only ever reads. Naming the file with `@` is not offered, since a name cannot leave the
 workspace either ([NAME-5](naming-files.md#NAME-5)). The planner can do none of these itself, so a
 refusal that names nothing it can pass on leaves it looking for another route to the file, such as
-`run`. A path that climbs out with `..` is refused the same way, and the refusal also says that a
-path with `..` never reaches a file in an opened directory: once the directory is opened the file
-is named by its absolute path. Where the directory the climb lands in is already open, the refusal
-offers only that absolute spelling, unless a link on the way makes the landing uncertain, in which
-case it offers nothing. Every other refusal for leaving the workspace offers nothing,
-since opening a directory would not make that path work: a climb that lands inside the root or
-leaves no directory to open, one a link carries out, and an absolute path that lands inside the
-root, where no directory can be opened.
+`run`. A path that climbs out with `..` into a directory that is not open is refused the same
+way, and once that directory is opened the same path, as typed, reaches the file. Every other
+refusal for leaving the workspace offers nothing, since opening a directory would not make that
+path work: a climb that lands inside the root, off the top of the file system or on a name that is
+not UTF-8, one a link carries out, and an absolute path that lands inside the root, where no
+directory can be opened.
+A climb that lands inside the root stays refused even where a directory holding the root is open,
+since the relative spelling reaches the file.
 
 `request_path` ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is not among these remedies. A
 person's yes to it reaches programs and not these tools, and `/add-dir` is the grant that reaches
@@ -548,7 +557,15 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_refusal_that_opening_a_directory_would_not_cure_offers_nothing`
 `verified-by: bravebot_agent::workspace::a_refused_write_outside_the_workspace_does_not_offer_a_drop`
 `verified-by: bravebot_agent::turn::a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do`
-`verified-by: bravebot_agent::workspace::a_path_climbing_to_a_sibling_directory_is_told_to_use_the_absolute_spelling`
+`verified-by: bravebot_agent::workspace::a_path_climbing_to_a_sibling_directory_reaches_it_once_the_directory_is_open`
+`verified-by: bravebot_agent::workspace::a_path_climbing_into_a_directory_that_is_not_open_is_refused`
+`verified-by: bravebot_agent::workspace::a_climb_into_an_opened_directory_is_the_absolute_path_it_lands_on_everywhere`
+`verified-by: bravebot_agent::workspace::a_climb_is_reported_as_the_absolute_path_only_where_it_is_taken_out_and_admitted`
+`verified-by: bravebot_agent::workspace::a_climb_through_a_link_or_back_into_the_working_directory_is_not_taken_out`
+`verified-by: bravebot_agent::workspace::a_climb_onto_a_name_that_is_not_text_is_not_taken_as_its_lookalike`
+`verified-by: bravebot_agent::turn::a_read_climbing_into_an_opened_sibling_directory_reads_it_and_names_the_absolute_path`
+`verified-by: bravebot_agent::turn::a_search_climbing_into_an_opened_sibling_directory_searches_it_and_names_the_absolute_path`
+`verified-by: bravebot_agent::turn::a_deny_rule_on_the_absolute_path_covers_the_spelling_that_climbs_to_it`
 `verified-by: bravebot_agent::workspace::a_path_climbing_out_under_reads_stay_in_workspace_is_not_told_to_open_a_directory`
 `verified-by: bravebot_agent::workspace::a_path_climbing_after_a_link_is_not_told_to_use_the_absolute_spelling`
 `verified-by: bravebot_agent::turn::a_read_climbing_to_a_sibling_directory_tells_the_planner_to_ask_for_the_directory`

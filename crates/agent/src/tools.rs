@@ -4344,6 +4344,9 @@ fn path_argument<S: Sink>(
                 .read_planner_argument(tool, "path", &path)
                 .map_err(|denial| format!("refused: {denial}"))?;
             refuse_denied_path(policy, workspace, purpose, &shown)?;
+            // A `..` into an open directory is reported, trusted and keyed as the absolute path it
+            // lands on, which is what the rules above were also asked about (TRUST-10).
+            let shown = workspace.climbed_to(&shown).unwrap_or(shown);
             Ok(PathArgument {
                 path,
                 destination: Destination::Named,
@@ -4681,6 +4684,7 @@ fn list_files<S: Sink>(
     if let Err(refusal) = refuse_denied_path(policy, workspace, Purpose::Read, &proposed_dir) {
         return Produced::problem(refusal);
     }
+    let proposed_dir = workspace.climbed_to(&proposed_dir).unwrap_or(proposed_dir);
 
     // A filter only narrows a confined, non-destructive read, so it is promotable on the
     // same terms as the directory itself.
@@ -10331,6 +10335,9 @@ fn search<S: Sink>(
     if let Err(refusal) = refuse_denied_path(policy, workspace, Purpose::Read, &proposed_where) {
         return Produced::problem(refusal);
     }
+    let proposed_where = workspace
+        .climbed_to(&proposed_where)
+        .unwrap_or(proposed_where);
 
     let include = match argument(arguments, "include") {
         Some(proposed) => match policy.promote_confined_read("search", "include", &proposed) {

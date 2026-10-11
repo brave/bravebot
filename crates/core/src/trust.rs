@@ -449,9 +449,9 @@ pub fn is_absolute_key(key: &str) -> bool {
 ///
 /// A `..` segment is kept as written rather than resolved. Resolving one lexically would be a
 /// guess: nothing here has a filesystem, and `a/../b` names `b` only if `a` is a directory and
-/// not a symlink somewhere else. A confined path never contains one, since confinement refuses
-/// `..` rather than resolving it (TRUST-10), so what this leaves unmerged is the spelling a
-/// dropped file arrives under.
+/// not a symlink somewhere else. A confined path never reaches here with one, since confinement
+/// takes the `..` out of the path it admits and refuses the rest (TRUST-10), so what this leaves
+/// unmerged is the spelling a dropped file arrives under.
 ///
 /// An absolute path **keeps** its leading slash, which is what makes it a key already rather than
 /// a name to be read under the working directory.

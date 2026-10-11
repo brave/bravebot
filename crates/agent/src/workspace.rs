@@ -162,13 +162,8 @@ fn io_detail(error: &std::io::Error, named: &str, root: &Path) -> String {
 pub enum WorkspaceError {
     /// The policy refused the operation.
     Denied(Denial),
-    /// The path resolved outside the workspace root. `climbs` is set when it was refused for a `..`
-    /// in it, which no opened directory makes work: the remedy then names the absolute spelling.
-    Escapes {
-        path: String,
-        remedy: Remedy,
-        climbs: bool,
-    },
+    /// The path resolved outside the workspace root.
+    Escapes { path: String, remedy: Remedy },
     /// The path was not usable as a relative workspace path.
     Invalid { path: String, reason: &'static str },
     /// The operation failed on disk.
@@ -228,59 +223,39 @@ impl WorkspaceError {
             // otherwise been seen to reach the same file through `run` instead.
             Self::Escapes {
                 remedy: Remedy::Open,
-                climbs,
                 ..
             } => format!(
                 "'{named}' resolves outside the workspace; refusing to touch it. The person can \
                  open the directory it is in, with /add-dir in the terminal or --add-dir when \
-                 starting bravebot, after which {}",
-                reaches(*climbs)
+                 starting bravebot, after which this path reaches it"
             ),
             Self::Escapes {
                 remedy: Remedy::OpenOrDrop,
-                climbs,
                 ..
             } => format!(
                 "'{named}' resolves outside the workspace; refusing to touch it. The person can \
                  open the directory it is in, with /add-dir in the terminal or --add-dir when \
-                 starting bravebot, after which {}, or drop the file on the window to have it \
-                 read with their next message",
-                reaches(*climbs)
+                 starting bravebot, after which this path reaches it, or drop the file on the \
+                 window to have it read with their next message"
             ),
             Self::Escapes {
                 remedy: Remedy::OpenEndsCheckouts,
-                climbs,
                 ..
             } => format!(
                 "'{named}' resolves outside the workspace; refusing to touch it. The person can \
                  open the directory it is in, with /add-dir in the terminal or --add-dir when \
-                 starting bravebot, after which {}. That directory holds the working directory, \
-                 and {ENDS_CHECKOUTS}",
-                reaches(*climbs)
+                 starting bravebot, after which this path reaches it. That directory holds the \
+                 working directory, and {ENDS_CHECKOUTS}"
             ),
             Self::Escapes {
                 remedy: Remedy::DropOrOpenEndsCheckouts,
-                climbs,
                 ..
             } => format!(
                 "'{named}' resolves outside the workspace; refusing to touch it. The person can \
                  drop the file on the window to have it read with their next message. Opening the \
                  directory it is in, with /add-dir in the terminal or --add-dir when starting \
-                 bravebot, would also make {}, but that directory holds the working directory, \
-                 and {ENDS_CHECKOUTS}",
-                if *climbs {
-                    "its absolute path reach it (a path with '..' never does)"
-                } else {
-                    "this path reach it"
-                }
-            ),
-            Self::Escapes {
-                remedy: Remedy::Absolute,
-                ..
-            } => format!(
-                "'{named}' resolves outside the workspace; refusing to touch it. The directory it \
-                 lands in is open, but a path with '..' never reaches a file in it: name the file \
-                 by its absolute path instead"
+                 bravebot, would also make this path reach it, but that directory holds the \
+                 working directory, and {ENDS_CHECKOUTS}"
             ),
             Self::Escapes {
                 remedy: Remedy::Kept,
@@ -339,12 +314,7 @@ impl WorkspaceError {
     /// there.
     /// This refusal as a call that reads the file reports it, which may also name a drop.
     fn for_a_read(self) -> Self {
-        let Self::Escapes {
-            path,
-            remedy,
-            climbs,
-        } = self
-        else {
+        let Self::Escapes { path, remedy } = self else {
             return self;
         };
         let remedy = match remedy {
@@ -353,11 +323,7 @@ impl WorkspaceError {
             Remedy::Kept => Remedy::Drop,
             other => other,
         };
-        Self::Escapes {
-            path,
-            remedy,
-            climbs,
-        }
+        Self::Escapes { path, remedy }
     }
 
     fn carried_path(&self) -> &str {
@@ -380,26 +346,15 @@ impl WorkspaceError {
 /// the planner reads uses for it (CHECKOUT-7).
 const ENDS_CHECKOUTS: &str = "while one is open no delegate is given a checkout";
 
-/// What opening a directory does for the path that was refused, in a sentence's words. A path with
-/// `..` is never admitted, in an opened directory or out of one, so what opening makes work is the
-/// same file spelled absolutely.
-fn reaches(climbs: bool) -> &'static str {
-    if climbs {
-        "its absolute path reaches it (a path with '..' never does)"
-    } else {
-        "this path reaches it"
-    }
-}
-
 /// What a person can do so that a path refused for leaving the workspace reaches its file.
 ///
 /// Chosen where the refusal is made, since only there is it known whether opening a directory would
 /// make the same path work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Remedy {
-    /// None is offered: the path climbs with `..` and lands inside the root, a link carries it out,
-    /// it is inside the root, where a directory cannot be opened, or what was refused is a
-    /// command's redirection or a rewind.
+    /// None is offered: the path climbs with `..` through a link, off the top of the file system
+    /// or to a place inside the root; a link carries it out; it is inside the root, where a
+    /// directory cannot be opened; or what was refused is a command's redirection or a rewind.
     Nothing,
     /// Opening the directory makes the same path reach the file, for whatever the call does to it.
     Open,
@@ -412,9 +367,6 @@ pub enum Remedy {
     /// [`Remedy::OpenOrDrop`] where the directory holds the working directory. The drop is named
     /// first, since it reaches the file and costs nothing.
     DropOrOpenEndsCheckouts,
-    /// The path climbs with `..` into a directory that is already open: no `..` is admitted, and
-    /// the absolute spelling of the same file is.
-    Absolute,
     /// `permissions.readsStayInWorkspace` refuses opening a directory, and the call is not a read,
     /// which a drop would not serve (PERM-16).
     Kept,
@@ -436,7 +388,6 @@ impl Remedy {
                 "drop the file, or open its directory, which holds the working directory and so \
                  ends checkouts"
             }
-            Self::Absolute => "name it by its absolute path",
             Self::Kept => {
                 "none, since permissions.readsStayInWorkspace refuses opening its directory"
             }
@@ -1375,7 +1326,6 @@ impl Workspace {
         let escapes = || WorkspaceError::Escapes {
             path: path.display().to_string(),
             remedy: Remedy::Nothing,
-            climbs: false,
         };
         let resolved = destination(path).ok_or_else(escapes)?;
         if resolved.starts_with(&self.root) || self.is_opened(&resolved) {
@@ -1773,8 +1723,10 @@ impl Workspace {
     /// directory the user added by name, and is refused otherwise: an absolute path was refused
     /// outright before `/add-dir` existed, and naming a directory is what makes one reachable.
     ///
-    /// Rejects any `..` component rather than resolving one. Resolving would admit it: a path
-    /// that climbs out of the root and back in by its own name lands inside, and would pass a
+    /// A `..` is resolved only into a directory that is open, and then as the absolute path it
+    /// lands on, which is checked as any other ([`Workspace::climb_lands`]). A `..` through a link,
+    /// or that lands inside the root, is refused: taking it out there would admit a path that
+    /// climbs out of the root and back in by its own name, which lands inside and would pass a
     /// test on where it lands.
     ///
     /// Containment is then decided against where the path lands and not against how it is spelled,
@@ -1794,10 +1746,31 @@ impl Workspace {
     /// a watch is looked at later from a working directory that may have moved, where `~/x` reads
     /// as relative and the watch is ended.
     pub(crate) fn expanded(&self, named: &str) -> String {
-        match expand_home(named, self.home.as_deref()) {
+        match self.spelled(named, self.home.as_deref()) {
             Ok(Some(path)) => path.to_string_lossy().into_owned(),
             _ => named.to_string(),
         }
+    }
+
+    /// `named` as the absolute path it is resolved as, where that is not how it was written: a
+    /// leading `~` spelled out, or the `..` of a path that climbs out of the root taken out
+    /// ([`Workspace::climb_lands`]). `None` where the name stands as written.
+    fn spelled(&self, named: &str, home: Option<&Path>) -> Result<Option<PathBuf>, &'static str> {
+        let expanded = expand_home(named, home)?;
+        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(named));
+        Ok(self.climb_lands(candidate).or(expanded))
+    }
+
+    /// `named` as the absolute path of the open directory a `..` in it lands in, where the call
+    /// is to be reported under that spelling, and `None` for any other name, including a `~`
+    /// with no `..` (whose messages keep the spelling that was written) and a `..` that is
+    /// refused.
+    pub(crate) fn climbed_to(&self, named: &str) -> Option<String> {
+        let expanded = expand_home(named, self.home.as_deref()).ok()?;
+        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(named));
+        let lands = self.climb_lands(candidate)?;
+        self.is_opened(&destination(&lands)?)
+            .then(|| lands.to_string_lossy().into_owned())
     }
 
     /// Stand in for the environment's home directory, so a test does not depend on whose machine
@@ -1814,16 +1787,19 @@ impl Workspace {
     ///
     /// A first component that is exactly `~` is the person's home directory, expanded before any
     /// check is made so what follows sees an absolute path like any other: reachable only inside
-    /// an opened directory, and refused otherwise. Messages keep the spelling that was written.
+    /// an opened directory, and refused otherwise. A `..` that lands in an opened directory is
+    /// taken out the same way. Messages keep the spelling that was written.
     fn resolve_with_home(
         &self,
         relative: &str,
         home: Option<&Path>,
     ) -> Result<PathBuf, WorkspaceError> {
-        let expanded = expand_home(relative, home).map_err(|reason| WorkspaceError::Invalid {
-            path: relative.to_string(),
-            reason,
-        })?;
+        let expanded = self
+            .spelled(relative, home)
+            .map_err(|reason| WorkspaceError::Invalid {
+                path: relative.to_string(),
+                reason,
+            })?;
         let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(relative));
 
         if candidate.is_absolute() {
@@ -1833,7 +1809,7 @@ impl Workspace {
         for component in candidate.components() {
             match component {
                 Component::ParentDir => {
-                    return Err(self.refuse_climb(&self.root.join(candidate), relative));
+                    return Err(Self::refuse_climb(relative));
                 }
                 Component::Prefix(_) | Component::RootDir => {
                     return Err(WorkspaceError::Invalid {
@@ -1850,7 +1826,6 @@ impl Workspace {
         let escapes = || WorkspaceError::Escapes {
             path: relative.to_string(),
             remedy: Remedy::Nothing,
-            climbs: false,
         };
         let resolved = destination(&self.root.join(candidate)).ok_or_else(escapes)?;
         if !resolved.starts_with(&self.root) {
@@ -1949,7 +1924,7 @@ impl Workspace {
             .components()
             .any(|c| matches!(c, Component::ParentDir))
         {
-            return Err(self.refuse_climb(candidate, named));
+            return Err(Self::refuse_climb(named));
         }
 
         refuse_misleading_names(candidate, named, true, cfg!(windows))?;
@@ -1957,7 +1932,6 @@ impl Workspace {
         let escapes = |remedy| WorkspaceError::Escapes {
             path: named.to_string(),
             remedy,
-            climbs: false,
         };
         let resolved = destination(candidate).ok_or_else(|| escapes(Remedy::Nothing))?;
         if !self.is_opened(&resolved) {
@@ -2031,38 +2005,46 @@ impl Workspace {
         }
     }
 
-    /// The refusal of a path with `..` in it, which is made whatever the `..` lead to.
+    /// Where a path with a `..` in it lands once each `..` is taken out, for a path that leaves
+    /// the root: the absolute spelling its file is reached by, which is then resolved and confined
+    /// as any other absolute path, so this decides how a name is spelled and nothing more.
     ///
-    /// What the remedy says depends on where the path lands once each `..` is taken out, which is
-    /// where its absolute spelling would land and is asked of the file system the way that
-    /// spelling is. Nothing is admitted or refused on the answer: the absolute spelling the remedy
-    /// names is resolved, and confined, as any other. So the answer chooses a sentence and nothing
-    /// else.
-    fn refuse_climb(&self, candidate: &Path, named: &str) -> WorkspaceError {
+    /// `None` for a path with no `..`, for one whose `..` leaves a link (where the kernel would
+    /// follow the link and the text would not), for one that climbs off the top of the file
+    /// system, for one that lands inside the root, which the relative spelling reaches, and for
+    /// one that lands on a name that is not UTF-8. The key, the rules and the result carry the
+    /// absolute spelling as text, and a lossy one would name a different file.
+    fn climb_lands(&self, candidate: &Path) -> Option<PathBuf> {
+        if !candidate
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        {
+            return None;
+        }
         let mut lands = PathBuf::new();
-        let mut within = true;
-        for component in candidate.components() {
+        for component in self.root.join(candidate).components() {
             match component {
                 Component::ParentDir => {
                     let through_a_link = lands
                         .symlink_metadata()
                         .is_ok_and(|found| found.file_type().is_symlink());
-                    within &= !through_a_link && lands.pop();
+                    if through_a_link || !lands.pop() {
+                        return None;
+                    }
                 }
                 Component::CurDir => {}
                 other => lands.push(other.as_os_str()),
             }
         }
-        let landed = within.then(|| destination(&lands)).flatten();
-        let remedy = match landed {
-            None => Remedy::Nothing,
-            Some(landed) if self.is_opened(&landed) => Remedy::Absolute,
-            Some(landed) => self.remedy_outside(&landed),
-        };
+        (!lands.starts_with(&self.root) && lands.to_str().is_some()).then_some(lands)
+    }
+
+    /// The refusal of a path with a `..` that [`Workspace::climb_lands`] does not take out.
+    /// Nothing is offered, since no directory a person opens makes such a path reach its file.
+    fn refuse_climb(named: &str) -> WorkspaceError {
         WorkspaceError::Escapes {
             path: named.to_string(),
-            remedy,
-            climbs: true,
+            remedy: Remedy::Nothing,
         }
     }
 
@@ -2999,7 +2981,6 @@ impl Workspace {
         let escapes = || WorkspaceError::Escapes {
             path: path.display().to_string(),
             remedy: Remedy::Nothing,
-            climbs: false,
         };
         let reached = match was {
             Before::Nothing => path.parent(),
@@ -5146,10 +5127,11 @@ impl Workspace {
     /// therefore still has two rules, which is a cost of keying on the name that the spec records
     /// rather than one this closes.
     ///
-    /// A `..` component leaves the name alone, for the same reason the kernel's own normalisation
-    /// leaves one as written: confinement refuses such a path rather than resolving it (TRUST-10),
-    /// so it is refused before anything reads it, and reducing it here would be guessing at which
-    /// file it named.
+    /// A `..` that is left in the name leaves it alone, for the same reason the kernel's own
+    /// normalisation leaves one as written: confinement refuses such a path rather than resolving
+    /// it (TRUST-10), so it is refused before anything reads it, and reducing it here would be
+    /// guessing at which file it named. One that climbs out of the root is the absolute path it
+    /// lands on by here, and is keyed as that.
     ///
     /// Whatever the reduction leaves is spelled from `/`, which is how a key arrives spelled
     /// (TRUST-18) on a host that separates with something else, a drive letter included: a name
@@ -5162,9 +5144,10 @@ impl Workspace {
     /// The same with the host's answer and the home a leading `~` stands for supplied, for the
     /// reason [`Workspace::displayed`] takes one.
     fn keyed(&self, named: &str, backslash_separates: bool, home: Option<&Path>) -> String {
-        // A `~` is spelled as the absolute path it stands for, so the key is the one the expanded
-        // path has; a machine with no home leaves it, and `resolve` refuses it.
-        let expanded = expand_home(named, home).ok().flatten();
+        // A `~`, or a `..` climbing out of the root, is spelled as the absolute path it stands
+        // for, so the key is the one that path has; a machine with no home leaves the `~`, and
+        // `resolve` refuses it.
+        let expanded = self.spelled(named, home).ok().flatten();
         let named = expanded.as_deref().and_then(Path::to_str).unwrap_or(named);
         let candidate = Path::new(named);
         let climbs = candidate
@@ -6468,6 +6451,141 @@ mod tests {
         );
         assert_ne!(tilde, "~/src/x.txt");
         let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// The rules, the trust map and the result all see the one spelling of a file, so a `..` into an
+    /// opened directory is the absolute path it lands on to each of them. A key that kept the `..`
+    /// would be a rule for a name no file has, and a `deny` rule on the absolute path would not
+    /// cover the climbing spelling of the file it denies (PERM-7).
+    #[test]
+    fn a_climb_into_an_opened_directory_is_the_absolute_path_it_lands_on_everywhere() {
+        let (home, project) = home_and_project("climb-spelled");
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        workspace
+            .add_directory(home.to_str().expect("utf-8"))
+            .expect("home opened");
+        let absolute = home.join("src").join("x.txt");
+        let absolute = absolute.to_str().expect("utf-8");
+
+        for climbing in ["../home/src/x.txt", "src/../../home/src/x.txt"] {
+            assert_eq!(workspace.expanded(climbing), absolute, "{climbing}");
+            assert_eq!(
+                workspace.climbed_to(climbing).as_deref(),
+                Some(absolute),
+                "{climbing}"
+            );
+            assert_eq!(
+                workspace.keyed(climbing, false, None),
+                workspace.keyed(absolute, false, None),
+                "{climbing}"
+            );
+            assert_eq!(
+                workspace.resolve(climbing).expect("reaches the file"),
+                home.join("src").join("x.txt"),
+                "{climbing}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// Only a `..` that lands in an open directory is reported as the absolute path: one that lands
+    /// in a closed directory is refused under the name that was written, which is the one the
+    /// refusal says, and a `~` keeps its own spelling in what a call reports.
+    #[test]
+    fn a_climb_is_reported_as_the_absolute_path_only_where_it_is_taken_out_and_admitted() {
+        let (home, project) = home_and_project("climb-reported");
+        let workspace = Workspace::new(&project).expect("workspace");
+
+        assert_eq!(workspace.climbed_to("../home/x.txt"), None);
+        let error = workspace
+            .resolve("../home/x.txt")
+            .expect_err("the directory is not open");
+        assert!(
+            matches!(&error, WorkspaceError::Escapes { path, remedy: Remedy::Open } if path == "../home/x.txt"),
+            "{error:?}"
+        );
+
+        let workspace = workspace.with_home(Some(home.clone()));
+        assert_eq!(workspace.climbed_to("~/x.txt"), None);
+        assert_eq!(workspace.climbed_to("src/x.txt"), None);
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// A `..` that leaves a link is not the text's `..`: the file system takes the parent of the
+    /// link's target, so removing the pair from the text names another file than the call asked
+    /// for. And a climb that comes back into the working directory is reached by the relative
+    /// path, even where the directory that holds it is open.
+    #[cfg(unix)]
+    #[test]
+    fn a_climb_through_a_link_or_back_into_the_working_directory_is_not_taken_out() {
+        let (home, project) = home_and_project("climb-not-taken");
+        let elsewhere = home.parent().expect("base").join("elsewhere");
+        std::fs::create_dir_all(elsewhere.join("deep")).expect("elsewhere");
+        std::fs::write(home.join("x.txt"), "home").expect("file");
+        std::fs::write(elsewhere.join("x.txt"), "elsewhere").expect("file");
+        std::os::unix::fs::symlink(elsewhere.join("deep"), home.join("link")).expect("link");
+
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        workspace
+            .add_directory(home.to_str().expect("utf-8"))
+            .expect("home opened");
+        let through = format!("{}/link/../x.txt", home.display());
+        assert_eq!(workspace.climbed_to(&through), None);
+        assert!(workspace.resolve(&through).is_err());
+
+        let base = home.parent().expect("base").to_path_buf();
+        let mut holding = Workspace::new(&project).expect("workspace");
+        holding
+            .add_directory(base.to_str().expect("utf-8"))
+            .expect("the parent is opened");
+        assert_eq!(holding.climbed_to("../project/x.txt"), None);
+        assert!(holding.resolve("../project/x.txt").is_err());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A `..` that lands under a directory whose name is not text is refused. The directory its
+    /// lossy rendering spells is open beside it, so an implementation that rendered the landing
+    /// with replacement characters would report, key and open that one instead.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_climb_onto_a_name_that_is_not_text_is_not_taken_as_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let base = crate::testutil::scratch_dir("climb-not-text");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("base");
+        let base = base.canonicalize().expect("canonical base");
+        let mut bytes = base.as_os_str().as_bytes().to_vec();
+        bytes.extend_from_slice(b"/x-\xff");
+        let real = PathBuf::from(OsStr::from_bytes(&bytes));
+        assert!(real.to_str().is_none());
+        let lookalike = base.join("x-\u{FFFD}");
+        std::fs::create_dir_all(real.join("project")).expect("project");
+        std::fs::create_dir_all(&lookalike).expect("lookalike");
+        std::fs::write(real.join("x.txt"), "real").expect("file");
+        std::fs::write(lookalike.join("x.txt"), "lookalike").expect("file");
+
+        let mut workspace = Workspace::new(real.join("project")).expect("workspace");
+        workspace
+            .add_directory(base.to_str().expect("utf-8"))
+            .expect("the base is opened");
+        let lookalike_file = lookalike.join("x.txt");
+        assert_eq!(
+            workspace
+                .resolve(lookalike_file.to_str().expect("utf-8"))
+                .expect("the lookalike is reachable"),
+            lookalike_file
+        );
+
+        assert_eq!(workspace.climbed_to("../x.txt"), None);
+        assert_eq!(workspace.expanded("../x.txt"), "../x.txt");
+        assert_ne!(
+            workspace.keyed("../x.txt", false, None),
+            workspace.keyed(lookalike_file.to_str().expect("utf-8"), false, None)
+        );
+        assert!(workspace.resolve("../x.txt").is_err());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// A missing relative file says where it was looked for, so a path that is merely absent reads

@@ -2198,47 +2198,30 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         WorkspaceError::Escapes {
             path: carried.to_string(),
             remedy: Remedy::Nothing,
-            climbs: false,
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
             remedy: Remedy::Open,
-            climbs: false,
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
             remedy: Remedy::OpenOrDrop,
-            climbs: false,
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
             remedy: Remedy::OpenEndsCheckouts,
-            climbs: false,
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
             remedy: Remedy::DropOrOpenEndsCheckouts,
-            climbs: false,
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
             remedy: Remedy::Kept,
-            climbs: false,
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
             remedy: Remedy::Drop,
-            climbs: false,
-        },
-        WorkspaceError::Escapes {
-            path: carried.to_string(),
-            remedy: Remedy::Absolute,
-            climbs: true,
-        },
-        WorkspaceError::Escapes {
-            path: carried.to_string(),
-            remedy: Remedy::Open,
-            climbs: true,
         },
         WorkspaceError::Invalid {
             path: carried.to_string(),
@@ -2922,12 +2905,12 @@ fn a_path_climbing_after_a_link_is_not_told_to_use_the_absolute_spelling() {
     );
 }
 
-/// A worktree beside the working directory is reached as `../<name>/...`, and no `..` is ever
-/// admitted, so opening its directory makes the absolute spelling work and the typed one not. The
-/// refusal says so before the directory is open, and after it names the absolute spelling instead
-/// of offering to open what is open.
+/// A worktree beside the working directory is reached as `../<name>/...`. Before its directory is
+/// open the refusal says that opening it makes the same path work, and once it is open the path
+/// does: a read, a write and a listing by the climbing spelling reach the files the absolute
+/// spelling reaches.
 #[test]
-fn a_path_climbing_to_a_sibling_directory_is_told_to_use_the_absolute_spelling() {
+fn a_path_climbing_to_a_sibling_directory_reaches_it_once_the_directory_is_open() {
     let scratch = Scratch::new("climb-sibling");
     let sibling = outside("climb-sibling");
     std::fs::write(sibling.path.join("policy.rs"), "fn policy() {}").unwrap();
@@ -2946,16 +2929,12 @@ fn a_path_climbing_to_a_sibling_directory_is_told_to_use_the_absolute_spelling()
 
     let error = workspace
         .read(&mut policy, &Labelled::trusted(climbing.clone()))
-        .expect_err("a path that climbs is refused");
+        .expect_err("the directory is not open");
     let told = error.describe(&climbing);
     assert!(told.contains("/add-dir in the terminal"), "{told}");
     assert!(
-        told.contains("its absolute path reaches it") && told.contains("'..' never does"),
-        "the sentence promised that the typed path would work once the directory is open: {told}"
-    );
-    assert!(
-        !told.contains("this path reaches it"),
-        "the climbing path was promised to work once the directory is open: {told}"
+        told.contains("this path reaches it") && !told.contains("'..' never does"),
+        "the sentence did not promise that the typed path works once the directory is open: {told}"
     );
     let error = workspace
         .write(
@@ -2972,7 +2951,6 @@ fn a_path_climbing_to_a_sibling_directory_is_told_to_use_the_absolute_spelling()
     workspace
         .add_directory(sibling.path.to_str().expect("utf-8 path"))
         .expect("the directory is added");
-    let absolute = sibling.path.join("policy.rs").display().to_string();
     let inside_climbing = sibling
         .path
         .join("inner")
@@ -2981,25 +2959,88 @@ fn a_path_climbing_to_a_sibling_directory_is_told_to_use_the_absolute_spelling()
         .display()
         .to_string();
     for typed in [climbing.as_str(), inside_climbing.as_str()] {
-        let error = workspace
+        let read = workspace
             .read(&mut policy, &Labelled::trusted(typed.to_string()))
-            .expect_err("no `..` is admitted, even into an open directory");
-        assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
-        let told = error.describe(typed);
-        assert!(
-            told.contains("name the file by its absolute path"),
-            "{typed}: the absolute spelling was not named: {told}"
-        );
-        assert!(
-            !told.contains("add-dir"),
-            "{typed}: the person was sent to open a directory that is open: {told}"
-        );
+            .unwrap_or_else(|error| panic!("{typed} was refused: {error:?}"));
+        let proof = policy.authorise_content_release("test", "contents");
+        assert_eq!(read.declassify(&proof), "fn policy() {}");
     }
-    let read = workspace
-        .read(&mut policy, &Labelled::trusted(absolute))
-        .expect("the absolute spelling reaches the file");
-    let proof = policy.authorise_content_release("test", "contents");
-    assert_eq!(read.declassify(&proof), "fn policy() {}");
+
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(format!("../{name}/made.txt")),
+            &Labelled::trusted("made".to_string()),
+        )
+        .expect("a new file is written by the climbing spelling");
+    assert_eq!(
+        std::fs::read_to_string(sibling.path.join("made.txt")).unwrap(),
+        "made"
+    );
+    assert!(
+        !scratch.path.join("made.txt").exists(),
+        "the write landed where the `..` was taken out of the text"
+    );
+    let listed = workspace
+        .list(
+            &mut policy,
+            &Labelled::trusted(format!("../{name}")),
+            None,
+            None,
+        )
+        .expect("the directory is listed by the climbing spelling");
+    let proof = policy.authorise_content_release("test", "paths");
+    let listed = listed.declassify(&proof);
+    assert!(
+        listed.files.iter().any(|file| file.ends_with("policy.rs")),
+        "{listed:?}"
+    );
+}
+
+/// Opening one directory does not open the next: a `..` into a directory that is not open is
+/// refused with the way to open it, whatever else is open, and a `..` back into the working
+/// directory is refused even where a directory that holds it was opened, since the relative path
+/// reaches the file.
+#[test]
+fn a_path_climbing_into_a_directory_that_is_not_open_is_refused() {
+    let scratch = Scratch::new("climb-closed");
+    let open = outside("climb-closed-open");
+    let closed = outside("climb-closed-closed");
+    std::fs::write(closed.path.join("secret.rs"), "fn secret() {}").unwrap();
+    std::fs::write(scratch.path.join("main.rs"), "fn main() {}").unwrap();
+    let closed_name = closed.path.file_name().unwrap().to_str().unwrap();
+    let root_name = scratch.path.file_name().unwrap().to_str().unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    workspace
+        .add_directory(open.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let typed = format!("../{closed_name}/secret.rs");
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(typed.clone()))
+        .expect_err("the directory it lands in is not open");
+    let told = error.describe(&typed);
+    assert!(told.contains("/add-dir in the terminal"), "{told}");
+
+    let mut holding = Workspace::new(&scratch.path).expect("workspace");
+    let parent = scratch.path.parent().expect("parent");
+    holding
+        .add_directory(parent.to_str().expect("utf-8 path"))
+        .expect("the directory that holds the working directory is added");
+    let back = format!("../{root_name}/main.rs");
+    let error = holding
+        .read(&mut policy, &Labelled::trusted(back.clone()))
+        .expect_err("a climb that lands in the working directory is refused");
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
 }
 
 /// The key that keeps the file tools inside the workspace refuses opening a directory, so a path

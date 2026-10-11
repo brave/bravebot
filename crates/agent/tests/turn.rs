@@ -1502,9 +1502,9 @@ fn a_read_outside_the_workspace_tells_the_planner_what_the_person_can_do() {
 }
 
 /// A planner that follows `pr-fix` reads a worktree beside the working directory as `../<name>/..`.
-/// The refusal it reads says to use the absolute path once the person has opened the directory, so
-/// the planner has something to tell them rather than a reason to try `run`, and the trail records
-/// the remedy that was offered.
+/// The refusal it reads says the same path works once the person has opened the directory, so the
+/// planner has something to tell them rather than a reason to try `run`, and the trail records the
+/// remedy that was offered.
 #[test]
 fn a_read_climbing_to_a_sibling_directory_tells_the_planner_to_ask_for_the_directory() {
     let sibling = Scratch::new("climb-remedy-sibling");
@@ -1535,10 +1535,7 @@ fn a_read_climbing_to_a_sibling_directory_tells_the_planner_to_ask_for_the_direc
 
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
-    for told in [
-        "with /add-dir in the terminal",
-        "its absolute path reaches it",
-    ] {
+    for told in ["with /add-dir in the terminal", "this path reaches it"] {
         assert!(
             second.contains(told),
             "the refusal did not say {told}: {second}"
@@ -1554,6 +1551,147 @@ fn a_read_climbing_to_a_sibling_directory_tells_the_planner_to_ask_for_the_direc
         refused[0].contains("remedy offered: open its directory"),
         "the trail does not record the remedy offered: {}",
         refused[0]
+    );
+}
+
+/// Once the person has opened the worktree beside the working directory, the planner's `../<name>/..`
+/// path reaches it, and a failure names the absolute path the call was made on rather than the
+/// spelling that was typed, so the planner and the trail say the same file (TRUST-10).
+#[cfg(unix)]
+#[test]
+fn a_read_climbing_into_an_opened_sibling_directory_reads_it_and_names_the_absolute_path() {
+    let sibling = Scratch::new("climb-opened-sibling");
+    std::fs::write(sibling.path.join("policy.rs"), "fn policy() {}").unwrap();
+    let name = sibling.path.file_name().unwrap().to_str().unwrap();
+    let climbing = format!("../{name}/policy.rs");
+
+    let scratch = Scratch::new("climb-opened");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(sibling.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+
+    let missing = format!("../{name}/missing.rs");
+    let bodies = run_calls_under(
+        &workspace,
+        rules(&[], &[], &[]),
+        trust,
+        &[
+            ("read_file", &format!(r#"{{"path":"{climbing}"}}"#)),
+            ("read_file", &format!(r#"{{"path":"{missing}"}}"#)),
+        ],
+    );
+
+    let second = bodies.last().expect("the last request");
+    assert!(
+        second.contains("fn policy"),
+        "the file was not read: {second}"
+    );
+    let absolute = added.join("missing.rs").display().to_string();
+    assert!(
+        second.contains(&format!("'{absolute}'")),
+        "the failure did not name the absolute path the call was made on: {second}"
+    );
+    assert!(
+        !second.contains(&format!("'{missing}'")),
+        "the failure kept the spelling with the `..` in it: {second}"
+    );
+}
+
+/// A search of a `../<name>` directory in an opened sibling searches it, and a failure names the
+/// absolute path the search was made in, as a read's does (TRUST-10).
+#[cfg(unix)]
+#[test]
+fn a_search_climbing_into_an_opened_sibling_directory_searches_it_and_names_the_absolute_path() {
+    let sibling = Scratch::new("climb-search-sibling");
+    std::fs::write(sibling.path.join("policy.rs"), "fn policy() {}").unwrap();
+    let name = sibling.path.file_name().unwrap().to_str().unwrap();
+
+    let scratch = Scratch::new("climb-search");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(sibling.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+
+    let missing = format!("../{name}/missing");
+    let bodies = run_calls_under(
+        &workspace,
+        rules(&[], &[], &[]),
+        trust,
+        &[
+            (
+                "search",
+                &format!(r#"{{"pattern":"policy","directory":"../{name}"}}"#),
+            ),
+            (
+                "search",
+                &format!(r#"{{"pattern":"policy","directory":"{missing}"}}"#),
+            ),
+        ],
+    );
+
+    let last = bodies.last().expect("the last request");
+    assert!(
+        last.contains("fn policy() {}"),
+        "the directory was not searched: {last}"
+    );
+    let absolute = added.join("missing").display().to_string();
+    assert!(
+        last.contains(&format!("'{absolute}'")),
+        "the failure did not name the absolute path the search was made in: {last}"
+    );
+    assert!(
+        !last.contains(&format!("'{missing}'")),
+        "the failure kept the spelling with the `..` in it: {last}"
+    );
+}
+
+/// A rule is about the file, so the `..` spelling of a file that a `deny` rule names by its
+/// absolute path is refused as the absolute spelling is, for a read and for a listing.
+#[cfg(unix)]
+#[test]
+fn a_deny_rule_on_the_absolute_path_covers_the_spelling_that_climbs_to_it() {
+    let sibling = Scratch::new("climb-denied-sibling");
+    std::fs::write(sibling.path.join("secret.txt"), "SECRET_TOKEN=hunter2").unwrap();
+    let name = sibling.path.file_name().unwrap().to_str().unwrap();
+
+    let scratch = Scratch::new("climb-denied");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(sibling.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+    let rule = format!("Read(/{}/**)", added.display());
+    let permissions = rules_as_a_session_reads_them(
+        &format!(r#"{{"permissions": {{"deny": ["{rule}"]}}}}"#),
+        &workspace,
+    );
+
+    let bodies = run_calls_under(
+        &workspace,
+        permissions,
+        trust,
+        &[
+            (
+                "read_file",
+                &format!(r#"{{"path":"../{name}/secret.txt"}}"#),
+            ),
+            ("list_files", &format!(r#"{{"directory":"../{name}"}}"#)),
+        ],
+    );
+
+    assert!(
+        !bodies.iter().any(|b| b.contains("hunter2")),
+        "a file a rule names by its absolute path was read by the spelling that climbs to it"
+    );
+    assert!(
+        bodies.iter().any(|b| b.contains("deny rule")),
+        "the planner was not told a rule refused the read: {bodies:?}"
     );
 }
 
