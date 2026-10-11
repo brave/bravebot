@@ -130,8 +130,11 @@ open, or on a terminal too narrow for it, the line has no such part.
 While the panel is drawn it holds the context reading, in whichever of the three states of
 [INPUT-22](terminal-input.md#INPUT-22) it is in, and the cache hit rate
 ([BACKEND-31](backends.md#BACKEND-31)), and the hint line drops both. Below them the panel gives the
-last turn's cache figures as two rows, what was read and what was written, never summed, and
-neither row before a turn has reported one. When the panel is not drawn, or the terminal is too
+cache figures as two rows, what was read and what was written, never summed. A turn in flight
+gives its running totals once one of its rounds has reported a completed request, and the last
+turn's figures until then, so a first turn shows them after its first round rather than at its
+end. The hit rate reads the same figures, on the hint line as well. Neither row is drawn before
+any turn or round has reported one. When the panel is not drawn, or the terminal is too
 short for the panel to show its Context section whole, the hint line has the reading and the hit
 rate. The loop, the job count, the mode and the keys stay on the hint line in every case, because a
 loop and a job spend while nobody is watching, and the panel can be closed or the terminal too
@@ -139,6 +142,9 @@ narrow for it.
 
 `verified-by: bravebot_tui::panel::the_context_reading_moves_into_the_panel_in_each_state`
 `verified-by: bravebot_tui::panel::the_cache_read_and_written_are_two_figures`
+`verified-by: bravebot_tui::app::a_first_turn_in_flight_draws_the_cache_figures_after_its_first_round`
+`verified-by: bravebot_tui::app::each_round_of_a_turn_replaces_the_cache_figures_with_the_turns_running_totals`
+`verified-by: bravebot_tui::app::a_report_with_no_completed_request_leaves_the_cache_figures_where_they_were`
 `verified-by: bravebot_tui::panel::the_loop_stays_on_the_hint_line_while_the_panel_is_drawn`
 `verified-by: bravebot_tui::panel::the_context_reading_stays_on_the_hint_line_where_the_panel_is_too_short_for_it`
 

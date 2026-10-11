@@ -1175,7 +1175,9 @@ Whatever presents these figures presents nothing when they are zero, rather than
 that may not have happened. That holds of each figure alone: a turn that established a prefix and
 read nothing back reports the write and says nothing about the read.
 
-**The status panel and footer report the last turn's.** The last turn rather than a total over the
+**The status panel and footer report the last turn's.** A turn in flight reports its own running
+totals from the first round that completed a request ([PANEL-8](info-panel.md#PANEL-8)), and the
+last turn's until then. The last turn rather than a total over the
 session, because caching is a property of a request: a session that compacted part way through has
 turns whose prefix survived and turns whose prefix was rewritten, and a total averages away the
 thing the figures are for. The footer shows the cached read as a percentage of the turn's prompt
