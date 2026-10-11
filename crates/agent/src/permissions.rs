@@ -100,6 +100,7 @@ pub fn filesystem_reason(reason: bravebot_sandbox::rules::Reason) -> &'static st
         Reason::ConfinesNothing => t!(sandbox_rule_confines_nothing),
         Reason::PrivateKey => t!(sandbox_rule_private_key),
         Reason::StateDirectory => t!(sandbox_rule_state_directory),
+        Reason::HoldsCredentials => t!(sandbox_rule_holds_credentials),
         Reason::TooBroad => t!(sandbox_rule_too_broad),
         Reason::Overridden => t!(sandbox_rule_overridden),
     }

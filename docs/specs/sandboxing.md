@@ -1791,7 +1791,12 @@ or any directory above it are refused as `allowWrite` rows, since a stage that w
 confined to nothing ([SANDBOX-2](#SANDBOX-2)). No list adds reach to `~/.ssh` or anything inside it,
 which is where a private key is ([SANDBOX-16](#SANDBOX-16)), nor to `~/.bravebot` or anything inside it, which is
 where the gateway keys are ([SANDBOX-12](#SANDBOX-12)), and no list can set the `.git` writes
-[SANDBOX-14](#SANDBOX-14) withholds, since none of them reaches that setting. A write row of the
+[SANDBOX-14](#SANDBOX-14) withholds, since none of them reaches that setting. On Windows, where a
+grant cannot be narrowed, an `allowRead` or `allowWrite` entry that is a directory holding one of
+the locations of [SANDBOX-12](#SANDBOX-12) beneath it (the home directory, a directory above it, or
+`~/.config`, which holds `~/.config/gcloud`) is refused too, since a stage given that directory
+would reach `~/.ssh`, `~/.aws` and `~/.bravebot` with it; a wildcard drops those matches and keeps the
+rest. An entry at or inside such a location other than `~/.ssh` and `~/.bravebot` is not affected. A write row of the
 person's above a location of the table does not write it, since Seatbelt's refusal of a read is not
 a refusal of a write. `*` and `?` in an entry of `allowRead` or `denyRead` are expanded when a call's
 confinement is built, by listing each directory once without following a link, within a bound of
@@ -1845,6 +1850,9 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_write_row_over_the_home_or_the_root_is_refused`
 `verified-by: bravebot_sandbox::rules::an_entry_that_adds_reach_inside_ssh_is_refused`
 `verified-by: bravebot_sandbox::rules::an_entry_that_adds_reach_inside_the_state_directory_is_refused`
+`verified-by: bravebot_sandbox::rules::a_row_over_a_directory_holding_a_credential_location_is_refused_on_windows_only`
+`verified-by: bravebot_sandbox::rules::a_pattern_on_windows_leaves_out_the_matches_that_hold_a_credential_location`
+`verified-by: bravebot_agent::confine::an_allow_read_over_the_home_directory_is_not_a_row_on_windows`
 `verified-by: bravebot_sandbox::rules::a_glob_is_expanded_by_listing_and_applies_to_reads`
 `verified-by: bravebot_sandbox::rules::a_glob_over_a_tree_deeper_than_the_walk_goes_is_refused_and_not_cut_short`
 `verified-by: bravebot_sandbox::rules::a_match_is_judged_where_it_leads_and_the_directory_it_is_read_from_is_not_a_pattern`

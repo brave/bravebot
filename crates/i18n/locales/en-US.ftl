@@ -587,6 +587,7 @@ sandbox-rule-glob-on-a-write = a wildcard applies to reads and not to writes
 sandbox-rule-confines-nothing = a write row over the home directory or the whole filesystem confines nothing
 sandbox-rule-private-key = no list adds reach to ~/.ssh, where a private key is
 sandbox-rule-state-directory = no list adds reach to ~/.bravebot, where the gateway keys are
+sandbox-rule-holds-credentials = on this platform a row over a directory reaches everything inside it, so no list adds a directory that holds a credential location such as ~/.ssh, ~/.aws or ~/.bravebot
 sandbox-rule-too-broad = its wildcard looked at more of the disk than a pattern may, so what it names is not known
 sandbox-rule-overridden = another entry decides that path: a refusal at the same path, or one the managed file wrote
 sandbox-rule-cannot-subtract = this platform cannot hold back a path inside a directory every stage is granted, so a stage is refused instead of started with the path reachable

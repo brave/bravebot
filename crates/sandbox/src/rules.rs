@@ -9,7 +9,7 @@
 //! entries a person wrote, the home directory and the directory relative entries are read from, and
 //! what a glob names is decided by the directory entries' names alone.
 
-use crate::base::STATE_DIRECTORY;
+use crate::base::{Prelude, STATE_DIRECTORY, credential_locations};
 use crate::policy::{
     SandboxPolicy, names_a_filesystem_root, spread_around, with_their_resolved_spelling,
 };
@@ -137,6 +137,10 @@ pub enum Reason {
     /// It names `~/.bravebot`, or a place inside it, in a list that adds reach. The directory holds
     /// the gateway keys.
     StateDirectory,
+    /// It names a directory that holds a credential location, such as the home directory or
+    /// `~/.config`, in a list that adds reach, on a platform whose backend cannot hold a location
+    /// back inside a directory it grants.
+    HoldsCredentials,
     /// A glob looked at more entries or went deeper than a glob may, so what it names is not
     /// known.
     TooBroad,
@@ -377,6 +381,20 @@ impl Rules {
 /// its links, so a link into `~/.aws` is `~/.aws`. Globs are expanded here and not when a stage
 /// starts, so a file made afterwards is outside what a glob named.
 pub fn resolve(lists: &Lists, home: Option<&Path>, base: &Path) -> Rules {
+    resolve_for(Prelude::current(), lists, home, base)
+}
+
+/// [`resolve`] for a session on `prelude`, where `None` is a platform with no written-down prelude.
+///
+/// The platform decides one refusal: where a grant cannot be narrowed (Windows), a row that adds
+/// reach over a directory holding a credential location is refused, since the location could not
+/// be held back inside it.
+pub fn resolve_for(
+    prelude: Option<Prelude>,
+    lists: &Lists,
+    home: Option<&Path>,
+    base: &Path,
+) -> Rules {
     let home = home.map(resolved);
     let base = resolved(base);
     let mut items: Vec<Item> = Vec::new();
@@ -387,7 +405,7 @@ pub fn resolve(lists: &Lists, home: Option<&Path>, base: &Path) -> Rules {
         List::DenyWrite,
     ] {
         for entry in lists.of(list) {
-            let state = match one(list, entry, home.as_deref(), &base) {
+            let state = match one(list, entry, prelude, home.as_deref(), &base) {
                 Ok(paths) => State::InForce(paths),
                 Err(reason) => State::Refused(reason),
             };
@@ -589,6 +607,7 @@ fn overridden(rules: &Rules) -> Vec<usize> {
 fn one(
     list: List,
     entry: &Entry,
+    prelude: Option<Prelude>,
     home: Option<&Path>,
     base: &Path,
 ) -> Result<Vec<PathBuf>, Reason> {
@@ -654,6 +673,15 @@ fn one(
         if list == List::AllowWrite && confines_nothing(&path, home) {
             return Err(Reason::ConfinesNothing);
         }
+        if matches!(list, List::AllowRead | List::AllowWrite)
+            && prelude == Some(Prelude::Windows)
+            && home.is_some_and(|home| holds_a_credential_location(&path, home))
+        {
+            if wildcard {
+                continue;
+            }
+            return Err(Reason::HoldsCredentials);
+        }
         kept.push(path);
     }
     kept.sort();
@@ -675,6 +703,20 @@ fn refused_for_adding_reach(path: &Path, home: Option<&Path>) -> Option<Reason> 
             None
         }
     })
+}
+
+/// Whether a row at a resolved `path` grants a directory with a credential location beneath it,
+/// the location itself excluded.
+///
+/// A location is compared in the spelling it has under `home` and where its links lead.
+fn holds_a_credential_location(path: &Path, home: &Path) -> bool {
+    credential_locations(Prelude::Windows, home)
+        .into_iter()
+        .any(|location| {
+            [location.clone(), resolved(&location)]
+                .iter()
+                .any(|spelling| under(spelling, path) && !same_path(spelling, path))
+        })
 }
 
 /// Whether a write row at a resolved path would be a write row over a filesystem root, the home
@@ -1039,6 +1081,90 @@ mod tests {
         // Holding it back is the point of the table, so a refusal of it stands.
         let rules = resolve(&only(List::DenyRead, "~/.ssh/id_rsa"), Some(&home), &base);
         assert_eq!(refusal_of(&rules), None);
+    }
+
+    /// A Windows container cannot be refused a location inside a directory it is granted, so a row
+    /// over the home directory, a directory above it or `~/.config` (which holds `~/.config/gcloud`)
+    /// would reach `~/.ssh`, `~/.aws` and `~/.bravebot`. Elsewhere the refusals hold beneath such a
+    /// row and the entry stands.
+    #[test]
+    fn a_row_over_a_directory_holding_a_credential_location_is_refused_on_windows_only() {
+        let home = fresh("rules-holds-home");
+        let base = fresh("rules-holds-base");
+        let above = home.parent().unwrap().to_string_lossy().into_owned();
+        for (list, spelled) in [
+            (List::AllowRead, "~"),
+            (List::AllowRead, "~/"),
+            (List::AllowRead, above.as_str()),
+            (List::AllowRead, "~/.config"),
+            (List::AllowWrite, "~/.config"),
+        ] {
+            let rules = resolve_for(
+                Some(Prelude::Windows),
+                &only(list, spelled),
+                Some(&home),
+                &base,
+            );
+            assert_eq!(
+                refusal_of(&rules),
+                Some(Reason::HoldsCredentials),
+                "{list:?} {spelled}"
+            );
+            for prelude in [Some(Prelude::Linux), Some(Prelude::MacOs), None] {
+                let rules = resolve_for(prelude, &only(list, spelled), Some(&home), &base);
+                assert_eq!(refusal_of(&rules), None, "{prelude:?} {list:?} {spelled}");
+            }
+        }
+        // A directory that holds none, a neighbour sharing a prefix with one that does, and a
+        // location or a place inside one that the person named stay in force: SANDBOX-25 lets a
+        // list lift a table row other than `~/.ssh` and the state directory.
+        for spelled in ["~/projects", "~/.configx", "~/.aws", "~/.aws/config"] {
+            for list in [List::AllowRead, List::AllowWrite] {
+                let rules = resolve_for(
+                    Some(Prelude::Windows),
+                    &only(list, spelled),
+                    Some(&home),
+                    &base,
+                );
+                assert_eq!(refusal_of(&rules), None, "{list:?} {spelled}");
+            }
+        }
+        // A denial adds no reach, so a refusal of the home directory is not refused.
+        let rules = resolve_for(
+            Some(Prelude::Windows),
+            &only(List::DenyRead, "~"),
+            Some(&home),
+            &base,
+        );
+        assert_eq!(refusal_of(&rules), None);
+    }
+
+    /// A pattern over the home directory names what it matches, and a match that holds a credential
+    /// location is left out rather than granted, as one at `~/.ssh` is.
+    #[test]
+    fn a_pattern_on_windows_leaves_out_the_matches_that_hold_a_credential_location() {
+        let home = fresh("rules-holds-glob-home");
+        let base = fresh("rules-holds-glob-base");
+        for directory in [".config", ".ssh", "projects"] {
+            fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        let named = |prelude| {
+            let rules = resolve_for(
+                Some(prelude),
+                &only(List::AllowRead, "~/*"),
+                Some(&home),
+                &base,
+            );
+            match &rules.items()[0].state {
+                State::InForce(paths) => paths.clone(),
+                State::Refused(reason) => panic!("refused: {reason:?}"),
+            }
+        };
+        assert_eq!(
+            named(Prelude::Windows),
+            vec![resolved(&home.join("projects"))]
+        );
+        assert!(named(Prelude::Linux).contains(&resolved(&home.join(".config"))));
     }
 
     /// The state directory holds the gateway keys. No list that adds reach names it or a place in
