@@ -2523,6 +2523,7 @@ int main(int argc, char **argv) {
             ".bravebot/gateway-keys.json",
             ".bravebot/leo-premium.json",
             ".bravebot/mcp.json",
+            ".bravebot-browser/secret",
             ".ssh/id_ed25519",
             ".ssh/id_rsa",
             ".aws/credentials",

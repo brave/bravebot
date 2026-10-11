@@ -255,6 +255,14 @@ pub fn base(
 /// two different directories.
 pub const STATE_DIRECTORY: &str = ".bravebot";
 
+/// The name of the directory under the home directory that holds the browser relay's socket and
+/// the secret a peer presents to it, so a program that reads the secret can drive the browser.
+///
+/// `bravebot-browser` links no workspace crate and so carries its own spelling of this name
+/// (`DIRECTORY_NAME` in its `paths` module), which a person can move with `BRAVEBOT_BROWSER_DIR`.
+/// The table refuses the default location.
+const BROWSER_DIRECTORY: &str = ".bravebot-browser";
+
 /// Directories under the home directory that hold a credential on every unix platform, each
 /// refused with everything beneath it.
 ///
@@ -265,6 +273,7 @@ pub const STATE_DIRECTORY: &str = ".bravebot";
 /// they could leave, which is decided by the plan.
 pub(crate) const CREDENTIAL_DIRECTORIES: &[&str] = &[
     STATE_DIRECTORY,
+    BROWSER_DIRECTORY,
     ".ssh",
     ".aws",
     ".kube",
@@ -273,6 +282,13 @@ pub(crate) const CREDENTIAL_DIRECTORIES: &[&str] = &[
     ".config/gcloud",
     ".gnupg",
 ];
+
+/// The same, where only Windows keeps them, under the home directory.
+///
+/// `gcloud` and `gpg` keep their directories under `%APPDATA%` there, which is
+/// `AppData\Roaming` unless the account's profile moves it.
+pub(crate) const WINDOWS_CREDENTIAL_DIRECTORIES: &[&str] =
+    &["AppData/Roaming/gcloud", "AppData/Roaming/gnupg"];
 
 /// The same, where only macOS keeps them, under the home directory.
 pub(crate) const MACOS_CREDENTIAL_DIRECTORIES: &[&str] = &[
@@ -325,17 +341,25 @@ const SSH_READABLE: &[&str] = &[
     ".ssh/id_ed25519_sk.pub",
 ];
 
+/// Every row of the four tables, whatever platform keeps it.
+pub(crate) fn every_credential_directory() -> impl Iterator<Item = &'static &'static str> {
+    CREDENTIAL_DIRECTORIES
+        .iter()
+        .chain(MACOS_CREDENTIAL_DIRECTORIES)
+        .chain(LINUX_CREDENTIAL_DIRECTORIES)
+        .chain(WINDOWS_CREDENTIAL_DIRECTORIES)
+}
+
 /// The locations under `home` that hold credentials or the state directory, which a stage of a
 /// `run` command is refused on `prelude` (SANDBOX-12).
 ///
-/// The Windows table is the shared one: the platform tables add nothing there. A Windows
-/// container cannot be refused a location inside a directory it is granted, so the caller checks
-/// the directories it would grant against this list instead.
+/// A Windows container cannot be refused a location inside a directory it is granted, so the
+/// caller checks the directories it would grant against this list instead.
 pub fn credential_locations(prelude: Prelude, home: &Path) -> Vec<PathBuf> {
     let platform = match prelude {
         Prelude::MacOs => MACOS_CREDENTIAL_DIRECTORIES,
         Prelude::Linux => LINUX_CREDENTIAL_DIRECTORIES,
-        Prelude::Windows => &[],
+        Prelude::Windows => WINDOWS_CREDENTIAL_DIRECTORIES,
     };
     CREDENTIAL_DIRECTORIES
         .iter()
@@ -491,12 +515,14 @@ mod tests {
     /// The regression it rejects: a run base that lists what a stage reaches, which refuses a
     /// script for starting a program the list never heard of, or one that reads the machine with
     /// no refusals, which hands the first program that asks a credential; or one whose table leaves out
-    /// the program's own state directory, where the gateway keys are. Spelled out here and
+    /// the program's own state directory, where the gateway keys are, or the browser relay's, where
+    /// the secret that drives the browser is. Spelled out here and
     /// not read from the tables, so a row dropped from them fails this.
     #[test]
     fn the_run_base_reads_the_machine_and_refuses_each_credential_location() {
         let expected_everywhere = [
             ".bravebot",
+            ".bravebot-browser",
             ".ssh",
             ".aws",
             ".kube",
@@ -691,7 +717,15 @@ mod tests {
         let home = Path::new(A_HOME);
         let windows = credential_locations(Prelude::Windows, home);
 
-        for row in [".bravebot", ".ssh", ".aws", ".config/gcloud"] {
+        for row in [
+            ".bravebot",
+            ".bravebot-browser",
+            ".ssh",
+            ".aws",
+            ".config/gcloud",
+            "AppData/Roaming/gcloud",
+            "AppData/Roaming/gnupg",
+        ] {
             assert!(windows.contains(&under(home, row)), "{row}");
         }
         for prelude in [Prelude::MacOs, Prelude::Linux] {

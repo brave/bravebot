@@ -1758,6 +1758,45 @@ mod tests {
         refused_naming(&confinement(&["/home/person/.config"]), "gcloud");
     }
 
+    /// `gcloud` and `gpg` keep their directories under `%APPDATA%` on Windows, so a session opened
+    /// on either, or on a directory that holds them, is refused. The regression it rejects: a
+    /// table naming only the unix spelling, `~/.config/gcloud` and `~/.gnupg`, which grants both
+    /// directories whole to a container that cannot be refused a path inside a grant.
+    #[test]
+    fn a_windows_session_on_the_application_data_of_gcloud_or_gpg_is_refused() {
+        refused_naming(
+            &confinement(&["/home/person/AppData/Roaming/gcloud"]),
+            "gcloud",
+        );
+        refused_naming(
+            &confinement(&["/home/person/AppData/Roaming/gnupg/private-keys-v1.d"]),
+            "gnupg",
+        );
+        refused_naming(&confinement(&["/home/person/AppData/Roaming"]), "gcloud");
+        assert!(
+            confinement(&["/home/person/AppData/Roaming/other"])
+                .root_reaching_credentials()
+                .is_none()
+        );
+    }
+
+    /// The browser relay's directory holds the secret a peer presents to drive the browser, so a
+    /// session opened on it is refused on every platform. The regression it rejects: leaving it
+    /// out of the table, which grants a stage the secret.
+    #[test]
+    fn a_session_inside_the_browser_relays_directory_is_refused_on_every_platform() {
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            refused_naming(
+                &reading_confinement(prelude, &["/home/person/.bravebot-browser"]),
+                "/home/person/.bravebot-browser",
+            );
+        }
+        refused_naming(
+            &confinement(&["/home/person/.bravebot-browser"]),
+            ".bravebot-browser",
+        );
+    }
+
     /// A stage granted a credential location to read and write is not kept out of it on macOS,
     /// where a row at a refused path lifts the refusal, so a session directory that is or lies
     /// inside one is refused on every platform. The regression it rejects: the check running on
@@ -2010,6 +2049,7 @@ mod tests {
                 format!("{HOME}/.bravebot/gateway-keys.json"),
                 format!("{HOME}/.bravebot/leo-premium.json"),
                 format!("{HOME}/.bravebot/mcp.json"),
+                format!("{HOME}/.bravebot-browser/secret"),
                 format!("{HOME}/.ssh/id_ed25519"),
                 format!("{HOME}/.aws/credentials"),
                 format!("{HOME}/.kube/config"),

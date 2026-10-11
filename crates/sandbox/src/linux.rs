@@ -319,6 +319,14 @@ impl LandlockSandbox {
             command.pre_exec(move || {
                 use std::io::Error;
 
+                // The kernel refuses `TIOCSTI` to a process whose controlling terminal is not the
+                // one it names, and a session of its own has none. Landlock governs an ioctl on a
+                // device only from ABI 5 (kernel 6.10), so older kernels rely on this alone.
+                // SAFETY: `setsid` takes no pointers and is async-signal-safe.
+                if libc::setsid() == -1 {
+                    return Err(Error::last_os_error());
+                }
+
                 let mut ruleset = landlock::Ruleset::default()
                     .set_compatibility(CompatLevel::BestEffort)
                     .handle_access(AccessFs::from_all(HANDLED_ABI))
@@ -991,6 +999,7 @@ mod tests {
             ".bravebot/gateway-keys.json",
             ".bravebot/leo-premium.json",
             ".bravebot/mcp.json",
+            ".bravebot-browser/secret",
             ".ssh/id_ed25519",
             ".ssh/id_rsa",
             ".aws/credentials",
@@ -1710,6 +1719,50 @@ mod tests {
              witness stopped for a reason of its own"
         );
         drop(outside);
+    }
+
+    /// A confined process leads a session of its own, so it has no controlling terminal to push
+    /// keystrokes into on a kernel where Landlock does not govern an ioctl on a device.
+    ///
+    /// The regression it rejects: starting the program in the caller's session, where its session
+    /// id is the caller's and not its own process id. Both ways of starting a program are read,
+    /// since a stage is started through the command and a server through the spawn.
+    #[test]
+    fn a_confined_process_leads_a_session_of_its_own() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let leads_its_session = "import os, sys\n\
+                                 sys.exit(0 if os.getsid(0) == os.getpid() else 1)\n";
+        let arguments = ["-c".into(), leads_its_session.into()];
+
+        let through_the_command = sandbox
+            .command(
+                OsStr::new("/usr/bin/python3"),
+                &arguments,
+                &loadable_policy(),
+                &Environment::Inherited,
+            )
+            .expect("a command")
+            .stdin(std::process::Stdio::null())
+            .status()
+            .expect("spawned")
+            .code();
+        let through_the_spawn = sandbox
+            .spawn(
+                OsStr::new("/usr/bin/python3"),
+                &arguments,
+                &loadable_policy(),
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("python is what reads the session id here")
+            .wait()
+            .expect("should wait")
+            .code();
+
+        assert_eq!(through_the_command, Some(0), "a command's program");
+        assert_eq!(through_the_spawn, Some(0), "a spawned program");
     }
 
     /// Emptying a file and writing it again is what every `>` redirect, every
