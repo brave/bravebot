@@ -361,7 +361,7 @@ pub fn commands() -> [Command; 45] {
         },
         Command {
             name: EFFORT_COMMAND,
-            argument: "[level]",
+            argument: "[low | medium | high | xhigh | max]",
             description: t!(command_effort),
             mid_turn: MidTurn::RunsWhenNamed,
         },
@@ -15825,6 +15825,22 @@ mod tests {
             session.transcript.is_empty(),
             "the command was sent as a prompt"
         );
+    }
+
+    /// The hint after `/effort ` is the list a person can pick from, so it must not drift from the levels.
+    #[test]
+    fn the_effort_hint_lists_every_level() {
+        let all = commands();
+        let command = all
+            .iter()
+            .find(|command| command.name == EFFORT_COMMAND)
+            .unwrap();
+        let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
+            .iter()
+            .map(|level| level.as_str())
+            .collect();
+
+        assert_eq!(command.argument, format!("[{}]", levels.join(" | ")));
     }
 
     /// A command, not a prompt: asking how hard to think must not also ask the planner about it.
