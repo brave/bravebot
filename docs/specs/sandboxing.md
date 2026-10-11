@@ -2182,9 +2182,10 @@ nothing keeps the request from becoming a standing allowance approved for a diff
 ### SANDBOX-30: a program bravebot starts itself is never one a confined stage could have written
 
 The programs bravebot starts on its own account, unconfined and with the person's access to `~/.ssh`,
-`~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard tools, `osascript`, and the
-inhibitor `/caffeinate` starts. Each is resolved to an absolute path before it is started, from the
-absolute entries of `PATH` that lie outside every directory a confined stage may write.
+`~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard tools, `osascript`, the
+inhibitor `/caffeinate` starts, a hook's program, a language server, and the editor Ctrl-G opens.
+Each is resolved to an absolute path before it is started, from the absolute entries of `PATH` that
+lie outside every directory a confined stage may write.
 
 - **Those directories are the session's.** Each directory the session was opened on, added, or
   moved to, its scratch directory, the system temporary directory, and every row a stage's policy
@@ -2197,7 +2198,8 @@ absolute entries of `PATH` that lie outside every directory a confined stage may
   and so is a file in another directory that links into one.
 - **An entry that is not absolute is not searched,** and neither is an empty one, which a shell
   reads as the current directory. A name carrying a separator is not looked up, and an absolute
-  path is started as given.
+  path is started as given. A hook's relative path is the person's own and runs from the directory
+  the hook runs in ([HOOK-4](hooks.md#HOOK-4)).
 - **Nothing found is not installed.** A person whose only `aws` is in such a directory, an
   activated virtualenv's `bin` among them, is told it is not installed
   (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
@@ -2225,6 +2227,11 @@ the person's access, which the confinement exists to deny it.
 `verified-by: bravebot_sandbox::programs::a_registered_directory_is_kept_out_of_the_search`
 `verified-by: bravebot_sandbox::programs::an_absolute_path_is_the_callers_own_choice`
 `verified-by: bravebot_bedrock::credentials::an_aws_a_confined_stage_wrote_at_the_front_of_path_is_not_the_one_run`
+`verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
+`verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
+`verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
+`verified-by: bravebot_tui::editor::an_editor_found_only_in_a_directory_a_stage_may_write_is_not_started`
+`verified-by: bravebot_tui::editor::an_editor_named_only_by_a_planted_file_is_not_found`
 `verified-by: bravebot_bedrock::credentials::an_aws_only_in_a_directory_a_stage_may_write_is_reported_as_not_installed`
 `verified-by: bravebot_agent::workspace::every_directory_a_stage_may_write_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`

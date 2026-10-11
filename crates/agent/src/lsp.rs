@@ -32,6 +32,7 @@ use bravebot_lsp::{
     Answer, BuildTooling, Declared, Diagnostics, Location, LspResult, Operation, Servers,
 };
 pub use bravebot_lsp::{Language, Roster};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -74,12 +75,12 @@ impl std::fmt::Debug for LanguageServers {
 /// [`crate::programs::find`] also starts the link, and adds the file it leads to because `run` asks
 /// the person about both paths (RUN-8). Nothing here is asked about a path. The program comes from
 /// a fixed table in this repository and the person approves *a language server for a language*.
+///
+/// A server is started without confinement, so the lookup is the one every such program gets
+/// (SANDBOX-30): a `PATH` directory a confined stage may write is not searched, and a server found
+/// only in one is not installed.
 fn resolve_program(program: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .filter(|directory| !directory.as_os_str().is_empty())
-        .map(|directory| directory.join(program))
-        .find(|candidate| candidate.is_file())
+    bravebot_sandbox::programs::find(OsStr::new(program)).filter(|found| found.is_file())
 }
 
 /// The servers a person declared in their own directory, in name order.
@@ -585,6 +586,71 @@ mod tests {
         );
         // The full path is kept, so the person watching can see where it went.
         assert!(outside.shown.contains(".cargo/registry"));
+    }
+
+    /// SANDBOX-30: a language server is started without confinement, so a file a confined stage
+    /// wrote under its name is not the server. The test binary runs again with `PATH` holding a
+    /// kept-out directory ahead of an installed one. A lookup that searched `PATH` itself returns
+    /// the planted file for `only-planted` and for `in-both`, and fails the child.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_found_only_where_a_stage_may_write_is_not_installed() {
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str =
+            "lsp::tests::a_server_found_only_where_a_stage_may_write_is_not_installed";
+        const SESSION: &str = "BRAVEBOT_TEST_LSP_KEPT_OUT_SESSION";
+        const SYSTEM: &str = "BRAVEBOT_TEST_LSP_KEPT_OUT_SYSTEM";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
+
+            assert_eq!(
+                resolve_program("only-planted"),
+                None,
+                "a server found only where a stage may write was resolved"
+            );
+            assert_eq!(
+                resolve_program("in-both"),
+                Some(PathBuf::from(std::env::var_os(SYSTEM).unwrap()).join("in-both")),
+                "the server resolved was not the installed one"
+            );
+            return;
+        }
+
+        let session = crate::testutil::scratch_dir("lsp-kept-out-session");
+        let system = crate::testutil::scratch_dir("lsp-kept-out-system");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&system);
+        let planted = session.join("node_modules/.bin");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::create_dir_all(&system).unwrap();
+        for file in [
+            planted.join("only-planted"),
+            planted.join("in-both"),
+            system.join("in-both"),
+        ] {
+            std::fs::write(&file, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = std::env::join_paths([planted, system.clone()]).unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(SESSION, &session)
+            .env(SYSTEM, &system)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+
+        let ran = session.join("ran").exists();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&system);
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(child.status.success(), "{report}");
     }
 
     /// A sibling directory whose name merely starts with the root's is not inside it.
