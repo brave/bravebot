@@ -953,16 +953,11 @@ fn programs_started_while_channels_are_created_hold_no_socket() {
                 .output()
         })
         .expect("ls runs");
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|line| line.starts_with('s'))
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
+        socket_lines(&String::from_utf8_lossy(&out.stdout))
     };
     // Sockets this process was started with are held by every program it starts. Only one that
     // appears afterwards, at a descriptor number this process did not hold, was made by the test.
-    let descriptor = |line: &str| line.split_whitespace().last().unwrap_or("").to_string();
-    let inherited: Vec<String> = list().iter().map(|line| descriptor(line)).collect();
+    let inherited: Vec<String> = list().iter().map(|line| listed_descriptor(line)).collect();
 
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let creating = {
@@ -980,7 +975,7 @@ fn programs_started_while_channels_are_created_hold_no_socket() {
         leaked.extend(
             list()
                 .into_iter()
-                .filter(|line| !inherited.contains(&descriptor(line))),
+                .filter(|line| !inherited.contains(&listed_descriptor(line))),
         );
     }
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -989,6 +984,43 @@ fn programs_started_while_channels_are_created_hold_no_socket() {
         leaked.is_empty(),
         "a started program held a socket: {leaked:?}"
     );
+}
+
+/// The lines of an `ls -l /dev/fd/` listing that are sockets. macOS lists a descriptor as a device
+/// node of type `s`; Linux lists it as a link whose target is `socket:[inode]`.
+fn socket_lines(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .filter(|line| line.starts_with('s') || line.contains(" -> socket:"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The descriptor a line of that listing names: the name before the arrow where there is a link,
+/// and the last word otherwise.
+fn listed_descriptor(line: &str) -> String {
+    let named = line.split(" -> ").next().unwrap_or(line);
+    named.split_whitespace().last().unwrap_or("").to_string()
+}
+
+const MACOS_SOCKET: &str = "srw-rw-rw-  0 runner  staff          0 Jan  1  1970 131";
+const LINUX_SOCKET: &str = "lrwx------ 1 runner runner 64 Oct 12 08:00 7 -> socket:[48213]";
+const LINUX_PIPE: &str = "lr-x------ 1 runner runner 64 Oct 12 08:00 0 -> pipe:[48200]";
+const LINUX_FILE: &str = "lrwx------ 1 runner runner 64 Oct 12 08:00 1 -> /dev/null";
+
+#[test]
+fn a_socket_is_found_in_the_listing_of_either_system() {
+    let listing = [MACOS_SOCKET, LINUX_SOCKET, LINUX_PIPE, LINUX_FILE].join("\n");
+    assert_eq!(
+        socket_lines(&listing),
+        vec![MACOS_SOCKET.to_string(), LINUX_SOCKET.to_string()]
+    );
+}
+
+#[test]
+fn the_descriptor_is_named_before_the_arrow_on_linux_and_last_on_macos() {
+    assert_eq!(listed_descriptor(MACOS_SOCKET), "131");
+    assert_eq!(listed_descriptor(LINUX_SOCKET), "7");
 }
 
 /// A host that serves clients over channels it created and also starts hooks and `run` programs
