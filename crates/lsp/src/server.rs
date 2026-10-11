@@ -2387,6 +2387,30 @@ done
         assert_ne!(unconfigured, missing);
     }
 
+    /// A server starts under the spawn gate, so it cannot overlap the creation of a control channel.
+    #[test]
+    fn a_server_start_waits_for_a_channel_being_created() {
+        bravebot_sandbox::process::start_waits_at_the_gate(|| {
+            let (_launching, scratch, _log, declared) =
+                a_workspace_with_a_declared_server(DECLARED_AND_APPROVED);
+            let mut servers = Servers::new(
+                scratch.to_path_buf(),
+                None,
+                the_approved_declared_server,
+                false,
+                Vec::new,
+            );
+            servers.declare(vec![declared]);
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = a_policy_that_holds_the_capability(&mut sink);
+            let file = scratch.join("a.zz");
+            let file = file.to_str().expect("a utf-8 path");
+            servers
+                .ask(&mut policy, &definition_in(file), &mut |_| true)
+                .expect("the declared server answers");
+        });
+    }
+
     /// LSP-8: nothing starts until something asks.
     #[test]
     fn no_server_starts_until_a_request_needs_one() {
