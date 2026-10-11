@@ -145,9 +145,10 @@ about to act on.
 ### TURN-5: completed work remains charged when a turn fails or stops
 
 The turn reports cumulative usage after completed planner, processor and compaction calls, and
-when delegates are collected. Each report replaces the previous total. A delegate retains its own
-progress until collection, so it cannot overwrite the parent's total. Collection adds either its
-successful outcome or its retained progress on failure, once. A failed or stopped parent collects
+when delegates are collected. Each report replaces the previous total. While a delegate runs, each
+report of its own adds to the parent's total, so the total includes the requests it has completed
+and never drops to the delegate's alone. Collection adds either its successful outcome or its
+retained progress on failure, and the total counts that usage once. A failed or stopped parent collects
 outstanding delegates before returning and reports the resulting total and elapsed timing.
 
 A completed reply also contributes valid reported usage when its content is rejected by the
@@ -175,7 +176,13 @@ Raw backend errors remain outside planner context and user-facing history.
 `verified-by: bravebot_agent::turn::failed_parents_collect_outstanding_delegate_usage_once`
 `verified-by: bravebot_agent::turn::stopped_parents_collect_outstanding_delegate_usage_once`
 `verified-by: bravebot_agent::turn::the_last_request_keeps_elapsed_time_on_failure_and_cancellation`
-`verified-by: bravebot_agent::shared::what_a_delegate_has_spent_is_not_reported_as_what_the_turn_has`
+`verified-by: bravebot_agent::shared::what_a_running_delegate_has_spent_is_added_to_the_turns_total_as_it_goes`
+`verified-by: bravebot_agent::shared::every_running_delegates_spend_is_in_the_total`
+`verified-by: bravebot_agent::shared::a_collected_delegates_spend_is_in_the_total_once`
+`verified-by: bravebot_agent::shared::a_delegates_context_reading_is_not_the_turns`
+`verified-by: bravebot_agent::shared::a_nested_delegates_spend_reaches_the_turns_total`
+`verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
+`verified-by: bravebot_agent::turn::a_report_the_policy_refuses_ends_its_delegate_and_leaves_its_spend_in_the_total_once`
 
 `verified-by: bravebot_agent::turn::planner_retry_costs_do_not_replace_the_last_prompt_measurement`
 `verified-by: bravebot_agent::turn::completed_empty_reply_keeps_reported_usage_on_failure`
