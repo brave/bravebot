@@ -104,7 +104,7 @@ failures reach the caller, and that scanner failures cannot pass as empty scans.
 half also holds `check-npm` to reaching the installer test and the lockfile lint's own cases before
 any lockfile is read, and to failing rather than passing when that test is no longer there. It runs
 `check-all-selftest`, `check-reviewdog-selftest`, `check-rebase-selftest`, `check-affected-selftest`,
-`check-peer-advisories-selftest`, `check-peer-features-selftest` and `check-pr-fix-selftest`, which can also run separately. `check-affected-selftest` holds
+`check-peer-advisories-selftest`, `check-peer-features-selftest`, `check-pr-fix-selftest` and `check-maintenance-selftest`, which can also run separately. `check-affected-selftest` holds
 each rule of the classifier, and holds every workflow condition reading it to running its job on
 anything but an explicit `false`.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
@@ -178,6 +178,15 @@ whoever remembers to run this. It is the deterministic half of the
 other half, and a person runs those. Run it before a commit that touches a label,
 `.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, the required
 check contexts, or the trust specs.
+
+`make check-maintenance` lists candidates for cleanup: `pub` items, module-level Python definitions
+and TypeScript exports named nowhere but where they are defined or only from tests, allowances
+silencing the dead-code lint, blocks of lines and string literals repeated across files, and files
+and functions past a length. rustc warns about none of the first kind in a library crate, and no
+check compares one file with another. The scan reads no code and exits zero whatever it lists, so
+nothing runs it in CI. It is the deterministic half of the
+[maintenance skill](../../agents/skills/maintenance/SKILL.md), whose reviewers read each candidate
+and draft an issue for the ones worth fixing.
 
 Wherever this page says a check fails a pull request, what does the failing is not the job going
 red. A job reports. What holds a merge is branch protection's list of required contexts, which is

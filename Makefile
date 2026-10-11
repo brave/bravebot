@@ -55,6 +55,7 @@ help:
 	@echo "  make check-affected-containers  The Docker checks they need [BASE=ref]"
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
+	@echo "  make check-maintenance     Dead code, repeated code and long files, as candidates for the maintenance skill"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-versions        Whether every file stating the version states the same one"
 	@echo "  make check-narration       Whether this branch's commits and lines narrate their writer's process [BASE=ref]"
@@ -215,6 +216,15 @@ check-spec:
 check-security:
 	python3 agents/skills/security-audit/selftest.py
 	python3 agents/skills/security-audit/security-audit.py --mechanical-only
+
+# The scan half of the maintenance skill: public items nothing names, items only tests name,
+# allowances silencing the dead-code lint, blocks and string literals repeated across files, and
+# files and functions past a length. It reads no code, so a candidate may be wrong in either
+# direction, and it exits zero whatever it finds. Deciding which candidates are worth an issue
+# needs a reading of the code: run the maintenance skill for that half.
+.PHONY: check-maintenance
+check-maintenance: check-maintenance-selftest
+	python3 agents/skills/maintenance/maintenance.py --mechanical-only
 
 # agents/unverified-clauses.txt, written from the specs. It is the list of clauses nothing pins, and
 # check-spec fails while it and the specs disagree, so this is what to run after giving a clause
@@ -378,9 +388,11 @@ check-affected-containers:
 		{ [ -z "$$targets" ] || $(MAKE) --no-print-directory -k $$targets; }
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-release-preflight-selftest
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-release-preflight-selftest \
+	check-maintenance-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-release-preflight-selftest
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-release-preflight-selftest \
+	check-maintenance-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -402,6 +414,9 @@ check-peer-features-selftest:
 
 check-pr-fix-selftest:
 	python3 agents/skills/pr-fix/selftest.py
+
+check-maintenance-selftest:
+	python3 agents/skills/maintenance/selftest.py
 
 check-release-preflight-selftest:
 	python3 contrib/release-preflight.py --selftest

@@ -54,8 +54,12 @@ already editing the issue for another reason.
 ## The kind, and the three axes
 
 The kind labels say what an issue **is**: `bug`, `security`, `spec-mismatch`, `spec-coverage`,
-`spec-bug`, `parity`, `beyond-parity`, `enhancement`. The three axes say what to **do** about it, and every open
+`spec-bug`, `parity`, `beyond-parity`, `enhancement`, `maintenance`. The three axes say what to **do** about it, and every open
 issue carries one value from each: an `importance`, an `urgency`, and a `size`.
+
+`maintenance` is code to delete, share or split where what the program does stays the same: an
+item nothing uses, two copies of one block, a file too long to work on. Where the cleanup turns up
+something that does not work, the issue is a `bug` instead.
 
 More than one kind can be true at once, and a `spec-mismatch` usually carries a second: `bug` where
 the code attempts the clause's behaviour and gets it wrong, `enhancement` where nothing attempts it
@@ -186,4 +190,14 @@ while `beyond-parity` does not exist, because a person creates labels:
 ```bash
 gh label create beyond-parity --repo brave/bravebot --color 0E8A16 \
   --description "Better than what comparable tools offer, by a concrete margin"
+```
+
+The [maintenance skill](../../agents/skills/maintenance/SKILL.md), which files dead code,
+duplication and files or functions past a length, applies `maintenance`, or `bug` where a reviewer
+found a defect, an `area` or `infrastructure` where one is clear, and no axis. It assigns every
+issue to netzenbot. The skill refuses to post while `maintenance` does not exist:
+
+```bash
+gh label create maintenance --repo brave/bravebot --color C5DEF5 \
+  --description "Dead code, duplication or structure to clean up; behaviour does not change"
 ```
