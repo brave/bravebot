@@ -28,6 +28,11 @@ fn main() {
     // First of all, as the other entry points do: a credential is in this process's memory from
     // the first turn, and a crash after this writes no image of it. See CRED-23.
     let _ = bravebot_agent::crash::disable_core_dumps();
+    // Standard input and output are the channel to the editor. Another process of the same user
+    // must not be able to copy those descriptors out of this one. See RPCVIEW-8.
+    if let Some(notice) = bravebot_sandbox::inspection::refuse_same_user_inspection().notice() {
+        eprintln!("bravebot-acp: {notice}");
+    }
 
     // Not a security decision. The only argument is `--settings <path>`, which names a settings
     // file for a developer driving this by hand, and what that file may grant is decided by the

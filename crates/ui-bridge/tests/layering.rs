@@ -456,3 +456,57 @@ fn a_crate_named_in_any_dependency_table_but_dev_is_linked() {
     found.sort();
     assert_eq!(found, vec!["a", "b", "c", "e"]);
 }
+
+/// Each binary here speaks over its own standard input and output, which is the control channel
+/// when an editor or window launches it. On Linux, a process of the same user could copy those
+/// descriptors out of one that has not marked itself non-dumpable (RPCVIEW-8).
+#[test]
+fn every_binary_that_speaks_over_its_own_stdio_marks_itself_non_dumpable() {
+    let binaries = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin");
+    let mut seen = 0;
+    let mut unmarked = Vec::new();
+    visit(&binaries, &mut |path, text| {
+        seen += 1;
+        if !marks_itself_before_reading(text) {
+            unmarked.push(path.display().to_string());
+        }
+    });
+    assert!(seen > 0, "no binaries found under {binaries:?}");
+    assert!(
+        unmarked.is_empty(),
+        "these binaries do not mark themselves non-dumpable before they read:\n{}",
+        unmarked.join("\n")
+    );
+}
+
+/// Whether `text` calls `refuse_same_user_inspection` on a line of code, before any line that
+/// reads standard input.
+fn marks_itself_before_reading(text: &str) -> bool {
+    let code = |line: &str| line.split("//").next().unwrap_or("").to_string();
+    let mark = text
+        .lines()
+        .position(|line| code(line).contains("refuse_same_user_inspection("));
+    let read = text.lines().position(|line| code(line).contains("stdin"));
+    match (mark, read) {
+        (Some(mark), Some(read)) => mark < read,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+#[test]
+fn a_comment_that_names_the_call_does_not_mark_the_process() {
+    assert!(!marks_itself_before_reading(
+        "fn main() {\n    // See refuse_same_user_inspection().\n}\n"
+    ));
+}
+
+#[test]
+fn a_call_after_standard_input_is_read_is_too_late() {
+    let late =
+        "fn main() {\n    let line = std::io::stdin();\n    refuse_same_user_inspection();\n}\n";
+    assert!(!marks_itself_before_reading(late));
+    let early =
+        "fn main() {\n    refuse_same_user_inspection();\n    let line = std::io::stdin();\n}\n";
+    assert!(marks_itself_before_reading(early));
+}

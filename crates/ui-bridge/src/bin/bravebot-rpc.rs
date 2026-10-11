@@ -20,6 +20,11 @@ fn main() {
     // this process's memory from the first turn, and a crash after this writes no image of it.
     // See CRED-23.
     let _ = bravebot_agent::crash::disable_core_dumps();
+    // The control channel is this process's standard input and output. Another process of the same
+    // user must not be able to copy those descriptors out of it. See RPCVIEW-8.
+    if let Some(notice) = bravebot_sandbox::inspection::refuse_same_user_inspection().notice() {
+        eprintln!("bravebot-rpc: {notice}");
+    }
 
     // Not a security decision. The only argument is `--settings <path>`, which names a
     // settings file for a developer driving this by hand, and what that file may then grant
