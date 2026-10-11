@@ -542,13 +542,10 @@ pub fn writable_without_a_request(home: &Path) -> Vec<PathBuf> {
     rows
 }
 
-/// Every credential location the base refuses on any platform: the rows of the three tables under
+/// Every credential location the base refuses on any platform: the rows of the four tables under
 /// `home`, and the machine-wide keychain directory.
 fn credential_rows(home: &Path) -> impl Iterator<Item = PathBuf> + '_ {
-    crate::base::CREDENTIAL_DIRECTORIES
-        .iter()
-        .chain(crate::base::MACOS_CREDENTIAL_DIRECTORIES)
-        .chain(crate::base::LINUX_CREDENTIAL_DIRECTORIES)
+    crate::base::every_credential_directory()
         .map(|row| home.join(row))
         .chain(std::iter::once(PathBuf::from(
             crate::base::MACOS_SYSTEM_KEYCHAINS,
@@ -1522,11 +1519,7 @@ mod tests {
     fn a_request_at_inside_or_above_a_credential_location_is_refused() {
         let home = fresh("request-credential-home");
         let rules = Rules::none();
-        for row in crate::base::CREDENTIAL_DIRECTORIES
-            .iter()
-            .chain(crate::base::MACOS_CREDENTIAL_DIRECTORIES)
-            .chain(crate::base::LINUX_CREDENTIAL_DIRECTORIES)
-        {
+        for row in crate::base::every_credential_directory() {
             let inside = home.join(row).join("inner");
             fs::create_dir_all(&inside).unwrap();
             let above = home.join(row).parent().map(Path::to_path_buf);
@@ -1550,17 +1543,13 @@ mod tests {
     }
 
     /// A directory added for a session is a read and write row, and on macOS a row at a refused
-    /// path lifts the refusal. Every location of the three tables is therefore inside one at the
+    /// path lifts the refusal. Every location of the four tables is therefore inside one at the
     /// directory and beneath it. The directory above a location, the home directory and a
     /// directory whose name only begins like a location are not: the refusals beneath them hold.
     #[test]
     fn a_directory_at_or_inside_a_credential_location_is_inside_one_and_its_neighbours_are_not() {
         let home = fresh("inside-credential-home");
-        for row in crate::base::CREDENTIAL_DIRECTORIES
-            .iter()
-            .chain(crate::base::MACOS_CREDENTIAL_DIRECTORIES)
-            .chain(crate::base::LINUX_CREDENTIAL_DIRECTORIES)
-        {
+        for row in crate::base::every_credential_directory() {
             let at = home.join(row);
             let inside = at.join("inner");
             fs::create_dir_all(&inside).unwrap();

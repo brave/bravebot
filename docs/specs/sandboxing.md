@@ -452,8 +452,12 @@ directory the session resolved as it opened, where the platform has one as a fil
 device, and on macOS the `mds` directory in the account's per-user cache directory (below). The
 table is code, the same for every stage, and no value, argument vector, printed output
 or configuration file adds to it or removes from it. In the home directory it holds the program's own state
-directory `~/.bravebot`, where the gateway keys, the premium token and the server list are, and then `~/.ssh`,
-`~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud` and `~/.gnupg`; on macOS also
+directory `~/.bravebot`, where the gateway keys, the premium token and the server list are, the browser
+relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay
+told to use another directory is not covered), and then `~/.ssh`,
+`~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud` and `~/.gnupg`; on Windows also
+`~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, where `gcloud` and `gpg` keep what the
+unix spellings hold (an application data directory moved out of the home is not covered); on macOS also
 `~/Library/Keychains`, `/Library/Keychains`, the browser profiles under
 `~/Library/Application Support` (`BraveSoftware`, `Google/Chrome`, `Firefox`), `~/Library/Cookies`
 and `~/Library/Safari`; on Linux also `~/.local/share/keyrings`, `~/.password-store`,
@@ -544,6 +548,7 @@ directory so that `aws-vault.keychain-db` and every other keychain file stay ref
 `verified-by: bravebot_sandbox::linux::a_program_under_the_base_reads_the_machine_and_not_a_private_key`
 `verified-by: bravebot_sandbox::windows::cmd_and_a_compiler_start_under_the_empty_base`
 `verified-by: bravebot_sandbox::base::the_run_base_reads_the_machine_and_refuses_each_credential_location`
+`verified-by: bravebot_sandbox::base::the_credential_locations_are_the_rows_the_run_base_refuses`
 `verified-by: bravebot_sandbox::base::the_run_base_lifts_the_ssh_files_that_hold_no_secret_and_only_those`
 `verified-by: bravebot_sandbox::base::the_run_base_leaves_the_token_files_readable`
 `verified-by: bravebot_sandbox::base::the_run_base_writes_only_the_temporary_directory_and_the_null_device`
@@ -946,6 +951,12 @@ stopped, and the turn is told the program was not started since it could not be 
 program is started with no profile is the mode `off` ([SANDBOX-22](#SANDBOX-22)), which a person
 chose by name in their own settings or on the command line, and which a window never reads.
 
+On Linux every program the backend starts, a stage among them, is made the leader of a session of
+its own before the policy is applied, and is not started if that fails. A process with no controlling
+terminal is refused `TIOCSTI` on the terminal the session runs in, and Landlock governs an ioctl on a
+device only from ABI 5 (kernel 6.10), so on an older kernel the session is what keeps a program from
+typing into the terminal. A terminal's interrupt and hangup do not reach such a program.
+
 Confinement is a property of the session and not of the plan: the terminal, desktop, plain and
 one-shot front ends each ask for it when they open a session. A caller that does not ask, which is a
 test driving the executor directly, starts stages as the user's own shell would.
@@ -989,6 +1000,7 @@ number of entries in those directories, the home directory among them. On macOS 
 `verified-by: bravebot_agent::turn::a_delegate_of_a_confining_turn_cannot_write_outside_the_session`
 `verified-by: bravebot_agent::tools::a_turn_that_confines_runs_is_confined_to_its_workspace_and_a_turn_that_does_not_is_not`
 `verified-by: bravebot_sandbox::linux::a_command_handed_back_is_confined_when_the_caller_spawns_it`
+`verified-by: bravebot_sandbox::linux::a_confined_process_leads_a_session_of_its_own`
 `verified-by: bravebot_sandbox::macos::a_command_handed_back_is_confined_when_the_caller_spawns_it`
 `verified-by: bravebot_sandbox::windows::a_batch_file_is_refused_and_an_executable_is_not`
 `verified-by: bravebot_agent::confine::variable_names_match_without_case_only_when_folding`
@@ -1032,7 +1044,7 @@ remote scope.
 On Windows a stage is also refused when a directory the session was opened on is, holds or lies
 inside one of the credential locations under the home directory ([SANDBOX-12](#SANDBOX-12)): the
 state directory `~/.bravebot`, which holds `settings.json`, `~/.ssh`, `~/.aws` and the rest of the
-shared table. The row would be a read and write grant, and a Windows container cannot be refused a
+table, which on Windows also holds `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`. The row would be a read and write grant, and a Windows container cannot be refused a
 path inside a grant, so the refusal is made before the policy is built and no grant is written. The
 paths are compared by component without regard to case, and a credential location is compared in
 the form it is named and in its resolved form. A session opened on a project directory is not
@@ -1076,6 +1088,8 @@ open the home.
 `verified-by: bravebot_sandbox::windows::a_write_grant_under_a_system_directory_still_needs_its_entry`
 `verified-by: bravebot_agent::confine::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
 `verified-by: bravebot_agent::confine::a_windows_session_inside_a_credential_location_is_refused`
+`verified-by: bravebot_agent::confine::a_windows_session_on_the_application_data_of_gcloud_or_gpg_is_refused`
+`verified-by: bravebot_agent::confine::a_session_inside_the_browser_relays_directory_is_refused_on_every_platform`
 `verified-by: bravebot_agent::confine::a_windows_session_is_compared_to_the_credential_locations_without_regard_to_case`
 `verified-by: bravebot_agent::confine::a_name_that_is_not_text_is_not_taken_for_its_lossy_lookalike`
 `verified-by: bravebot_agent::confine::a_windows_session_beside_the_credential_locations_is_not_refused`

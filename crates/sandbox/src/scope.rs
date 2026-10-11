@@ -12,10 +12,7 @@
 //! assignment in front of it, gets no scope: what would run with the credential is not what the
 //! plan says would run.
 
-use crate::base::{
-    CREDENTIAL_DIRECTORIES, LINUX_CREDENTIAL_DIRECTORIES, MACOS_CREDENTIAL_DIRECTORIES,
-    STATE_DIRECTORY, under,
-};
+use crate::base::{STATE_DIRECTORY, every_credential_directory, under};
 use crate::policy::SandboxPolicy;
 use crate::signing::Place;
 use crate::toolchain::Toolchain;
@@ -521,10 +518,7 @@ pub(crate) fn judged_public_key(named: &Path, home: &Path) -> Option<PathBuf> {
 pub(crate) fn in_another_credential_location(resolved: &Path, home: &Path) -> bool {
     let real_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
     [home, real_home.as_path()].iter().any(|home| {
-        CREDENTIAL_DIRECTORIES
-            .iter()
-            .chain(MACOS_CREDENTIAL_DIRECTORIES)
-            .chain(LINUX_CREDENTIAL_DIRECTORIES)
+        every_credential_directory()
             .filter(|row| **row != ".ssh")
             .any(|row| resolved.starts_with(under(home, row)))
     })
