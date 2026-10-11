@@ -240,7 +240,12 @@ impl Confinement {
             .cloned()
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
-        self.filesystem = bravebot_sandbox::rules::resolve(lists, self.home.as_deref(), &base);
+        self.filesystem = bravebot_sandbox::rules::resolve_for(
+            Some(self.prelude),
+            lists,
+            self.home.as_deref(),
+            &base,
+        );
         self
     }
 
@@ -2817,6 +2822,53 @@ mod tests {
         .with_filesystem(&listed(&["~/notes"], &[], &[]));
 
         assert!(held.filesystem().unapplied_denial().is_some());
+    }
+
+    /// A Windows stage is granted a directory with everything in it, so an `allowRead` of the home
+    /// directory would hand it `~/.ssh`, `~/.aws` and `~/.bravebot`. The entry is not in force there
+    /// and the stage gets no row over the home directory, while an entry beside the credential
+    /// locations still is a row. Elsewhere the table's refusals hold beneath the row and it stands.
+    #[test]
+    fn an_allow_read_over_the_home_directory_is_not_a_row_on_windows() {
+        let allowing = |paths: &[&str]| Lists {
+            allow_read: paths
+                .iter()
+                .map(|path| bravebot_sandbox::rules::Entry {
+                    path: (*path).to_string(),
+                    by: None,
+                    pinned: false,
+                })
+                .collect(),
+            ..Lists::default()
+        };
+        let run = step("/usr/bin/cat", &["notes"]);
+        let policy = |prelude, paths: &[&str]| {
+            let held =
+                reading_confinement(prelude, &["/work/project"]).with_filesystem(&allowing(paths));
+            let policy = held.policy(&run, Path::new("/work/project"), &[]);
+            (held, policy)
+        };
+
+        let (held, windows) = policy(Prelude::Windows, &["~", "~/projects"]);
+        let has_row = |policy: &SandboxPolicy, tail: &str| {
+            policy.readable.iter().any(|row| row.ends_with(tail))
+        };
+        assert!(
+            !has_row(&windows, "home/person"),
+            "the home directory is a row"
+        );
+        assert!(has_row(&windows, "home/person/projects"));
+        let refused: Vec<_> = held.filesystem().refused().collect();
+        assert_eq!(refused.len(), 1);
+        assert_eq!(refused[0].0.entry.path, "~");
+        assert_eq!(
+            refused[0].1,
+            bravebot_sandbox::rules::Reason::HoldsCredentials
+        );
+
+        let (held, linux) = policy(Prelude::Linux, &["~"]);
+        assert!(has_row(&linux, "home/person"));
+        assert_eq!(held.filesystem().refused().count(), 0);
     }
 
     /// A session that names no home directory grants no row under it, so it describes none.
