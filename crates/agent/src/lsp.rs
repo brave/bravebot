@@ -131,8 +131,9 @@ impl LanguageServers {
         // passing it would be repeating something already true.
         let incognito = bravebot_core::incognito::engaged();
         Self {
-            // The same `$PATH` lookup `run` uses, so a name cannot mean one binary to a command a
-            // person approved and another to a question put to a server. And the same withheld
+            // The lookup every program started unconfined gets (SANDBOX-30). `run` also finds a file in
+            // a directory a stage may write, since what it starts is confined and approved by path;
+            // a server is neither. And the same withheld
             // credentials, which is RUN-12: a person approving a server did not approve handing it
             // what this agent authenticates with. Computed when each server starts, since the
             // provider blocks in force can change during a session.
