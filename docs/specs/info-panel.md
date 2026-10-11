@@ -177,7 +177,8 @@ narrow for it.
 4. **Links.** PANEL-12.
 5. **Context.** PANEL-8. It always has a reading, so it is always there. Under the reading it
    has the session's token total, as `/cost` opens with it, in tokens and not money, counting what
-   the turn in flight has spent so far, and left out until a token has been spent.
+   the turn in flight has spent so far, the requests its delegates have completed included as
+   they complete, and left out until a token has been spent.
 6. **Language servers.** PANEL-13.
 7. **MCP servers.** PANEL-14.
 8. **Plan.** PANEL-10.
@@ -199,6 +200,7 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::status::a_name_a_provider_block_chose_is_shown_without_a_service_added`
 `verified-by: bravebot_config::lib::a_request_name_finds_its_entry_in_either_kind_of_account`
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
+`verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
 
 <a id="PANEL-10"></a>

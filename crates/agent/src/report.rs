@@ -593,7 +593,8 @@ pub trait Reporter {
     /// Context may precede it, and a context read can fail before it is appended.
     fn prompt_recorded(&mut self, _at: usize) {}
 
-    /// Cumulative usage from completed requests. Each report replaces the previous total.
+    /// Cumulative usage from completed requests, the delegates' included as each of theirs
+    /// completes. Each report replaces the previous total.
     fn spent(&mut self, _spent: crate::outcome::Spent) {}
 
     /// The task list changed. Rows are already shaped for display and released.

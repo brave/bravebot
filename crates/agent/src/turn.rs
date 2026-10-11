@@ -2703,15 +2703,21 @@ fn collect_delegates<S: Sink, R: Reporter>(
                     _ => String::new(),
                 };
                 let slot = conversation.next_reference();
-                let presented = policy
-                    .present(
-                        "delegate",
-                        slot,
-                        &format!("a {kind} delegate"),
-                        &delegated.report,
-                        conversation.quarantine(),
-                    )
-                    .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                let presented = match policy.present(
+                    "delegate",
+                    slot,
+                    &format!("a {kind} delegate"),
+                    &delegated.report,
+                    conversation.quarantine(),
+                ) {
+                    Ok(presented) => presented,
+                    Err(refused) => {
+                        // Its usage is in this turn's count already, so the running total stops
+                        // adding it on its own.
+                        reporter.delegate_finished(id, note, true, None);
+                        return Err(TurnError::Precommit(refused.to_string()));
+                    }
+                };
                 // The person is shown what the delegate concluded, either way. The whole of
                 // what a delegate did ends with it, so a report drawn nowhere leaves somebody
                 // with a round count for work done in a directory they own. Where the planner

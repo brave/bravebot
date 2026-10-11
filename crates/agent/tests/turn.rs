@@ -28072,6 +28072,118 @@ fn a_delegates_work_is_bracketed_by_the_announcements_the_interface_reads() {
     );
 }
 
+/// Keeps every total the turn reported, and the ones reported before a delegate was joined.
+#[derive(Default)]
+struct Totalled {
+    totals: Vec<u64>,
+    before_any_delegate_finished: Vec<u64>,
+    finished: usize,
+}
+
+impl bravebot_agent::report::Reporter for Totalled {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn spent(&mut self, spent: bravebot_agent::Spent) {
+        self.totals.push(spent.tokens);
+        if self.finished == 0 {
+            self.before_any_delegate_finished.push(spent.tokens);
+        }
+    }
+
+    fn delegate_finished(
+        &mut self,
+        _delegate: bravebot_agent::report::DelegateId,
+        _note: String,
+        _failed: bool,
+        _reported: Option<bravebot_agent::report::Reported>,
+    ) {
+        self.finished += 1;
+    }
+}
+
+/// The turn adds a delegate's usage to its own count only when it joins the delegate. A person
+/// watching the token total while the planner waits on a long delegate would see it stand still,
+/// so the delegate's completed requests are reported as they complete (PANEL-9).
+///
+/// The turn reports 0 when it starts and its own rounds come to 1010, 2120 and 3330. A total
+/// reported before the delegate is joined that is none of those includes the delegate's spend. The total never falls and never
+/// exceeds what the turn finally reports, which a delegate counted again at the join would break.
+#[test]
+fn the_token_total_moves_while_a_delegate_works_and_counts_it_once() {
+    let scratch = Scratch::new("delegate-running-total");
+    std::fs::write(scratch.path.join("a.txt"), "one line").expect("written");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-SOMETHING",
+            vec![
+                tool_request_with_usage(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
+                    1000,
+                    10,
+                ),
+                reply_with_usage("waiting", 1100, 10),
+                reply_with_usage("relayed", 1200, 10),
+            ],
+        ),
+        (
+            "SAY-SOMETHING-SHORT",
+            vec![
+                tool_request_with_usage("read_file", r#"{"path":"a.txt"}"#, 200, 20),
+                reply_with_usage("REPORTED BACK", 300, 30),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Totalled::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-SOMETHING"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(outcome.tokens, 3880, "the turn's own count changed");
+    assert_eq!(reporter.finished, 1, "the delegate was never joined");
+
+    let own = [0, 1010, 2120, 3330];
+    assert!(
+        reporter
+            .before_any_delegate_finished
+            .iter()
+            .any(|total| !own.contains(total)),
+        "no total included the delegate before it was joined: {:?}",
+        reporter.totals
+    );
+    assert!(
+        reporter.totals.windows(2).all(|pair| pair[0] <= pair[1]),
+        "the total fell: {:?}",
+        reporter.totals
+    );
+    assert!(
+        reporter.totals.iter().all(|total| *total <= outcome.tokens),
+        "the total passed what the turn spent: {:?}",
+        reporter.totals
+    );
+    assert_eq!(
+        reporter.totals.last().copied(),
+        Some(outcome.tokens),
+        "the last total is not the turn's: {:?}",
+        reporter.totals
+    );
+}
+
 /// One turn can spawn several, and everything reported about one has to say which. Nothing else
 /// can: two delegates of the same kind produce lines that read identically, and the order the
 /// lines arrive in is the order the work happened rather than the order it was asked for.
@@ -39981,7 +40093,7 @@ mod usage {
             ));
             let child_next = run.request();
             assert!(!child_next.body.contains("PARENT-TASK"));
-            let parent_only = run.progress();
+            let while_child_works = run.progress();
             match ending {
                 "done" => parent.answer(&reply_with_cache("waiting", 20, 2, 4)),
                 "failed" => parent.refuse(),
@@ -40013,7 +40125,8 @@ mod usage {
                 last.answer(&reply_with_cache("done", 50, 4, 8));
             }
             let result = run.finish();
-            assert_usage(parent_only, 17, 7, 3);
+            // The child's completed request is in the total while it still runs.
+            assert_usage(while_child_works, 17 + 31, 7 + 1, 3 + 5);
             let (parent_tokens, parent_output, parent_cache) = if ending == "done" {
                 (93, 13, 15)
             } else {

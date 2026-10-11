@@ -20,8 +20,9 @@
 //! # What this does not do
 //!
 //! It carries no content and reads none. Every method here takes what it was handed, takes the
-//! lock, and passes it through. Usage totals stay with the delegate until collection; labelled
-//! content keeps the label it arrived with.
+//! lock, and passes it through. Usage is the one thing it combines: a report of the turn's total
+//! is the turn's own figure plus what each delegate running under it has reported so far
+//! (TURN-5). Labelled content keeps the label it arrived with.
 
 use crate::confirm::{
     Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
@@ -34,6 +35,7 @@ use bravebot_aichat::{Subscription, SubscriptionCredential};
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::event::{Event, Sink};
 use bravebot_core::todo::Row;
+use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
 /// One thing several runs take turns with.
@@ -42,13 +44,55 @@ use std::sync::{Mutex, MutexGuard};
 /// the lock for one call each.
 pub struct Lent<'a, T: ?Sized> {
     inner: Mutex<&'a mut T>,
+    totals: Mutex<Totals>,
+}
+
+/// What the turn and the delegates under it have each reported spending, so that a report of the
+/// turn's total can be made whichever of them last spent (TURN-5).
+#[derive(Default)]
+struct Totals {
+    /// The turn's own last report, which already holds every delegate collected before it.
+    turn: crate::outcome::Spent,
+    /// Each delegate's last report, from its first request until the turn reports again.
+    delegates: BTreeMap<DelegateId, Delegated>,
+}
+
+#[derive(Default)]
+struct Delegated {
+    spent: crate::outcome::Spent,
+    /// Set when the turn has taken this delegate's usage into its own count. The turn's next
+    /// report holds it, and until then it is still added here, so the total neither drops nor
+    /// counts it twice in between.
+    collected: bool,
+}
+
+impl Totals {
+    /// The turn's figures with what every delegate it has not yet reported has spent added. The
+    /// context reading and the timing are the turn's alone: a delegate's context is another
+    /// conversation, and its requests overlap the turn's own clock.
+    fn reported(&self) -> crate::outcome::Spent {
+        let mut total = self.turn;
+        for delegate in self.delegates.values() {
+            total.tokens += delegate.spent.tokens;
+            total.output_tokens += delegate.spent.output_tokens;
+            total.cached.add(delegate.spent.cached);
+        }
+        total
+    }
 }
 
 impl<'a, T: ?Sized> Lent<'a, T> {
     pub fn new(inner: &'a mut T) -> Self {
         Self {
             inner: Mutex::new(inner),
+            totals: Mutex::new(Totals::default()),
         }
+    }
+
+    /// Take the usage lock. Always taken before [`Lent::hold`] where a call needs both, so the two
+    /// cannot be waited on in opposite orders.
+    fn totals(&self) -> MutexGuard<'_, Totals> {
+        self.totals.lock().unwrap_or_else(|held| held.into_inner())
     }
 
     /// A handle for the turn's own work.
@@ -285,16 +329,26 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn delegate_waiting(&mut self, delegate: DelegateId);
     }
 
-    /// Retain delegate totals until collection. Forwarding them would replace the parent's
-    /// cumulative total with one delegate's smaller total.
+    /// Report the turn's total as the turn's own figure plus what its delegates have spent so far.
+    ///
+    /// A delegate's report is kept beside the turn's and added to it, because forwarding it as it
+    /// stands would replace the turn's cumulative total with one delegate's smaller one. The sum
+    /// is made and forwarded under one lock so reports reach the interface in the order they
+    /// were summed.
     fn spent(&mut self, spent: crate::outcome::Spent) {
         self.spent = spent;
-        if self.from.is_some() {
-            return;
+        let mut totals = self.lent.totals();
+        match self.from {
+            Some(delegate) => totals.delegates.entry(delegate).or_default().spent = spent,
+            None => {
+                totals.turn = spent;
+                totals.delegates.retain(|_, delegate| !delegate.collected);
+            }
         }
+        let combined = totals.reported();
         let mut held = self.lent.hold();
         held.reporting_for(None);
-        held.spent(spent);
+        held.spent(combined);
     }
 
     /// Not through the macro: whose report this is was settled when the handle was made, and a
@@ -306,6 +360,11 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         failed: bool,
         reported: Option<Reported>,
     ) {
+        // The turn added this delegate's usage to its own count before saying it finished, and
+        // reports that count next. Until it does, the delegate stays in the sum.
+        if let Some(delegated) = self.lent.totals().delegates.get_mut(&delegate) {
+            delegated.collected = true;
+        }
         let mut held = self.lent.hold();
         held.reporting_for(None);
         held.delegate_finished(delegate, note, failed, reported);
@@ -688,9 +747,12 @@ mod tests {
         );
     }
 
-    /// A delegate must not overwrite parent progress while cancellation is still possible.
+    /// A turn waiting on a delegate completes no round of its own, so the total a person watches
+    /// moves only if the delegate's requests are added to it as they complete (PANEL-9). The
+    /// turn's own count is the base and stays the base: reporting a delegate's smaller total in
+    /// its place would make the figure fall.
     #[test]
-    fn what_a_delegate_has_spent_is_not_reported_as_what_the_turn_has() {
+    fn what_a_running_delegate_has_spent_is_added_to_the_turns_total_as_it_goes() {
         let mut recording = RecordingReporter::default();
         {
             let lent = Lent::new(&mut recording);
@@ -703,8 +765,141 @@ mod tests {
         }
         assert_eq!(
             recording.spent,
-            vec![a_total(1_000), a_total(1_200)],
-            "a delegate's own total was reported as the turn's"
+            vec![
+                a_total(1_000),
+                a_total(1_005),
+                a_total(1_010),
+                a_total(1_210)
+            ],
+            "a delegate's spend was left out of the total, or reported in place of the turn's"
+        );
+    }
+
+    /// Delegates run side by side, and each one's spend counts while the others work.
+    #[test]
+    fn every_running_delegates_spend_is_in_the_total() {
+        let mut recording = RecordingReporter::default();
+        {
+            let lent = Lent::new(&mut recording);
+            let mut turn = lent.turn();
+            let mut first = lent.delegate(DelegateId::nth(1));
+            let mut second = lent.delegate(DelegateId::nth(2));
+            turn.spent(a_total(1_000));
+            first.spent(a_total(500));
+            second.spent(a_total(200));
+            first.spent(a_total(700));
+        }
+        assert_eq!(
+            recording.spent,
+            vec![
+                a_total(1_000),
+                a_total(1_500),
+                a_total(1_700),
+                a_total(1_900)
+            ],
+            "a delegate's spend replaced a sibling's instead of adding to it"
+        );
+    }
+
+    /// The turn adds a delegate's usage to its own count when it collects it, and the total must
+    /// hold that usage once: not dropping it while another delegate reports in the moment between
+    /// the collection and the turn's next report, and not adding it a second time after.
+    #[test]
+    fn a_collected_delegates_spend_is_in_the_total_once() {
+        let mut recording = RecordingReporter::default();
+        {
+            let lent = Lent::new(&mut recording);
+            let mut turn = lent.turn();
+            let mut first = lent.delegate(DelegateId::nth(1));
+            let mut second = lent.delegate(DelegateId::nth(2));
+            turn.spent(a_total(1_000));
+            first.spent(a_total(500));
+            second.spent(a_total(200));
+            turn.delegate_finished(DelegateId::nth(1), String::new(), false, None);
+            second.spent(a_total(300));
+            turn.spent(a_total(1_500));
+            second.spent(a_total(400));
+        }
+        assert_eq!(
+            recording.spent,
+            vec![
+                a_total(1_000),
+                a_total(1_500),
+                a_total(1_700),
+                a_total(1_800),
+                a_total(1_800),
+                a_total(1_900)
+            ],
+            "a collected delegate's spend dropped out of the total, or was counted twice"
+        );
+    }
+
+    /// Only the tokens add up. The context reading describes the turn's own conversation, and a
+    /// delegate's is another one.
+    #[test]
+    fn a_delegates_context_reading_is_not_the_turns() {
+        use bravebot_aichat::protocol::Cached;
+        let mut recording = RecordingReporter::default();
+        {
+            let lent = Lent::new(&mut recording);
+            let mut turn = lent.turn();
+            let mut delegate = lent.delegate(DelegateId::nth(1));
+            turn.spent(Spent {
+                tokens: 1_000,
+                output_tokens: 100,
+                context_tokens: 900,
+                cached: Cached {
+                    read_tokens: 50,
+                    written_tokens: 5,
+                },
+                ..Default::default()
+            });
+            delegate.spent(Spent {
+                tokens: 40,
+                output_tokens: 7,
+                context_tokens: 30_000,
+                cached: Cached {
+                    read_tokens: 20,
+                    written_tokens: 2,
+                },
+                ..Default::default()
+            });
+        }
+        assert_eq!(
+            recording.spent.last().copied(),
+            Some(Spent {
+                tokens: 1_040,
+                output_tokens: 107,
+                context_tokens: 900,
+                cached: Cached {
+                    read_tokens: 70,
+                    written_tokens: 7,
+                },
+                ..Default::default()
+            }),
+            "the delegate's context reading replaced the turn's, or its cache figures were left out"
+        );
+    }
+
+    /// A delegate's own delegates spend inside its total, which is what reaches the turn.
+    #[test]
+    fn a_nested_delegates_spend_reaches_the_turns_total() {
+        let mut recording = RecordingReporter::default();
+        {
+            let lent = Lent::new(&mut recording);
+            let mut turn = lent.turn();
+            turn.spent(a_total(1_000));
+            let mut delegate = lent.delegate(d(&[1]));
+            let within = Lent::new(&mut delegate);
+            let mut own = within.turn();
+            let mut nested = within.delegate(d(&[1, 2]));
+            own.spent(a_total(100));
+            nested.spent(a_total(40));
+        }
+        assert_eq!(
+            recording.spent,
+            vec![a_total(1_000), a_total(1_100), a_total(1_140)],
+            "what a delegate's own delegate spent never reached the turn's total"
         );
     }
 
