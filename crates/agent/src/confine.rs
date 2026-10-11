@@ -2122,6 +2122,33 @@ mod tests {
         }
     }
 
+    /// SANDBOX-15, SANDBOX-18: where the machine is read a stage writes every toolchain's cache
+    /// whatever program it resolved to, so `npm` can write the cargo registry. The regression it
+    /// rejects: keying the cache rows on the binary here too, which would make the separation
+    /// SANDBOX-15 describes hold where the spec says it does not, or granting a cache's parent,
+    /// which hands over the token beside it.
+    #[test]
+    fn where_the_machine_is_read_every_stage_writes_every_toolchains_cache() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let confined = reading_confinement(prelude, &["/work/project"]);
+            for program in ["/usr/bin/make", "/usr/bin/npm", "/usr/bin/cargo"] {
+                let policy = confined.policy(&step(program, &[]), Path::new("/work"), &[]);
+                for cache in [".cargo/registry", ".cargo/git", ".npm/_cacache"] {
+                    assert!(
+                        writes(&policy, &format!("{HOME}/{cache}")),
+                        "{prelude:?}: {program} does not write {cache}"
+                    );
+                }
+                for token in [".cargo/credentials.toml", ".npmrc", ".m2/settings.xml"] {
+                    assert!(
+                        !writes(&policy, &format!("{HOME}/{token}")),
+                        "{prelude:?}: {program} writes {token}"
+                    );
+                }
+            }
+        }
+    }
+
     /// SANDBOX-26: a requested scope lifts its own directory on a stage that names nothing, and no
     /// other. The control is the same stage with no request, which refuses all three; the
     /// regression it rejects is a request that lifts every credential, or none.

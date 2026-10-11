@@ -646,13 +646,17 @@ What decides a row is the table and the platform: nothing on the machine is read
 `GOCACHE` and `XDG_CACHE_HOME` move no row. A list also says whether its program fetches, which is
 the egress a closed network leaves it ([SANDBOX-20](#SANDBOX-20)): cargo, npm and the other node
 package managers, pip, go, mvn and gradle fetch, and `node`, `python3` and a program no list knows
-do not. `run` adds the list for each stage it starts
-([SANDBOX-18](#SANDBOX-18)).
+do not. `run` adds the list for each stage it starts where the machine is not read: on Windows
+and under the mode `strict` ([SANDBOX-18](#SANDBOX-18), [SANDBOX-22](#SANDBOX-22)). Where the machine is read, which is the
+default on Linux and macOS, no stage brings a list, and every stage writes the caches of every
+toolchain instead ([SANDBOX-18](#SANDBOX-18)).
 
 **Why.** The paths a build resolves through belong to that build and not to every program that runs,
 and the file a stage resolved to is the part of the plan a person read, where a name the model wrote
-or a configuration file's contents is not. One list shared by every toolchain lets a postinstall
-script leave something in `~/.cargo/registry` for a later `cargo build` to read. A package manager
+or a configuration file's contents is not. One list shared by every toolchain would let a postinstall
+script leave something in `~/.cargo/registry` for a later `cargo build` to read. Keying the lists
+prevents that where they apply and does nothing about it where the machine is read, since every
+stage there writes every cache and a postinstall script can leave that file. A package manager
 keeps its token beside its cache, so a row naming the directory holding the cache hands the token to
 every build in that ecosystem. An install written by a confined stage is the `cargo` a later stage
 resolves to, and a configuration file written by one is a `build.rustc-wrapper` every later build
@@ -1060,10 +1064,20 @@ it would be one somebody turns off; it is the same reach Linux gives. A program 
 home is read as the file a person read and not as its directory, so that granting a program does not
 open the home.
 
+Every cache is written by every stage on Linux and macOS in the mode `standard` because a stage is as often a script or a
+wrapper (`make check`, a `just` recipe) as one program, and the binary it resolves to is not the
+build it drives. The cost is that the separation between ecosystems that
+[SANDBOX-15](#SANDBOX-15) describes does not hold there: a stage that runs `npm ci` can write
+`~/.cargo/registry`, and a later `cargo build` reads what it left. The token files and the installs
+stay out of the write rows, so the reach is to caches only. A person who wants each ecosystem held
+to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)).
+
 `verified-by: bravebot_agent::confine::the_session_directories_are_read_and_written_and_nothing_else_of_the_persons`
 `verified-by: bravebot_agent::confine::the_description_follows_the_platform_it_describes`
 `verified-by: bravebot_agent::confine::a_step_whose_plan_names_no_credential_reaches_nothing_in_the_home`
 `verified-by: bravebot_agent::confine::a_toolchains_cache_is_granted_to_its_own_binary_only`
+`verified-by: bravebot_agent::confine::a_stage_writes_only_the_session_the_temporary_directory_and_the_caches`
+`verified-by: bravebot_agent::confine::where_the_machine_is_read_every_stage_writes_every_toolchains_cache`
 `verified-by: bravebot_agent::confine::a_session_with_no_home_is_not_granted_the_machine`
 `verified-by: bravebot_agent::confine::a_push_reaches_the_remote_scope_and_a_status_does_not`
 `verified-by: bravebot_agent::confine::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
@@ -2360,13 +2374,20 @@ plan never named it, and the mode that directory is created with does not separa
 running as the same account. The row is a write row, so it also reaches a unix socket another
 program keeps in that directory ([SANDBOX-3](#SANDBOX-3)).
 
-**A toolchain and its caches are the list a program brings.** The paths a build resolves through
-belong to that build rather than to every program that runs, so they are keyed on the resolved
-binary a stage of the plan names and are shown in the prompt with the rest of the plan. An `npm ci`
-is held to the npm rows and a `cargo build` in the same session to the cargo rows, so a postinstall
-script cannot leave something in `~/.cargo/registry` for a later `cargo build` to read. The key is
-the binary the plan already resolved and a person already read, never a name the model supplied and
-never a value a configuration file holds.
+**A toolchain and its caches are the list a program brings, where the machine is not read.** The
+paths a build resolves through belong to that build rather than to every program that runs, so on
+Windows and under the mode `strict` they are keyed on the resolved binary a stage of the plan names
+and are shown in the prompt with the rest of the plan.
+There an `npm ci` is held to the npm rows and a `cargo build` in the same session to the cargo rows,
+so a postinstall script cannot leave something in `~/.cargo/registry` for a later `cargo build` to
+read. The key is the binary the plan already resolved and a person already read, never a name the
+model supplied and never a value a configuration file holds.
+
+On Linux and macOS in the mode `standard` no list is keyed. The machine is read, so the installs and
+the cargo configuration need no row, and every stage writes the caches in the table below, since a
+stage is often a script that starts a build and not the build's own binary. A postinstall script can
+therefore leave something in `~/.cargo/registry` for a later `cargo build` to read, and the keying
+that follows does not prevent it. The token files and the installs are in no write row either way.
 
 | The list for | Read | Read and write |
 |---|---|---|
@@ -2383,11 +2404,12 @@ and an `npm` a version manager installed resolves to `npm-cli.js`.
 
 A cache is writable because a build that cannot write one fetches everything again or fails
 outright, and the price is a write no plan accounted for: a program can leave something in its own
-ecosystem's cache for a later build in that ecosystem to read. Holding that to one ecosystem is what
-keying on the binary buys, since the write a `cargo build` is trusted with is one an `npm ci` never
-receives. An install is read-only for the opposite reason. A build that would install a toolchain
-fails, and a line somebody then runs unconfined costs less than letting a confined stage replace the
-`cargo` or the `node` a later stage in the same pipeline resolves to. `npx` meets that rule: a
+ecosystem's cache for a later build in that ecosystem to read. Where the lists are keyed, keying on
+the binary holds that to one ecosystem, since the write a `cargo build` is trusted with is one an
+`npm ci` never receives. Where the machine is read it holds nothing, and a program can leave
+something in any ecosystem's cache. An install is read-only for the opposite reason. A build that
+would install a toolchain fails, and a line somebody then runs unconfined costs less than letting a
+confined stage replace the `cargo` or the `node` a later stage in the same pipeline resolves to. `npx` meets that rule: a
 package the project does not hold is installed under `~/.npm/_npx`, which is an install and not a
 cache, so an `npx` that would fetch one fails.
 
@@ -2424,9 +2446,11 @@ is never the terminal ([tools/run.md](tools/run.md)), so a terminal editor has n
 confined or not. A graphical one such as `code --wait` needs no terminal, and it is a program the
 plan never showed, so no list is keyed on it.
 
-**A command no list knows is asked about, and the answer lasts the session.** Partly built: a
-stage no list knows runs under the base and its plan, and a person who knows what it needs types
-`/reach` ([SANDBOX-23](#SANDBOX-23)) to attach a scope or a directory to it, for the session or
+**A command no list knows is asked about, and the answer lasts the session.** Partly built. This
+applies where the lists are keyed; on Linux and macOS in the mode `standard` a wrapper already
+writes every cache, though under a closed network it still has no egress, since that is decided by
+its own binary ([SANDBOX-20](#SANDBOX-20)). A stage no list knows runs under the base and its plan, and a person who knows
+what it needs types `/reach` ([SANDBOX-23](#SANDBOX-23)) to attach a scope or a directory to it, for the session or
 for good. Nothing asks about it at the prompt yet, so a build inside it that needs a cache and was
 not given one fails and stays failed. The rest of this paragraph is the decision. A wrapper is the
 common case rather than the edge one: `make check` here, a `just` recipe or an `npm run` target
