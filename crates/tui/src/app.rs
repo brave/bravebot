@@ -9580,11 +9580,12 @@ fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u
     }
 }
 
-/// Take a round's report of what the turn has spent into the session, and what its request came
-/// to into the context reading, so a turn in flight reads how full the context is rather than
-/// waiting for the turn to end (INPUT-22).
+/// Take a round's report of what the turn has spent into the session, what its request came to
+/// into the context reading, and the turn's running cache totals into the cache figures, so a turn
+/// in flight reads how full the context is and how much the backend recognised rather than
+/// waiting for the turn to end (INPUT-22, PANEL-8).
 ///
-/// A report with no request behind it yet leaves the reading where it was.
+/// A report with no request behind it yet leaves both where they were.
 fn progress_of_a_turn(
     session: &mut Session,
     spent: bravebot_agent::Spent,
@@ -9593,6 +9594,12 @@ fn progress_of_a_turn(
 ) {
     if spent.context_tokens > 0 {
         session.measured(spent.context_tokens, budget, guessed);
+    }
+    if spent.tokens > 0 {
+        session.served_from_cache(
+            spent.cached,
+            spent.tokens.saturating_sub(spent.output_tokens),
+        );
     }
     session.progressed(spent);
 }
@@ -28313,6 +28320,153 @@ mod tests {
         let mut nothing = Session::new("none");
         progress_of_a_turn(&mut nothing, round_that_came_to(0), 100_000, false);
         assert_eq!(nothing.occupancy(), crate::state::Occupancy::Unmeasured);
+    }
+
+    /// A report as the agent sends it: every figure is the turn's running total, not the round's.
+    fn running_totals(
+        prompt_tokens: u64,
+        output_tokens: u64,
+        read_tokens: u64,
+        written_tokens: u64,
+    ) -> bravebot_agent::Spent {
+        bravebot_agent::Spent {
+            tokens: prompt_tokens + output_tokens,
+            output_tokens,
+            context_tokens: prompt_tokens,
+            cached: bravebot_aichat::protocol::Cached {
+                read_tokens,
+                written_tokens,
+            },
+            ..Default::default()
+        }
+    }
+
+    fn panel_rows(session: &Session) -> Vec<String> {
+        crate::panel::lines(session, crate::panel::WIDTH, 40)
+            .iter()
+            .map(|line| line.to_string().trim().to_string())
+            .collect()
+    }
+
+    fn cache_rows(read: u64, written: u64) -> [String; 2] {
+        [
+            t!(panel_cache_read, tokens = crate::status::tokens(read)).to_string(),
+            t!(panel_cache_written, tokens = crate::status::tokens(written)).to_string(),
+        ]
+    }
+
+    fn hit_rate(whole: u64, tenth: u64) -> String {
+        t!(
+            hint_cache_hit_rate,
+            rate = format!("{whole}{}{tenth}", t!(number_decimal_separator))
+        )
+        .to_string()
+    }
+
+    /// A first turn has no earlier figure to show, so leaving them to the end of the turn drew
+    /// neither row nor the hit rate for as long as the turn ran.
+    #[test]
+    fn a_first_turn_in_flight_draws_the_cache_figures_after_its_first_round() {
+        let mut session = Session::new("none");
+        let before = panel_rows(&session);
+        for row in cache_rows(12_000, 3_000) {
+            assert!(!before.contains(&row), "{row:?} drawn before any report");
+        }
+        assert_eq!(crate::render::cache_hit_rate(&session), None);
+
+        progress_of_a_turn(
+            &mut session,
+            running_totals(20_000, 40, 12_000, 3_000),
+            100_000,
+            false,
+        );
+
+        let after = panel_rows(&session);
+        for row in cache_rows(12_000, 3_000) {
+            assert!(after.contains(&row), "{row:?} missing: {after:#?}");
+        }
+        assert_eq!(
+            crate::render::cache_hit_rate(&session),
+            Some(hit_rate(60, 0))
+        );
+    }
+
+    /// Each report carries the turn's totals so far, so the second replaces the first. Adding it
+    /// to the first would count round one twice, and keeping the first would stop at round one.
+    #[test]
+    fn each_round_of_a_turn_replaces_the_cache_figures_with_the_turns_running_totals() {
+        let mut session = Session::new("none");
+        progress_of_a_turn(
+            &mut session,
+            running_totals(20_000, 40, 12_000, 3_000),
+            100_000,
+            false,
+        );
+        progress_of_a_turn(
+            &mut session,
+            running_totals(50_000, 80, 39_000, 4_000),
+            100_000,
+            false,
+        );
+
+        let rows = panel_rows(&session);
+        for row in cache_rows(39_000, 4_000) {
+            assert!(rows.contains(&row), "{row:?} missing: {rows:#?}");
+        }
+        for row in cache_rows(12_000, 3_000) {
+            assert!(!rows.contains(&row), "{row:?} outlived the second round");
+        }
+        assert_eq!(
+            crate::render::cache_hit_rate(&session),
+            Some(hit_rate(78, 0))
+        );
+    }
+
+    /// A report with nothing spent behind it says nothing about the cache, so it must not zero
+    /// the figures of the turn before, nor draw rows in a session that has none.
+    #[test]
+    fn a_report_with_no_completed_request_leaves_the_cache_figures_where_they_were() {
+        let mut session = Session::new("none");
+        session.served_from_cache(
+            bravebot_aichat::protocol::Cached {
+                read_tokens: 12_000,
+                written_tokens: 3_000,
+            },
+            20_000,
+        );
+        progress_of_a_turn(
+            &mut session,
+            bravebot_agent::Spent::default(),
+            100_000,
+            false,
+        );
+
+        let rows = panel_rows(&session);
+        for row in cache_rows(12_000, 3_000) {
+            assert!(rows.contains(&row), "{row:?} missing: {rows:#?}");
+        }
+        assert_eq!(session.cached_prompt_tokens(), Some(20_000));
+        assert_eq!(
+            crate::render::cache_hit_rate(&session),
+            Some(hit_rate(60, 0))
+        );
+
+        let mut nothing = Session::new("none");
+        progress_of_a_turn(
+            &mut nothing,
+            bravebot_agent::Spent::default(),
+            100_000,
+            false,
+        );
+        assert_eq!(nothing.cached(), None);
+        assert_eq!(nothing.cached_prompt_tokens(), None);
+        let none = panel_rows(&nothing);
+        assert!(
+            !none
+                .iter()
+                .any(|row| row.contains(&t!(panel_cache_read, tokens = "").to_string())),
+            "a cache row was drawn with nothing reported: {none:#?}"
+        );
     }
 
     #[test]
