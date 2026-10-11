@@ -223,6 +223,13 @@ const CARDS = {
     entry: () => t.askedMcpMove({ request: 1, alias: 'weather', declared: 'https://weather.example/mcp', destination: FORGED_CHROME, authority: 'elsewhere.example:443', mayRecord: true }),
     marks: 'class="mcp-destination"',
   },
+  host: {
+    entry: () => t.askedHost({ request: 1, hosts: [FORGED_CHROME] }),
+    marks: null,
+    // docs/specs/sandboxing.md SANDBOX-24: a host is kept only where it is a host name or an IP
+    // address, so what a program chose to ask for cannot hold markup or a control character.
+    why: 'host names and addresses a program asked for, each checked to be one before it was put to a person',
+  },
   'mcp-started': {
     entry: () => t.mcpStarted({ servers: [FORGED_CHROME], confined: false, notes: [FORGED_CHROME] }),
     marks: null,

@@ -1662,7 +1662,9 @@ and the trail, the planner is told nothing about them, and nothing branches on o
 
 Half built. The list, its defaults, the proxy, the settings that carry the list through the
 layers, the managed pin, the environment injection, the port-limited policy on macOS, the trace
-record, the `/status` line and the prompt for an unlisted host are written and tested. Unbuilt: a
+record, the `/status` line and the prompt for an unlisted host are written and tested. The prompt is
+drawn by the plain CLI, the terminal interface, the desktop app (`host.request`, answered by
+`host.reply`) and the editor bridge, and each lists the hosts as the program named them. Unbuilt: a
 backend on Linux and Windows that limits egress to the port, so a networked stage is refused there
 while a list is set.
 
@@ -1715,6 +1717,14 @@ while a list is set.
 `verified-by: bravebot_tui::confirm::a_host_list_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
 `verified-by: bravebot_tui::remote_confirm::hosts_cross_with_every_name_and_only_their_own_yes_comes_back`
 `verified-by: bravebot_cli::plain::hosts_are_asked_in_lines_and_only_a_yes_lets_programs_reach_them`
+`verified-by: bravebot_ui_bridge::refusal::a_host_request_is_put_to_the_window_and_takes_no_answer_but_its_own`
+`verified-by: bravebot_ui_bridge::refusal::a_host_answer_answers_no_other_question`
+`verified-by: bravebot_ui_bridge::refusal::an_unanswerable_host_request_refuses`
+`verified-by: bravebot_ui_bridge::dispatch::a_host_answer_for_no_waiting_question_is_refused_as_an_answer_to_nothing`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the card is pinned instead by ui/scripts/host-card.test.mjs, which asserts that it lists every host as text, says how long a yes lasts and what deniedHosts still refuses, offers no standing answer, takes only a host answer, and that the main process lets host.reply through; ui/scripts/shown.test.mjs asserts that an approval waits on the hosts being on screen; make check-ui runs both)`
+`verified-by: bravebot_ui_bridge::wire::a_host_prompt_carries_the_hosts_and_nothing_else`
+`verified-by: bravebot_ui_bridge::acp::a_host_request_is_shown_with_each_host_on_a_row_and_its_escapes_pictured`
+`verified-by: bravebot_ui_bridge::acp::a_host_request_offers_the_session_not_a_single_use`
 `verified-by: bravebot_sandbox::proxy::the_environment_points_every_proxy_variable_at_the_loopback_port`
 `verified-by: bravebot_sandbox::proxy::dropping_the_proxy_stops_it_listening`
 `verified-by: bravebot_agent::host_proxy::a_stage_holds_the_defaults_its_own_reasons_bring_and_no_others`

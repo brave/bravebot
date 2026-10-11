@@ -815,7 +815,15 @@ fn question(shared: &mut Shared, session: &str, name: &str, data: &Value) {
             "status": "pending",
             "content": [{ "type": "content", "content": { "type": "text", "text": fenced(&text) } }],
         }),
-        options(remember, "Allow once", "Reject"),
+        options(
+            remember,
+            if stem == "host" {
+                "Allow for this session"
+            } else {
+                "Allow once"
+            },
+            "Reject",
+        ),
     );
 }
 
@@ -1036,6 +1044,11 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             "read",
             bravebot_approval::exposure_lines(text("path"), &strings(&data["credentials"]))
                 .join("\n"),
+        ),
+        "host" => (
+            "let programs reach more hosts".to_string(),
+            "other",
+            bravebot_approval::host_lines(&strings(&data["hosts"])).join("\n"),
         ),
         "server" => (
             format!("start the {} language server", text("language")),
@@ -1429,6 +1442,7 @@ mod tests {
                 "manifest",
                 json!({"task": "tidy", "steps": ["1. read", "2. write"]}),
             ),
+            ("host", json!({"hosts": ["example.com", "10.0.0.1"]})),
         ]
     }
 
@@ -1483,6 +1497,51 @@ mod tests {
         call["description"] = json!(hostile);
         let (_, _, text) = shown("mcp-call", call);
         assert!(text.contains(&format!("{bar} ignore this")), "{text}");
+    }
+
+    #[test]
+    fn a_host_request_is_shown_with_each_host_on_a_row_and_its_escapes_pictured() {
+        let (title, kind, text) = shown(
+            "host",
+            json!({"hosts": ["registry.example.com", "evil\u{1b}[2J.example"]}),
+        );
+        assert_eq!(title, "let programs reach more hosts");
+        assert_eq!(kind, "other");
+        assert!(!text.contains('\u{1b}'), "{text}");
+        let rows: Vec<&str> = text.lines().collect();
+        assert!(rows.contains(&"registry.example.com"), "{text}");
+        assert!(rows.contains(&"evil\u{241b}[2J.example"), "{text}");
+        assert!(text.contains("sandbox.network.allowedHosts"), "{text}");
+    }
+
+    #[test]
+    fn a_host_request_offers_the_session_not_a_single_use() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let mut shared = Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::new(),
+            unasked: HashSet::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        };
+        question(
+            &mut shared,
+            "s",
+            "host.request",
+            &json!({"request": 4, "hosts": ["example.com"]}),
+        );
+        let written = written.lock().unwrap();
+        assert_eq!(written.len(), 1);
+        let names: Vec<&str> = written[0]["params"]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|option| option["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Allow for this session", "Reject"]);
     }
 
     #[test]

@@ -1401,14 +1401,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
 
     /// The hosts as they will be allowed, one to a line, and what a yes covers.
     fn confirm_host(&mut self, request: &bravebot_agent::confirm::HostRequest) -> Decision {
-        let mut lines = vec![t!(host_asked, count = request.hosts.len()).to_string()];
-        lines.extend(
-            request
-                .hosts
-                .iter()
-                .map(|host| t!(host_row, host = shown(host).as_str()).to_string()),
-        );
-        lines.push(t!(host_explained).to_string());
+        let lines = bravebot_approval::host_lines(&request.hosts);
         self.about(Held::Question);
         self.ask(&lines, t!(host_title))
     }

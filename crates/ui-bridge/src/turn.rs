@@ -16,7 +16,7 @@ use crate::emit::Emitter;
 use crate::protocol::Event;
 use crate::wire;
 use bravebot_agent::confirm::{
-    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, ManifestRequest,
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
     ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
@@ -59,6 +59,8 @@ pub enum Kind {
     McpCall,
     /// Whether a remote MCP server moved where its reply pointed (SERVERS-11).
     McpMove,
+    /// Whether programs may reach more hosts through the session proxy for this session (SANDBOX-24).
+    Host,
     Ask,
 }
 
@@ -101,6 +103,7 @@ pub enum Reply {
     /// Three answers: no, yes, and yes without asking again about this tool in this project.
     McpCall(CallDecision),
     McpMove(Decision),
+    Host(Decision),
     /// One answer per question, in the order they were asked. Empty means nobody could be
     /// asked — see [`Confirmer::ask_user`].
     Ask(Vec<Answer>),
@@ -122,6 +125,7 @@ impl Reply {
             Reply::McpTools(_) => Kind::McpTools,
             Reply::McpCall(_) => Kind::McpCall,
             Reply::McpMove(_) => Kind::McpMove,
+            Reply::Host(_) => Kind::Host,
             Reply::Ask(_) => Kind::Ask,
         }
     }
@@ -143,7 +147,8 @@ impl Reply {
             | Reply::Manifest(decision)
             | Reply::Exposure(decision)
             | Reply::McpTools(decision)
-            | Reply::McpMove(decision) => Some(*decision),
+            | Reply::McpMove(decision)
+            | Reply::Host(decision) => Some(*decision),
             Reply::Run(_) | Reply::McpServer(_) | Reply::McpCall(_) | Reply::Ask(_) => None,
         }
     }
@@ -173,6 +178,7 @@ impl Kind {
             Kind::McpTools => Reply::McpTools(Decision::Reject),
             Kind::McpCall => Reply::McpCall(CallDecision::reject()),
             Kind::McpMove => Reply::McpMove(Decision::Reject),
+            Kind::Host => Reply::Host(Decision::Reject),
             // No answers at all, which is how this question says nobody was asked.
             Kind::Ask => Reply::Ask(Vec::new()),
         }
@@ -633,8 +639,15 @@ impl Confirmer for BridgeConfirmer {
         Decision::Reject
     }
 
-    fn confirm_host(&mut self, _request: &bravebot_agent::confirm::HostRequest) -> Decision {
-        Decision::Reject
+    /// Ask whether programs may reach more hosts through the session proxy (SANDBOX-24).
+    ///
+    /// The request names each host the program tried to reach and the list did not allow. A yes
+    /// allows them for the rest of this session and writes no rule. A no leaves the connection
+    /// refused.
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+        self.yes_or_no(Kind::Host, "host.request", |id| {
+            wire::host_request(id, request)
+        })
     }
 
     /// Ask whether a remote MCP server moved where its reply pointed (SERVERS-11).

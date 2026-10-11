@@ -194,6 +194,7 @@ impl Bridge {
             "manifest.read" => crate::manifest::read(request),
             "manifest.reply" => self.reply_decision(request, Reply::Manifest),
             "exposure.reply" => self.reply_decision(request, Reply::Exposure),
+            "host.reply" => self.reply_decision(request, Reply::Host),
             "mcp-server.reply" => self.deliver(
                 request,
                 Reply::McpServer(wire::start_answer(

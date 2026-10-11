@@ -690,6 +690,16 @@ export interface McpMoveRequest {
   mayRecord: boolean
 }
 
+/**
+ * Hosts a confined program asked the session proxy for that `sandbox.network.allowedHosts` does
+ * not list (SANDBOX-24). Each is a host name or IP address as the program chose it, so it is drawn
+ * as text. A yes allows them for the rest of the session and writes nothing to disk.
+ */
+export interface HostRequest {
+  request: number
+  hosts: string[]
+}
+
 /** What starting a session's MCP servers came to: the ones started, and why each other was not. */
 export interface McpStarted { servers: string[]; confined: boolean; notes: string[] }
 
@@ -860,6 +870,7 @@ export interface EventMap {
   'mcp-tools.request': McpToolsRequest
   'mcp-call.request': McpCallRequest
   'mcp-move.request': McpMoveRequest
+  'host.request': HostRequest
   /** Sent as a session's first turn starts the MCP servers its project requests. */
   'mcp.starting': { servers: string[] }
   'mcp.started': McpStarted

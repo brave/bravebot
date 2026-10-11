@@ -889,6 +889,7 @@ fn every_kind_of_question_is_refused_in_its_own_shape() {
         Kind::Server,
         Kind::Manifest,
         Kind::Exposure,
+        Kind::Host,
         Kind::Ask,
     ] {
         let refusal = kind.refusal();
@@ -1400,4 +1401,92 @@ fn the_window_refuses_an_unconfined_run_without_asking() {
     assert!(!asked, "a card was drawn for it");
     assert_eq!(decision.decision, Decision::Reject);
     assert!(!decision.remember);
+}
+
+fn some_hosts() -> bravebot_agent::confirm::HostRequest {
+    bravebot_agent::confirm::HostRequest {
+        hosts: vec!["registry.example.com".into(), "10.0.0.1".into()],
+    }
+}
+
+/// Nobody to ask means the hosts stay refused (SANDBOX-24). The desktop app once refused every
+/// such request without asking.
+#[test]
+fn an_unanswerable_host_request_refuses() {
+    let mut harness = harness();
+    drop(harness.running);
+
+    assert_eq!(
+        harness.confirmer.confirm_host(&some_hosts()),
+        Decision::Reject,
+        "hosts were allowed on nobody's word"
+    );
+}
+
+/// The question goes out as `host.request` carrying the hosts, and a yes to one is an answer to a
+/// host request and to nothing else. Every other approval waiting is a yes about something
+/// narrower, so one read as this would allow hosts on a person's word about one write or URL.
+#[test]
+fn a_host_request_is_put_to_the_window_and_takes_no_answer_but_its_own() {
+    for other in [
+        Reply::Write(Decision::Approve),
+        Reply::Run(RunDecision::approve_always()),
+        Reply::Fetch(Decision::Approve),
+        Reply::Server(Decision::Approve),
+        Reply::Exposure(Decision::Approve),
+        Reply::McpMove(Decision::Approve),
+    ] {
+        let mut h = harness();
+        h.running.answers.send(other.clone()).unwrap();
+        assert_eq!(
+            h.confirmer.confirm_host(&some_hosts()),
+            Decision::Reject,
+            "{other:?} allowed hosts"
+        );
+        assert!(h.running.pending.lock().unwrap().is_none());
+    }
+
+    let mut h = harness();
+    h.running
+        .answers
+        .send(Reply::Host(Decision::Approve))
+        .unwrap();
+    assert_eq!(h.confirmer.confirm_host(&some_hosts()), Decision::Approve);
+
+    let events = h.events.lock().unwrap();
+    let [asked] = events.as_slice() else {
+        panic!("one question was expected, and the window was sent {events:?}");
+    };
+    assert_eq!(asked.name, "host.request");
+    assert_eq!(
+        asked.data["hosts"],
+        serde_json::json!(["registry.example.com", "10.0.0.1"])
+    );
+}
+
+/// A host answer settles a waiting host request and no other question.
+#[test]
+fn a_host_answer_answers_no_other_question() {
+    let harness = harness();
+    let running = harness.running;
+
+    for kind in [
+        Kind::Write,
+        Kind::Run,
+        Kind::Fetch,
+        Kind::Server,
+        Kind::Exposure,
+        Kind::McpMove,
+    ] {
+        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        assert!(
+            !running.answer(1, Reply::Host(Decision::Approve)),
+            "a host approval answered a waiting {kind:?}"
+        );
+    }
+    *running.pending.lock().expect("not poisoned") = Some(Question {
+        id: 1,
+        kind: Kind::Host,
+    });
+    assert!(running.answer(1, Reply::Host(Decision::Approve)));
 }

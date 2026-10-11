@@ -1798,6 +1798,8 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedMcpCall(message.data)] }
       case 'mcp-move.request':
         return { ...old, entries: [...old.entries, t.askedMcpMove(message.data)] }
+      case 'host.request':
+        return { ...old, entries: [...old.entries, t.askedHost(message.data)] }
       // A server has up to a minute to answer its handshake, and the turn says nothing else
       // while it waits, so the wait is named where the phase is.
       case 'mcp.starting':

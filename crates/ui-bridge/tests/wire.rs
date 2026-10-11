@@ -1456,3 +1456,20 @@ fn a_refused_sandbox_mode_names_the_file_and_the_floor() {
     );
     assert!(by_network.contains("run.network"), "{by_network}");
 }
+
+/// The hosts cross as the program named them, and nothing else does.
+#[test]
+fn a_host_prompt_carries_the_hosts_and_nothing_else() {
+    use bravebot_agent::confirm::HostRequest;
+    let value = wire::host_request(
+        4,
+        &HostRequest {
+            hosts: vec!["registry.example.com".into(), "10.0.0.1".into()],
+        },
+    );
+
+    assert_eq!(
+        value,
+        json!({"request": 4, "hosts": ["registry.example.com", "10.0.0.1"]})
+    );
+}
