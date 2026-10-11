@@ -1999,6 +1999,9 @@ status-goal-rounds = { $rounds ->
 # one that says otherwise.
 status-permissions = Permissions
 status-permissions-cycle = shift-tab to change
+status-programs-write = Programs write
+status-programs-write-anywhere = anywhere a request_path would be granted
+status-programs-write-except = not a credential location, your denyWrite paths, or a new entry in your home directory or beside a credential location
 # Said only where auto-vetting is on. The file is named because that is where the answer is kept
 # and where it is undone; nothing in the interface turns it back off.
 status-vetting = Vetting

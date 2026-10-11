@@ -23,7 +23,7 @@ use bravebot_sandbox::hosts::{Refusal, Verdict};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::proxy::Proxy;
-use bravebot_sandbox::rules::{Lists, Rules, without_verbatim_prefix};
+use bravebot_sandbox::rules::{Lists, Rules, without_verbatim_prefix, writable_without_a_request};
 use bravebot_sandbox::scope::{Reach, Requested, Scope, environment_reach, requested_reach};
 use bravebot_sandbox::signing;
 use bravebot_sandbox::toolchain::Toolchain;
@@ -59,6 +59,9 @@ pub struct Confinement {
     /// The paths the person let programs reach for this session (SANDBOX-28). Applied before
     /// `filesystem`, so a denial of the person's still removes them.
     path_reach: Rules,
+    /// Whether the session gives the stages it starts every path a `request_path` for writing would
+    /// be granted, without the planner asking (SANDBOX-28). Set only for the lead session in bypass.
+    unasked_writes: bool,
     /// What the planner asked this one line to add to every stage that has no assignment in front
     /// of it, from the fixed menu. Empty for every line that asked for nothing.
     requested: Vec<Requested>,
@@ -113,6 +116,7 @@ impl Confinement {
             grants: Vec::new(),
             filesystem: Rules::none(),
             path_reach: Rules::none(),
+            unasked_writes: false,
             requested: Vec::new(),
             #[cfg(test)]
             unconfinable: None,
@@ -213,6 +217,28 @@ impl Confinement {
             .collect();
         self.path_reach = Rules::granted(&read, &write);
         self
+    }
+
+    /// This confinement given, where [`Confinement::writes_without_a_request`] allows it, every path
+    /// a `request_path` for writing would be granted when a stage starts (SANDBOX-28).
+    ///
+    /// `bypass` is whether the permission mode answers a request in the person's place and the
+    /// caller is the lead session, which is the only one offered the tool. Nothing a program wrote
+    /// or printed is among its inputs.
+    #[must_use]
+    pub fn with_unasked_writes(mut self, bypass: bool) -> Self {
+        self.unasked_writes = bypass;
+        self
+    }
+
+    /// Whether the stages this starts hold every path a request for writing would be granted.
+    ///
+    /// Only under `standard`, since a person who chose `strict` asked for less reach than the
+    /// default and `off` has no profile, and only where the machine is read, which is every
+    /// platform with a home directory but Windows, where a grant is an access-control entry written
+    /// onto each directory and so cannot be made for the entries of the home directory.
+    pub fn writes_without_a_request(&self) -> bool {
+        self.unasked_writes && self.mode == SandboxMode::Standard && self.reads_the_machine()
     }
 
     /// The entries of the person's filesystem lists, each with what became of it, for a report.
@@ -731,11 +757,36 @@ impl Confinement {
         if let Some(scratch) = &self.scratch {
             policy = policy.allow_read(scratch).allow_write(scratch);
         }
-        let policy = self.path_reach.apply(policy);
-        let policy = self.filesystem.apply(policy);
-        // A program bravebot starts itself must not be found in a place this stage can write.
+        let mut policy = self.path_reach.apply(policy);
+        let unasked: Vec<PathBuf> = match (self.writes_without_a_request(), self.home.as_deref()) {
+            (true, Some(home)) => writable_without_a_request(home),
+            _ => Vec::new(),
+        };
+        let held: Vec<PathBuf> = policy.writable.iter().map(|row| row.path.clone()).collect();
+        for row in &unasked {
+            policy = policy.allow_write(row);
+        }
+        let mut policy = self.filesystem.apply(policy);
+        // Seatbelt's refusal of a read does not stop a write, and a request for writing is refused
+        // under the person's denyRead, so a read refusal inside an unasked row is a write refusal.
+        if !unasked.is_empty() {
+            for refused in policy.unreadable.clone() {
+                let inside = policy
+                    .writable
+                    .iter()
+                    .any(|row| refused.starts_with(&row.path) && row.path != refused);
+                if inside && !policy.unwritable.contains(&refused) {
+                    policy = policy.deny_write(refused);
+                }
+            }
+        }
+        // A program bravebot starts itself must not be found in a place this stage can write. A
+        // row that came with the whole machine is such a place only where the account can write.
         for row in &policy.writable {
-            bravebot_sandbox::programs::keep_out(&row.path);
+            match unasked.contains(&row.path) && !held.contains(&row.path) {
+                true => bravebot_sandbox::programs::keep_out_where_writable(&row.path),
+                false => bravebot_sandbox::programs::keep_out(&row.path),
+            }
         }
         policy.starting_in(directory)
     }
@@ -850,14 +901,25 @@ impl Confinement {
             ),
         };
         if self.reads_the_machine() {
+            let writes = match self.writes_without_a_request() {
+                true => "write every path a request_path with write set would be granted, which \
+                     is everything the account can write except the places that hold a credential \
+                     and the person's own denyRead and denyWrite paths, with no new entry made \
+                     directly in the home directory, a directory above it, or a directory that \
+                     holds a credential location"
+                    .to_string(),
+                false => format!(
+                    "write {} and the temporary directory and the toolchain caches",
+                    directories.join(", "),
+                ),
+            };
             return format!(
                 "Confinement: programs could read this machine except the places that hold a \
-                 credential, and write {} and the temporary directory and the toolchain caches; \
+                 credential, and {writes}; \
                  a place that holds a credential was read only where a credential scope added it \
                  for the steps that named one (credential scopes: {}). Any other path is refused \
                  by the operating system as `Operation not permitted` or `Permission denied`. \
                  Network: {}.{}{}",
-                directories.join(", "),
                 named(scopes),
                 network,
                 rules,
@@ -4268,5 +4330,197 @@ mod tests {
             a_confinement_over_a_home_that("accepted", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
         assert!(!confined.profile(&[&commit]).contains("user.signingkey"));
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A home with a directory beside it, made on disk with its links followed, since the rows are
+    /// judged where the paths lead.
+    fn unasked_places(name: &str) -> (PathBuf, PathBuf) {
+        let top = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("confine-unit-unasked-{name}"));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("home/.ssh")).expect("home directory");
+        std::fs::create_dir_all(top.join("beside")).expect("a directory beside");
+        (
+            top.join("home").canonicalize().expect("canonical home"),
+            top.join("beside").canonicalize().expect("canonical beside"),
+        )
+    }
+
+    fn bypass_confinement(prelude: Prelude, home: &Path, root: &Path) -> Confinement {
+        Confinement::new(
+            prelude,
+            PathBuf::from("/tmp"),
+            Some(home),
+            vec![root.to_path_buf()],
+            Some(Path::new("/var/scratch")),
+        )
+        .with_unasked_writes(true)
+    }
+
+    /// SANDBOX-22, SANDBOX-28: under bypass a `standard` stage on a platform that reads the machine
+    /// holds the rows a request for writing would be granted, and none of them is the home
+    /// directory, a directory above it, or a place that holds a credential. The regression it
+    /// rejects is the mode never reaching the policy, or a row wide enough to cover home. The same
+    /// confinement without the flag is the control that none of these rows is there to begin with.
+    #[test]
+    fn a_bypass_stage_holds_the_rows_a_request_would_be_granted_and_not_the_home_directory() {
+        let (home, beside) = unasked_places("rows");
+        let top = home.parent().unwrap().to_path_buf();
+        let root = beside.join("project");
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let step = step("/bin/cat", &["f"]);
+            let control = bypass_confinement(prelude, &home, &root)
+                .with_unasked_writes(false)
+                .policy(&step, &root, &[]);
+            let policy = bypass_confinement(prelude, &home, &root).policy(&step, &root, &[]);
+            let covers = |policy: &SandboxPolicy, path: &Path| {
+                policy
+                    .writable
+                    .iter()
+                    .any(|row| path.starts_with(&row.path))
+            };
+            let covered = |path: &Path| covers(&policy, path);
+
+            assert!(
+                !covers(&control, &beside.join("new")),
+                "{prelude:?}: the control already writes beside"
+            );
+            assert!(covered(&beside.join("new")), "{prelude:?}: nothing beside");
+            assert!(
+                !writes(&policy, top.to_str().unwrap()) && !writes(&policy, "/"),
+                "{prelude:?}: a directory above home is a row as a whole"
+            );
+            for refused in [
+                home.join(".ssh/new"),
+                home.join(".bravebot/new"),
+                home.join("new"),
+                top.join("new"),
+            ] {
+                assert!(!covered(&refused), "{prelude:?}: {}", refused.display());
+            }
+        }
+    }
+
+    /// SANDBOX-22: the mode is the person's to choose and a session that is not the lead session
+    /// asks for nothing more. `strict`, `off`, a platform that lists what a program reaches, a
+    /// confinement whose caller is a delegate or is outside bypass, and a session with no home add no
+    /// row. The regression it rejects is a check on bypass alone.
+    #[test]
+    fn a_stage_outside_standard_bypass_on_the_lead_session_is_given_no_extra_row() {
+        let (home, beside) = unasked_places("none");
+        let root = beside.join("project");
+        let step = step("/bin/cat", &["f"]);
+        let rows = |confinement: Confinement| confinement.policy(&step, &root, &[]).writable.len();
+
+        for (what, prelude, mode) in [
+            ("strict", Prelude::MacOs, SandboxMode::Strict),
+            ("off", Prelude::MacOs, SandboxMode::Off),
+            ("windows", Prelude::Windows, SandboxMode::Standard),
+        ] {
+            let flagged = bypass_confinement(prelude, &home, &root).with_mode(mode);
+            let plain = bypass_confinement(prelude, &home, &root)
+                .with_mode(mode)
+                .with_unasked_writes(false);
+            assert!(!flagged.writes_without_a_request(), "{what}");
+            assert_eq!(rows(flagged), rows(plain), "{what}");
+        }
+        let homeless = |unasked| {
+            Confinement::new(
+                Prelude::MacOs,
+                PathBuf::from("/tmp"),
+                None,
+                vec![root.clone()],
+                None,
+            )
+            .with_unasked_writes(unasked)
+        };
+        assert!(!homeless(true).writes_without_a_request(), "no home");
+        assert_eq!(rows(homeless(true)), rows(homeless(false)), "no home");
+        let standard = bypass_confinement(Prelude::MacOs, &home, &root);
+        assert!(standard.writes_without_a_request());
+        assert!(
+            !standard
+                .with_unasked_writes(false)
+                .writes_without_a_request()
+        );
+    }
+
+    /// SANDBOX-28: Seatbelt's refusal of a read does not stop a write, so a `denyRead` path inside
+    /// a row given without a request is refused for writing too. The regression it rejects is a
+    /// `denyRead` path a bypass program can overwrite.
+    #[test]
+    fn a_bypass_stage_cannot_write_where_the_person_denied_a_read() {
+        let (home, beside) = unasked_places("deniedread");
+        let root = beside.join("project");
+        let denied = beside.join("private");
+        std::fs::create_dir_all(&denied).expect("a directory");
+        let denied = denied.canonicalize().unwrap();
+        let step = step("/bin/cat", &["f"]);
+        let confined = |bypass: bool| {
+            bypass_confinement(Prelude::MacOs, &home, &root)
+                .with_unasked_writes(bypass)
+                .with_filesystem(&listed(&[denied.to_str().unwrap()], &[], &[]))
+        };
+
+        let policy = confined(true).policy(&step, &root, &[]);
+
+        assert!(
+            policy.unwritable.contains(&denied),
+            "a denyRead path stays writable: {:?}",
+            policy.unwritable
+        );
+        assert!(
+            !confined(false)
+                .policy(&step, &root, &[])
+                .unwritable
+                .contains(&denied),
+            "the refusal is added without bypass too"
+        );
+    }
+
+    /// SANDBOX-22: the person's `denyWrite` outranks the grant, and the profile line tells the
+    /// planner what the stage may write. The regression it rejects is a grant applied after the
+    /// lists, or a line that still says the stage writes the session alone.
+    #[test]
+    fn a_bypass_stage_keeps_the_persons_denied_write_and_says_what_it_writes() {
+        let (home, beside) = unasked_places("denied");
+        let root = beside.join("project");
+        let denied = beside.join("kept");
+        std::fs::create_dir_all(&denied).expect("a directory");
+        let denied = denied.canonicalize().unwrap();
+        let confined = bypass_confinement(Prelude::MacOs, &home, &root).with_filesystem(&listed(
+            &[],
+            &[],
+            &[denied.to_str().unwrap()],
+        ));
+        let step = step("/bin/cat", &["f"]);
+
+        let policy = confined.policy(&step, &root, &[]);
+        let line = confined.profile(&[&step]);
+
+        assert!(
+            policy.unwritable.contains(&denied),
+            "the person's refusal is gone: {:?}",
+            policy.unwritable
+        );
+        assert!(
+            !policy
+                .writable
+                .iter()
+                .any(|row| denied.starts_with(&row.path) && row.path != beside),
+            "a row covers the refused path"
+        );
+        assert!(
+            line.contains("write every path a request_path with write set would be granted"),
+            "{line}"
+        );
+        assert!(
+            !bypass_confinement(Prelude::MacOs, &home, &root)
+                .with_unasked_writes(false)
+                .profile(&[&step])
+                .contains("every path a request_path"),
+            "the line says it without bypass"
+        );
     }
 }

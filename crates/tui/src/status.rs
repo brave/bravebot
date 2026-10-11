@@ -147,6 +147,9 @@ pub struct Facts<'a> {
     pub permission_mode: bravebot_agent::PermissionMode,
     /// Whether the session was started with the flag that skips permissions.
     pub began_in_bypass: bool,
+    /// Whether the programs `run` starts write every path a request for writing would be granted,
+    /// as [`programs_write_unasked`] answers it.
+    pub programs_write_unasked: bool,
     /// Whether a check that finds nothing promotes a slot without the person being asked.
     ///
     /// Reported for the reason the permission mode is: it is a standing answer that stops a prompt
@@ -293,6 +296,23 @@ fn network_line(
         Line::new(t!(status_network), t!(status_network_closed))
             .with_note(run_network_source(&settled.decided)),
     )
+}
+
+/// Whether the stages this session's `run` starts write every path a request for writing would be
+/// granted, as [`bravebot_agent::confine::Confinement::writes_without_a_request`] answers for the
+/// home, sandbox mode and permission mode a turn builds its confinement from. This session is the
+/// lead session, so bypass alone decides whether the confinement is told to.
+pub fn programs_write_unasked(
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    home: Option<&Path>,
+) -> bool {
+    bravebot_agent::confine::Confinement::here(Vec::new(), None, home).is_some_and(|confinement| {
+        confinement
+            .with_mode(mode)
+            .with_unasked_writes(permission == bravebot_agent::PermissionMode::Bypass)
+            .writes_without_a_request()
+    })
 }
 
 /// The line for the person's own filesystem lists, where any has an entry: how many each holds and
@@ -607,6 +627,18 @@ pub fn report(facts: &Facts<'_>) -> Report {
     if let Some(named) = named_mode(facts.permission_mode, facts.began_in_bypass) {
         lines
             .push(Line::new(t!(status_permissions), named).with_note(t!(status_permissions_cycle)));
+    }
+
+    // Only where it is so, for the reason the network line is: the ordinary session writes the
+    // directories it was opened on, and a line saying so on each would be skimmed past.
+    if facts.programs_write_unasked {
+        lines.push(
+            Line::new(
+                t!(status_programs_write),
+                t!(status_programs_write_anywhere),
+            )
+            .with_note(t!(status_programs_write_except)),
+        );
     }
 
     // Beside it for the same reason, and only where it is on: this is the other standing answer
@@ -1166,6 +1198,7 @@ mod tests {
             // the line set this themselves.
             permission_mode: bravebot_agent::PermissionMode::Ask,
             began_in_bypass: false,
+            programs_write_unasked: false,
             auto_vetting: false,
             turns: 4,
             tokens: 12_400,
@@ -2232,6 +2265,48 @@ mod tests {
         facts.began_in_bypass = false;
         let shown = rendered(&report(&facts));
         assert!(!shown.contains(asking), "{shown}");
+    }
+
+    /// SANDBOX-22: a session whose programs write what a request would be granted says so, and a
+    /// session that does not is silent. The regressions it rejects are a line shown in `strict`, in
+    /// `off`, outside bypass, on Windows, or with no home directory, where the stage is given no
+    /// extra row.
+    #[test]
+    fn the_report_says_programs_write_what_a_request_would_be_granted_only_where_they_do() {
+        use bravebot_agent::PermissionMode::{AcceptEdits, Ask, Bypass};
+        use bravebot_sandbox::SandboxMode::{Off, Standard, Strict};
+        let home = std::env::temp_dir();
+        let home = Some(home.as_path());
+
+        assert_eq!(
+            programs_write_unasked(Standard, Bypass, home),
+            cfg!(any(target_os = "linux", target_os = "macos"))
+        );
+        for (mode, permission, home) in [
+            (Standard, Bypass, None),
+            (Standard, Ask, home),
+            (Standard, AcceptEdits, home),
+            (Strict, Bypass, home),
+            (Off, Bypass, home),
+        ] {
+            assert!(
+                !programs_write_unasked(mode, permission, home),
+                "{mode:?} {permission:?} {home:?}"
+            );
+        }
+
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut facts = facts(&config, &trust);
+        let said = |facts: &Facts<'_>| {
+            report(facts)
+                .lines
+                .iter()
+                .any(|line| line.label == t!(status_programs_write))
+        };
+        assert!(!said(&facts));
+        facts.programs_write_unasked = true;
+        assert!(said(&facts));
     }
 
     fn rendered(report: &Report) -> String {

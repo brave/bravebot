@@ -1743,6 +1743,9 @@ status-job-started = lancée en arrière-plan
 status-goal-rounds = renvoyé { $rounds } fois, il en reste { $left }
 status-permissions = Permissions
 status-permissions-cycle = shift-tab pour changer
+status-programs-write = Écriture des programmes
+status-programs-write-anywhere = partout où un request_path serait accordé
+status-programs-write-except = ni un emplacement d'identifiants, ni vos chemins denyWrite, ni une nouvelle entrée dans votre répertoire personnel ou à côté d'un emplacement d'identifiants
 status-vetting = Vérification
 status-vetting-auto =
     une vérification qui ne trouve rien donne le contenu au modèle sans demander
