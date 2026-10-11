@@ -195,9 +195,11 @@ impl ToolList {
         let (text, offered, refused) = self.drawn(alias);
         Listing {
             alias: alias.to_string(),
-            list: Labelled::new(text, crate::list_label()),
+            list: Labelled::new(text.clone(), crate::list_label()),
+            raw: text,
             offered,
             refused,
+            withheld: 0,
         }
     }
 
@@ -398,9 +400,11 @@ fn choices(property: &Value) -> Option<Vec<String>> {
 /// nothing and two servers offering `lookup` offer two different tools.
 pub struct Listing {
     alias: String,
+    raw: String,
     list: Labelled<String>,
     offered: usize,
     refused: usize,
+    withheld: usize,
 }
 
 /// Shows the counts but nothing the server said, so a log line cannot carry a description.
@@ -410,6 +414,7 @@ impl std::fmt::Debug for Listing {
             .field("alias", &self.alias)
             .field("offered", &self.offered)
             .field("refused", &self.refused)
+            .field("withheld", &self.withheld)
             .finish_non_exhaustive()
     }
 }
@@ -433,6 +438,61 @@ impl Listing {
     /// How many tools the server listed that are not in it.
     pub fn refused(&self) -> usize {
         self.refused
+    }
+
+    /// How many tools were withheld by the server's allow or deny list.
+    pub fn withheld(&self) -> usize {
+        self.withheld
+    }
+
+    /// Filter the offered tools according to allow and deny lists.
+    ///
+    /// When `exclude_tools` names a tool, it is withheld. When `tools` is non-empty and does
+    /// not name a tool, it is withheld. Withheld tools are removed from the offered list and
+    /// counted under `withheld()`.
+    #[must_use]
+    pub fn filtered(mut self, tools: &[String], exclude_tools: &[String]) -> Self {
+        if tools.is_empty() && exclude_tools.is_empty() {
+            return self;
+        }
+        let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&self.raw) else {
+            return self;
+        };
+        let mut kept = Vec::new();
+        let mut withheld = 0;
+        for item in items {
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let is_excluded = exclude_tools
+                .iter()
+                .any(|filter| tool_filter_matches(filter, &self.alias, name));
+            let is_allowed = tools.is_empty()
+                || tools
+                    .iter()
+                    .any(|filter| tool_filter_matches(filter, &self.alias, name));
+            if !is_excluded && is_allowed {
+                kept.push(item);
+            } else {
+                withheld += 1;
+            }
+        }
+        self.offered = kept.len();
+        self.withheld += withheld;
+        let text = Value::Array(kept).to_string();
+        self.raw = text.clone();
+        self.list = Labelled::new(text, crate::list_label());
+        self
+    }
+}
+
+/// Whether a tool filter pattern matches a tool name under an alias.
+fn tool_filter_matches(filter: &str, alias: &str, tool: &str) -> bool {
+    if let Some((filter_alias, filter_word)) = filter.split_once(':') {
+        filter_alias == alias && filter_word == tool
+    } else {
+        filter == tool
     }
 }
 
@@ -889,5 +949,65 @@ mod tests {
         let params = call_params("search", serde_json::json!({"query": "rust"}));
         assert_eq!(params["name"], "search");
         assert_eq!(params["arguments"]["query"], "rust");
+    }
+
+    #[test]
+    fn tool_filtering_filters_by_allow_and_deny_lists() {
+        let raw = r#"{"tools":[
+            {"name":"get_alerts"},
+            {"name":"get_forecast"},
+            {"name":"get_radar"}
+        ]}"#;
+        let base = serde_json::from_str::<ToolList>(raw)
+            .unwrap()
+            .listing("weather");
+        assert_eq!((base.offered(), base.refused(), base.withheld()), (3, 0, 0));
+
+        // Allow list only: only allowed tools kept
+        let allowed = base.filtered(&["get_alerts".into(), "weather:get_forecast".into()], &[]);
+        assert_eq!(
+            (allowed.offered(), allowed.refused(), allowed.withheld()),
+            (2, 0, 1)
+        );
+        assert!(allowed.raw.contains("get_alerts"));
+        assert!(allowed.raw.contains("get_forecast"));
+        assert!(!allowed.raw.contains("get_radar"));
+
+        // Deny list only: denied tools withheld
+        let base2 = serde_json::from_str::<ToolList>(raw)
+            .unwrap()
+            .listing("weather");
+        let denied = base2.filtered(&[], &["get_radar".into()]);
+        assert_eq!(
+            (denied.offered(), denied.refused(), denied.withheld()),
+            (2, 0, 1)
+        );
+        assert!(denied.raw.contains("get_alerts"));
+        assert!(denied.raw.contains("get_forecast"));
+        assert!(!denied.raw.contains("get_radar"));
+
+        // Deny strictly wins over allow
+        let base3 = serde_json::from_str::<ToolList>(raw)
+            .unwrap()
+            .listing("weather");
+        let conflict = base3.filtered(&["get_alerts".into()], &["weather:get_alerts".into()]);
+        assert_eq!(
+            (conflict.offered(), conflict.refused(), conflict.withheld()),
+            (0, 0, 3)
+        );
+
+        // Qualified with a different alias does not match
+        let base4 = serde_json::from_str::<ToolList>(raw)
+            .unwrap()
+            .listing("weather");
+        let other_alias = base4.filtered(&[], &["other:get_radar".into()]);
+        assert_eq!(
+            (
+                other_alias.offered(),
+                other_alias.refused(),
+                other_alias.withheld()
+            ),
+            (3, 0, 0)
+        );
     }
 }

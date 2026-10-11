@@ -967,6 +967,7 @@ fn tools_text(data: &Value) -> String {
         alias: text_of(data, "alias"),
         tools: &tools,
         refused: data["refused"].as_u64().map_or(0, |n| n as usize),
+        withheld: data["withheld"].as_u64().map_or(0, |n| n as usize),
         changed: data["changed"].as_bool() == Some(true),
         check: check_of(data),
     })

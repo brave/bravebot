@@ -216,6 +216,8 @@ pub fn reach<A: Asker + ?Sized>(
                     url: moving.url.clone(),
                     declared: moving.declaration.digest(),
                     timeouts: moving.declaration.timeouts(),
+                    tools: moving.declaration.tools().to_vec(),
+                    exclude_tools: moving.declaration.exclude_tools().to_vec(),
                 };
                 (moving.alias.clone(), plan)
             })
@@ -397,11 +399,15 @@ enum Plan {
         /// The digest of the declaration, which a vouch for the server's list is recorded beside.
         declared: Digest,
         timeouts: Timeouts,
+        tools: Vec<String>,
+        exclude_tools: Vec<String>,
     },
     Http {
         url: String,
         declared: Digest,
         timeouts: Timeouts,
+        tools: Vec<String>,
+        exclude_tools: Vec<String>,
     },
 }
 
@@ -739,12 +745,19 @@ fn planned(
     declaration: &Declaration,
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Plan, String> {
-    let (argv, names, env, reads, directory) = match declaration {
-        Declaration::Http { url, timeouts, .. } => {
+    let (argv, names, env, reads, directory, tools, exclude_tools) = match declaration {
+        Declaration::Http {
+            url,
+            timeouts,
+            tools,
+            exclude_tools,
+        } => {
             return Ok(Plan::Http {
                 url: url.clone(),
                 declared: declaration.digest(),
                 timeouts: *timeouts,
+                tools: tools.clone(),
+                exclude_tools: exclude_tools.clone(),
             });
         }
         Declaration::Stdio {
@@ -753,8 +766,10 @@ fn planned(
             env,
             reads,
             directory,
+            tools,
+            exclude_tools,
             ..
-        } => (argv, variables, env, reads, directory),
+        } => (argv, variables, env, reads, directory, tools, exclude_tools),
     };
     // A stored name is never in `variables`, so the environment is not read for it.
     let variables = names
@@ -791,6 +806,8 @@ fn planned(
         directory: directory.as_ref().map(PathBuf::from),
         declared: declaration.digest(),
         timeouts: declaration.timeouts(),
+        tools: tools.clone(),
+        exclude_tools: exclude_tools.clone(),
     })
 }
 
@@ -1524,6 +1541,8 @@ fn start_under(
                 directory,
                 declared,
                 timeouts,
+                tools,
+                exclude_tools,
             } => {
                 reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
                 let sandbox = match &sandbox {
@@ -1593,7 +1612,7 @@ fn start_under(
                     // Held apart from the handshake, so a server that fails one has been stopped
                     // by the time its home is removed.
                     let outcome =
-                        handshake_local(server, declared, timeouts).map(
+                        handshake_local(server, declared, timeouts, &tools, &exclude_tools).map(
                             |reached| match throwaway {
                                 Some(throwaway) => reached.holding(throwaway),
                                 None => reached,
@@ -1606,10 +1625,19 @@ fn start_under(
                 url,
                 declared,
                 timeouts,
+                tools,
+                exclude_tools,
             } => {
                 waiting.push(wait_for(&alias, timeouts));
                 std::thread::spawn(move || {
-                    let (outcome, hop) = handshake_remote(&alias, url.clone(), declared, timeouts);
+                    let (outcome, hop) = handshake_remote(
+                        &alias,
+                        url.clone(),
+                        declared,
+                        timeouts,
+                        &tools,
+                        &exclude_tools,
+                    );
                     let hop = hop.map(|destination| Hop {
                         alias: alias.clone(),
                         url,
@@ -1688,11 +1716,14 @@ fn handshake_local(
     mut server: StdioServer,
     declared: Digest,
     timeouts: Timeouts,
+    tools: &[String],
+    exclude_tools: &[String],
 ) -> McpResult<crate::mcp::Reached> {
     server.set_bound(timeouts.startup());
     server.initialize("bravebot", env!("CARGO_PKG_VERSION"))?;
     let alias = server.name().to_string();
-    let listing = bravebot_mcp::listed_or_none(&alias, server.list_tools())?;
+    let listing =
+        bravebot_mcp::listed_or_none(&alias, server.list_tools())?.filtered(tools, exclude_tools);
     server.set_bound(timeouts.tool());
     Ok(crate::mcp::Reached::new(
         Connection::Stdio(server),
@@ -1711,6 +1742,8 @@ fn handshake_remote(
     url: String,
     declared: Digest,
     timeouts: Timeouts,
+    tools: &[String],
+    exclude_tools: &[String],
 ) -> (McpResult<crate::mcp::Reached>, Option<Labelled<String>>) {
     let mut sink = RecordingSink::new();
     let mut routing = Routing::new();
@@ -1728,7 +1761,16 @@ fn handshake_remote(
         Err(denial) => return (Err(McpError::Denied(denial)), None),
     };
     let egress = bravebot_net::Egress::new();
-    let reached = handshake_at(&mut policy, &egress, alias, url, declared, timeouts);
+    let reached = handshake_at(
+        &mut policy,
+        &egress,
+        alias,
+        url,
+        declared,
+        timeouts,
+        tools,
+        exclude_tools,
+    );
     let hop = match &reached {
         Err(McpError::Denied(_)) => policy.take_server_hop(),
         _ => None,
@@ -1736,6 +1778,7 @@ fn handshake_remote(
     (reached, hop)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handshake_at(
     policy: &mut Policy<'_, RecordingSink>,
     egress: &bravebot_net::Egress,
@@ -1743,10 +1786,13 @@ fn handshake_at(
     url: String,
     declared: Digest,
     timeouts: Timeouts,
+    tools: &[String],
+    exclude_tools: &[String],
 ) -> McpResult<crate::mcp::Reached> {
     let mut server = HttpServer::new(alias, url).starting_within(timeouts.startup());
     server.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
-    let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(policy, egress))?;
+    let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(policy, egress))?
+        .filtered(tools, exclude_tools);
     server.set_bound(timeouts.tool());
     Ok(crate::mcp::Reached::new(
         Connection::Http(server),
@@ -3282,6 +3328,8 @@ done
             directory: Some(work.to_path_buf()),
             declared: digested(&["weather-mcp"]),
             timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         };
         Some(start(
             vec![("weather".to_string(), plan)],
@@ -3718,6 +3766,8 @@ done
             directory: Some(work.clone()),
             declared: digested(&["weather-mcp"]),
             timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         };
         let mut notes = Vec::new();
 
@@ -3806,6 +3856,8 @@ done
             directory: Some(work.clone()),
             declared: digested(&["weather-mcp"]),
             timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         };
         let mut notes = Vec::new();
 
@@ -3887,6 +3939,8 @@ done
             directory: Some(work),
             declared: digested(&["weather-mcp"]),
             timeouts,
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         };
         let home = Home {
             directory: Some(state),
@@ -4009,7 +4063,7 @@ done
     ) -> McpResult<crate::mcp::Reached> {
         let (url, _bodies) = serving_holding(weather, String::new(), method, hold);
         let declared = Declaration::http(url.clone()).expect("declaration");
-        handshake_remote("weather", url, declared.digest(), timeouts).0
+        handshake_remote("weather", url, declared.digest(), timeouts, &[], &[]).0
     }
 
     /// A remote server that does not answer its handshake within the startup bound its declaration

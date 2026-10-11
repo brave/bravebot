@@ -3250,3 +3250,74 @@ fn an_addressed_worker_with_a_tools_line_is_offered_no_loader_unless_it_names_th
         }
     }
 }
+
+#[test]
+fn withheld_mcp_tools_are_not_offered_and_reported_in_confirmation() {
+    let scratch = Scratch::new("road");
+    let (url, _server) = serve_weather();
+    let declared = Declaration::http(url.clone())
+        .expect("http declaration")
+        .filtering(Vec::new(), vec!["get_forecast".to_string()])
+        .expect("filter");
+    let reached = reach_with_filter(
+        "weather",
+        &url,
+        &[],
+        &["get_forecast".to_string()],
+        declared.digest(),
+    );
+    let session = Session::new(
+        vec![reached],
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    );
+    let (endpoint, _chat) = serve_chat(vec![reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the weather").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let [list] = confirmer.lists.as_slice() else {
+        panic!("the list was not put to the person: {:?}", confirmer.lists);
+    };
+    assert_eq!(list.alias, "weather");
+    assert_eq!(list.tools.len(), 0);
+    assert_eq!(list.withheld, 1);
+}
+
+fn reach_with_filter(
+    alias: &str,
+    url: &str,
+    tools: &[String],
+    exclude_tools: &[String],
+    declared: Digest,
+) -> Reached {
+    let mut server = HttpServer::new(alias, url);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "reach an MCP server");
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new(alias)),
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+    server
+        .initialize(&mut policy, &egress, "bravebot", "0.1.0")
+        .expect("handshake");
+    let listing = server
+        .list_tools(&mut policy, &egress)
+        .expect("listed")
+        .filtered(tools, exclude_tools);
+    Reached::new(Connection::Http(server), listing, declared)
+}

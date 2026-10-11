@@ -451,6 +451,8 @@ pub struct Tools<'a> {
     pub tools: &'a [Tool<'a>],
     /// How many the client would not draw.
     pub refused: usize,
+    /// How many tools were withheld by the server's allow or deny list.
+    pub withheld: usize,
     /// A list was vouched for under this declaration before and this is not it.
     pub changed: bool,
     /// What the check made of the list.
@@ -491,6 +493,9 @@ pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
     }
     if list.refused > 0 {
         lines.push(t!(mcp_tools_not_listed, count = list.refused));
+    }
+    if list.withheld > 0 {
+        lines.push(t!(mcp_tools_withheld, count = list.withheld));
     }
     lines.push(t!(mcp_tools_explained).to_string());
     lines
@@ -722,5 +727,24 @@ mod tests {
                 "line endings: LF kept".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn a_tool_list_with_withheld_tools_reports_them() {
+        let tool = Tool {
+            name: "weather:get_forecast",
+            arguments: &[],
+            description: None,
+        };
+        let lines = tools_lines(&Tools {
+            alias: "weather",
+            tools: &[tool],
+            refused: 1,
+            withheld: 2,
+            changed: false,
+            check: Check::Safe,
+        });
+        assert!(lines.contains(&t!(mcp_tools_not_listed, count = 1).to_string()));
+        assert!(lines.contains(&t!(mcp_tools_withheld, count = 2).to_string()));
     }
 }

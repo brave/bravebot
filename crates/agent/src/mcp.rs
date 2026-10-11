@@ -395,6 +395,7 @@ impl Session {
     ) -> (State, Usage) {
         let alias = server.alias.as_str();
         let refused = listing.refused();
+        let withheld = listing.withheld();
         let recorded = self.0.directory.as_deref().and_then(|directory| {
             Approvals::read(directory).vouched_list(&held(&server.declaration))
         });
@@ -440,6 +441,7 @@ impl Session {
             alias: alias.to_string(),
             tools,
             refused,
+            withheld,
             changed,
             verdict,
             reason,

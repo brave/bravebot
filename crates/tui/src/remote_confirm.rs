@@ -654,6 +654,7 @@ mod tests {
             alias: "weather".into(),
             tools: Vec::new(),
             refused: 0,
+            withheld: 0,
             changed: false,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,

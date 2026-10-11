@@ -1049,6 +1049,8 @@ pub struct ToolListRequest {
     pub tools: Vec<ListedTool>,
     /// How many tools the server listed that are not drawn, because this client refused them.
     pub refused: usize,
+    /// How many tools were withheld by the server's allow or deny list.
+    pub withheld: usize,
     /// Whether a list for this declaration was vouched for before and this one is not it.
     pub changed: bool,
     /// What a check said about the list, or that none was made.

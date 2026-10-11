@@ -1257,6 +1257,11 @@ mcp-tools-not-listed =
         [one] one more tool is not listed: its name or its arguments cannot be offered
        *[other] { $count } more tools are not listed: their names or their arguments cannot be offered
     }
+mcp-tools-withheld =
+    { $count ->
+        [one] one tool was withheld by the server's allow or deny list
+       *[other] { $count } tools were withheld by the server's allow or deny list
+    }
 # How one argument's kind reads in a list, as in `city_name (string, required)`. The kinds are
 # the server's JSON Schema words and stay as it wrote them.
 mcp-tools-argument-list-of = { $kind } of { $items }
