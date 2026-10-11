@@ -8,8 +8,11 @@
 use crate::state::Session;
 use crate::theme;
 use bravebot_i18n::t;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
 /// Columns the panel takes, its border included.
 pub const WIDTH: u16 = 36;
@@ -92,6 +95,62 @@ fn link_row(label: &str, url: &str, width: usize) -> Line<'static> {
     ])
 }
 
+/// `https://github.com/{owner}/{repo}/pull/{n}` or `.../issues/{n}` as `{owner}/{repo}#{n}`.
+///
+/// Each part may hold only the characters GitHub allows in it, so the address can go to the
+/// terminal as a link with nothing in it able to end the escape sequence (PANEL-2).
+fn shorthand(word: &str) -> Option<String> {
+    let mut parts = word.strip_prefix("https://github.com/")?.split('/');
+    let (owner, repo, kind, number) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    let made_of =
+        |part: &str, allowed: fn(char) -> bool| !part.is_empty() && part.chars().all(allowed);
+    let fits = parts.next().is_none()
+        && matches!(kind, "pull" | "issues")
+        && made_of(owner, |c| c.is_ascii_alphanumeric() || c == '-')
+        && made_of(repo, |c| {
+            c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')
+        })
+        && made_of(number, |c| c.is_ascii_digit());
+    fits.then(|| format!("{owner}/{repo}#{number}"))
+}
+
+/// `name` with each GitHub pull request or issue address in it written as its shorthand, and each
+/// shorthand beside the address it stands for.
+fn shortened(name: &str) -> (String, Vec<(String, String)>) {
+    let mut addresses = Vec::new();
+    let words: Vec<String> = name
+        .split(' ')
+        .map(|word| match shorthand(word) {
+            Some(short) => {
+                addresses.push((short.clone(), word.to_string()));
+                short
+            }
+            None => word.to_string(),
+        })
+        .collect();
+    (words.join(" "), addresses)
+}
+
+/// The column of each place in `row` where `word` stands as a whole word.
+fn columns_of<'a>(row: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
+    row.match_indices(word)
+        .filter(move |(at, _)| {
+            let (before, after) = (&row[..*at], &row[at + word.len()..]);
+            (before.is_empty() || before.ends_with(' '))
+                && (after.is_empty() || after.starts_with(' '))
+        })
+        .map(move |(at, _)| crate::wrap::display_width(&row[..at]))
+}
+
+/// Part of a panel row that links to `url`: the row, the column it starts at inside the border,
+/// and how many columns it takes.
+struct Link {
+    row: usize,
+    column: usize,
+    width: usize,
+    url: String,
+}
+
 fn section(body: &mut Vec<Line<'static>>, title: String, rows: Vec<Line<'static>>) {
     if !body.is_empty() {
         body.push(Line::raw(""));
@@ -106,12 +165,37 @@ fn section(body: &mut Vec<Line<'static>>, title: String, rows: Vec<Line<'static>
 /// reading. The plan is last because it is the one section that can be longer than the room, so it
 /// is the one cut to what is left.
 pub fn lines(session: &Session, width: u16, height: u16) -> Vec<Line<'static>> {
+    laid_out(session, width, height).0
+}
+
+/// Draw the panel over `area`, its border on the left, each shortened address a link to the
+/// address it stands for.
+pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
+    let (rows, links) = laid_out(session, area.width, area.height);
+    Clear.render(area, buffer);
+    Paragraph::new(rows)
+        .block(Block::default().borders(Borders::LEFT).border_style(dim()))
+        .render(area, buffer);
+    for link in links {
+        // One column for the border.
+        crate::hyperlink::link(
+            buffer,
+            area.x + 1 + link.column as u16,
+            area.y + link.row as u16,
+            link.width as u16,
+            &link.url,
+        );
+    }
+}
+
+/// The rows [`lines`] gives, and where among them the links are.
+fn laid_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, Vec<Link>) {
     let height = usize::from(height);
     if height == 0 {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
     let text = text_width(width);
-    let mut body = head(session, text);
+    let (mut body, mut links) = head(session, text);
 
     let languages = session.language_servers().programs();
     if !languages.is_empty() {
@@ -153,7 +237,8 @@ pub fn lines(session: &Session, width: u16, height: u16) -> Vec<Line<'static>> {
         t!(panel_hide, chord = session.bindings().panel_name()).to_string(),
         dim(),
     ));
-    body
+    links.retain(|link| link.row < height - 1);
+    (body, links)
 }
 
 /// Whether a frame `columns` by `rows` draws the panel with its Context section whole.
@@ -163,7 +248,7 @@ pub fn lines(session: &Session, width: u16, height: u16) -> Vec<Line<'static>> {
 /// both rather than leave the reading on neither.
 pub fn shows_context(session: &Session, columns: u16, rows: u16) -> bool {
     // The hint line takes one row and the key that hides the panel another.
-    drawn(session, columns) && head(session, text_width(WIDTH)).len() + 2 <= usize::from(rows)
+    drawn(session, columns) && head(session, text_width(WIDTH)).0.len() + 2 <= usize::from(rows)
 }
 
 /// One column for the border and one for the space after it.
@@ -172,13 +257,30 @@ fn text_width(width: u16) -> usize {
 }
 
 /// The Session, Goal, Links and Context sections, each left out where it has nothing to say but for
-/// the context, which always has a reading.
-fn head(session: &Session, text: usize) -> Vec<Line<'static>> {
+/// the context, which always has a reading, and where in them the links are.
+fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
     let mut body: Vec<Line<'static>> = Vec::new();
+    let mut links = Vec::new();
 
     let identity = session.identity();
+    let (name, addresses) = shortened(&crate::render::printable(&crate::status::cut(
+        &identity.name,
+        usize::MAX,
+    )));
     let mut about = Vec::new();
-    for name_row in wrapped(&identity.name, text) {
+    let mut name_links = Vec::new();
+    for name_row in wrapped(&name, text) {
+        for (short, url) in &addresses {
+            for column in columns_of(&name_row, short) {
+                name_links.push(Link {
+                    row: about.len(),
+                    // The space `row` puts before the text.
+                    column: column + 1,
+                    width: crate::wrap::display_width(short),
+                    url: url.clone(),
+                });
+            }
+        }
         about.push(row(name_row, Style::default()));
     }
     if !identity.directory.is_empty() {
@@ -202,7 +304,13 @@ fn head(session: &Session, text: usize) -> Vec<Line<'static>> {
         }
     }
     if !about.is_empty() {
+        let count = about.len();
         section(&mut body, t!(panel_session).to_string(), about);
+        let first = body.len() - count;
+        links.extend(name_links.into_iter().map(|link| Link {
+            row: first + link.row,
+            ..link
+        }));
     }
 
     let mut model = Vec::new();
@@ -234,15 +342,15 @@ fn head(session: &Session, text: usize) -> Vec<Line<'static>> {
         section(&mut body, t!(panel_goal).to_string(), rows);
     }
 
-    let links: Vec<Line<'static>> = [
+    let link_rows: Vec<Line<'static>> = [
         (t!(panel_pull_request), &identity.pull_request),
         (t!(panel_issue), &identity.issue),
     ]
     .into_iter()
     .filter_map(|(label, url)| Some(link_row(label, url.as_deref()?, text)))
     .collect();
-    if !links.is_empty() {
-        section(&mut body, t!(panel_links).to_string(), links);
+    if !link_rows.is_empty() {
+        section(&mut body, t!(panel_links).to_string(), link_rows);
     }
 
     let mut context = vec![row(
@@ -278,7 +386,7 @@ fn head(session: &Session, text: usize) -> Vec<Line<'static>> {
         ));
     }
     section(&mut body, t!(panel_context).to_string(), context);
-    body
+    (body, links)
 }
 
 /// The plan in at most `room` rows, the task being worked on among them.
@@ -348,16 +456,21 @@ mod tests {
     /// The frame drawn `width` by `height`, one string a row, with its layout recorded on the
     /// session the way the event loop records it after every draw.
     fn screen(session: &mut Session, width: u16, height: u16) -> Vec<String> {
+        let buffer = frame(session, width, height);
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    /// The cells the terminal was sent for a frame `width` by `height`.
+    fn frame(session: &mut Session, width: u16, height: u16) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         let mut laid = None;
         terminal
             .draw(|frame| laid = Some(crate::render::draw(frame, session)))
             .expect("draw succeeds");
         session.note_layout(laid.expect("the frame was drawn"));
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect()
+        terminal.backend().buffer().clone()
     }
 
     /// What the panel's columns hold on each row but the hint line, the border left off.
@@ -1094,6 +1207,108 @@ mod tests {
         assert!(
             drawn[directory - 1].ends_with('…'),
             "the cut row has no ellipsis: {drawn:#?}"
+        );
+    }
+
+    /// The name rows under the Session heading, for a name that leaves the directory `~/b`.
+    fn name_rows(session: &Session) -> Vec<String> {
+        let drawn = texts(&lines(session, WIDTH, 30));
+        let heading = t!(panel_session).to_string();
+        let first = drawn
+            .iter()
+            .position(|row| *row == heading)
+            .expect("a session heading");
+        let directory = drawn
+            .iter()
+            .position(|row| row == "~/b")
+            .expect("the directory");
+        drawn[first + 1..directory].to_vec()
+    }
+
+    /// A session started on a pull request is usually named by a prompt holding its address,
+    /// which wraps over two of the panel's rows and pushes the rest of the section down.
+    #[test]
+    fn a_github_address_in_the_name_is_drawn_as_its_shorthand() {
+        let mut session = Session::new("none");
+        for (name, shown) in [
+            (
+                "/pr-fix https://github.com/brave/bravebot/pull/1975",
+                "/pr-fix brave/bravebot#1975",
+            ),
+            (
+                "see https://github.com/a-b/c.d_e/issues/12 now",
+                "see a-b/c.d_e#12 now",
+            ),
+        ] {
+            session.identify(name, "~/b".to_string(), None);
+            assert_eq!(name_rows(&session), [shown], "{name:?}");
+        }
+    }
+
+    /// An address with more after the number, on another host, over plain http, or with a
+    /// character GitHub does not allow is not a pull request or issue the shorthand can name.
+    #[test]
+    fn an_address_of_any_other_shape_is_drawn_as_written() {
+        let mut session = Session::new("none");
+        for name in [
+            "https://github.com/a/b/pull/1/f",
+            "https://x.test/a/b/pull/1",
+            "http://github.com/a/b/pull/1",
+            "https://github.com/a_b/c/pull/1",
+            "https://github.com/a/b/commit/1",
+            "https://github.com/a/b/pull/1a",
+        ] {
+            session.identify(name, "~/b".to_string(), None);
+            assert_eq!(name_rows(&session), [name], "{name:?}");
+        }
+    }
+
+    /// The shorthand stands for the address, so it has to open it, and only its own cells may:
+    /// a link one column off, or over the words beside it, opens the pull request from text that
+    /// does not name it.
+    #[test]
+    fn the_shorthand_links_to_the_address_and_nothing_else_does() {
+        const ADDRESS: &str = "https://github.com/brave/bravebot/pull/1975";
+        let mut session = opened_at(100);
+        session.identify(
+            &format!("/pr-fix {ADDRESS} and https://x.test/a/b/pull/1"),
+            "~/b".to_string(),
+            None,
+        );
+        let buffer = frame(&mut session, 100, 30);
+
+        let mut linked = Vec::new();
+        for y in 0..30 {
+            for x in 0..100 {
+                let symbol = buffer[(x, y)].symbol();
+                let shown = crate::hyperlink::shown(symbol);
+                if shown != symbol {
+                    assert!(
+                        symbol.starts_with(&format!("\x1b]8;;{ADDRESS}\x1b\\")),
+                        "({x}, {y}) links elsewhere: {symbol:?}"
+                    );
+                    linked.push((x, y, shown.to_string()));
+                }
+            }
+        }
+        let y = linked
+            .first()
+            .map(|(_, y, _)| *y)
+            .expect("nothing was linked");
+        let row: Vec<&str> = (100 - WIDTH..100)
+            .map(|x| crate::hyperlink::shown(buffer[(x, y)].symbol()))
+            .collect();
+        let at = (0..row.len())
+            .find(|&i| row[i..].concat().starts_with("brave/"))
+            .expect("the shorthand is on the row");
+        let start = 100 - WIDTH + at as u16;
+        assert_eq!(
+            linked,
+            (start..)
+                .zip("brave/bravebot#1975".chars())
+                .map(|(x, c)| (x, y, c.to_string()))
+                .collect::<Vec<_>>(),
+            "the link is not exactly the shorthand's cells: {row:?}"
         );
     }
 

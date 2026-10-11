@@ -152,7 +152,12 @@ narrow for it.
 ### PANEL-9: the sections, in order, each left out when it has nothing
 
 1. **Session.** The session's name, wrapped to at most three rows, the third cut with an ellipsis
-   where more was left. Below it the directory, written from `~` as `/status` writes it, and the
+   where more was left. A word of the name that is a whole GitHub pull request or issue address,
+   `https://github.com/{owner}/{repo}/pull/{n}` or `.../issues/{n}`, with only the characters
+   GitHub allows in the owner and repository and only digits in the number, is drawn as
+   `{owner}/{repo}#{n}`. Its cells are a terminal link (OSC 8) to the address, and a selection
+   over them copies the shorthand. An address of any other shape is drawn as written. Below it the
+   directory, written from `~` as `/status` writes it, and the
    branch, as the resume list shows it: read when the session starts, resumes or moves to another
    directory, so a checkout made during a turn shows from the next of those. Each is one row, cut
    from the left with an ellipsis where it is longer, since the end is what tells two apart. Last
@@ -188,6 +193,10 @@ whatever whoever made it chose.
 
 `verified-by: bravebot_tui::panel::the_sections_come_in_order_and_an_empty_one_leaves_no_heading`
 `verified-by: bravebot_tui::panel::a_long_name_takes_three_rows_and_ends_in_an_ellipsis`
+`verified-by: bravebot_tui::panel::a_github_address_in_the_name_is_drawn_as_its_shorthand`
+`verified-by: bravebot_tui::panel::an_address_of_any_other_shape_is_drawn_as_written`
+`verified-by: bravebot_tui::panel::the_shorthand_links_to_the_address_and_nothing_else_does`
+`verified-by: bravebot_tui::select::a_link_is_copied_as_the_text_it_shows`
 `verified-by: bravebot_tui::panel::control_characters_in_the_session_section_are_drawn_as_pictures`
 `verified-by: bravebot_tui::panel::a_long_directory_and_branch_keep_their_ends`
 `verified-by: bravebot_tui::panel::the_session_id_is_drawn_whole_over_two_rows`
