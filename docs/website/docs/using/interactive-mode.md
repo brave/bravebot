@@ -25,8 +25,8 @@ growing further. It keeps growing while a turn runs.
 | Ctrl-S | put the line away, bring back the one you put away, or search this workspace |
 | Escape | discard a half-typed prompt, keeping it for Up, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |
-| Up / Down | walk back through prompts you have sent, starting with a line you cleared |
-| Ctrl-N | on a prompt recalled with Up, walk every stored prompt instead of this session's, and press it again to come back |
+| Up / Down | walk back through every prompt you have sent in any session, starting with a line you cleared |
+| Ctrl-N | on a prompt recalled with Up, walk only this session's prompts instead, and press it again to come back. It stays where you put it, and is not offered until this session has sent a prompt |
 | Ctrl-R | search every prompt you have sent |
 | Tab | complete a slash command or an `@path` |
 | Ctrl-U, Ctrl-K, Ctrl-W, Alt-D | delete to the line start, to the line end, the word before, the word after; the text is kept |
@@ -86,7 +86,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `trail` | `ctrl-t` | show or hide the audit trail |
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](sessions.md#telling-sessions-apart) |
-| `scope` | `ctrl-n` | switch Up between this session's prompts and every stored one |
+| `scope` | `ctrl-n` | switch Up between every stored prompt and this session's |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, and the arrows walk the caret and the history.

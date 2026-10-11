@@ -1916,58 +1916,62 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
 
 <a id="INPUT-40"></a>
-### INPUT-40: Up walks this session's prompts, and the scope chord reaches every stored one
+### INPUT-40: Up walks every stored prompt, and the scope chord narrows it to this session's
 
-Up and Down walk the prompts this session sent, and the ones its record holds when it was resumed,
-and Up stops at the oldest of them (INPUT-18). While a stored prompt is on screen, the scope chord,
-Ctrl-N by default, walks every stored prompt from every session and workspace instead, staying on
-the prompt on screen, and pressed again goes back to this session's. Where the prompt on screen is
-not this session's, the way back lands on the newest of this session's before it, and failing that
-the oldest of them. The border of the box names the scope with the position, `This session 2/3` or
-`All 78/83`, and the chord that changes it. Ending the walk, editing the line, or sending puts the
-scope back to this session's. `/clear` starts a new session's own prompts, and a prompt queued
-during a turn counts as sent from the moment it is queued (INPUT-10). The stored file is unchanged:
-which prompts are this session's is known from what this process sent and from the turns of a
-resumed record.
+Up and Down walk every stored prompt, from every session and workspace, and Up stops at the oldest
+of them (INPUT-18). While a sent prompt is on screen and this session has sent one, the scope
+chord, Ctrl-N by default, walks only the prompts this session sent, and the ones its record holds
+when it was resumed, staying on the prompt on screen, and pressed again goes back to every stored
+prompt. Where the prompt on screen is not this session's, the narrow scope lands on the newest of
+this session's before it, and failing that the oldest of them. The border of the box names the
+scope with the position, `All 78/83` or `This session 2/3`, and the chord that changes it. The
+scope stays where the person put it: ending the walk, editing the line and sending do not change
+it. `/clear` starts a new session's own prompts and puts the scope back on every stored prompt,
+and a prompt queued during a turn counts as sent from the moment it is queued (INPUT-10). The
+stored file is unchanged: which prompts are this session's is known from what this process sent
+and from the turns of a resumed record.
 
-A session that has sent nothing has nothing to recall, and Up says so on the hint line, naming the
-scope chord; with an empty box that chord then widens the scope, and Up walks every stored prompt.
-It does not walk into earlier sessions silently. Where the history has nothing to switch, in a line
-being typed or with nothing recalled, the chord is not typed and does nothing, except that a
+Where this session has sent nothing, the walk is over every stored prompt, the chord is not
+offered on the border, and pressing it does nothing. Where the history has nothing to switch, in a
+line being typed or with nothing recalled, the chord is not typed and does nothing, except that a
 chord moved onto a line-editing key still edits there. Ctrl-Left, Ctrl-Right, Alt-Left and
 Alt-Right are the caret's word motion everywhere, a recalled prompt included, since a prompt is
 recalled in order to be edited and a terminal may deliver the arrows with a modifier as something
 other than the key (macOS reserves Ctrl-Left and Ctrl-Right for Mission Control). The chord is
-one of the ten a settings file can move (INPUT-32), and the border and the hint name the chord in
-force. A person who moved it, or whose terminal delivers nothing for it, still reaches every stored
-prompt through the search (INPUT-19).
+one of the ten a settings file can move (INPUT-32), and the border names the chord in force. A
+person who moved it, or whose terminal delivers nothing for it, still reaches this workspace's
+prompts through the search (INPUT-19).
 
-`bravebot --incognito` stores nothing, so there are no earlier prompts there and the session scope
-is all there is.
+`bravebot --incognito` stores nothing, so the prompts Up walks are the ones this session sent.
 
-**Why.** A person who presses Up wants the last thing said in this conversation first. A walk
-across every session mixes this conversation's prompts with other sessions' and gives no mark where
-this one's end, so a person reaching for what they just said can land on a prompt from last week.
-The wide list stays one chord away, and the search is where an old prompt is found by a word. The
-switch is a letter chord because a letter chord reaches the app in every terminal, while a Ctrl
-arrow chord may be taken by the system (Mission Control on macOS) and never arrive. It is one chord
-that toggles because a pair of directions is two things to remember.
+**Why.** A person who presses Up is looking for something said before, and which session said it
+is not what they know. The walk reaches all of it by default, and the narrow scope is one chord
+away for a person who wants only this conversation's last prompts. The scope holds once chosen,
+because a person who narrowed it to this conversation would otherwise be put back on last week's
+prompts by the next send. It is not offered before this session has sent a prompt, since the chord
+would have nothing to narrow to. The switch is a letter chord because a letter chord reaches the
+app in every terminal, while a Ctrl arrow chord may be taken by the system (Mission Control on
+macOS) and never arrive. It is one chord that toggles because a pair of directions is two things
+to remember.
 
-`verified-by: bravebot_tui::app::the_scope_chord_widens_the_walk_to_every_stored_prompt_and_narrows_it_again`
+`verified-by: bravebot_tui::app::the_scope_chord_narrows_the_walk_to_this_sessions_prompts_and_widens_it_again`
+`verified-by: bravebot_tui::app::the_scope_chosen_holds_after_the_walk_ends_and_after_sending`
 `verified-by: bravebot_tui::app::switching_scope_keeps_a_prompt_that_is_in_both`
 `verified-by: bravebot_tui::app::ctrl_and_alt_arrows_on_a_recalled_prompt_move_the_caret_and_leave_the_scope`
 `verified-by: bravebot_tui::app::the_scope_chord_does_nothing_in_a_line_being_typed`
 `verified-by: bravebot_tui::app::a_moved_scope_chord_switches_and_the_old_one_does_not`
 `verified-by: bravebot_tui::app::a_moved_scope_chord_is_not_typed_and_keeps_the_edit_it_landed_on`
 `verified-by: bravebot_tui::app::the_word_keys_still_move_the_caret_outside_a_recalled_prompt`
-`verified-by: bravebot_tui::app::up_in_a_new_session_says_why_it_recalled_nothing`
+`verified-by: bravebot_tui::app::up_in_a_new_session_walks_the_stored_prompts_and_offers_no_switch`
 `verified-by: bravebot_tui::app::the_scope_chord_works_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_prompt_queued_during_a_turn_is_one_this_session_sent`
-`verified-by: bravebot_tui::app::clearing_the_session_empties_the_scope_up_walks`
-`verified-by: bravebot_tui::render::the_border_names_the_scope_and_the_hint_line_the_way_to_earlier_prompts`
-`verified-by: bravebot_tui::render::the_border_and_hint_name_the_scope_chord_a_settings_file_moved`
+`verified-by: bravebot_tui::app::clearing_the_session_empties_the_scope_the_chord_narrows_to`
+`verified-by: bravebot_tui::render::the_border_names_the_scope_and_offers_the_switch_only_where_it_works`
+`verified-by: bravebot_tui::render::the_border_names_the_scope_chord_a_settings_file_moved`
 `verified-by: bravebot_tui::state::a_resumed_sessions_own_prompts_are_in_its_session_scope`
-`verified-by: bravebot_tui::history::stored_prompts_are_not_this_sessions`
+`verified-by: bravebot_tui::history::up_walks_every_stored_prompt_by_default`
+`verified-by: bravebot_tui::history::this_sessions_scope_is_offered_only_from_a_prompt_when_the_session_has_sent_one`
+`verified-by: bravebot_tui::history::the_scope_stays_where_it_was_put_when_the_walk_ends`
 `verified-by: bravebot_tui::history::narrowing_from_a_prompt_of_another_session_lands_on_the_one_before_it`
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
@@ -1989,8 +1993,8 @@ block, so one place answers what a key does. Ten actions can be moved, and nothi
 - `trail` (default: `ctrl-t`): toggle turn execution trail visibility.
 - `paste` (default: `ctrl-v`): paste from clipboard.
 - `panel` (default: `ctrl-x`): show or hide the info panel ([PANEL-5](info-panel.md#PANEL-5)).
-- `scope` (default: `ctrl-n`): switch the prompt history Up walks between this session's prompts and
-  every stored one (INPUT-40).
+- `scope` (default: `ctrl-n`): switch the prompt history Up walks between every stored prompt and
+  this session's prompts (INPUT-40).
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
 typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk

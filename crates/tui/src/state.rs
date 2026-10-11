@@ -1635,10 +1635,6 @@ pub struct Session {
     /// The hint saying which key ends it hangs on this. It lives for exactly one press, because it
     /// answers the press just made and the next press is the answer to it.
     pub cleared_by_interrupt: bool,
-    /// Up found nothing this session sent while earlier sessions' prompts are stored, so the hint
-    /// line names the key that reaches them. Lives for the press that set it, as the field above
-    /// does.
-    pub offered_all_prompts: bool,
     /// Whether an interrupt on an idle session has already offered the way out.
     ///
     /// The bottom rung of the interrupt ladder ends the session, and a bare interrupt is a single
@@ -2063,7 +2059,6 @@ impl Session {
             copied: None,
             finished: None,
             cleared_by_interrupt: false,
-            offered_all_prompts: false,
             expandable_lines: 0,
             offered_to_leave: false,
             key_arrived_alone: true,
@@ -7428,21 +7423,19 @@ impl Session {
     pub fn recall_older(&mut self) {
         if let Some(prompt) = self.history.older(&self.input) {
             self.set_input(prompt);
-        } else if self.history.only_earlier_sessions() {
-            // Said on the hint line rather than walking into earlier sessions' prompts unannounced.
-            self.offered_all_prompts = true;
         }
     }
 
-    /// The scope chord on a stored prompt, or where Up found nothing of this session's: walk every
-    /// stored prompt, staying on the one on screen.
+    /// The scope chord on a sent prompt in this session's scope: walk every stored prompt, staying
+    /// on the one on screen.
     pub fn widen_history(&mut self) {
         if let Some(prompt) = self.history.widen() {
             self.set_input(prompt);
         }
     }
 
-    /// The scope chord on a stored prompt in the wide scope: walk this session's prompts again.
+    /// The scope chord on a sent prompt in the wide scope, where this session has sent one: walk
+    /// this session's prompts only.
     pub fn narrow_history(&mut self) {
         if let Some(prompt) = self.history.narrow() {
             self.set_input(prompt);
@@ -16031,8 +16024,8 @@ mod tests {
     }
 
     /// The prompts a resumed record holds are this session's own, since the person is carrying on
-    /// the conversation they were sent in; without them Up would find nothing and send the person
-    /// to the wide scope for the prompt they typed a minute before quitting.
+    /// the conversation they were sent in; narrowing the walk to this session's prompts lands on
+    /// the prompt they typed a minute before quitting, and Up does not go past it.
     #[test]
     fn a_resumed_sessions_own_prompts_are_in_its_session_scope() {
         use bravebot_aichat::protocol::Message;
@@ -16055,7 +16048,7 @@ mod tests {
             bravebot_session::store::Entry::sent("mine before", None),
             bravebot_session::store::Entry::sent("somebody else's", None),
         ]);
-        assert!(s.history.only_earlier_sessions());
+        assert!(!s.history.can_narrow());
         s.replay(
             &conversation,
             "a title",
@@ -16068,6 +16061,9 @@ mod tests {
             },
         );
         s.recall_older();
+        assert_eq!(s.input, "somebody else's");
+        assert!(s.history.can_narrow());
+        s.narrow_history();
         assert_eq!(s.input, "mine before");
         s.recall_older();
         assert_eq!(

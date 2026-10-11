@@ -850,15 +850,16 @@ pub enum Action {
 
 /// The scope chord as the prompt history's switch, and the answer to the key if it was that.
 ///
-/// One key toggles: it widens to every stored prompt where that is on offer and otherwise narrows
-/// to this session's. Only where the history can use it (INPUT-40): on a stored prompt, or where
-/// Up found nothing this session sent. Anywhere else the chord is not a switch, so the key is what
-/// `edit_line` makes of it, and when that is nothing it is swallowed rather than typed.
+/// One key toggles: it narrows to this session's prompts from the wide walk, and widens back to
+/// every stored prompt from the narrow one. Only where the history can use it (INPUT-40): on a sent
+/// prompt, and for narrowing only where this session has sent one. Anywhere else the chord is not
+/// a switch, so the key is what `edit_line` makes of it, and when that is nothing it is swallowed
+/// rather than typed.
 fn change_history_scope(session: &mut Session, key: KeyEvent) -> Option<Action> {
     if !session.bindings().is_scope(&key) {
         return None;
     }
-    if session.history.can_widen(session.input().is_empty()) {
+    if session.history.can_widen() {
         session.widen_history();
     } else if session.history.can_narrow() {
         session.narrow_history();
@@ -1715,7 +1716,6 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     // The hint offering the way out lives for one press, and this is it. Cleared before the arms
     // rather than after, so the Ctrl-C that puts it up survives its own press.
     session.cleared_by_interrupt = false;
-    session.offered_all_prompts = false;
 
     // The offer to leave outlives its own press, because the press that takes it is the next one.
     // Any other key withdraws it: somebody who went and did something else has moved on, and an
@@ -2671,7 +2671,7 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // Up and Down walk the prompt history, which is what they do in a shell and so what a
         // user expects at a prompt. Scrolling the transcript keeps the wheel and the page keys,
         // and Up still scrolls once there is no history left to walk.
-        KeyCode::Up if session.history.can_recall() || session.history.only_earlier_sessions() => {
+        KeyCode::Up if session.history.can_recall() => {
             session.recall_older();
             Action::Redraw
         }
@@ -2849,7 +2849,6 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // up when this path takes over, and a press that did not take it down would leave it standing
     // frame after frame saying the next Ctrl-C leaves, which mid-turn stops the turn instead.
     session.cleared_by_interrupt = false;
-    session.offered_all_prompts = false;
 
     // Before the modifier guard, since the readline bindings are how the caret moves on a terminal
     // that sends nothing for the named keys, and a line that can be typed mid-turn has to be
@@ -24233,13 +24232,23 @@ mod tests {
         session
     }
 
-    /// Up walks this session's prompts and stops at the oldest of them; the scope chord goes on
-    /// into every stored prompt from the one on screen, and pressed again comes back.
+    /// Up walks every stored prompt; the scope chord narrows to this session's from the prompt on
+    /// screen, and pressed again goes back to every stored one.
     #[test]
-    fn the_scope_chord_widens_the_walk_to_every_stored_prompt_and_narrows_it_again() {
+    fn the_scope_chord_narrows_the_walk_to_this_sessions_prompts_and_widens_it_again() {
         let mut session = with_earlier_sessions();
         handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(session.input(), "mine");
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "old two");
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
+
+        // Not this session's, so the nearest of this session's before it, and failing that the
+        // oldest.
+        handle_key(&mut session, ctrl('n'));
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        assert_eq!(session.input(), "mine");
+        assert_eq!(session.history.position(), Some((1, 1)));
         handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(
             session.input(),
@@ -24248,6 +24257,7 @@ mod tests {
         );
 
         handle_key(&mut session, ctrl('n'));
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
         assert_eq!(
             session.input(),
             "mine",
@@ -24256,13 +24266,31 @@ mod tests {
         assert_eq!(session.history.position(), Some((3, 3)));
         handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(session.input(), "old two");
+    }
 
-        // Not this session's, so the nearest of this session's before it, and failing that the
-        // oldest.
+    /// Once a scope is chosen it holds: ending the walk, or sending, does not put it back.
+    #[test]
+    fn the_scope_chosen_holds_after_the_walk_ends_and_after_sending() {
+        let mut session = with_earlier_sessions();
+        handle_key(&mut session, key(KeyCode::Up));
         handle_key(&mut session, ctrl('n'));
         assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        handle_key(&mut session, key(KeyCode::Down));
+        assert!(!session.history.is_browsing());
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        handle_key(&mut session, key(KeyCode::Up));
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(session.input(), "mine", "Up left this session's prompts");
+
+        handle_key(&mut session, key(KeyCode::Down));
+        type_line(&mut session, "mine again");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("ok", Vec::new(), 0);
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        handle_key(&mut session, key(KeyCode::Up));
+        handle_key(&mut session, key(KeyCode::Up));
+        handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(session.input(), "mine");
-        assert_eq!(session.history.position(), Some((1, 1)));
     }
 
     /// The terminal sees Ctrl-Right as a window-manager key on some systems (macOS gives it to
@@ -24286,7 +24314,7 @@ mod tests {
                 end,
                 "{modifiers:?}-Right did not move it back"
             );
-            assert_eq!(session.history.scope(), crate::history::Scope::Session);
+            assert_eq!(session.history.scope(), crate::history::Scope::All);
             assert_eq!(session.input(), "mine");
         }
     }
@@ -24304,17 +24332,17 @@ mod tests {
         handle_key(&mut session, ctrl('n'));
         assert_eq!(
             session.history.scope(),
-            crate::history::Scope::Session,
+            crate::history::Scope::All,
             "the chord the switch was moved off still switched"
         );
         handle_key(&mut session, alt('n'));
-        assert_eq!(session.history.scope(), crate::history::Scope::All);
-        handle_key(&mut session, alt('n'));
         assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        handle_key(&mut session, alt('n'));
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
     }
 
     /// With nothing on screen from the history there is nothing to switch, so the chord does not
-    /// type, move or widen anything in a line being written.
+    /// type, move or narrow anything in a line being written.
     #[test]
     fn the_scope_chord_does_nothing_in_a_line_being_typed() {
         let mut session = with_earlier_sessions();
@@ -24323,7 +24351,7 @@ mod tests {
         handle_key(&mut session, ctrl('n'));
         assert_eq!(session.input(), "read src now");
         assert_eq!(session.caret(), caret);
-        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
     }
 
     /// A moved chord is dead in a typed line like the default is, and where it lands on a readline
@@ -24351,7 +24379,7 @@ mod tests {
         );
         handle_key(&mut session, key(KeyCode::Up));
         handle_key(&mut session, ctrl('a'));
-        assert_eq!(session.history.scope(), crate::history::Scope::All);
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
     }
 
     /// A prompt that is in both lists stays on screen across the switch, at its place in each.
@@ -24364,11 +24392,13 @@ mod tests {
         handle_key(&mut session, key(KeyCode::Up));
         handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(session.input(), "mine");
-        handle_key(&mut session, ctrl('n'));
         assert_eq!(session.history.position(), Some((3, 4)));
         handle_key(&mut session, ctrl('n'));
         assert_eq!(session.input(), "mine");
         assert_eq!(session.history.position(), Some((1, 2)));
+        handle_key(&mut session, ctrl('n'));
+        assert_eq!(session.input(), "mine");
+        assert_eq!(session.history.position(), Some((3, 4)));
     }
 
     /// Alt is the word motion on a recalled prompt, and Ctrl is in a line that is being typed.
@@ -24378,7 +24408,7 @@ mod tests {
         type_line(&mut session, "read src now");
         handle_key(&mut session, ctrl_key(KeyCode::Left));
         assert_eq!(session.caret(), "read src ".len());
-        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
 
         let mut session = with_earlier_sessions();
         handle_key(&mut session, key(KeyCode::Up));
@@ -24388,13 +24418,13 @@ mod tests {
             &mut session,
             KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
         );
-        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
         assert_eq!(session.input(), on_screen);
         assert!(session.caret() < before, "Alt-Left did not move the caret");
     }
 
     /// A turn can begin while a stored prompt is on screen, and the chord means the same there as
-    /// at rest: it widens and stays on the prompt, and pressed again comes back.
+    /// at rest: it narrows and stays on the prompt, and pressed again comes back.
     #[test]
     fn the_scope_chord_works_while_a_turn_runs() {
         let mut session = with_earlier_sessions();
@@ -24403,17 +24433,17 @@ mod tests {
         session.status = Status::Working;
 
         handle_key_while_working(&mut session, ctrl('n'));
-        assert_eq!(session.history.scope(), crate::history::Scope::All);
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
         assert_eq!(session.input(), "mine");
-        assert_eq!(session.history.position(), Some((3, 3)));
+        assert_eq!(session.history.position(), Some((1, 1)));
 
         handle_key_while_working(&mut session, ctrl('n'));
-        assert_eq!(session.history.scope(), crate::history::Scope::Session);
-        assert_eq!(session.history.position(), Some((1, 1)));
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
+        assert_eq!(session.history.position(), Some((3, 3)));
     }
 
-    /// A prompt queued behind a running turn is one the person has sent, so Up in a session that
-    /// sent nothing else finds it rather than saying nothing was sent.
+    /// A prompt queued behind a running turn is one the person has sent, so it is in this
+    /// session's scope from the moment it is queued.
     #[test]
     fn a_prompt_queued_during_a_turn_is_one_this_session_sent() {
         let mut session = Session::new("none");
@@ -24421,17 +24451,18 @@ mod tests {
             crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
                 "old one", None,
             )]);
-        assert!(session.history.only_earlier_sessions());
         session.status = Status::Working;
         type_line(&mut session, "queued one");
         handle_key_while_working(&mut session, key(KeyCode::Enter));
         assert_eq!(session.queued.len(), 1);
-        assert!(!session.history.only_earlier_sessions());
 
         session.queued.clear();
         session.status = Status::Idle;
         handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(session.input(), "queued one");
+        handle_key(&mut session, ctrl('n'));
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        assert_eq!(session.history.position(), Some((1, 1)));
         handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(
             session.input(),
@@ -24440,36 +24471,40 @@ mod tests {
         );
     }
 
-    /// `/clear` starts a new conversation, whose own prompts are none yet, so Up does not bring
-    /// back what was sent before it.
+    /// `/clear` starts a new conversation, whose own prompts are none yet, so the walk is over
+    /// every stored prompt and the chord has no session's prompts to narrow to.
     #[test]
-    fn clearing_the_session_empties_the_scope_up_walks() {
+    fn clearing_the_session_empties_the_scope_the_chord_narrows_to() {
         let mut session = with_earlier_sessions();
+        handle_key(&mut session, key(KeyCode::Up));
+        handle_key(&mut session, ctrl('n'));
+        assert_eq!(session.history.scope(), crate::history::Scope::Session);
+        handle_key(&mut session, key(KeyCode::Down));
         session.clear();
         handle_key(&mut session, key(KeyCode::Up));
-        assert_eq!(session.input(), "");
-        assert!(session.offered_all_prompts);
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
+        assert_eq!(session.input(), "mine");
+        handle_key(&mut session, ctrl('n'));
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
+        assert_eq!(session.input(), "mine");
     }
 
-    /// A new session has nothing of its own: Up recalls nothing, and the hint line names the key
-    /// that reaches the stored ones, which then walks them.
+    /// A new session has sent nothing, so Up walks the stored prompts and the chord is not on
+    /// offer: it stays in the wide scope.
     #[test]
-    fn up_in_a_new_session_says_why_it_recalled_nothing() {
+    fn up_in_a_new_session_walks_the_stored_prompts_and_offers_no_switch() {
         let mut session = Session::new("none");
         session.history =
             crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
                 "old one", None,
             )]);
         handle_key(&mut session, key(KeyCode::Up));
-        assert_eq!(session.input(), "");
-        assert!(session.offered_all_prompts);
-        assert!(!session.history.is_browsing());
-
-        handle_key(&mut session, ctrl('n'));
-        assert!(!session.offered_all_prompts);
-        handle_key(&mut session, key(KeyCode::Up));
         assert_eq!(session.input(), "old one");
         assert_eq!(session.history.position(), Some((1, 1)));
+
+        handle_key(&mut session, ctrl('n'));
+        assert_eq!(session.history.scope(), crate::history::Scope::All);
+        assert_eq!(session.input(), "old one");
     }
 
     /// The readline bindings, because a terminal may send nothing at all for the named keys and

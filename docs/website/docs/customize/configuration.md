@@ -1203,7 +1203,7 @@ Ten actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt
 | `trail` | `ctrl-t` | toggle the [audit trail](../security/audit-trail.md) |
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](../using/sessions.md#telling-sessions-apart) |
-| `scope` | `ctrl-n` | switch Up between this session's prompts and every stored one |
+| `scope` | `ctrl-n` | switch Up between every stored prompt and this session's |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is already answered (a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, the arrows move), so handing one to an action
