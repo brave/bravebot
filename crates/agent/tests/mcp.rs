@@ -3253,27 +3253,52 @@ fn an_addressed_worker_with_a_tools_line_is_offered_no_loader_unless_it_names_th
 
 #[test]
 fn withheld_mcp_tools_are_not_offered_and_reported_in_confirmation() {
-    let scratch = Scratch::new("road");
-    let (url, _server) = serve_weather();
+    let (url, server) = serve_two_tools();
+    let scratch = Scratch::new("tool-filter");
+    let home = bravebot_agent::servers::Home {
+        directory: Some(scratch.state()),
+        writable: true,
+    };
     let declared = Declaration::http(url.clone())
         .expect("http declaration")
-        .filtering(Vec::new(), vec!["get_forecast".to_string()])
+        .filtering(vec!["get_alerts".to_string()], Vec::new())
         .expect("filter");
-    let reached = reach_with_filter(
-        "weather",
-        &url,
-        &[],
-        &["get_forecast".to_string()],
-        declared.digest(),
+    let mut declarations = Declarations::default();
+    declarations.insert("weather", &declared);
+    std::fs::write(declarations_file(&scratch.state()), declarations.to_text())
+        .expect("write mcp.json");
+
+    let mut approvals = Approvals::default();
+    approvals.approve("weather", declared.digest());
+    std::fs::write(approvals_file(&scratch.state()), approvals.to_text())
+        .expect("write mcp-approved");
+
+    let requested = vec![(
+        scratch.project().join(".bravebot/settings.json"),
+        "weather".to_string(),
+    )];
+    let mut person = bravebot_agent::servers::Person {
+        answers: &b""[..],
+        screen: Vec::new(),
+        present: true,
+    };
+    let reached = bravebot_agent::servers::reach(
+        &requested,
+        &scratch.project(),
+        &home,
+        &Managed::default(),
+        bravebot_agent::servers::Asking::Bypass,
+        &mut person,
+        bravebot_sandbox::Stream::Null,
     );
-    let session = Session::new(
-        vec![reached],
-        scratch.project(),
-        Some(scratch.state()),
-        true,
-        Managed::default(),
-    );
-    let (endpoint, _chat) = serve_chat(vec![reply_with("done")]);
+    let session = reached
+        .session()
+        .expect("session reached through real handshake");
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
     let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
     run_turn(
         &endpoint,
@@ -3286,38 +3311,85 @@ fn withheld_mcp_tools_are_not_offered_and_reported_in_confirmation() {
         panic!("the list was not put to the person: {:?}", confirmer.lists);
     };
     assert_eq!(list.alias, "weather");
-    assert_eq!(list.tools.len(), 0);
+    assert_eq!(list.tools.len(), 1);
+    assert_eq!(list.tools[0].name, "weather:get_alerts");
     assert_eq!(list.withheld, 1);
+
+    let sent = rounds(&chat);
+    let first: Value = serde_json::from_str(&sent[0]).expect("first round request");
+    let tools = first["tools"].as_array().expect("tools array in payload");
+    let offered_names: Vec<&str> = tools
+        .iter()
+        .filter_map(|t| t["function"]["name"].as_str())
+        .collect();
+    assert!(
+        offered_names.contains(&"mcp__weather__get_alerts"),
+        "allowed tool should be offered: {offered_names:?}"
+    );
+    assert!(
+        !offered_names.contains(&FORECAST),
+        "withheld tool must not be offered to model: {offered_names:?}"
+    );
+
+    assert!(
+        confirmer.calls.is_empty(),
+        "call confirmation was requested for withheld tool: {:?}",
+        confirmer.calls
+    );
+    assert!(
+        methods(&server).iter().all(|m| m != "tools/call"),
+        "MCP server was called for withheld tool"
+    );
+    let second = &sent[1];
+    let told = answer_to_the_call(second);
+    assert!(
+        told.contains("error: no such tool") && told.contains("get_forecast"),
+        "turn did not refuse call to withheld tool: {told}"
+    );
 }
 
-fn reach_with_filter(
-    alias: &str,
-    url: &str,
-    tools: &[String],
-    exclude_tools: &[String],
-    declared: Digest,
-) -> Reached {
-    let mut server = HttpServer::new(alias, url);
-    let egress = Egress::new();
-    let mut sink = RecordingSink::new();
-    let mut routing = Routing::new();
-    routing.insert_trusted("task", "reach an MCP server");
-    let mut policy = Policy::begin(
-        routing,
-        ReleasePlan::new(),
-        CapabilitySet::from_iter([
-            Capability::WebFetch,
-            Capability::McpCall(ServerAlias::new(alias)),
-        ]),
-        &mut sink,
+fn serve_two_tools() -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let reply = reply_for_two_tools(&body);
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+fn reply_for_two_tools(body: &str) -> String {
+    let request: Value = serde_json::from_str(body).unwrap_or_default();
+    let result = match request.get("method").and_then(|m| m.as_str()) {
+        Some("initialize") => json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "weather", "version": "1.0.0"},
+        }),
+        Some("tools/list") => json!({"tools": [
+            {
+                "name": "get_forecast",
+                "description": "Get forecast for a city",
+                "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+            {
+                "name": "get_alerts",
+                "description": "Get weather alerts",
+                "inputSchema": {"type": "object", "properties": {"area": {"type": "string"}}},
+            },
+        ]}),
+        Some("tools/call") => json!({"content": [{"type": "text", "text": "tool output"}]}),
+        _ => json!({}),
+    };
+    let reply = json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}).to_string();
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+        reply.len()
     )
-    .expect("policy");
-    server
-        .initialize(&mut policy, &egress, "bravebot", "0.1.0")
-        .expect("handshake");
-    let listing = server
-        .list_tools(&mut policy, &egress)
-        .expect("listed")
-        .filtered(tools, exclude_tools);
-    Reached::new(Connection::Http(server), listing, declared)
 }

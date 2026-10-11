@@ -2493,4 +2493,39 @@ mod tests {
         assert_eq!(remote.changes(&remote_tools), vec![Field::Tools]);
         assert_eq!(remote.changes(&remote_exclude), vec![Field::ExcludeTools]);
     }
+
+    #[test]
+    fn tools_and_exclude_tools_require_lists_of_valid_tool_names() {
+        let cases = [
+            (
+                r#"{"servers": {"srv": {"transport": "stdio", "argv": ["tool"], "tools": "not-a-list"}}}"#,
+                Err(Problem::Tools("tools")),
+            ),
+            (
+                r#"{"servers": {"srv": {"transport": "stdio", "argv": ["tool"], "tools": [123]}}}"#,
+                Err(Problem::Tools("tools")),
+            ),
+            (
+                r#"{"servers": {"srv": {"transport": "http", "url": "https://example.com/mcp", "exclude_tools": 42}}}"#,
+                Err(Problem::Tools("exclude_tools")),
+            ),
+            (
+                r#"{"servers": {"srv": {"transport": "http", "url": "https://example.com/mcp", "exclude_tools": [true]}}}"#,
+                Err(Problem::Tools("exclude_tools")),
+            ),
+            (
+                r#"{"servers": {"srv": {"transport": "stdio", "argv": ["tool"], "tools": ["bad tool name"]}}}"#,
+                Err(Problem::Tool("bad tool name".into())),
+            ),
+            (
+                r#"{"servers": {"srv": {"transport": "http", "url": "https://example.com/mcp", "exclude_tools": [":empty-alias"]}}}"#,
+                Err(Problem::Tool(":empty-alias".into())),
+            ),
+        ];
+        for (json, expected) in cases {
+            let declarations = Declarations::parse(json).unwrap();
+            let entry = declarations.get("srv").unwrap();
+            assert_eq!(entry.declaration, expected, "testing json: {json}");
+        }
+    }
 }

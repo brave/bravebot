@@ -74,6 +74,11 @@ impl Reached {
     pub fn alias(&self) -> &str {
         self.listing.alias()
     }
+
+    /// What the server offered and what was withheld or refused.
+    pub fn listing(&self) -> &Listing {
+        &self.listing
+    }
 }
 
 /// What a session has decided about one server's list.

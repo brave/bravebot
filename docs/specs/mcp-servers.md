@@ -1514,9 +1514,12 @@ full user visibility into withheld tools.
 `verified-by: bravebot_config::mcp::a_declaration_with_no_tool_filters_digests_as_it_did_before`
 `verified-by: bravebot_config::mcp::tool_filters_are_read_written_and_roundtripped`
 `verified-by: bravebot_config::mcp::tool_filter_changes_are_named_by_field`
+`verified-by: bravebot_config::mcp::tools_and_exclude_tools_require_lists_of_valid_tool_names`
+`verified-by: bravebot_agent::servers::handshake_local_filters_tools_by_allow_and_deny_lists`
 `verified-by: bravebot_agent::mcp::withheld_mcp_tools_are_not_offered_and_reported_in_confirmation`
 `verified-by: bravebot_cli::mcp::the_tool_filter_flags_set_allow_and_deny_lists_and_refuse_invalid_inputs`
 `verified-by: bravebot_cli::mcp::the_question_shows_tool_allow_and_deny_filters`
+
 
 ## Testing this with the weather server
 

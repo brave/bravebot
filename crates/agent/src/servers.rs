@@ -4147,4 +4147,66 @@ done
         assert_eq!(error.to_string(), "tool 'lookup' timed out after 1 seconds");
         assert!(called.elapsed() < Duration::from_millis(2900));
     }
+
+    /// SERVERS-17: handshake_local filters tools by allow and deny lists.
+    #[cfg(unix)]
+    #[test]
+    fn handshake_local_filters_tools_by_allow_and_deny_lists() {
+        let root = scratch("cli-servers-handshake-local-filter");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let script = installed(&root.join("bin"), "mock-mcp");
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}},{"name":"ping","inputSchema":{"type":"object"}},{"name":"drop","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#,
+        )
+        .expect("write script");
+        let home_dir = root.join("home");
+        std::fs::create_dir_all(&home_dir).expect("home");
+        let home = Home {
+            directory: Some(home_dir),
+            writable: true,
+        };
+        let plan = Plan::Stdio {
+            program: script,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: None,
+            declared: digested(&["mock-mcp"]),
+            timeouts: Timeouts::default(),
+            tools: vec!["echo".to_string(), "ping".to_string()],
+            exclude_tools: vec!["ping".to_string()],
+        };
+        let mut notes = Vec::new();
+        let started = start(
+            vec![("mock".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(started.len(), 1, "notes: {notes:?}");
+        assert_eq!(started[0].listing().offered(), 1);
+        assert_eq!(started[0].listing().refused(), 0);
+        assert_eq!(started[0].listing().withheld(), 2);
+    }
 }
