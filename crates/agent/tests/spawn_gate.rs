@@ -57,7 +57,8 @@ fn start_waits_for_the_gate_within(start: impl FnOnce() + Send + 'static, to_rea
             }
             assert!(
                 Instant::now() < deadline,
-                "the start never reached the gate, so it does not wait for it"
+                "the start never reached the gate, so it does not wait for it (or it now starts on a thread \
+                 other than the one this test runs it on)"
             );
             std::thread::sleep(Duration::from_millis(5));
         }

@@ -32,7 +32,8 @@ static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// **Why.** macOS creates a socket pair, or a pipe, and then marks it close-on-exec, so a process
 /// another thread starts between the two steps holds both ends and the bridge hands them on to its
 /// tools. Linux creates them already marked, so the race is macOS's, but the lock is taken
-/// everywhere so every platform runs the same code. A start creates the pipes of its own standard
+/// everywhere so every platform runs the same code. The pipes the agent makes for a stage's standard streams, and
+/// a socket pair, are made under [`creating_a_channel`] for the same reason. A start creates the pipes of its own standard
 /// streams inside `spawn`, so a start is also an fd creation and a fork: two starts must not
 /// overlap either, or each could inherit the other's pipe ends and keep them open. Every start of a
 /// program by a crate the bridge links goes through here, and every creation of a control channel
@@ -47,8 +48,9 @@ static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Landlock rule setup on Linux, therefore holds up every start behind it. A start that waits for
 /// its program to finish, rather than to start, would hold the lock that long, so a caller spawns
 /// here and waits outside. The gate is not reentrant: `spawn` must not enter it again, and
-/// entering it again panics instead of waiting for itself. Start latency under it has not been
-/// measured.
+/// entering it again panics instead of waiting for itself. That guard sees only the same thread: a
+/// `spawn` that waits on another thread which itself needs the gate would still hang, so `spawn`
+/// starts the program and nothing else. Start latency under it has not been measured.
 ///
 /// **When to reduce it.** If measured latency shows contention, take it only on macOS, create
 /// channels before any worker thread exists, or start programs through a helper that holds none of

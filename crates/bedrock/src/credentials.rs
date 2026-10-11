@@ -395,6 +395,8 @@ pub fn sign_in_if_needed(
 
 /// Run `command` to its end and collect what it printed, as `Command::output` does, with the start
 /// taken under the spawn gate and the wait taken outside it, so a slow CLI holds up no other start.
+/// It sets the standard streams the way `output` does by default and replaces any set before, which
+/// is harmless while `export_command` and `profiles_command` set none.
 fn output_of(command: &mut Command) -> std::io::Result<std::process::Output> {
     let child = bravebot_sandbox::process::starting_a_program(|| {
         command
