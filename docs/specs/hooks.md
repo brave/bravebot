@@ -132,6 +132,12 @@ person who wrote it meant. It is not confined, and its environment is the one it
 less this agent's own credentials, which are the same names taken off a program the planner asked
 for, a gateway's token variables included ([RUN-12](tools/run.md#RUN-12)).
 
+A bare program name is the one exception to "the person's own shell would give it": it is looked up
+as every program bravebot starts unconfined is ([SANDBOX-30](sandboxing.md#SANDBOX-30)), so a
+`.venv/bin/ruff` a confined stage wrote is not the `ruff` that runs. A hook whose bare name is found
+only there is reported as not started. A name with a separator in it is the person's path and is
+never looked up.
+
 **Why.** The person named this command in a file in their own directory, so it is their program on
 their machine, and [sandboxing.md](sandboxing.md) confines processes running code we did not write.
 Whatever is decided there about bounding a program a person asked for reaches a hook too, and by
@@ -146,6 +152,8 @@ A hook has no more use for one than a formatter has.
 `verified-by: bravebot_agent::hooks::a_hook_is_not_handed_this_agent_s_own_credentials`
 `verified-by: bravebot_agent::hooks::a_hook_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::hooks::two_hooks_on_one_moment_run_in_the_order_the_file_listed_them`
+`verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
+`verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
 
 <a id="HOOK-5"></a>
 ### HOOK-5: a hook is told which moment fired, and nothing else

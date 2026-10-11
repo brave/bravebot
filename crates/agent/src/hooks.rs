@@ -29,10 +29,18 @@
 //! The environment is inherited less the names [`crate::scrub`] takes off, so this agent's own
 //! credentials do not travel into a program the person attached to a moment any more than they
 //! travel into one the planner asked for.
+//!
+//! # Where a bare name is found
+//!
+//! Not confined does not mean found anywhere. A bare program name is looked up by
+//! [`bravebot_sandbox::programs::find`], which skips every `PATH` directory a confined stage may
+//! write (SANDBOX-30), so a stage cannot choose what runs with the person's access by writing a
+//! file under a hook's name.
 
 use bravebot_config::hooks::{Hook, Hooks, Moment};
+use std::ffi::OsStr;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -166,10 +174,29 @@ fn announcement(moment: Moment) -> String {
     format!("{{\"event\":\"{}\"}}\n", moment.as_str())
 }
 
+/// The program a hook starts, or `None` when its bare name is found only where a confined stage may
+/// write.
+///
+/// A name with a separator in it is the person's own path, absolute or relative to the directory the
+/// hook runs in (HOOK-4), and `PATH` plays no part in it. A bare name is looked up as every program
+/// bravebot starts unconfined is (SANDBOX-30), so a `.venv/bin/ruff` written by a stage is not the
+/// `ruff` that runs.
+fn program_to_start(program: &str) -> Option<PathBuf> {
+    if crate::programs::has_separator(program) {
+        return Some(PathBuf::from(program));
+    }
+    bravebot_sandbox::programs::find(OsStr::new(program))
+}
+
 /// Start one hook, hand it the line, and wait for it.
 fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<Trouble> {
     let limit = hook.timeout().unwrap_or(default);
     let (program, arguments) = hook.run().split_first()?;
+    let Some(program) = program_to_start(program) else {
+        return Some(Trouble::NotStarted(
+            std::io::Error::from(std::io::ErrorKind::NotFound).to_string(),
+        ));
+    };
     let mut command = Command::new(program);
     // The vector, never a string. There is no shell between the file and the process, so an
     // argument holding a space or a semicolon is one argument and arrives as one.
@@ -234,6 +261,101 @@ mod tests {
         assert_eq!(
             announcement(Moment::TurnFinished),
             "{\"event\":\"turn-finished\"}\n"
+        );
+    }
+
+    /// SANDBOX-30: a hook's bare program name is looked up as every program started unconfined is,
+    /// so a file a confined stage wrote under that name is never the one that runs. The test binary
+    /// runs again with `PATH` holding a directory the session keeps out ahead of an installed one.
+    /// `only-planted` exists in the kept-out directory alone and must not start at all. `in-both`
+    /// exists in each and must start the installed one. A lookup that searched `PATH` itself runs
+    /// the planted files and fails the child.
+    #[cfg(unix)]
+    #[test]
+    fn a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write() {
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str = "hooks::tests::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write";
+        const SESSION: &str = "BRAVEBOT_TEST_HOOK_KEPT_OUT_SESSION";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
+
+            let fire_one = |name: &str| {
+                let hooks = Hooks::parse(&format!(
+                    r#"{{"hooks": [{{"on": "turn-finished", "run": ["{name}"]}}]}}"#
+                ));
+                fire(&hooks, Moment::TurnFinished, None, &session)
+            };
+            let only_planted = fire_one("only-planted");
+            let in_both = fire_one("in-both");
+
+            assert!(
+                matches!(only_planted[0].trouble, Some(Trouble::NotStarted(_))),
+                "a hook found only where a stage may write was started: {only_planted:?}"
+            );
+            assert!(
+                !session.join("planted-ran").exists(),
+                "the planted program ran"
+            );
+            assert_eq!(in_both[0].trouble, None, "{in_both:?}");
+            assert!(
+                session.join("installed-ran").exists(),
+                "the installed program did not run"
+            );
+            return;
+        }
+
+        let session = crate::testutil::scratch_dir("hooks-kept-out-session");
+        let system = crate::testutil::scratch_dir("hooks-kept-out-system");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&system);
+        let planted = session.join(".venv/bin");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::create_dir_all(&system).unwrap();
+        let write = |directory: &Path, name: &str, marker: &str| {
+            let file = directory.join(name);
+            std::fs::write(
+                &file,
+                format!("#!/bin/sh\n: > '{}'\n", session.join(marker).display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        write(&planted, "only-planted", "planted-ran");
+        write(&planted, "in-both", "planted-ran");
+        write(&system, "in-both", "installed-ran");
+        let path = std::env::join_paths([planted, system.clone()]).unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(SESSION, &session)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+
+        let ran = session.join("ran").exists();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&system);
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(child.status.success(), "{report}");
+    }
+
+    /// HOOK-4: a path with a separator is the person's own, relative to the directory the hook runs
+    /// in, and `PATH` plays no part in it. Searching for it as a bare name would find nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_hook_named_by_a_path_is_not_looked_up() {
+        assert_eq!(
+            program_to_start("./tools/format"),
+            Some(PathBuf::from("./tools/format"))
+        );
+        assert_eq!(
+            program_to_start("/usr/bin/true"),
+            Some(PathBuf::from("/usr/bin/true"))
         );
     }
 

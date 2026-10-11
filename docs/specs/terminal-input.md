@@ -752,7 +752,8 @@ unchanged with nothing anywhere saying why, which is neither a failure nor an ed
 <a id="INPUT-16"></a>
 ### INPUT-16: an editor is started under the name it was asked for
 
-A name is looked for where a shell would look for it, and what runs is that name and not the file a
+A name is looked for where a shell would look for it, in the `PATH` directories a confined stage
+cannot write ([SANDBOX-30](sandboxing.md#SANDBOX-30)), and what runs is that name and not the file a
 symlink behind it points at. The name is only kept while it still reaches the same program: a link
 that now points elsewhere, or one that no longer resolves, is started by resolved path instead. This
 is the editor alone. Everywhere a program is approved before it runs, the approval names the file
@@ -767,11 +768,7 @@ started rather than approved, and for it the name is part of what the user asked
 `verified-by: bravebot_tui::editor::a_configured_link_to_a_gui_shim_runs_as_the_link`
 `verified-by: bravebot_tui::editor::a_terminal_editor_behind_a_gui_shim_is_started_under_its_own_name`
 `verified-by: bravebot_tui::editor::a_program_reached_through_a_link_keeps_the_name_it_was_asked_for`
-`verified-by: bravebot_tui::editor::the_name_is_looked_for_on_the_path_not_beside_the_resolved_file`
-`verified-by: bravebot_tui::editor::an_empty_path_entry_is_not_searched`
 `verified-by: bravebot_tui::editor::a_name_that_is_no_longer_the_same_program_falls_back_to_the_resolved_path`
-`verified-by: bravebot_tui::editor::a_name_the_path_holds_under_another_spelling_still_starts_the_program`
-`verified-by: bravebot_tui::editor::a_name_is_looked_for_under_every_spelling_it_may_be_filed_under`
 
 <a id="INPUT-17"></a>
 ### INPUT-17: Ctrl-S puts the line away, and puts it back

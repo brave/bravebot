@@ -14,7 +14,7 @@
 //! second interpreter with its own opinions about quoting.
 
 use bravebot_i18n::t;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -269,107 +269,49 @@ fn split(command: &str, find: impl Fn(&str) -> Option<PathBuf>) -> Option<(PathB
 
 /// Find the editor `command` names, keeping the name it was found under.
 ///
-/// The shared lookup canonicalises, because an approval recorded against a program has to name the
-/// file that actually ran and not a symlink that may be repointed. An editor is started rather than
-/// approved, and here the name is part of what was asked for: MacVim installs `vim`, `vi` and
-/// `gvim` as links to one shim that reads its own `argv[0]` and opens a detached window for the
-/// `m*` and `g*` spellings. Resolved through the link it becomes `mvim`, so asking for `vim` got a
-/// GUI window and a prompt that came straight back. Started the way the shell would start it, under
-/// the name on the `$PATH`, it stays in the terminal.
+/// A bare name is looked up as every program bravebot starts unconfined is (SANDBOX-30): through
+/// [`bravebot_sandbox::programs::find`], which skips every `$PATH` entry a confined stage may write.
+/// An `$EDITOR` of `vim` therefore never starts a `vim` a stage left in `.venv/bin` or
+/// `node_modules/.bin`, however early that directory sits on the `$PATH`.
 ///
-/// So the file is located with the shared lookup, which decides whether the name is a program at
-/// all, and then the path that was not canonicalised is what runs.
+/// The lookup returns the entry joined to the name, not the canonicalised file, and that is what
+/// runs. An editor is started rather than approved, and here the name is part of what was asked for:
+/// MacVim installs `vim`, `vi` and `gvim` as links to one shim that reads its own `argv[0]` and
+/// opens a detached window for the `m*` and `g*` spellings. Resolved through the link it becomes
+/// `mvim`, so asking for `vim` got a GUI window and a prompt that came straight back. Started the way
+/// the shell would start it, under the name on the `$PATH`, it stays in the terminal.
 ///
-/// The name has to be looked for where the shell would look for it, not in the directory the
-/// canonicalised file turned out to live in. MacVim's bundle holds a `vim` link but no `vi` one:
-/// `vi` is a link in the Homebrew directory on the `$PATH`, and joining the name onto the bundle
-/// found nothing.
+/// A name with a separator in it is a path the user wrote, absolute or relative to `working`, and the
+/// `$PATH` plays no part in it.
 fn lookup(command: &str, working: &Path) -> Option<PathBuf> {
+    if !names_a_path(command) {
+        return bravebot_sandbox::programs::find(OsStr::new(command));
+    }
     let resolved = bravebot_agent::programs::resolve(command, working)?;
-    let path = std::env::var_os("PATH").unwrap_or_default();
-
-    Some(started_as(
-        command,
-        resolved,
-        working,
-        std::env::split_paths(&path),
-    ))
+    Some(started_as(command, resolved, working))
 }
 
-/// Which path starts `command`, given the file the lookup settled on.
+/// Whether `command` is spelled as a path rather than a name to look for.
+fn names_a_path(command: &str) -> bool {
+    command.contains('/') || (cfg!(windows) && command.contains('\\'))
+}
+
+/// Which path starts a `command` that names a path, given the file the lookup settled on.
 ///
-/// Takes the `$PATH` entries rather than reading them, so the case the lookup itself cannot
-/// produce on unix is still checkable there: a name the `$PATH` holds under a different spelling.
-///
-/// Whatever the name reaches, the program has already been found, so there is always something to
-/// start. Failing here instead reports no editor at all on a machine where one is installed:
-/// `%PATHEXT%` resolves `notepad` to `notepad.EXE`, no `$PATH` entry holds a file called
-/// `notepad`, and Ctrl-G has nothing to open.
-fn started_as(
-    command: &str,
-    resolved: PathBuf,
-    working: &Path,
-    directories: impl Iterator<Item = PathBuf>,
-) -> PathBuf {
+/// It stays under the name written, and only while that is still the same program. A link pointing
+/// somewhere else, or a name that no longer resolves, is not something to run on a guess.
+fn started_as(command: &str, resolved: PathBuf, working: &Path) -> PathBuf {
     let named = if Path::new(command).is_absolute() {
         PathBuf::from(command)
-    } else if command.contains('/') || (cfg!(windows) && command.contains('\\')) {
-        working.join(command)
     } else {
-        match by_name(command, &resolved, directories) {
-            Some(named) => named,
-            None => return resolved,
-        }
+        working.join(command)
     };
 
-    // Only where it is still the same program by another name. A link pointing somewhere else, or
-    // a name that no longer resolves, is not something to run on a guess.
     if same_file(&named, &resolved) {
         named
     } else {
         resolved
     }
-}
-
-/// Where on the `$PATH` `command` names the same file the lookup settled on.
-///
-/// The first entry holding it, exactly as the shell would find it. An empty entry means the current
-/// directory and is skipped for the reason the shared lookup skips it: a file in the workspace has
-/// no business shadowing a program.
-///
-/// Every filename the shared lookup would have tried, since on Windows a bare name means any of
-/// the `%PATHEXT%` spellings and the file on the `$PATH` is one of those rather than the name
-/// itself.
-fn by_name(
-    command: &str,
-    resolved: &Path,
-    directories: impl Iterator<Item = PathBuf>,
-) -> Option<PathBuf> {
-    by_spelling(
-        &bravebot_agent::programs::candidates(command),
-        resolved,
-        directories,
-    )
-}
-
-/// The same search, over the spellings one name may be filed under.
-///
-/// Separated so the Windows case is checkable where `%PATHEXT%` is not: on unix `candidates`
-/// answers with the one name, so a search over several is unreachable through [`by_name`] and a
-/// test that went through it would pass whether the search ran or not.
-fn by_spelling(
-    names: &[String],
-    resolved: &Path,
-    directories: impl Iterator<Item = PathBuf>,
-) -> Option<PathBuf> {
-    directories
-        .filter(|directory| !directory.as_os_str().is_empty())
-        .find_map(|directory| {
-            names
-                .iter()
-                .map(|name| directory.join(name))
-                .find(|candidate| same_file(candidate, resolved))
-        })
 }
 
 /// Whether two paths reach one file, links and all.
@@ -564,6 +506,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_terminal_editor_behind_a_gui_shim_is_started_under_its_own_name() {
+        use bravebot_sandbox::programs::find_in;
         let scratch = Scratch::new("macvim");
         let bundle = scratch.path.join("MacVim.app/Contents/bin");
         std::fs::create_dir_all(&bundle).expect("create");
@@ -577,12 +520,12 @@ mod tests {
         for name in ["vim", "vi"] {
             std::os::unix::fs::symlink(bundle.join("vim"), scratch.path.join(name)).expect("link");
         }
+        let path = std::env::join_paths([&scratch.path]).unwrap();
 
         for name in ["vim", "vi"] {
-            let (program, arguments) = split(name, |command| {
-                by_name(command, &shim, [scratch.path.clone()].into_iter())
-            })
-            .expect("the editor is found");
+            let (program, arguments) =
+                split(name, |command| find_in(OsStr::new(command), &path, &[]))
+                    .expect("the editor is found");
 
             assert_eq!(
                 program,
@@ -594,46 +537,6 @@ mod tests {
                 "a terminal editor was given {arguments:?}"
             );
         }
-    }
-
-    /// The name is looked for where the shell would look for it. MacVim's bundle holds a `vim` link
-    /// but no `vi` one: `vi` lives in the directory that is actually on the `$PATH`, so searching
-    /// the directory the canonicalised file turned out to be in found nothing and `vi` went on
-    /// opening a GUI window after `vim` had been fixed.
-    #[cfg(unix)]
-    #[test]
-    fn the_name_is_looked_for_on_the_path_not_beside_the_resolved_file() {
-        let scratch = Scratch::new("bundle");
-        let bundle = scratch.path.join("bundle");
-        std::fs::create_dir_all(&bundle).expect("create");
-        let shim = bundle.join("mvim");
-        std::fs::write(&shim, "#!/bin/sh\n").expect("write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        }
-        // On the `$PATH`, and the only place this spelling exists.
-        let on_path = scratch.path.join("vi");
-        std::os::unix::fs::symlink(&shim, &on_path).expect("link");
-
-        let found = by_name("vi", &shim, [scratch.path.clone()].into_iter())
-            .expect("the name is found on the path");
-
-        assert_eq!(found, on_path);
-    }
-
-    /// An empty `$PATH` entry means the current directory, and a file in the workspace has no
-    /// business shadowing the editor.
-    #[cfg(unix)]
-    #[test]
-    fn an_empty_path_entry_is_not_searched() {
-        let scratch = Scratch::new("empty-entry");
-        let real = scratch.program("vim");
-
-        let found = by_name("vim", &real, [PathBuf::new()].into_iter());
-
-        assert!(found.is_none());
     }
 
     /// The name only survives while it is the same program. A link repointed at something else is
@@ -649,47 +552,106 @@ mod tests {
         assert_eq!(found.canonicalize().unwrap(), real.canonicalize().unwrap());
     }
 
-    /// A bare name that the `$PATH` holds under another spelling still starts the program the
-    /// lookup found. On Windows `%PATHEXT%` resolves `notepad` to `notepad.EXE` and no `$PATH`
-    /// entry holds a file called `notepad`, so giving up here leaves Ctrl-G reporting that no
-    /// editor is configured on a machine where one is installed.
+    /// SANDBOX-30: the editor is started unconfined, so a file a confined stage wrote under its
+    /// name must never be the one that runs. The test binary runs again with `PATH` holding a
+    /// directory the session keeps out ahead of one it does not, each holding a `vim`, and asks
+    /// for the editor through `command_line`. A lookup that searched `$PATH` itself picks the
+    /// planted `vim` first and fails the child; one that gives up when the first entry is refused
+    /// finds nothing and fails it too.
     #[cfg(unix)]
     #[test]
-    fn a_name_the_path_holds_under_another_spelling_still_starts_the_program() {
-        let scratch = Scratch::new("spelling");
-        let real = scratch.program("notepad.EXE");
+    fn an_editor_found_only_in_a_directory_a_stage_may_write_is_not_started() {
+        const TEST: &str =
+            "editor::tests::an_editor_found_only_in_a_directory_a_stage_may_write_is_not_started";
+        const SESSION: &str = "BRAVEBOT_TEST_EDITOR_KEPT_OUT_SESSION";
+        const SYSTEM: &str = "BRAVEBOT_TEST_EDITOR_KEPT_OUT_SYSTEM";
 
-        let started = started_as(
-            "notepad",
-            real.clone(),
-            &scratch.path,
-            [scratch.path.clone()].into_iter(),
-        );
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
 
-        assert_eq!(
-            started, real,
-            "an installed editor the `$PATH` spells differently was not started at all"
-        );
+            let (program, _) = command_line("vim").expect("the installed editor is found");
+
+            assert_eq!(
+                program,
+                PathBuf::from(std::env::var_os(SYSTEM).unwrap()).join("vim"),
+                "the editor started was not the installed one"
+            );
+            return;
+        }
+
+        let session = crate::testutil::scratch_dir("editor-kept-out-session");
+        let system = crate::testutil::scratch_dir("editor-kept-out-system");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&system);
+        for directory in [session.join(".venv/bin"), system.clone()] {
+            std::fs::create_dir_all(&directory).unwrap();
+            let editor = directory.join("vim");
+            std::fs::write(&editor, "#!/bin/sh\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = std::env::join_paths([session.join(".venv/bin"), system.clone()]).unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(SESSION, &session)
+            .env(SYSTEM, &system)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+
+        let ran = session.join("ran").exists();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&system);
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(child.status.success(), "{report}");
     }
 
-    /// A name is looked for under every spelling it may be filed under. On Windows `%PATHEXT%`
-    /// makes `notepad` mean `notepad.EXE`, so a search for the bare spelling alone finds nothing
-    /// in the directory that holds the program, which is the second assertion here.
+    /// With nothing but the planted directory on the `$PATH` there is no editor at all, which is
+    /// the answer a configured name must get rather than the planted file.
     #[cfg(unix)]
     #[test]
-    fn a_name_is_looked_for_under_every_spelling_it_may_be_filed_under() {
-        let scratch = Scratch::new("spellings");
-        let real = scratch.program("notepad.EXE");
-        let names = ["notepad".to_string(), "notepad.EXE".to_string()];
+    fn an_editor_named_only_by_a_planted_file_is_not_found() {
+        const TEST: &str = "editor::tests::an_editor_named_only_by_a_planted_file_is_not_found";
+        const SESSION: &str = "BRAVEBOT_TEST_EDITOR_PLANTED_SESSION";
 
-        let found = by_spelling(&names, &real, [scratch.path.clone()].into_iter())
-            .expect("the program is found under one of its spellings");
-        assert_eq!(found, real);
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
 
-        assert!(
-            by_spelling(&names[..1], &real, [scratch.path.clone()].into_iter()).is_none(),
-            "the bare spelling matched a file that is not there"
-        );
+            assert_eq!(command_line("bravebot-planted-editor --wait"), None);
+            return;
+        }
+
+        let session = crate::testutil::scratch_dir("editor-planted-session");
+        let _ = std::fs::remove_dir_all(&session);
+        let bin = session.join("node_modules/.bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let editor = bin.join("bravebot-planted-editor");
+        std::fs::write(&editor, "#!/bin/sh\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(SESSION, &session)
+            .env("PATH", &bin)
+            .output()
+            .unwrap();
+
+        let ran = session.join("ran").exists();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        let _ = std::fs::remove_dir_all(&session);
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(child.status.success(), "{report}");
     }
 
     /// The four the clause names, wherever the binary ships. A platform that has a list of its
