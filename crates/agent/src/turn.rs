@@ -6290,6 +6290,125 @@ mod tests {
         );
     }
 
+    /// PANEL-9 where the policy refuses to quarantine the report. The turn has counted the
+    /// delegate's usage when it fails, so the delegate has to be reported finished (failed) or the
+    /// running total keeps adding it beside the turn's next report, which holds it already. A
+    /// slot that is already written makes the quarantine write fail. An untrusted report is given
+    /// directly, since a delegate's own context meets nothing untrusted on the ordinary paths.
+    #[test]
+    fn a_report_the_policy_refuses_ends_its_delegate_and_leaves_its_spend_in_the_total_once() {
+        use bravebot_core::{SlotId, label::Label};
+
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+        );
+        let a_total = |tokens: u64| crate::outcome::Spent {
+            tokens,
+            ..Default::default()
+        };
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "collect a report that cannot be quarantined");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let mut conversation = Conversation::new();
+        // The slot the report would be written to, taken already.
+        let earlier = policy.label_piped_input("AN-EARLIER-RESULT".to_string());
+        conversation
+            .quarantine()
+            .writer_for(SlotId::new("ref:0"), Label::untrusted_public())
+            .unwrap()
+            .write_measured(earlier)
+            .unwrap();
+        let report = policy.label_piped_input("WHAT-THE-UNVOUCHED-LOOK-FOUND".to_string());
+        let mut recording = crate::report::RecordingReporter::default();
+        let mut tokens = 1_000;
+        {
+            let lent = crate::shared::Lent::new(&mut recording);
+            let mut turn = lent.turn();
+            let mut running = lent.delegate(DelegateId::nth(1));
+            turn.spent(a_total(1_000));
+            running.spent(a_total(500));
+            let outcome = std::thread::scope(|scope| {
+                let handed = seeded.clone();
+                let answered = scope.spawn(move || -> Joined {
+                    (
+                        crate::delegate::Ended {
+                            delegated: Ok(crate::delegate::Delegated {
+                                report,
+                                kind: "one-round".to_string(),
+                                usage: bravebot_aichat::protocol::Usage {
+                                    prompt_tokens: 400,
+                                    completion_tokens: 100,
+                                    ..Default::default()
+                                },
+                            }),
+                            vouched: handed,
+                            notices: Vec::new(),
+                            rounds: 1,
+                            took: Duration::from_millis(900),
+                        },
+                        Default::default(),
+                        Vec::new(),
+                    )
+                });
+                let mut delegates = vec![Working {
+                    join_started: None,
+                    id: DelegateId::nth(1),
+                    seeded: seeded.clone(),
+                    checkout: None,
+                    rounds: 1,
+                    stop: Default::default(),
+                    handle: answered,
+                }];
+                collect_delegates(
+                    &mut delegates,
+                    &mut policy,
+                    &mut conversation,
+                    &mut turn,
+                    &mut tokens,
+                    &mut 0,
+                    &mut Cached::default(),
+                    true,
+                    &mut crate::timing::DelegateWait::default(),
+                    &mut Elapsed::default(),
+                    &mut Vec::new(),
+                )
+            });
+            let Err(TurnError::Precommit(refused)) = outcome else {
+                panic!("a report that could not be quarantined was presented anyway");
+            };
+            assert!(
+                refused.contains("could not quarantine a one-round delegate"),
+                "the turn failed for some other reason: {refused}"
+            );
+            assert_eq!(tokens, 1_500, "the delegate's usage was not counted");
+            turn.spent(a_total(tokens));
+        }
+
+        assert!(
+            matches!(
+                recording.delegates_finished.as_slice(),
+                [(id, _, true)] if *id == DelegateId::nth(1)
+            ),
+            "the delegate was not reported as finished and failed: {:?}",
+            recording.delegates_finished
+        );
+        assert_eq!(
+            recording.spent,
+            vec![a_total(1_000), a_total(1_500), a_total(1_500)],
+            "the delegate's spend was counted again beside the turn's"
+        );
+    }
+
     /// A turn holds a grant for each server the session reached and for no other. A worker it
     /// spawns holds the same ones, and a reader and a checker hold none, whatever servers the
     /// delegate's own task names: its grants are its spec's.

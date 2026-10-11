@@ -182,6 +182,7 @@ Raw backend errors remain outside planner context and user-facing history.
 `verified-by: bravebot_agent::shared::a_delegates_context_reading_is_not_the_turns`
 `verified-by: bravebot_agent::shared::a_nested_delegates_spend_reaches_the_turns_total`
 `verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
+`verified-by: bravebot_agent::turn::a_report_the_policy_refuses_ends_its_delegate_and_leaves_its_spend_in_the_total_once`
 
 `verified-by: bravebot_agent::turn::planner_retry_costs_do_not_replace_the_last_prompt_measurement`
 `verified-by: bravebot_agent::turn::completed_empty_reply_keeps_reported_usage_on_failure`
