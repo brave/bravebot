@@ -3291,7 +3291,7 @@ mod tests {
         );
     }
 
-    /// SERVERS-17: header names and environment variable names are drawn,
+    /// SERVERS-18: header names and environment variable names are drawn,
     /// and secret values are never read or shown.
     #[test]
     fn a_declarations_headers_are_drawn_with_variable_names_and_without_secrets() {

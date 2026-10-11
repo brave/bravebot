@@ -2306,7 +2306,7 @@ mod tests {
         assert_eq!(found(&remote), Problem::Remote("env"));
     }
 
-    /// SERVERS-17: `--bearer-env` and `--header-env` are parsed for HTTP declarations,
+    /// SERVERS-18: `--bearer-env` and `--header-env` are parsed for HTTP declarations,
     /// read environment variable names, and are refused for stdio declarations.
     #[test]
     fn http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio() {

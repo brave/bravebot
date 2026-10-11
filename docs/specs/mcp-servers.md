@@ -167,7 +167,7 @@ machine asks again, and a deliberate `rm -rf` of the workspace no longer forgets
 
 ```
 bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--stdio] -- <program> [args...]
-bravebot mcp add <alias> [-s <scope>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] --http <url>
+bravebot mcp add <alias> [-s <scope>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--bearer-env <name>] [--header-env <header>=<name>...] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
 bravebot mcp approve <alias>
@@ -220,7 +220,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | `claude mcp add brave-search -e BRAVE_API_KEY_FILE=/path/to/key -- npx -y @brave/brave-search-mcp-server` | the same line | The value is stored in `~/.bravebot/mcp.json`. The key file it names is one the server may read, and the question shows it as `may read`. |
 | `claude mcp add gmail -e WORKSPACE_FEATURE_OVERRIDES=... -- node ~/google-workspace-mcp/dist/index.js` | `bravebot mcp add gmail -e GEMINI_CLI_WORKSPACE_FORCE_FILE_STORAGE=true -e WORKSPACE_FEATURE_OVERRIDES=... -e BROWSER=www-browser --dir ~/google-workspace-mcp -- node ~/google-workspace-mcp/dist/index.js` | Google's Workspace server. Claude Code runs it with the person's `HOME`. Here `HOME` is the server's own ([SERVERS-10](#SERVERS-10)), so the server keeps its token in a file in its own directory, and `--dir` makes that directory writable. The sign-in, `node dist/headless-login.js`, is run first and outside bravebot. What the server returns is private ([MCP-1](mcp.md#MCP-1)). |
 | `claude mcp add calendar -e WORKSPACE_FEATURE_OVERRIDES=... -- node ~/google-workspace-calendar-mcp/dist/index.js` | `bravebot mcp add calendar -e GEMINI_CLI_WORKSPACE_FORCE_FILE_STORAGE=true -e WORKSPACE_FEATURE_OVERRIDES=... -e BROWSER=www-browser --dir ~/google-workspace-calendar-mcp -- node ~/google-workspace-calendar-mcp/dist/index.js` | The same server as the Gmail row, with the Calendar read group left on and every other group off, in a directory of its own so each token has one. The sign-in, `node dist/headless-login.js`, is run first and outside bravebot. What the server returns is private ([MCP-1](mcp.md#MCP-1)). |
-| `claude mcp add github -e GITHUB_PERSONAL_ACCESS_TOKEN=... -- docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server` | `bravebot mcp add github -e GITHUB_PERSONAL_ACCESS_TOKEN=... -- ~/github-mcp-server/github-mcp-server stdio --read-only --lockdown-mode --toolsets issues,pull_requests` | GitHub's own server, run as its released binary. The Docker line does not work here, because a confined server does not reach the Docker daemon, and the hosted server needs an `Authorization` header that `--http` does not send. The flags are part of the declaration, so they show at the question. What the server returns is private ([MCP-1](mcp.md#MCP-1)). |
+| `claude mcp add github --http https://api.githubcopilot.com/mcp -e GITHUB_PERSONAL_ACCESS_TOKEN=...` | `bravebot mcp add github --http https://api.githubcopilot.com/mcp --bearer-env GITHUB_PERSONAL_ACCESS_TOKEN` | GitHub's remote MCP endpoint. `--bearer-env` reads `GITHUB_PERSONAL_ACCESS_TOKEN` from the environment at launch and sends it as `Authorization: Bearer <token>` to `api.githubcopilot.com` only ([SERVERS-18](#SERVERS-18)). What the server returns is private ([MCP-1](mcp.md#MCP-1)). |
 | `claude mcp add weather -s user -- ...` | `bravebot mcp add weather -s user -- ...` | The declaration goes in `~/.bravebot/mcp.json` whatever the scope. The request goes in `~/.bravebot/settings.json`, so every session starts it. |
 | `claude mcp add weather -s project -- ...` | `bravebot mcp add weather -s project -- ...` | [SERVERS-1](#SERVERS-1). The checkout's `.bravebot/settings.json` gets the alias and not the argv. |
 | `claude mcp get weather` | `bravebot mcp get weather` | Also prints the digest, which is what an approval is against. |
@@ -231,7 +231,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 
 | What | Where | Scope | Lifetime |
 |---|---|---|---|
-| A declaration: alias, transport, argv or url, the variable names it needs, the values it stores, the files it may read, its directory, its startup and call bounds | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
+| A declaration: alias, transport, argv or url, the variable names it needs, the values it stores, the files it may read, its directory, its startup and call bounds, and the HTTP headers read from environment variables | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
 | An approval of a server, one digest and the alias it was given about per line, and a `changed` line per alias whose approved declaration changed since | `~/.bravebot/mcp-approved` | the person's own directory | until the declaration changes |
 | The list of tools a person vouched for, a `tools` line holding the declaration's digest and the list's | `~/.bravebot/mcp-approved` | the person's own directory | until another list is vouched for under that declaration, or no declaration resolves to it |
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
@@ -241,7 +241,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | What may start, `"mcp": { "allow": [{ "host": "*.corp.example" }], "deny": [{ "command": ["/opt/weather-mcp"] }] }` | the managed layer | the machine | as long as it is pinned |
 | A declaration, an argv, a url, or a variable's value | `.bravebot/settings.json` or `.bravebot/settings.local.json` | **nothing.** [SERVERS-1](#SERVERS-1) | n/a |
 | A variable's value given at `add` as `-e NAME=value` | `~/.bravebot/mcp.json`, under `env` | the person's own directory | until they change it |
-| A variable's value given by name | nowhere. The value is the person's own environment at launch | n/a | n/a |
+| A variable's value given by name, or an HTTP header variable | nowhere. The value is the person's own environment at launch | n/a | n/a |
 
 `~/.bravebot` is the state directory, which on Unix is readable only by the user
 ([STATE-1](state-directory.md#STATE-1)), and a machine naming no profile directory has no state
@@ -1524,6 +1524,35 @@ full user visibility into withheld tools.
 `verified-by: bravebot_cli::mcp::the_tool_filter_flags_set_allow_and_deny_lists_and_refuse_invalid_inputs`
 `verified-by: bravebot_cli::mcp::the_question_shows_tool_allow_and_deny_filters`
 
+<a id="SERVERS-18"></a>
+### SERVERS-18: an HTTP server declaration may read authorization and custom headers from named environment variables
+
+An HTTP server declaration may carry `--bearer-env <name>` and `--header-env <header>=<name>` flags
+naming environment variables to read when the server starts. The bearer flag is shorthand for
+sending `Authorization: Bearer <token>`. The values are read from the person's own environment at
+launch and are never written to `~/.bravebot/mcp.json`, never stored in any settings file, and
+never displayed in prompts, `get`, or `list` output. Those surfaces display the header names and
+the variable names (for example, `Authorization: Bearer $TOKEN`), ensuring secrets are never shown
+or stored.
+
+The header names and variable names are covered by the declaration's digest, so altering or adding
+a header requires re-approval. The environment variable values are attached inside `bravebot-net`
+only to requests matching the declared socket (scheme, host, and port). Any redirect hop that leaves
+the declared socket strips socket headers and `Authorization`, and a cross-socket hop is refused
+at the egress gate and put to the person as a server move ([SERVERS-11](#SERVERS-11)) before any
+credentialed request is sent. The planner never sees the credential values. Storing static values or
+using header flags with a stdio transport is refused.
+
+**Why.** Hosted MCP servers (such as GitHub's Copilot MCP endpoint) require authentication headers.
+Reading tokens from named environment variables allows using hosted servers securely without
+persisting secrets in configuration files or leaking them to other origins across redirects.
+
+`verified-by: bravebot_config::mcp::http_headers_and_bearer_env_are_validated_digested_and_roundtripped`
+`verified-by: bravebot_net::egress::socket_scoped_headers_and_authorization_are_dropped_across_different_sockets_on_redirect`
+`verified-by: bravebot_net::egress::socket_scoped_headers_are_kept_on_same_socket_redirect`
+`verified-by: bravebot_mcp::http::configured_headers_are_attached_to_requests`
+`verified-by: bravebot_cli::mcp::http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio`
+`verified-by: bravebot_agent::servers::a_declarations_headers_are_drawn_with_variable_names_and_without_secrets`
 
 ## Testing this with the weather server
 
