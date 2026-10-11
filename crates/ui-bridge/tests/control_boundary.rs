@@ -66,6 +66,14 @@ fn attacker_entry() {
     .to_string()
         + "\n";
 
+    let inherited: Vec<i32> = target["inherited"]
+        .as_array()
+        .map(|fds| {
+            fds.iter()
+                .filter_map(|fd| fd.as_i64().map(|n| n as i32))
+                .collect()
+        })
+        .unwrap_or_default();
     let mut sockets_held = 0;
     let mut socket_fds = Vec::new();
     let mut other_sockets = Vec::new();
@@ -77,7 +85,7 @@ fn attacker_entry() {
         let Ok(meta) = file.metadata() else { continue };
         if meta.file_type().is_socket() {
             let kind = socket_kind(fd);
-            if kind != "channel" {
+            if inherited.contains(&fd) || kind != "channel" {
                 // Not one end of an unnamed pair, so not a control channel: something this
                 // process inherited from wherever it was started.
                 other_sockets.push(format!("fd {fd}: {kind}"));
@@ -116,8 +124,13 @@ fn attacker_entry() {
             .open(path)
         {
             let kind = file.metadata().map(|m| m.file_type());
+            let named_fd = path
+                .strip_prefix("/dev/fd")
+                .ok()
+                .and_then(|name| name.to_string_lossy().parse::<i32>().ok());
             let channel_socket = kind.as_ref().is_ok_and(|t| t.is_socket())
-                && socket_kind(file.as_raw_fd()) == "channel";
+                && socket_kind(file.as_raw_fd()) == "channel"
+                && !named_fd.is_some_and(|fd| inherited.contains(&fd));
             if channel_socket || kind.is_ok_and(|t| *pipe_counts && t.is_fifo()) {
                 reached.push(format!("open {}", path.display()));
                 let _ = (&file).write_all(forged.as_bytes());
@@ -242,6 +255,22 @@ fn socket_kind(fd: i32) -> &'static str {
     }
 }
 
+/// The socket descriptors this process holds that every program it starts will inherit: those not
+/// marked close-on-exec. A control channel's ends are always marked, so these came from whatever
+/// started this process (a CI runner leaves some open), and a program that holds one has not been
+/// handed a channel. Taken under the gate, so no channel being made on another thread is counted.
+fn inherited_sockets() -> Vec<i32> {
+    bravebot_sandbox::process::creating_a_channel(|| {
+        (0..256)
+            .filter(|fd| {
+                let file = ManuallyDrop::new(unsafe { File::from_raw_fd(*fd) });
+                file.metadata().is_ok_and(|m| m.file_type().is_socket())
+                    && unsafe { libc::fcntl(*fd, libc::F_GETFD) } & libc::FD_CLOEXEC == 0
+            })
+            .collect()
+    })
+}
+
 /// Lists what this process holds, for the programs a host starts to run: how many descriptors, and
 /// which of them are control channels. Does nothing in an ordinary run.
 #[test]
@@ -249,12 +278,19 @@ fn list_my_sockets() {
     if std::env::var_os(LIST_SOCKETS).is_none() {
         return;
     }
+    // The descriptors the host itself was started with, which are not channels it made.
+    let inherited: Vec<i32> = std::env::var(INHERITED)
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|fd| fd.parse().ok())
+        .collect();
     let mut open = 0;
     for fd in 0..256 {
         let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd) });
         let Ok(meta) = file.metadata() else { continue };
         open += 1;
-        if meta.file_type().is_socket() && socket_kind(fd) == "channel" {
+        if meta.file_type().is_socket() && socket_kind(fd) == "channel" && !inherited.contains(&fd)
+        {
             println!("CHANNEL fd {fd}");
         }
     }
@@ -262,12 +298,15 @@ fn list_my_sockets() {
 }
 
 const LIST_SOCKETS: &str = "CONTROL_BOUNDARY_LIST_SOCKETS";
+const INHERITED: &str = "CONTROL_BOUNDARY_INHERITED";
 
 /// The command line that runs [`list_my_sockets`] in a program a host starts.
 fn list_sockets_command() -> String {
     let exe = std::env::current_exe().expect("the test binary");
+    let inherited: Vec<String> = inherited_sockets().iter().map(i32::to_string).collect();
     format!(
-        "{LIST_SOCKETS}=1 '{}' --exact list_my_sockets --nocapture",
+        "{LIST_SOCKETS}=1 {INHERITED}={} '{}' --exact list_my_sockets --nocapture",
+        inherited.join(","),
         exe.display()
     )
 }
@@ -644,7 +683,7 @@ fn let_the_attacker_try(scratch: &Scratch, waiting: &Waiting) -> Value {
         dir.join("target"),
         json!({"session": waiting.session, "request": waiting.request,
             "rpc_pid": waiting.rpc_pid, "client_pid": std::process::id(),
-            "control_pid": control.id()})
+            "control_pid": control.id(), "inherited": inherited_sockets()})
         .to_string(),
     )
     .unwrap();
