@@ -82,6 +82,60 @@ pub fn threads_waiting_at_the_gate() -> Vec<std::thread::ThreadId> {
     WAITING.lock().unwrap_or_else(|p| p.into_inner()).clone()
 }
 
+/// For tests of a caller that starts a program: runs `start` on another thread while this one holds
+/// the gate, and checks that the start is seen waiting at the gate, has not finished, and finishes
+/// once the gate is released. A start that never reaches the gate fails after ten seconds.
+#[doc(hidden)]
+pub fn start_waits_at_the_gate(start: impl FnOnce() + Send + 'static) {
+    start_waits_at_the_gate_within(start, std::time::Duration::from_secs(10));
+}
+
+/// As [`start_waits_at_the_gate`], with `to_reach` as the time a start gets to reach the gate.
+#[doc(hidden)]
+pub fn start_waits_at_the_gate_within(
+    start: impl FnOnce() + Send + 'static,
+    to_reach: std::time::Duration,
+) {
+    use std::sync::mpsc::{TryRecvError, channel};
+    use std::time::{Duration, Instant};
+    let (finished, done) = channel();
+    let (named, who) = channel();
+    let thread = creating_a_channel(|| {
+        let thread = std::thread::spawn(move || {
+            let _ = named.send(std::thread::current().id());
+            start();
+            let _ = finished.send(());
+        });
+        let id = who
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the start thread runs");
+        let deadline = Instant::now() + to_reach;
+        while !threads_waiting_at_the_gate().contains(&id) {
+            match done.try_recv() {
+                Err(TryRecvError::Empty) => {}
+                Ok(()) => panic!("a program was started while a control channel was being created"),
+                Err(TryRecvError::Disconnected) => {
+                    panic!("the start thread failed instead of waiting")
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the start never reached the gate, so it does not wait for it (or it now starts \
+                 on a thread other than the one this test runs it on)"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            matches!(done.try_recv(), Err(TryRecvError::Empty)),
+            "a program was started while a control channel was being created"
+        );
+        thread
+    });
+    done.recv_timeout(Duration::from_secs(30))
+        .expect("the start never went ahead once the gate was released");
+    thread.join().expect("the start thread ends");
+}
+
 /// Takes the gate with `acquire`, listing this thread as waiting until it has it.
 fn waiting<G>(acquire: impl FnOnce() -> G) -> G {
     let me = std::thread::current().id();

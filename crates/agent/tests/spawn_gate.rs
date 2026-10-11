@@ -18,59 +18,17 @@ use bravebot_agent::{exec, hooks, shell};
 use bravebot_config::hooks::{Hooks, Moment};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::{Pipeline, Stage};
-use bravebot_sandbox::process::{creating_a_channel, threads_waiting_at_the_gate};
 use std::path::Path;
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
-
-const PATIENCE: Duration = Duration::from_secs(30);
-
-/// How long a start gets to reach the gate. A start that does not use it never does.
-const TO_REACH_THE_GATE: Duration = Duration::from_secs(10);
+use std::time::Duration;
 
 /// Runs `start` on another thread while this one holds the gate, and checks that the start reaches
 /// the gate, is held there, and finishes once the gate is released.
 fn start_waits_for_the_gate(start: impl FnOnce() + Send + 'static) {
-    start_waits_for_the_gate_within(start, TO_REACH_THE_GATE);
+    bravebot_sandbox::process::start_waits_at_the_gate(start);
 }
 
 fn start_waits_for_the_gate_within(start: impl FnOnce() + Send + 'static, to_reach: Duration) {
-    let (finished, done) = mpsc::channel();
-    let (named, who) = mpsc::channel();
-    let thread = creating_a_channel(|| {
-        let thread = std::thread::spawn(move || {
-            let _ = named.send(std::thread::current().id());
-            start();
-            let _ = finished.send(());
-        });
-        let id = who.recv_timeout(PATIENCE).expect("the start thread runs");
-        let deadline = Instant::now() + to_reach;
-        while !threads_waiting_at_the_gate().contains(&id) {
-            match done.try_recv() {
-                Err(mpsc::TryRecvError::Empty) => {}
-                Ok(()) => {
-                    panic!("a program was started while a control channel was being created")
-                }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    panic!("the start thread failed instead of waiting")
-                }
-            }
-            assert!(
-                Instant::now() < deadline,
-                "the start never reached the gate, so it does not wait for it (or it now starts on a thread \
-                 other than the one this test runs it on)"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(
-            matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty)),
-            "a program was started while a control channel was being created"
-        );
-        thread
-    });
-    done.recv_timeout(PATIENCE)
-        .expect("the start never went ahead once the gate was released");
-    thread.join().expect("the start thread ends");
+    bravebot_sandbox::process::start_waits_at_the_gate_within(start, to_reach);
 }
 
 #[test]
