@@ -362,14 +362,20 @@ class Scope(unittest.TestCase):
         "docs/specs/thing.md": "---\nid: THING\ngoverns:\n  - crates/a/src/lib.rs\nguards:\n  - symbol: Policy::first_unused\n---\n# Thing\n",
     }
 
-    def test_lanes_paths_and_the_cap(self):
+    def test_naming_a_lane_scans_only_that_lane(self):
         with tree(self.files) as root:
             self.assertEqual(list(m.scan(root, ("size",))), ["size"])
+
+    def test_a_path_prefix_limits_the_candidates_to_files_under_it(self):
+        with tree(self.files) as root:
             scoped = m.scan(root, ("unreferenced",), ("crates/b",))["unreferenced"]
-            self.assertEqual([c["symbol"] for c in scoped["candidates"]], ["third_unused"])
+        self.assertEqual([c["symbol"] for c in scoped["candidates"]], ["third_unused"])
+
+    def test_the_cap_keeps_the_first_candidates_and_counts_the_rest_as_left_out(self):
+        with tree(self.files) as root:
             capped = m.scan(root, ("unreferenced",), limit=2)["unreferenced"]
-            self.assertEqual([c["id"] for c in capped["candidates"]], ["U1", "U2"])
-            self.assertEqual(capped["left_out"], 1)
+        self.assertEqual([c["id"] for c in capped["candidates"]], ["U1", "U2"])
+        self.assertEqual(capped["left_out"], 1)
 
     def test_a_candidate_names_the_spec_governing_it_and_the_guard_it_touches(self):
         with tree(self.files) as root:
