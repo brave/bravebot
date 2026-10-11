@@ -7347,6 +7347,85 @@ fn manifest_usage_controls_survive_storage() {
     }
 }
 
+/// SESSION-10: naming a manifest run on the command line prints what it produced to stdout and
+/// exits successfully. A refusal, on stderr or with a failure status, would make the advice the
+/// session printed ("name it to read it") look broken to the person who followed it.
+#[test]
+fn naming_a_manifest_run_prints_its_report_and_succeeds() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let requests = count.clone();
+    let plan = r#"{"steps":[
+        {"capability":"FILE_READ","args":{"path":"a.md","out_slot":"raw"}},
+        {"capability":"TRANSFORM","args":{"reads":["raw"],"instruction":"summarise","out_slot":"summary"}},
+        {"capability":"ANSWER","args":{"from_slot":"summary"}}]}"#;
+    let gateway = a_gateway("[]", move |_| {
+        match requests.fetch_add(1, Ordering::SeqCst) {
+            0 => usage_reply(None, "Read and summarise a.md", 12, 5),
+            1 => usage_reply(None, plan, 20, 9),
+            _ => http(401, r#"{"error":{"message":"denied"}}"#),
+        }
+    });
+    let scratch = Scratch::new("manifest-run-named")
+        .with_settings(&settings_for(&gateway))
+        .with_file("a.md", "hello");
+    let ran = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "--mode",
+            "manifest",
+            "--dangerously-skip-permissions",
+            "--json",
+            "-p",
+            "summarise",
+        ],
+    );
+    assert!(!ran.status.success(), "{}", said(&ran).1);
+    let asked = count.load(Ordering::SeqCst);
+    let sessions = scratch.path.join(".bravebot/sessions");
+    let record = std::fs::read_dir(&sessions)
+        .expect("sessions directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .flat_map(|path| {
+            if path.is_dir() {
+                std::fs::read_dir(path)
+                    .expect("workspace directory")
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .collect()
+            } else {
+                vec![path]
+            }
+        })
+        .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .expect("a manifest record");
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(record).unwrap()).unwrap();
+    let id = record["id"].as_str().expect("the record names its id");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--resume", id],
+    );
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.is_empty(), "a report is not a refusal: {stderr}");
+    assert!(
+        stdout.contains("Plan, fixed before anything runs")
+            && stdout.contains("read a.md into raw"),
+        "the report is on stdout: {stdout}"
+    );
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        asked,
+        "naming the run reads it back and does not continue it"
+    );
+}
+
 /// The commands and flags `--help` lists, read off the two tables a person reads: the first column
 /// of the usage lines and of the options lines. Prose in a description that happens to name a flag
 /// is not a row of either table, so it is not read.
