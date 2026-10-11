@@ -815,7 +815,15 @@ fn question(shared: &mut Shared, session: &str, name: &str, data: &Value) {
             "status": "pending",
             "content": [{ "type": "content", "content": { "type": "text", "text": fenced(&text) } }],
         }),
-        options(remember, "Allow once", "Reject"),
+        options(
+            remember,
+            if stem == "host" {
+                "Allow for this session"
+            } else {
+                "Allow once"
+            },
+            "Reject",
+        ),
     );
 }
 
@@ -1504,6 +1512,36 @@ mod tests {
         assert!(rows.contains(&"registry.example.com"), "{text}");
         assert!(rows.contains(&"evil\u{241b}[2J.example"), "{text}");
         assert!(text.contains("sandbox.network.allowedHosts"), "{text}");
+    }
+
+    #[test]
+    fn a_host_request_offers_the_session_not_a_single_use() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let mut shared = Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::new(),
+            unasked: HashSet::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        };
+        question(
+            &mut shared,
+            "s",
+            "host.request",
+            &json!({"request": 4, "hosts": ["example.com"]}),
+        );
+        let written = written.lock().unwrap();
+        assert_eq!(written.len(), 1);
+        let names: Vec<&str> = written[0]["params"]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|option| option["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Allow for this session", "Reject"]);
     }
 
     #[test]

@@ -1724,6 +1724,7 @@ while a list is set.
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the card is pinned instead by ui/scripts/host-card.test.mjs, which asserts that it lists every host as text, says how long a yes lasts and what deniedHosts still refuses, offers no standing answer, takes only a host answer, and that the main process lets host.reply through; ui/scripts/shown.test.mjs asserts that an approval waits on the hosts being on screen; make check-ui runs both)`
 `verified-by: bravebot_ui_bridge::wire::a_host_prompt_carries_the_hosts_and_nothing_else`
 `verified-by: bravebot_ui_bridge::acp::a_host_request_is_shown_with_each_host_on_a_row_and_its_escapes_pictured`
+`verified-by: bravebot_ui_bridge::acp::a_host_request_offers_the_session_not_a_single_use`
 `verified-by: bravebot_sandbox::proxy::the_environment_points_every_proxy_variable_at_the_loopback_port`
 `verified-by: bravebot_sandbox::proxy::dropping_the_proxy_stops_it_listening`
 `verified-by: bravebot_agent::host_proxy::a_stage_holds_the_defaults_its_own_reasons_bring_and_no_others`
