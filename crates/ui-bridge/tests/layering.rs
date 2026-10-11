@@ -503,46 +503,43 @@ fn every_binary_that_speaks_over_its_own_stdio_marks_itself_non_dumpable() {
     let mut unmarked = Vec::new();
     visit(&binaries, &mut |path, text| {
         seen += 1;
-        if !marks_itself_before_reading(text) {
+        if !marks_itself_first(text) {
             unmarked.push(path.display().to_string());
         }
     });
     assert!(seen > 0, "no binaries found under {binaries:?}");
     assert!(
         unmarked.is_empty(),
-        "these binaries do not mark themselves non-dumpable before they read:\n{}",
+        "these binaries do not mark themselves non-dumpable as the first thing they do:\n{}",
         unmarked.join("\n")
     );
 }
 
-/// Whether `text` calls `refuse_same_user_inspection` on a line of code, before any line that
-/// reads standard input.
-fn marks_itself_before_reading(text: &str) -> bool {
-    let code = |line: &str| line.split("//").next().unwrap_or("").to_string();
-    let mark = text
-        .lines()
-        .position(|line| code(line).contains("refuse_same_user_inspection("));
-    let read = text.lines().position(|line| code(line).contains("stdin"));
-    match (mark, read) {
-        (Some(mark), Some(read)) => mark < read,
-        (Some(_), None) => true,
-        (None, _) => false,
+/// Whether the first statement of `main` in `text` is the call to `refuse_same_user_inspection`.
+/// The descriptors the bridge speaks over exist from the moment it starts, so nothing runs before
+/// the protection is requested.
+fn marks_itself_first(text: &str) -> bool {
+    let mut lines = text.lines();
+    if !lines.any(|line| line.trim_start().starts_with("fn main()")) {
+        return false;
     }
+    lines
+        .map(|line| line.split("//").next().unwrap_or("").trim())
+        .find(|code| !code.is_empty())
+        .is_some_and(|code| code.contains("refuse_same_user_inspection("))
 }
 
 #[test]
 fn a_comment_that_names_the_call_does_not_mark_the_process() {
-    assert!(!marks_itself_before_reading(
+    assert!(!marks_itself_first(
         "fn main() {\n    // See refuse_same_user_inspection().\n}\n"
     ));
 }
 
 #[test]
-fn a_call_after_standard_input_is_read_is_too_late() {
-    let late =
-        "fn main() {\n    let line = std::io::stdin();\n    refuse_same_user_inspection();\n}\n";
-    assert!(!marks_itself_before_reading(late));
-    let early =
-        "fn main() {\n    refuse_same_user_inspection();\n    let line = std::io::stdin();\n}\n";
-    assert!(marks_itself_before_reading(early));
+fn a_call_after_another_statement_is_too_late() {
+    let late = "fn main() {\n    disable_core_dumps();\n    refuse_same_user_inspection();\n}\n";
+    assert!(!marks_itself_first(late));
+    let first = "fn main() {\n    // Why.\n    if let Some(n) = refuse_same_user_inspection().notice() {\n    }\n    disable_core_dumps();\n}\n";
+    assert!(marks_itself_first(first));
 }
