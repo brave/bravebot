@@ -43,6 +43,3 @@ serde_json = { workspace = true }
 # a file with, and flock(2), for the claim a session holds on its scratch directory. rustix rather
 # than libc so the calls do not need unsafe at this crate.
 rustix = { workspace = true, features = ["fs", "system"] }
-
-[dev-dependencies]
-tempfile = { workspace = true }

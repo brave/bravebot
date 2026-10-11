@@ -4230,9 +4230,9 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
-    /// Writes `~/.ssh/repo.pub` and starts an agent, at a socket short enough to bind under any checkout, that holds the key it names.
+    /// Writes `~/.ssh/repo.pub` and starts an agent that holds the key it names, at a socket path short enough to bind under any checkout.
     #[cfg(unix)]
-    fn an_agent_holding_the_repo_key(home: &Path) -> (PathBuf, tempfile::TempDir) {
+    fn an_agent_holding_the_repo_key(home: &Path) -> PathBuf {
         use std::io::{Read, Write};
         const HELD: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
         std::fs::write(
@@ -4240,12 +4240,11 @@ mod tests {
             format!("ssh-ed25519 {HELD} comment\n"),
         )
         .unwrap();
-        // A unix socket path is limited to about 100 bytes, so it cannot sit in a home under a deep checkout.
-        let directory = tempfile::Builder::new()
-            .prefix("bb-agent-")
-            .tempdir()
-            .unwrap();
-        let socket = directory.path().canonicalize().unwrap().join("s");
+        // A socket path must fit in sun_path, which a home under a deep checkout does not.
+        let name = home.file_name().unwrap().to_str().unwrap();
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let socket = std::env::temp_dir().join(format!("bb{}-{name}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&socket);
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -4268,7 +4267,7 @@ mod tests {
                 let _ = stream.write_all(&reply);
             }
         });
-        (socket, directory)
+        socket
     }
 
     /// SANDBOX-16: a stage that signs is lent a `.pub` in `~/.ssh` whose key the agent named by the
@@ -4282,7 +4281,7 @@ mod tests {
             SIGNS_WITH_A_KEY,
             &["keys/work.pub", ".ssh/unheld.pub"],
         );
-        let (socket, _directory) = an_agent_holding_the_repo_key(&home);
+        let socket = an_agent_holding_the_repo_key(&home);
         let step = step("/usr/bin/git", &["commit", "-m", "x"]);
         let held =
             |policy: &SandboxPolicy, file: &str| reads(policy, home.join(file).to_str().unwrap());
@@ -4301,6 +4300,7 @@ mod tests {
         assert!(held(&policy, "keys/work.pub"));
         assert!(!held(&policy, ".ssh/repo.pub"));
 
+        std::fs::remove_file(&socket).unwrap();
         std::fs::remove_dir_all(&home).unwrap();
     }
 
@@ -4316,7 +4316,7 @@ mod tests {
             SIGNS_WITH_A_KEY,
             &["keys/work.pub", ".ssh/unheld.pub"],
         );
-        let (socket, _directory) = an_agent_holding_the_repo_key(&home);
+        let socket = an_agent_holding_the_repo_key(&home);
         let environment = vec![(
             "SSH_AUTH_SOCK".to_string(),
             socket.to_str().unwrap().to_string(),
@@ -4352,6 +4352,7 @@ mod tests {
             assert!(lent(".ssh/repo.pub"), "{way}");
             assert!(!lent(".ssh/unheld.pub"), "{way}");
         }
+        std::fs::remove_file(&socket).unwrap();
         std::fs::remove_dir_all(&home).unwrap();
     }
 
