@@ -277,6 +277,10 @@ fn every_program_the_bridge_process_starts_goes_through_the_spawn_gate() {
             {
                 return;
             }
+            // Windows has no fork, so a handle is not inherited by a program started elsewhere.
+            if path.components().any(|part| part.as_os_str() == "windows") {
+                return;
+            }
             for number in ungated_starts(text) {
                 offences.push(format!("{}:{number}", path.display()));
             }
@@ -299,11 +303,19 @@ fn ungated_starts(text: &str) -> Vec<usize> {
     let mut found = Vec::new();
     for (at, (number, line)) in lines.iter().enumerate() {
         let code = line.split("//").next().unwrap_or("");
-        let Some(start) = [".spawn()", ".output()", ".status()"]
-            .iter()
-            .filter_map(|call| code.find(call))
-            .min()
-        else {
+        // A descriptor made in two steps on macOS (`pipe` then close-on-exec) is the same hazard as a
+        // socket pair: a program started on another thread in between inherits it.
+        let Some(start) = [
+            ".spawn()",
+            ".output()",
+            ".status()",
+            "io::pipe()",
+            "UnixStream::pair()",
+            "socketpair(",
+        ]
+        .iter()
+        .filter_map(|call| code.find(call))
+        .min() else {
             continue;
         };
         // The statement that starts it: a few lines up to where it is built.
@@ -316,7 +328,13 @@ fn ungated_starts(text: &str) -> Vec<usize> {
         // A `.spawn()` with no arguments is a `Command` in every crate this reads. `output` and
         // `status` are also methods of other things, so those count only beside a command.
         let is_spawn = code[start..].starts_with(".spawn()");
-        if !is_spawn && !(statement.contains("Command") || statement.contains("command")) {
+        let is_descriptor = !code[start..].starts_with(".output()")
+            && !code[start..].starts_with(".status()")
+            && !is_spawn;
+        if !is_spawn
+            && !is_descriptor
+            && !(statement.contains("Command") || statement.contains("command"))
+        {
             continue;
         }
         // Inside the gate means a call to either function that is still open where the start is.
@@ -400,6 +418,24 @@ fn every_form_of_test_only_code_is_left_out() {
 fn a_brace_in_a_string_does_not_change_where_a_test_module_ends() {
     let text = "#[cfg(test)]\nmod tests {\n    const OPEN: &str = \"{\";\n}\n\nfn a() {\n    command.spawn();\n}\n";
     assert_eq!(ungated_starts(text), vec![7]);
+}
+
+#[test]
+fn a_descriptor_made_outside_the_gate_is_an_offence() {
+    for creation in [
+        "std::io::pipe()",
+        "UnixStream::pair()",
+        "libc::socketpair(libc::AF_UNIX, 1, 0, fds)",
+    ] {
+        let text = format!("fn a() {{\n    let made = {creation};\n}}\n");
+        assert_eq!(ungated_starts(&text), vec![2], "{creation}");
+    }
+}
+
+#[test]
+fn a_descriptor_made_inside_the_gate_is_not_an_offence() {
+    let text = "fn a() {\n    let made = creating_a_channel(|| std::io::pipe());\n}\n";
+    assert_eq!(ungated_starts(text), Vec::<usize>::new());
 }
 
 #[test]
