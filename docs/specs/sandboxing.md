@@ -2234,6 +2234,30 @@ the person's access, which the confinement exists to deny it.
 `verified-by: bravebot_tui::clipboard::a_paste_tool_installed_outside_every_writable_directory_is_read`
 `verified-by: bravebot_tui::clipboard::the_clipboard_entry_points_start_no_tool_found_only_in_a_directory_a_stage_may_write`
 
+<a id="SANDBOX-31"></a>
+### SANDBOX-31: on macOS a confined process looks up a fixed list of Mach services and no others
+
+A Seatbelt profile allows a Mach lookup of the services in a fixed list and of nothing else, for
+every policy: the account and group lookups a program makes as it starts (`opendirectoryd`), the
+notification and log services of libSystem, the per-user directory helper, the network
+configuration services, certificate trust (`trustd`, `trustd.agent`), and the keychain service
+`SecurityServer` ([SANDBOX-12](#SANDBOX-12)). The list is code. No value, argument vector, printed
+output or configuration file adds to it, and it is not written as a pattern. A lookup of any other
+service is refused, which includes LaunchServices (`com.apple.coreservices.launchservicesd` and
+`com.apple.lsd.*`), the pasteboard (`com.apple.pasteboard.1`) and the other services that open a
+file or URL, read or write the clipboard, or start a program for the caller.
+
+**Why.** A Mach service acts with the account's access whatever the filesystem rows say, so a
+profile that allows every lookup lets a confined program read the clipboard, ask LaunchServices to
+open a file or URL in another application, and use any other service the session registers.
+Neither a read row nor the absence of network egress limits them. The list is the services the
+everyday programs need: `gh` fails to verify a certificate without `trustd.agent`, and
+`osxkeychain` fails with `-50` without `SecurityServer`. A program that looks up another service
+is refused the lookup.
+
+`verified-by: bravebot_sandbox::macos::the_profile_allows_a_lookup_of_named_services_and_not_of_every_service`
+`verified-by: bravebot_sandbox::macos::a_confined_process_finds_the_services_programs_need_and_none_that_act_for_the_person`
+
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is confined on Linux, macOS and Windows
@@ -2571,11 +2595,16 @@ reported as what it is.
 - A `run` argument that names a path outside the directories the session was opened on is refused
   ([SANDBOX-17](#SANDBOX-17)). Whether the compiler should read such an argument as a path and put
   it in the plan is not settled.
-- Seatbelt profiles here allow every `mach-lookup`, so the keychain service is reachable from every
+- The keychain service is in the list of [SANDBOX-31](#SANDBOX-31), so it is reachable from every
   stage and not only from one carrying the remote scope. A profile holding the keychain to that
-  scope has to name the service instead, the same step the socket above needs. Since the base reads
-  the login keychain file, a lookup through that service from any stage can reach the login
-  keychain's database.
+  scope has to leave the service out of the list for the stages without it, the same step the
+  socket above needs. Since the base reads the login keychain file, a lookup through that service
+  from any stage can reach the login keychain's database.
+- A program that looks up a Mach service outside the list of [SANDBOX-31](#SANDBOX-31) has the
+  lookup refused. The usability suite ([SANDBOX-21](#SANDBOX-21)) passes with the list; a program
+  that needs another service (a file watcher through `com.apple.FSEvents`, Spotlight through
+  `com.apple.metadata.mds`) loses that feature. Whether any program fails outright for it is not
+  shown.
 - The cold path of a macOS developer shim has not been exercised. With the lookup cache the shims
   keep empty, a shim asks `xcodebuild`, which refuses every invocation until the Xcode licence
   is accepted, confined or not, so a machine in that state cannot show whether that path starts,
