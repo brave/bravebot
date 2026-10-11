@@ -7759,9 +7759,11 @@ fn aside_reported(session: &mut Session, message: crate::remote_confirm::ToMain)
 /// it a manifest run: this session's own record stays a conversation, so it still resumes, and the
 /// run's record still has no conversation, so the picker still refuses it for the right reason.
 ///
-/// The trust map is lent and comes back unused. A grant a step was given belongs to the run, and
-/// travels into the run's own record with everything else it produced; folding it into the session
-/// would leave the conversation holding a yes that was given about a plan it never saw.
+/// The trust map is lent, and the session keeps the file decisions the run ends with: the
+/// attachment grants and any downgrade a completed write recorded, whether the run finished, failed
+/// or was stopped ([`crate::manifest_run::join`]). A grant a step was given for a program belongs to
+/// the run and travels into the run's own record; folding it into the session would leave the
+/// conversation holding a yes that was given about a plan it never saw.
 #[allow(clippy::too_many_arguments)]
 fn manifest_animated(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -8048,15 +8050,11 @@ fn manifest_animated(
         }
     }
 
-    let (outcome, sink, run_trust) = worker.join().unwrap_or_else(|_| {
-        (
-            Err(bravebot_agent::TurnError::Precommit(
-                t!(manifest_ended_unexpectedly).to_string(),
-            )),
-            Trail::new(),
-            trust.clone(),
-        )
-    });
+    // What the run decided about the tree is the session's, the way a turn's is. A file dropped on
+    // the line was vouched for by the gesture that put it there, and `dropping.md` DROP-2 has that
+    // rule hold for the rest of the session rather than for the run; the rules the run's own writes
+    // recorded belong to the same tree the next turn reads.
+    let (outcome, sink) = crate::manifest_run::join(worker, trust);
 
     let stopped_by_the_person = was_stopped(&outcome, &cancel);
 
@@ -8068,17 +8066,6 @@ fn manifest_animated(
         session.model().unwrap_or(&config.default_model),
     );
     note_a_refused_level(session, refused);
-
-    // What the run decided about the tree is the session's, the way a turn's is. A file dropped on
-    // the line was vouched for by the gesture that put it there, and `dropping.md` DROP-2 has that
-    // rule hold for the rest of the session rather than for the run; the rules the run's own writes
-    // recorded belong to the same tree the next turn reads. A run that failed or was stopped
-    // carries no map in its error, so the map the run was lent comes back instead: it holds the
-    // rules the drops recorded, which the gesture granted whether or not the run finished.
-    match &outcome {
-        Ok(finished) => *trust = finished.trust.clone(),
-        Err(_) => *trust = run_trust,
-    }
 
     let recorded = run.complete(session, workspace.root(), &asked, &outcome, &cancel);
 

@@ -67,6 +67,14 @@ impl Drop for Scratch {
 /// one step, which writes a body the plan carries. Every request after those is a turn's, and is
 /// answered with one word. Returns every request body, in order.
 fn a_planner_with_one_write() -> (String, mpsc::Receiver<String>) {
+    scripted_planner(vec![
+        json!({"content":"1. Write the notes file with a fixed body."}),
+        json!({"content":json!({"steps":[{"capability":"FILE_WRITE","args":{"path":TARGET,"contents":WRITTEN}}]}).to_string()}),
+    ])
+}
+
+fn scripted_planner(script: Vec<Value>) -> (String, mpsc::Receiver<String>) {
+    let script = Arc::new(script);
     let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
     let endpoint = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let (asked, rounds) = mpsc::channel();
@@ -74,13 +82,18 @@ fn a_planner_with_one_write() -> (String, mpsc::Receiver<String>) {
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let asked = Arc::clone(&asked);
-            std::thread::spawn(move || answer(stream, &asked));
+            let script = Arc::clone(&script);
+            std::thread::spawn(move || answer(stream, &asked, &script));
         }
     });
     (endpoint, rounds)
 }
 
-fn answer(mut stream: std::net::TcpStream, asked: &Mutex<(usize, mpsc::Sender<String>)>) {
+fn answer(
+    mut stream: std::net::TcpStream,
+    asked: &Mutex<(usize, mpsc::Sender<String>)>,
+    script: &[Value],
+) {
     let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
     let mut start = String::new();
     if reader.read_line(&mut start).unwrap_or(0) == 0 {
@@ -117,17 +130,13 @@ fn answer(mut stream: std::net::TcpStream, asked: &Mutex<(usize, mpsc::Sender<St
             let _ = asked.1.send(String::from_utf8_lossy(&body).into_owned());
             asked.0
         };
-        let content = match call {
-            1 => "1. Write the notes file with a fixed body.".to_string(),
-            2 => json!({"steps": [
-                {"capability": "FILE_WRITE", "args": {"path": TARGET, "contents": WRITTEN}},
-            ]})
-            .to_string(),
-            _ => "done".to_string(),
-        };
+        let delta = script
+            .get(call - 1)
+            .cloned()
+            .unwrap_or_else(|| json!({"content":"done"}));
         let chunk = json!({"id": "c1", "object": "chat.completion.chunk",
             "model": "stub-model",
-            "choices": [{"index": 0, "delta": {"role": "assistant", "content": content},
+            "choices": [{"index": 0, "delta": delta,
                 "finish_reason": "stop"}],
             "usage": {"prompt_tokens": if call == 1 {12} else {20}, "completion_tokens": if call == 1 {5} else {9}}});
         (
@@ -899,4 +908,125 @@ fn only_a_run_is_read_as_a_run() {
 
     let missing = front.record("manifest.read", &scratch, "no-such-record");
     assert_eq!(missing["error"]["code"], "no_such_session", "{missing}");
+}
+
+/// The desktop route must retain a quarantined overwrite through failure or stop and session save.
+#[test]
+fn ordinary_manifest_endings_keep_file_trust_in_the_bridge() {
+    const SENTINEL: &str = "BRIDGE-QUARANTINED-MANIFEST-SENTINEL";
+    for stopped in [false, true] {
+        let scratch = Scratch::new(if stopped {
+            "bridge-manifest-trust-stop"
+        } else {
+            "bridge-manifest-trust-failure"
+        });
+        std::fs::write(scratch.project().join(TARGET), "old trusted notes").unwrap();
+        std::fs::write(scratch.project().join("blocked"), "second processor input").unwrap();
+        let steps = json!([
+            {"capability":"FILE_READ","args":{"path":TARGET,"out_slot":"raw"}},
+            {"capability":"FILE_READ","args":{"path":"blocked","out_slot":"raw2"}},
+            {"capability":"TRANSFORM","args":{"reads":["raw"],"instruction":"produce a document","out_slot":"processed"}},
+            {"capability":"TRANSFORM","args":{"reads":["raw2"],"instruction":"produce another document","out_slot":"processed2"}},
+            {"capability":"FILE_WRITE","args":{"path":TARGET,"from_slot":"processed"}},
+            {"capability":"FILE_WRITE","args":{"path":"blocked","from_slot":"processed2"}},
+        ]);
+        let (endpoint, rounds) = scripted_planner(vec![
+            json!({"content":"Read, transform, write, then attempt a later write"}),
+            json!({"content":json!({"steps":steps}).to_string()}),
+            json!({"content":format!("===== the document starts here =====\n{SENTINEL}")}),
+            json!({"content":"===== the document starts here =====\nsecond quarantined output"}),
+            json!({"tool_calls":[{"index":0,"id":"read","function":{"name":"read_file","arguments":json!({"path":TARGET}).to_string()}}]}),
+            json!({"content":"{\"verdict\":\"unsafe\"}"}),
+            json!({"content":"done"}),
+            json!({"tool_calls":[{"index":0,"id":"read-resumed","function":{"name":"read_file","arguments":json!({"path":TARGET}).to_string()}}]}),
+            json!({"content":"{\"verdict\":\"unsafe\"}"}),
+            json!({"content":"done"}),
+        ]);
+        let mut front = FrontEnd::start(&scratch, &endpoint);
+        let session = front.session(&scratch, true);
+        let plan = front.plan(&session);
+        front.reply("manifest.reply", &session, &plan, "approve");
+        let write = front.question_or_the_end();
+        assert_eq!(write["event"], "confirm.request", "{write}");
+        assert_eq!(write["data"]["path"], TARGET);
+        std::fs::remove_file(scratch.project().join("blocked")).unwrap();
+        std::fs::create_dir(scratch.project().join("blocked")).unwrap();
+        front.reply("confirm.reply", &session, &write, "approve");
+        let later_write = front.question_or_the_end();
+        assert_eq!(later_write["event"], "confirm.request", "{later_write}");
+        assert_eq!(later_write["data"]["path"], "blocked");
+        assert_eq!(scratch.written().as_deref(), Some(SENTINEL));
+        if stopped {
+            front.call("turn.cancel", json!({"session":session}));
+        } else {
+            front.reply("confirm.reply", &session, &later_write, "approve");
+        }
+        let ended = front.question_or_the_end();
+        assert_eq!(ended["event"], "manifest.error", "{ended}");
+        assert_eq!(scratch.written().as_deref(), Some(SENTINEL));
+        assert_eq!(ended["data"]["stopped"], stopped);
+        assert_eq!(ended["data"]["record"].is_null(), stopped);
+        assert!(
+            ended["data"]["trust"]["rules"]
+                .as_array()
+                .is_some_and(|rules| rules
+                    .iter()
+                    .any(|rule| rule["path"] == TARGET && rule["integrity"] == "untrusted")),
+            "the error event must carry the downgrade the completed write recorded: {ended}"
+        );
+        front.send(
+            "turn.send",
+            json!({"session":session,"prompt":"inspect notes.md"}),
+        );
+        let mut turn = front.question_or_the_end();
+        if turn["event"] == "vouch.request" {
+            front.reply(
+                "vouch.reply",
+                turn["session"].as_str().unwrap(),
+                &turn,
+                "reject",
+            );
+            turn = front.question_or_the_end();
+        }
+        assert_eq!(turn["event"], "turn.done", "{turn}");
+        let requests: Vec<_> = rounds.try_iter().collect();
+        let planner = requests.last().unwrap();
+        assert!(
+            !planner.contains(SENTINEL),
+            "continuing bridge planner saw quarantined write"
+        );
+        assert!(planner.contains("quarantined"));
+        let id = turn["data"]["id"].as_str().unwrap();
+        assert!(
+            turn["data"]["trust"]["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|rule| rule["path"] == TARGET && rule["integrity"] == "untrusted"),
+            "{turn}"
+        );
+        let opened = front.record("session.open", &scratch, id);
+        let resumed = opened["ok"]["session"].as_str().expect("resumed session");
+        front.send(
+            "turn.send",
+            json!({"session":resumed,"prompt":"inspect notes.md again"}),
+        );
+        let mut turn = front.question_or_the_end();
+        if turn["event"] == "vouch.request" {
+            front.reply(
+                "vouch.reply",
+                turn["session"].as_str().unwrap(),
+                &turn,
+                "reject",
+            );
+            turn = front.question_or_the_end();
+        }
+        assert_eq!(turn["event"], "turn.done", "{turn}");
+        let requests: Vec<_> = rounds.try_iter().collect();
+        assert!(
+            !requests.last().unwrap().contains(SENTINEL),
+            "resumed bridge planner saw quarantined write"
+        );
+        assert!(requests.last().unwrap().contains("quarantined"));
+    }
 }

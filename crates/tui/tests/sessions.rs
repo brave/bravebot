@@ -4676,6 +4676,322 @@ fn failed_and_stopped_manifest_usage_survives_session_reload() {
     }
 }
 
+mod manifest_file_trust {
+    use super::*;
+    use bravebot_agent::report::{Activity, Reporter};
+    use bravebot_core::cancel::Cancel;
+    use bravebot_tui::remote_confirm::{
+        Interjections, RemoteConfirmer, RemoteReporter, Reply, ToMain,
+    };
+    use bravebot_tui::state::Session;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    const SENTINEL: &str = "QUARANTINED-MANIFEST-FILE-SENTINEL";
+    const WAIT: Duration = Duration::from_secs(10);
+
+    // Hold the worker after the completed write report so cancellation cannot race the effect.
+    struct AfterWrite {
+        remote: RemoteReporter,
+        release: mpsc::Receiver<()>,
+    }
+    impl Reporter for AfterWrite {
+        fn todos(&mut self, rows: Vec<Row>) {
+            self.remote.todos(rows);
+        }
+        fn tool_finished(&mut self, activity: Activity) {
+            let written = activity.tool == "write_file" && !activity.failed;
+            self.remote.tool_finished(activity);
+            if written {
+                self.release
+                    .recv_timeout(WAIT)
+                    .expect("release completed write");
+            }
+        }
+    }
+
+    fn frame(text: &str) -> String {
+        format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            serde_json::json!({
+            "choices":[{"delta":{"content":text},"finish_reason":"stop"}]})
+        )
+    }
+
+    fn next_request_contains_sentinel(root: &Path, trust: TrustStore) -> bool {
+        let read = format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            serde_json::json!({
+            "choices":[{"delta":{"tool_calls":[{"index":0,"id":"read","function":{"name":"read_file","arguments":"{\"path\":\"target.txt\"}"}}]},"finish_reason":"tool_calls"}]})
+        );
+        let trusted = trust.is_trusted("target.txt");
+        let replies = if trusted {
+            vec![read, frame("done")]
+        } else {
+            vec![read, frame("unsafe"), frame("done")]
+        };
+        let (endpoint, requests) = completed_usage::an_endpoint(replies);
+        let config = bravebot_config::Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+            _ => None,
+        })
+        .unwrap();
+        let result = bravebot_agent::turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &Workspace::new(root).unwrap(),
+            &bravebot_agent::Task::new("inspect target.txt"),
+            &mut Conversation::new(),
+            &mut bravebot_agent::Unattended,
+            &mut bravebot_agent::IgnoreReports,
+            &mut bravebot_core::RecordingSink::new(),
+            trust,
+            TrustedPrograms::new(),
+            None,
+            &Cancel::new(),
+        );
+        assert!(
+            result.outcome.is_ok(),
+            "next turn: {:?}",
+            result.outcome.err()
+        );
+        requests
+            .recv_timeout(WAIT)
+            .expect("initial planner request");
+        if !trusted {
+            let check = requests
+                .recv_timeout(WAIT)
+                .expect("quarantined read classifier");
+            assert!(check.contains("prompt-injection classifier"));
+        }
+        let request = requests
+            .recv_timeout(WAIT)
+            .expect("planner request after file read");
+        request.contains(SENTINEL)
+    }
+
+    fn ending_keeps_decisions(case: &str) {
+        let scratch = Scratch::new(&format!("manifest-file-trust-{case}"));
+        let root = &scratch.project;
+        std::fs::write(root.join("source.txt"), SENTINEL).unwrap();
+        // The before-effect control retains a trusted file and must still expose its content.
+        std::fs::write(
+            root.join("target.txt"),
+            if case == "before" {
+                SENTINEL
+            } else {
+                "old trusted text"
+            },
+        )
+        .unwrap();
+        std::fs::create_dir(root.join("blocked")).unwrap();
+        std::fs::create_dir(root.join("attachments")).unwrap();
+        std::fs::write(root.join("attachments/shot.png"), b"picture").unwrap();
+        let mut initial = TrustStore::new(root);
+        initial.trust(".");
+        initial.distrust("source.txt");
+        initial.distrust("unrelated/private.txt");
+        initial.distrust("attachments");
+        initial.trust("unrelated/open");
+        let mut expected = initial.clone();
+        expected.trust("attachments/shot.png");
+        if case != "before" {
+            expected.distrust("target.txt");
+        }
+        if case == "failure" {
+            expected.distrust("blocked");
+        }
+        let mut steps = vec![
+            serde_json::json!({"capability":"FILE_READ","args":{"path":"source.txt","out_slot":"raw"}}),
+            serde_json::json!({"capability":"FILE_WRITE","args":{"path":"target.txt","from_slot":"raw"}}),
+        ];
+        if matches!(case, "failure" | "cancel") {
+            steps.push(serde_json::json!({"capability":"FILE_WRITE","args":{"path":"blocked","contents":"later failure"}}));
+        }
+        let (endpoint, requests) = completed_usage::an_endpoint(vec![
+            frame("Copy source to target"),
+            frame(&serde_json::json!({"steps":steps}).to_string()),
+        ]);
+        let config = bravebot_config::Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+            _ => None,
+        })
+        .unwrap();
+        let workspace = Workspace::new(root).unwrap();
+        let cancel = Cancel::new();
+        let worker_cancel = cancel.clone();
+        let (outbound, inbound) = mpsc::channel();
+        let (answers, answer_rx) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let (finished, completion) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut trust = initial;
+            let mut asking =
+                RemoteConfirmer::new(outbound.clone(), answer_rx, Interjections::new());
+            let mut reporter = AfterWrite {
+                remote: RemoteReporter::new(outbound),
+                release: released,
+            };
+            let mut sink = bravebot_session::audit::Trail::new();
+            let outcome = bravebot_agent::manifest::run_recording(
+                &config,
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &bravebot_agent::Task::new("copy source")
+                    .with_attachment("attachments/shot.png", "image/png"),
+                &mut asking,
+                &mut reporter,
+                &mut sink,
+                &mut trust,
+                &worker_cancel,
+            );
+            finished.send(()).unwrap();
+            (outcome, sink, trust)
+        });
+        let mut session = Session::new("test");
+        session.type_char('x');
+        session.submit().unwrap();
+        session.complete("earlier reply", vec![], 0);
+        session.begin_aside();
+        let run = bravebot_tui::manifest_run::Run::default();
+        let mut saw_write = false;
+        loop {
+            match inbound.recv_timeout(WAIT) {
+                Ok(ToMain::Manifest(_)) => {
+                    if case == "before" {
+                        cancel.cancel();
+                    }
+                    answers
+                        .send(Reply::Manifest(bravebot_agent::Decision::Approve))
+                        .unwrap();
+                }
+                Ok(ToMain::Write(_)) => {
+                    answers
+                        .send(Reply::Write(
+                            bravebot_agent::confirm::WriteDecision::approve(),
+                        ))
+                        .unwrap();
+                }
+                Ok(ToMain::Finished(activity))
+                    if activity.tool == "write_file" && !activity.failed =>
+                {
+                    saw_write = true;
+                    assert_eq!(
+                        std::fs::read_to_string(root.join("target.txt")).unwrap(),
+                        SENTINEL
+                    );
+                    if case == "cancel" {
+                        cancel.cancel();
+                    }
+                    release.send(()).unwrap();
+                }
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(error) => panic!("manifest event: {error}"),
+            }
+        }
+        completion
+            .recv_timeout(WAIT)
+            .expect("bounded worker completion");
+        let mut trust = TrustStore::new(root);
+        let (outcome, _sink) = bravebot_tui::manifest_run::join(worker, &mut trust);
+        assert_eq!(saw_write, case != "before");
+        match case {
+            "success" => assert!(outcome.is_ok()),
+            "cancel" | "before" => assert!(matches!(
+                outcome,
+                Err(bravebot_agent::TurnError::Cancelled { .. })
+            )),
+            _ => assert!(outcome.as_ref().unwrap_err().to_string().contains("step 3")),
+        }
+        // Both planner requests must use the decisions retained at completion.
+        let live_exposed = next_request_contains_sentinel(root, trust.clone());
+        let recorded = run.complete(&mut session, root, "copy source", &outcome, &cancel);
+        assert_eq!(recorded.is_none(), matches!(case, "cancel" | "before"));
+        let mut handle = Handle::begin(root, Front::Terminal, bravebot_stamp::BUILD);
+        bravebot_tui::manifest_run::save_session(
+            &mut handle,
+            Standing {
+                history: Some(session.turn_history()),
+                conversation: &a_conversation().snapshot(),
+                turns: session.turns,
+                tokens: session.tokens,
+                spend: session.spend_by_turn(),
+                timing: session.timing_by_turn(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &trust,
+                programs: &TrustedPrograms::new(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            },
+            &[],
+        );
+        let record = sessions::load(root, handle.id()).unwrap();
+        let resumed = record.trust_map(root).unwrap();
+        let resumed_exposed = next_request_contains_sentinel(root, resumed.clone());
+        assert_eq!(
+            (live_exposed, resumed_exposed),
+            (case == "before", case == "before"),
+            "live and resumed planner requests must respect retained file trust"
+        );
+        let rules = |map: &TrustStore| {
+            map.rules()
+                .map(|(p, i)| (p.to_string(), i))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rules(&trust), rules(&expected), "live exact decisions");
+        assert_eq!(rules(&resumed), rules(&expected), "saved exact decisions");
+        assert!(record.manifest.is_none());
+        assert_eq!(requests.try_iter().count(), 2);
+    }
+
+    /// A later ordinary error must not expose the quarantined overwrite on continuation or resume.
+    #[test]
+    fn failed_manifest_retains_file_decisions_live_and_resumed() {
+        ending_keeps_decisions("failure");
+    }
+    /// Stopping after the observed write retains its downgrade and creates no manifest record.
+    #[test]
+    fn cancelled_manifest_retains_file_decisions_live_and_resumed() {
+        ending_keeps_decisions("cancel");
+    }
+    /// Success still adopts the write and keeps unrelated distrust and attachment grants.
+    #[test]
+    fn successful_manifest_retains_exact_file_decisions() {
+        ending_keeps_decisions("success");
+    }
+    /// A worker that panics hands back no map, so the session keeps the one it held before the run.
+    #[test]
+    fn a_lost_manifest_worker_leaves_the_session_map_as_it_was() {
+        let scratch = Scratch::new("manifest-file-trust-lost-worker");
+        let mut trust = TrustStore::new(&scratch.project);
+        trust.distrust("kept/distrust.txt");
+        let before = trust.clone();
+        let worker = std::thread::spawn(|| -> bravebot_tui::manifest_run::Worked {
+            std::panic::resume_unwind(Box::new("worker lost"))
+        });
+        let (outcome, _sink) = bravebot_tui::manifest_run::join(worker, &mut trust);
+        assert!(matches!(
+            outcome,
+            Err(bravebot_agent::TurnError::Precommit(_))
+        ));
+        assert_eq!(trust, before);
+    }
+    /// Stopping before any effect leaves the prior file decision and the attachment gesture intact.
+    #[test]
+    fn cancellation_before_manifest_effect_keeps_exact_file_decisions() {
+        ending_keeps_decisions("before");
+    }
+}
+
 /// A kept checkout, as the session lists it.
 fn a_kept_checkout() -> bravebot_agent::workspace::SessionCheckout {
     bravebot_agent::workspace::SessionCheckout {

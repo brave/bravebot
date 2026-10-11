@@ -184,12 +184,17 @@ No reader can capture replacement bytes under an earlier grant. This covers cont
 attachments, deferred references and searches as well as direct reads. Collection never merges
 a delegate's stale file snapshot. No coordination lock spans a prompt, model call or child join. Session callers retain this
 same authority after turn-owned children finish, including on failure or cancellation, and save
-its current file decisions rather than substituting the map from before the turn.
+its current file decisions rather than substituting the map from before the turn. Manifest runs
+also retain current file decisions on every returned error or cancellation, as
+[manifest.md](manifest.md) requires.
 
 Approvals based on a preview are checked against the path's revision before effect entry or
 vouching. A changed path cannot spend the old approval. Changes to another path do not invalidate
 that approval. A backup records the trust of its bytes at capture under the same boundary.
 
+`verified-by: bravebot_tui::sessions::failed_manifest_retains_file_decisions_live_and_resumed`
+`verified-by: bravebot_tui::sessions::cancelled_manifest_retains_file_decisions_live_and_resumed`
+`verified-by: bravebot_ui_bridge::manifest::ordinary_manifest_endings_keep_file_trust_in_the_bridge`
 `verified-by: bravebot_agent::turn::overlapping_delegate_writes_follow_effect_order_in_both_collection_orders`
 `verified-by: bravebot_agent::workspace::reads_before_write_publication_and_failed_replacements_remain_untrusted`
 `verified-by: bravebot_agent::workspace::shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_writes`

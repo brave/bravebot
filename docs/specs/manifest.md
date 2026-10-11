@@ -12,6 +12,8 @@ governs:
   - crates/tui/src/resume.rs
   - crates/tui/src/confirm.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/manifest_run.rs
+  - crates/ui-bridge/src/manifest.rs
 guards:
   - symbol: Policy::before_planning
   - symbol: Policy::adopt_manifest
@@ -252,6 +254,19 @@ not off the error that came back, since the two keys that stop a run reach it as
 plan prompt and as a cancellation a step later, and a person pressing one of them asked for the same
 thing at both moments.
 
+A run returns to its caller by finishing, failing with an error or being stopped. Each of the three
+leaves the continuing session with the file decisions the run ended with: attachment grants,
+unrelated grants, explicit distrust, and the downgrade of any path a completed write changed. A stop
+before any effect keeps the earlier decisions. A downgrade survives a later error or stop, and a
+session save and resume. The terminal and the desktop bridge adopt these decisions before the
+session continues or is saved, and the bridge reports them in `trust.rules` on both `manifest.done`
+and `manifest.error`. Trust comes from the retained authority and effect metadata, never from file
+contents or hashes.
+
+A panic or a lost worker is not one of these endings. A release build aborts on a panic, and when
+the terminal loses its worker the session keeps the map it held before the run. Recovering the
+decisions of a run that ended that way is outside this clause.
+
 Completed planning and processor requests retain their measured usage when a later request or
 step fails, including completed replies that cannot be used. Cumulative progress replaces earlier
 progress. A successful outcome replaces retained progress, so neither records nor continuing
@@ -269,6 +284,12 @@ meets one. Bypassing approves the plan, as MANIFEST-10 says. Plan mode is the on
 plan with a write in it does not run at all, decided from the frozen plan before the plan is put to
 anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 
+`verified-by: bravebot_tui::sessions::failed_manifest_retains_file_decisions_live_and_resumed`
+`verified-by: bravebot_tui::sessions::cancelled_manifest_retains_file_decisions_live_and_resumed`
+`verified-by: bravebot_tui::sessions::successful_manifest_retains_exact_file_decisions`
+`verified-by: bravebot_tui::sessions::cancellation_before_manifest_effect_keeps_exact_file_decisions`
+`verified-by: bravebot_tui::sessions::a_lost_manifest_worker_leaves_the_session_map_as_it_was`
+`verified-by: bravebot_ui_bridge::manifest::ordinary_manifest_endings_keep_file_trust_in_the_bridge`
 `verified-by: bravebot_session::sessions::failed_manifest_records_distinguish_unknown_timing_from_measured_zero`
 `verified-by: bravebot_cli::running::failed_manifest_usage_survives_json_and_reload`
 `verified-by: bravebot_cli::running::manifest_usage_controls_survive_storage`

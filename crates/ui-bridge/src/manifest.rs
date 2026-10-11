@@ -5,7 +5,8 @@
 //!
 //! - The conversation is not sent to the planner and nothing is added to it.
 //! - The run is saved as its own record, by the function the terminal and the command line use.
-//! - The session's record is not written. Only its trust map changes, on a run that finished.
+//! - The session's record is not written. Its trust map keeps current decisions on every ordinary
+//!   ending.
 //!
 //! The worker reports through the same events a turn uses for progress and questions. It ends
 //! with `manifest.done` or `manifest.error`, and both carry what the run produced (MANIFEST-3).
@@ -124,7 +125,7 @@ pub(crate) fn walk(walk: Walk) {
     let mut sink = BridgeSink::for_run(emitter.clone(), &session, run);
     let egress = Egress::new();
 
-    let outcome = bravebot_agent::manifest::run(
+    let outcome = bravebot_agent::manifest::run_recording(
         &config,
         &egress,
         &workspace,
@@ -132,7 +133,7 @@ pub(crate) fn walk(walk: Walk) {
         &mut confirmer,
         &mut reporter,
         &mut sink,
-        state.trust.clone(),
+        &mut state.trust,
         &cancel,
     );
 
@@ -140,11 +141,6 @@ pub(crate) fn walk(walk: Walk) {
     // a declined plan, and one pressed a step later arrives as a cancellation. Both are the
     // person stopping the run (MANIFEST-11).
     let stopped = outcome.is_err() && cancel.is_cancelled();
-
-    // A rule a finished run recorded is about the same tree the next turn reads.
-    if let Ok(done) = &outcome {
-        state.trust = done.trust.clone();
-    }
 
     // A run the person stopped is not written, as the terminal does not write one.
     let recorded = match stopped {
@@ -203,6 +199,7 @@ pub(crate) fn walk(walk: Walk) {
                     "attempt": attempt.map(attempt_json),
                     "record": recorded,
                     "notices": reporter.notices(),
+                    "trust": { "rules": rules_json(&state.trust) },
                 }),
             );
             Event::new("manifest.error", &session, data)
