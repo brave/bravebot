@@ -396,6 +396,13 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
+        self.asked(
+            |held| held.confirm_host(request),
+            |refuse| refuse.confirm_host(request),
+        )
+    }
+
     fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
         self.asked(
             |held| held.confirm_move(request),
@@ -616,6 +623,10 @@ mod tests {
             }
             /// Refuses. This double answers no question about reach.
             fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+                Decision::Reject
+            }
+
+            fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
                 Decision::Reject
             }
 

@@ -6356,6 +6356,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("hosts", detail);
     }
 
+    /// Record that the person was asked whether programs may reach `hosts` that the allowed-hosts
+    /// list does not cover, and what they answered (SANDBOX-24).
+    ///
+    /// `hosts` are the names the question showed, each a valid host name or address as the sandbox
+    /// crate lets a record carry one. A no is also what nobody being there to ask comes to, and the
+    /// mode that asks nothing, so the record says the answer was not a yes and no more.
+    pub fn record_host_answer(&mut self, hosts: &[String], granted: bool) {
+        let detail = match granted {
+            true => format!(
+                "the user let programs reach {} for this session",
+                hosts.join(", ")
+            ),
+            false => format!(
+                "programs were not let reach {} for this session: the user declined, or nobody \
+                 could be asked",
+                hosts.join(", ")
+            ),
+        };
+        self.allow("host_grant", detail);
+    }
+
     /// Record the credential scopes and toolchain lists the planner asked one `run` to add, and
     /// the stages each was added to.
     ///
@@ -10499,6 +10520,35 @@ five
             "the bare line was not covered, so the requesting one below proves nothing"
         );
         assert!(policy.plan_needs_approval_requesting(&a_plan(), &["aws", "cargo"]));
+    }
+
+    /// SANDBOX-24: an answer about hosts is recorded under its own gate, with the hosts, and says a
+    /// yes as a yes and anything else as not let. The regression it rejects: a no recorded as a
+    /// grant, or a grant that leaves no record.
+    #[test]
+    fn a_host_answer_leaves_a_trail_that_tells_a_yes_from_a_no() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.record_host_answer(&["a.example".to_string(), "b.example".to_string()], true);
+        policy.record_host_answer(&["c.example".to_string()], false);
+        drop(policy);
+        let details: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "host_grant",
+                    detail,
+                } => Some(detail.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(details.len(), 2, "{details:?}");
+        assert_eq!(
+            details[0],
+            "the user let programs reach a.example, b.example for this session"
+        );
+        assert!(details[1].starts_with("programs were not let reach c.example"));
     }
 
     /// SANDBOX-26: the question is audited with the names, and the scopes a run was given are

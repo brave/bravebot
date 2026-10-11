@@ -535,6 +535,9 @@ pub struct Workspace {
     /// path reached by a program is not a path the file tools open or a directory vouched for.
     /// Shared for the reason `checkouts` is.
     path_reach: Arc<Mutex<Vec<PathReach>>>,
+    /// The hosts the person let programs reach for this session beyond `allowedHosts`, and the
+    /// ones they declined (SANDBOX-24). Held here and nowhere else, for the reason `path_reach` is.
+    host_grants: Arc<Mutex<HostGrants>>,
     /// The directories below the root that a file tool has read from or written to, each by the
     /// spelling the planner typed, with every directory above it down to the root's child
     /// (INSTR-14). Shared for the reason `checkouts` is, so a delegate's reads count.
@@ -557,6 +560,15 @@ pub struct PathReach {
     pub write: bool,
     /// What the planner said it was for.
     pub why: String,
+}
+
+/// The hosts a person answered a prompt about for the session (SANDBOX-24).
+#[derive(Debug, Default)]
+struct HostGrants {
+    /// Allowed, oldest first.
+    allowed: Vec<String>,
+    /// Declined, so the same host is not asked about again this session.
+    declined: std::collections::BTreeSet<String>,
 }
 
 /// Which names the session wrote in the working directory, and when, counted in writes.
@@ -1192,6 +1204,7 @@ impl Workspace {
             temporary_checkouts: Arc::default(),
             working_writes: Arc::default(),
             path_reach: Arc::default(),
+            host_grants: Arc::default(),
             touched: Arc::default(),
             references: Vec::new(),
             reference_problems: Vec::new(),
@@ -1565,6 +1578,44 @@ impl Workspace {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Let programs reach `hosts` for the rest of the session, on top of the allowed-hosts list.
+    ///
+    /// Each is a name the sandbox crate accepted for a record. A host held already is not added
+    /// twice. A host both declined and granted is not asked about, since a grant outranks a decline.
+    pub fn grant_hosts(&self, hosts: &[String]) {
+        let mut held = self.host_grants.lock().unwrap_or_else(|e| e.into_inner());
+        for host in hosts {
+            if !held.allowed.contains(host) {
+                held.allowed.push(host.clone());
+            }
+        }
+    }
+
+    /// Remember that the person declined `hosts`, so they are not asked about them again.
+    pub fn decline_hosts(&self, hosts: &[String]) {
+        let mut held = self.host_grants.lock().unwrap_or_else(|e| e.into_inner());
+        held.declined.extend(hosts.iter().cloned());
+    }
+
+    /// The hosts programs may reach by the person's leave, oldest first.
+    pub fn granted_hosts(&self) -> Vec<String> {
+        self.host_grants
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .allowed
+            .clone()
+    }
+
+    /// Of `hosts`, those the person has neither allowed nor declined this session.
+    pub fn unanswered_hosts(&self, hosts: &[String]) -> Vec<String> {
+        let held = self.host_grants.lock().unwrap_or_else(|e| e.into_inner());
+        hosts
+            .iter()
+            .filter(|host| !held.allowed.contains(host) && !held.declined.contains(*host))
+            .cloned()
+            .collect()
     }
 
     /// End the grant numbered `number`, counting from one in `path_reach` order.
@@ -5737,6 +5788,61 @@ mod tests {
             Workspace::new(root).expect("workspace")
         };
         assert!(second.path_reach().is_empty());
+    }
+
+    /// SANDBOX-24: a host answer is held by the workspace and shared by a clone (a delegate's view).
+    /// A yes is held once, in the order given; a no is remembered so the host is not asked about
+    /// again; a later yes lifts the no; a host not answered is still unanswered.
+    #[test]
+    fn host_answers_are_shared_remembered_and_lifted_by_a_yes() {
+        let workspace = {
+            let root = crate::testutil::scratch_dir("host-grants-held");
+            std::fs::create_dir_all(&root).expect("scratch");
+            Workspace::new(root).expect("workspace")
+        };
+        let clone = workspace.clone();
+        let names = |hosts: &[&str]| hosts.iter().map(|h| h.to_string()).collect::<Vec<_>>();
+        assert!(workspace.granted_hosts().is_empty());
+
+        workspace.grant_hosts(&names(&["b.example", "a.example"]));
+        clone.grant_hosts(&names(&["b.example"]));
+        clone.decline_hosts(&names(&["c.example"]));
+        assert_eq!(
+            workspace.granted_hosts(),
+            names(&["b.example", "a.example"])
+        );
+
+        let asked = names(&["a.example", "c.example", "d.example"]);
+        assert_eq!(workspace.unanswered_hosts(&asked), names(&["d.example"]));
+
+        workspace.grant_hosts(&names(&["c.example"]));
+        assert_eq!(clone.unanswered_hosts(&asked), names(&["d.example"]));
+        assert_eq!(
+            clone.granted_hosts(),
+            names(&["b.example", "a.example", "c.example"])
+        );
+    }
+
+    /// SANDBOX-24: an answer lasts for the session. A workspace opened afresh holds none.
+    #[test]
+    fn a_new_workspace_holds_no_host_answers() {
+        let first = {
+            let root = crate::testutil::scratch_dir("host-grants-first");
+            std::fs::create_dir_all(&root).expect("scratch");
+            Workspace::new(root).expect("workspace")
+        };
+        first.grant_hosts(&["a.example".to_string()]);
+        first.decline_hosts(&["b.example".to_string()]);
+        let second = {
+            let root = crate::testutil::scratch_dir("host-grants-second");
+            std::fs::create_dir_all(&root).expect("scratch");
+            Workspace::new(root).expect("workspace")
+        };
+        assert!(second.granted_hosts().is_empty());
+        assert_eq!(
+            second.unanswered_hosts(&["b.example".to_string()]),
+            vec!["b.example".to_string()]
+        );
     }
 
     /// A read that asks for more than a page and one that names no limit return the same lines, and

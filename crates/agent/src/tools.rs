@@ -2042,6 +2042,40 @@ pub struct Tools<'a> {
     pub sandbox: bravebot_sandbox::SandboxMode,
 }
 
+/// A host list a unit test sets for the runs on its thread, read in place of the settled one.
+///
+/// The settled list is set once per process, so without this every test in a binary would hold
+/// the same list and none could set one without the others seeing it.
+#[cfg(all(test, unix))]
+pub(crate) mod scripted_hosts {
+    use bravebot_config::sandbox_network::Hosts;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HELD: RefCell<Option<Hosts>> = const { RefCell::new(None) };
+    }
+
+    /// Hold the runs on this thread to `hosts` until the returned guard is dropped.
+    pub(crate) fn hold(hosts: Hosts) -> Held {
+        HELD.with(|held| *held.borrow_mut() = Some(hosts));
+        Held
+    }
+
+    pub(super) fn held() -> Option<Hosts> {
+        HELD.with(|held| held.borrow().clone())
+    }
+
+    /// Clears the list when dropped, so a test that fails part way leaves nothing for the next
+    /// test on this thread.
+    pub(crate) struct Held;
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            HELD.with(|held| *held.borrow_mut() = None);
+        }
+    }
+}
+
 impl<'a> Tools<'a> {
     /// What this call's programs are confined to, or `None` where they are not.
     fn confinement(&self) -> Option<crate::confine::Confinement> {
@@ -2051,18 +2085,22 @@ impl<'a> Tools<'a> {
         let roots = std::iter::once(self.workspace.root().to_path_buf())
             .chain(self.workspace.added_directories().iter().cloned())
             .collect();
+        let hosts = bravebot_config::sandbox_network::settled().map(|settled| &settled.hosts);
+        #[cfg(all(test, unix))]
+        let scripted = scripted_hosts::held();
+        #[cfg(all(test, unix))]
+        let hosts = scripted.as_ref().or(hosts);
         let confinement =
             crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)?
                 .with_network(bravebot_config::run_network())
-                .with_hosts(
-                    bravebot_config::sandbox_network::settled().map(|settled| &settled.hosts),
-                )
+                .with_hosts(hosts)
                 .with_mode(self.sandbox)
                 .with_filesystem(&bravebot_config::sandbox_filesystem())
                 .with_path_reach(&self.workspace.path_reach())
                 .with_unasked_writes(
                     !self.delegated && self.permission_mode.get() == crate::PermissionMode::Bypass,
-                );
+                )
+                .with_host_grants(&self.workspace.granted_hosts());
         // Read only where a person is there to see the row it adds: a session with nobody to put
         // a prompt to reads no record, for the reason a remembered line is not read there.
         let grants = match (self.home, self.remembering) {
@@ -8392,11 +8430,15 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // After the line has stopped, so every request its programs made has been decided. Taken
     // whether or not the line ended well: a program that asked for a host and then failed has
     // still asked.
-    if let Some(detail) = confinement
-        .as_ref()
-        .and_then(|confinement| confinement.hosts_for_the_trail(&plan.steps()))
-    {
-        policy.record_hosts(detail);
+    if let Some((confinement, seen)) = confinement.as_ref().and_then(|confinement| {
+        confinement
+            .hosts_seen(&plan.steps())
+            .map(|seen| (confinement, seen))
+    }) {
+        policy.record_hosts(seen.detail);
+        if confinement.asks_about_unlisted_hosts() && !tools.delegated {
+            ask_about_hosts(policy, tools, confirmer, &seen.unlisted);
+        }
     }
     // A proof about inputs before execution cannot label output captured beside a write.
     // Our own effect entries each advance the revision once and are accounted for separately.
@@ -8569,6 +8611,43 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         Err(error) => Produced::problem(format!("error: `{displayed}` did not run: {error}"))
             .having_started_a_program(),
     }
+}
+
+/// Put the hosts a line's programs were refused for want of an entry to the person, once the line
+/// has stopped (SANDBOX-24, `onUnlisted: ask`).
+///
+/// Nothing waits on the answer: the programs were refused already, and a yes lets the lines that
+/// follow reach the hosts. The hosts are a program's own bytes, checked to be host names before
+/// they get here, and they go to the person's screen and the trail and no further, so the planner
+/// is told nothing about them and nothing here branches on one. A host already answered this
+/// session is not asked again, and no more than [`crate::confine::MOST_HOSTS_ASKED`] are asked at
+/// once. The mode that asks nothing refuses without remembering it, so a later switch to a mode
+/// that asks still asks, and a delegate is not offered the question.
+fn ask_about_hosts<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    confirmer: &mut C,
+    unlisted: &[String],
+) {
+    let mut hosts = tools.workspace.unanswered_hosts(unlisted);
+    hosts.truncate(crate::confine::MOST_HOSTS_ASKED);
+    if hosts.is_empty() {
+        return;
+    }
+    if tools.permission_mode.get() == crate::PermissionMode::Bypass {
+        policy.record_host_answer(&hosts, false);
+        return;
+    }
+    let request = crate::confirm::HostRequest {
+        hosts: hosts.clone(),
+    };
+    let granted = confirmer.confirm_host(&request) == Decision::Approve;
+    if granted {
+        tools.workspace.grant_hosts(&hosts);
+    } else {
+        tools.workspace.decline_hosts(&hosts);
+    }
+    policy.record_host_answer(&hosts, granted);
 }
 
 fn runs_git(step: &bravebot_core::command::Step) -> bool {
@@ -13646,6 +13725,10 @@ mod tests {
                 Decision::Reject
             }
 
+            fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
+                Decision::Reject
+            }
+
             fn confirm_move(
                 &mut self,
                 _request: &crate::confirm::MoveRequest,
@@ -16005,10 +16088,10 @@ mod tests {
         #[test]
         fn a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked() {
             use crate::confirm::{
-                CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
-                McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
-                ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
-                WriteRequest,
+                CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest,
+                ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest,
+                RunDecision, RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest,
+                WriteDecision, WriteRequest,
             };
             use bravebot_core::ask::{Answer, Asking};
 
@@ -16021,6 +16104,9 @@ mod tests {
                 fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
                     self.asked += 1;
                     Decision::Approve
+                }
+                fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+                    Decision::Reject
                 }
                 fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
                     Decision::Reject
@@ -16132,6 +16218,352 @@ mod tests {
                     held,
                     "delegated {delegated}: {said}"
                 );
+            }
+        }
+
+        /// SANDBOX-24: hosts a run was refused for want of an entry are put to the person once, as
+        /// one question, and the answer is kept for the session. A yes allows them from the next
+        /// line; a no is kept so they are not asked again; no more than the cap are asked at once;
+        /// each answer reaches the trail. The regressions it rejects: a question asked again for
+        /// a host already answered, a no that grants, a yes that is not kept, an unbounded list put
+        /// on the screen, and an answer that leaves no record.
+        #[test]
+        fn hosts_put_to_the_person_are_asked_once_and_the_answer_is_kept() {
+            use crate::confirm::{
+                CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest,
+                ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest,
+                RunDecision, RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest,
+                WriteDecision, WriteRequest,
+            };
+            use bravebot_core::ask::{Answer, Asking};
+
+            struct AnswersHosts {
+                answer: Decision,
+                asked: Vec<Vec<String>>,
+            }
+
+            impl Confirmer for AnswersHosts {
+                fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+                    self.asked.push(request.hosts.clone());
+                    self.answer
+                }
+                fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+                    WriteDecision::reject()
+                }
+                fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+                    RunDecision::reject()
+                }
+                fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+                    CallDecision::reject()
+                }
+                fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
+                    Vec::new()
+                }
+                fn interjection(&mut self) -> Option<String> {
+                    None
+                }
+            }
+
+            let names = |hosts: &[&str]| hosts.iter().map(|h| h.to_string()).collect::<Vec<_>>();
+            let scratch = Scratch::new("ask-about-hosts");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "fetch it");
+            let mut sink = RecordingSink::new();
+            let mut yes = AnswersHosts {
+                answer: Decision::Approve,
+                asked: Vec::new(),
+            };
+            let mut no = AnswersHosts {
+                answer: Decision::Reject,
+                asked: Vec::new(),
+            };
+            let many: Vec<String> = (0..12).map(|at| format!("many{at}.example")).collect();
+            {
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::ShellExec]),
+                    &mut sink,
+                )
+                .expect("policy");
+                with_tools(&workspace, |tools| {
+                    ask_about_hosts(
+                        &mut policy,
+                        tools,
+                        &mut yes,
+                        &names(&["a.example", "b.example"]),
+                    );
+                    ask_about_hosts(
+                        &mut policy,
+                        tools,
+                        &mut yes,
+                        &names(&["b.example", "a.example"]),
+                    );
+                    ask_about_hosts(
+                        &mut policy,
+                        tools,
+                        &mut no,
+                        &names(&["c.example", "a.example"]),
+                    );
+                    ask_about_hosts(&mut policy, tools, &mut yes, &names(&["c.example"]));
+                    ask_about_hosts(&mut policy, tools, &mut yes, &[]);
+                    ask_about_hosts(&mut policy, tools, &mut yes, &many);
+                    tools.permission_mode.set(crate::PermissionMode::Bypass);
+                    ask_about_hosts(&mut policy, tools, &mut yes, &names(&["late.example"]));
+                    tools.permission_mode.set(crate::PermissionMode::Ask);
+                    ask_about_hosts(&mut policy, tools, &mut yes, &names(&["late.example"]));
+                });
+            }
+
+            assert_eq!(
+                yes.asked[0],
+                names(&["a.example", "b.example"]),
+                "the first question was not the two hosts"
+            );
+            assert_eq!(
+                no.asked,
+                [names(&["c.example"])],
+                "a host already allowed was asked again, or the declined one was not asked"
+            );
+            assert_eq!(
+                yes.asked[1].len(),
+                crate::confine::MOST_HOSTS_ASKED,
+                "{:?}",
+                yes.asked
+            );
+            assert_eq!(
+                yes.asked.len(),
+                3,
+                "a host already declined or nothing was asked: {:?}",
+                yes.asked
+            );
+            assert_eq!(
+                yes.asked[2],
+                names(&["late.example"]),
+                "bypass asked, or remembered the refusal it made for the person: {:?}",
+                yes.asked
+            );
+            let granted = workspace.granted_hosts();
+            assert_eq!(&granted[..2], names(&["a.example", "b.example"]).as_slice());
+            assert!(
+                !granted.contains(&"c.example".to_string()),
+                "a no granted: {granted:?}"
+            );
+            assert_eq!(granted.len(), 3 + crate::confine::MOST_HOSTS_ASKED);
+            assert!(granted.contains(&"late.example".to_string()));
+            assert!(!granted.contains(&many[crate::confine::MOST_HOSTS_ASKED]));
+
+            let gates: Vec<String> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GatePassed { gate, detail } if *gate == "host_grant" => {
+                        Some(detail.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(gates.len(), 5, "{gates:?}");
+            assert!(gates[0].starts_with("the user let programs reach a.example, b.example"));
+            assert!(gates[1].starts_with("programs were not let reach c.example"));
+            assert!(gates[3].starts_with("programs were not let reach late.example"));
+            assert!(gates[4].starts_with("the user let programs reach late.example"));
+        }
+
+        /// SANDBOX-24: a host a run was refused for want of an entry is put to the person once the
+        /// run stops, and only where `onUnlisted` is `ask` and the turn is not a delegate's. The
+        /// first case is the control: a foreground run under `ask` is asked once, about the host it
+        /// was refused. Every case checks that the trail recorded the refusal, so the run reached
+        /// the proxy in each. The regressions it rejects: a delegate putting the question to the
+        /// person, and a session set to `refuse` asking anyway.
+        #[cfg(unix)]
+        #[test]
+        fn a_refused_host_is_put_to_the_person_under_ask_and_not_for_a_delegate_or_under_refuse() {
+            use crate::confirm::{
+                CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest,
+                ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest,
+                RunDecision, RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest,
+                WriteDecision, WriteRequest,
+            };
+            use bravebot_config::sandbox_network::{HostEntry, Hosts, OnUnlisted};
+            use bravebot_core::ask::{Answer, Asking};
+
+            #[derive(Default)]
+            struct RunsAndCountsHostQuestions {
+                asked: Vec<Vec<String>>,
+            }
+
+            impl Confirmer for RunsAndCountsHostQuestions {
+                fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+                    self.asked.push(request.hosts.clone());
+                    Decision::Reject
+                }
+                fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+                    RunDecision::approve()
+                }
+                fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+                    WriteDecision::reject()
+                }
+                fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+                    Decision::Reject
+                }
+                fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+                    CallDecision::reject()
+                }
+                fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
+                    Vec::new()
+                }
+                fn interjection(&mut self) -> Option<String> {
+                    None
+                }
+            }
+
+            // Linux and Windows refuse a networked stage under a list, so no run there reaches a
+            // proxy to be refused a host.
+            if !bravebot_sandbox::for_current_platform()
+                .is_ok_and(|sandbox| sandbox.capabilities().egress_limited_to_a_port)
+            {
+                return;
+            }
+
+            let scratch = Scratch::new("ask-about-refused-hosts");
+            let home = scratch.path.join("home");
+            let project = scratch.path.join("project");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            let home: &'static std::path::Path =
+                Box::leak(home.canonicalize().unwrap().into_boxed_path());
+
+            for (case, on_unlisted, delegated, asked) in [
+                ("ask", OnUnlisted::Ask, false, true),
+                ("ask-delegate", OnUnlisted::Ask, true, false),
+                ("refuse", OnUnlisted::Refuse, false, false),
+            ] {
+                // A proxy is kept for each list for the life of the process, so each case holds a
+                // list of its own and no case reads another's decisions.
+                let refused = format!("refused-{case}.example");
+                let _held = crate::tools::scripted_hosts::hold(Hosts {
+                    allowed: Some(vec![HostEntry {
+                        entry: format!("listed-{case}.example"),
+                        by: None,
+                    }]),
+                    denied: Vec::new(),
+                    on_unlisted: Some(on_unlisted),
+                });
+                let call: ToolCall = serde_json::from_value(json!({
+                    "id": "1",
+                    "function": {
+                        "name": "run",
+                        "arguments": json!({
+                            "command": format!("curl -s -m 5 https://{refused}/"),
+                        })
+                        .to_string(),
+                    }
+                }))
+                .expect("a call");
+                let workspace = Workspace::new(&project).expect("workspace");
+                let mut trust = bravebot_core::trust::TrustStore::new("/work");
+                trust.trust(".");
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "fetch it");
+                let mut sink = RecordingSink::new();
+                let mut confirmer = RunsAndCountsHostQuestions::default();
+                let said = {
+                    let mut policy = Policy::begin(
+                        routing,
+                        ReleasePlan::new(),
+                        CapabilitySet::from_iter([Capability::ShellExec]),
+                        &mut sink,
+                    )
+                    .expect("policy")
+                    .with_trust(trust);
+                    let output = with_tools(&workspace, |tools| {
+                        tools.confine_runs = true;
+                        tools.profile = Some(home);
+                        tools.delegated = delegated;
+                        dispatch(
+                            &mut policy,
+                            tools,
+                            &mut confirmer,
+                            &mut crate::report::IgnoreReports,
+                            &call,
+                        )
+                    });
+                    told(&mut policy, &output.text)
+                };
+
+                let recorded = sink.events().iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::GatePassed { gate, detail }
+                            if *gate == "hosts"
+                                && detail.contains(&format!("{refused} refused, not listed"))
+                    )
+                });
+                assert!(recorded, "{case}: the run reached no proxy: {said}");
+                let expected = match asked {
+                    true => vec![vec![refused.clone()]],
+                    false => Vec::new(),
+                };
+                assert_eq!(confirmer.asked, expected, "{case}: {said}");
             }
         }
     }

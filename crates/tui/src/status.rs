@@ -384,10 +384,13 @@ fn hosts_line(
         denied = hosts.denied.len()
     )
     .to_string();
+    let asks = hosts.on_unlisted == Some(bravebot_config::sandbox_network::OnUnlisted::Ask);
     Some(
-        Line::new(t!(status_hosts), counts).with_note(match sources.is_empty() {
-            true => t!(status_hosts_refused).to_string(),
-            false => t!(status_hosts_files, files = sources.join(", ")).to_string(),
+        Line::new(t!(status_hosts), counts).with_note(match (sources.is_empty(), asks) {
+            (true, false) => t!(status_hosts_refused).to_string(),
+            (true, true) => t!(status_hosts_asked).to_string(),
+            (false, false) => t!(status_hosts_files, files = sources.join(", ")).to_string(),
+            (false, true) => t!(status_hosts_files_ask, files = sources.join(", ")).to_string(),
         }),
     )
 }
@@ -2583,6 +2586,31 @@ mod tests {
         let empty = hosts_line(Some(&settled(Some(vec![]), vec![])), Standard).expect("a line");
         assert!(empty.value.contains("0 allowed"), "{}", empty.value);
         assert_eq!(empty.note, t!(status_hosts_refused));
+
+        let asking = Resolved {
+            hosts: Hosts {
+                on_unlisted: Some(bravebot_config::sandbox_network::OnUnlisted::Ask),
+                ..settled(Some(vec![]), vec![]).hosts
+            },
+            ..Default::default()
+        };
+        let asked = hosts_line(Some(&asking), Standard).expect("a line");
+        assert_eq!(asked.note, t!(status_hosts_asked));
+
+        let asking_with_files = Resolved {
+            hosts: Hosts {
+                on_unlisted: Some(bravebot_config::sandbox_network::OnUnlisted::Ask),
+                ..listed.hosts.clone()
+            },
+            ..Default::default()
+        };
+        let asked_files = hosts_line(Some(&asking_with_files), Standard).expect("a line");
+        assert!(
+            asked_files.note.contains("/home/a/.bravebot/settings.json")
+                && asked_files.note != line.note,
+            "{}",
+            asked_files.note
+        );
     }
 
     /// Before the first turn nothing has been observed, so the panel says premium is available

@@ -2822,6 +2822,10 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
         self.refusing.confirm_path(request)
     }
 
+    fn confirm_host(&mut self, request: &bravebot_agent::confirm::HostRequest) -> Decision {
+        self.refusing.confirm_host(request)
+    }
+
     fn confirm_move(&mut self, request: &bravebot_agent::confirm::MoveRequest) -> Decision {
         self.refusing.confirm_move(request)
     }

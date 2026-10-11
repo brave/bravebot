@@ -1392,6 +1392,20 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         self.ask(&lines, t!(path_title))
     }
 
+    /// The hosts as they will be allowed, one to a line, and what a yes covers.
+    fn confirm_host(&mut self, request: &bravebot_agent::confirm::HostRequest) -> Decision {
+        let mut lines = vec![t!(host_asked, count = request.hosts.len()).to_string()];
+        lines.extend(
+            request
+                .hosts
+                .iter()
+                .map(|host| t!(host_row, host = shown(host).as_str()).to_string()),
+        );
+        lines.push(t!(host_explained).to_string());
+        self.about(Held::Question);
+        self.ask(&lines, t!(host_title))
+    }
+
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
         let lines = bravebot_approval::move_lines(&bravebot_approval::Move {
             alias: &request.alias,
@@ -1839,6 +1853,36 @@ mod tests {
                     !drawn.contains(not_shown_access),
                     "write {write}: {not_shown_access} is drawn in {drawn}"
                 );
+            }
+        }
+    }
+
+    /// SANDBOX-24 in lines: the hosts, one to a line, and what a yes covers are put to the person,
+    /// and only the affirmative lets programs reach them. No answer is a no.
+    #[test]
+    fn hosts_are_asked_in_lines_and_only_a_yes_lets_programs_reach_them() {
+        let request = bravebot_agent::confirm::HostRequest {
+            hosts: vec!["a.example".to_string(), "b.example".to_string()],
+        };
+        for (answer, expected) in [
+            ("y\n", Decision::Approve),
+            ("n\n", Decision::Reject),
+            ("", Decision::Reject),
+        ] {
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(answer.as_bytes().to_vec())),
+                Vec::new(),
+            );
+            assert_eq!(asking.confirm_host(&request), expected, "{answer:?}");
+            let drawn = String::from_utf8(asking.output).expect("text");
+            for line in [
+                t!(host_asked, count = 2).to_string(),
+                "a.example".to_string(),
+                "b.example".to_string(),
+                t!(host_explained).to_string(),
+                t!(host_title).to_string(),
+            ] {
+                assert!(drawn.contains(&line), "{line} is not drawn in {drawn}");
             }
         }
     }

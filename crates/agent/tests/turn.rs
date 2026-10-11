@@ -2676,6 +2676,13 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
             bravebot_agent::confirm::Decision::Reject
         }
 
+        fn confirm_host(
+            &mut self,
+            _request: &bravebot_agent::confirm::HostRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
         fn confirm_move(
             &mut self,
             _request: &bravebot_agent::confirm::MoveRequest,
@@ -3098,6 +3105,13 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
     fn confirm_path(
         &mut self,
         _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::Decision::Reject
     }
@@ -5095,6 +5109,13 @@ impl bravebot_agent::Confirmer for SaysOnce {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -6214,6 +6235,13 @@ impl bravebot_agent::Confirmer for ChangesTheFileWhenAsked {
     fn confirm_path(
         &mut self,
         _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::Decision::Reject
     }
@@ -8814,6 +8842,13 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
         fn confirm_path(
             &mut self,
             _request: &bravebot_agent::confirm::PathRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
+        fn confirm_host(
+            &mut self,
+            _request: &bravebot_agent::confirm::HostRequest,
         ) -> bravebot_agent::confirm::Decision {
             bravebot_agent::confirm::Decision::Reject
         }
@@ -14420,6 +14455,13 @@ impl bravebot_agent::Confirmer for AnswersWith {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -14904,6 +14946,13 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
     fn confirm_fetch(
         &mut self,
         _request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
     }
@@ -18890,6 +18939,13 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -22505,6 +22561,13 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -22984,6 +23047,13 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
     fn confirm_path(
         &mut self,
         _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::Decision::Reject
     }
@@ -34221,6 +34291,13 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -41064,6 +41141,13 @@ impl bravebot_agent::confirm::Confirmer for RemembersWrites {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -42139,6 +42223,13 @@ impl bravebot_agent::confirm::Confirmer for RemembersExposures {
     fn confirm_path(
         &mut self,
         _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::Decision::Reject
     }
@@ -47768,6 +47859,10 @@ mod spend_limit {
         }
         /// Refuses. This double answers no question about reach.
         fn confirm_path(&mut self, _request: &bravebot_agent::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+
+        fn confirm_host(&mut self, _request: &bravebot_agent::confirm::HostRequest) -> Decision {
             Decision::Reject
         }
 

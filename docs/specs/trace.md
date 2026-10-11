@@ -66,7 +66,8 @@ asked", which is most of what anyone asks it.
 
 Every field is a gate name, a capability, a label, a path, a destination host or a slot id.
 Network decisions omit URL userinfo, paths, queries and fragments. A host a confined program asked
-a proxy for is recorded only where it is a host name or an address ([SANDBOX-24](sandboxing.md#SANDBOX-24)).
+a proxy for is recorded only where it is a host name or an address ([SANDBOX-24](sandboxing.md#SANDBOX-24)),
+and so is a host the person answered a question about, under `host_grant`.
 That is why it can be shown
 on a screen and written to a file without any release, and it is what makes the record safe to keep
 for a workspace nobody vouched for.

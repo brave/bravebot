@@ -1127,6 +1127,18 @@ pub struct PathRequest {
     pub why: String,
 }
 
+/// Programs a line started asked an allowed-hosts proxy for hosts no entry covers (SANDBOX-24).
+///
+/// `hosts` are names or addresses a program chose and the proxy refused. Each is a valid host name
+/// or IP address as [`bravebot_sandbox::hosts::recordable`] allows and nothing else, so what is
+/// drawn is exactly what a yes lists. They are the program's bytes and are not for the planner. A
+/// yes lets later lines of the session reach them, subject to `deniedHosts`, and marks nothing
+/// trusted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostRequest {
+    pub hosts: Vec<String>,
+}
+
 /// What the person decided about a call to a server's tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallDecision {
@@ -1511,6 +1523,15 @@ pub trait Confirmer {
     /// trusted, which is the difference from opening one by name.
     fn confirm_path(&mut self, request: &PathRequest) -> Decision;
 
+    /// Ask whether programs the planner starts may reach hosts that the session's allowed-hosts
+    /// list does not cover, for the rest of the session. Implementations must refuse when they
+    /// cannot ask.
+    ///
+    /// Asked after a line has stopped, about hosts its programs already asked for and were refused,
+    /// so nothing waits on the answer. Separate from [`Confirmer::confirm_path`] because the hosts
+    /// were chosen by a program, and a yes widens the network and no directory.
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision;
+
     /// Put a series of questions to the person, one answer per question in the order they were
     /// asked.
     ///
@@ -1559,6 +1580,10 @@ impl Confirmer for Unattended {
 
     /// Refuses. Nobody is there to approve reach.
     fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
     }
 
@@ -1693,6 +1718,10 @@ impl Confirmer for ApproveWrites {
         Decision::Reject
     }
 
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1761,6 +1790,10 @@ impl Confirmer for ChoosesFirst {
 
     /// Refuses. This double answers no question about reach.
     fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
     }
 
@@ -1851,6 +1884,10 @@ impl Confirmer for ApproveRuns {
         Decision::Reject
     }
 
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1922,6 +1959,10 @@ impl Confirmer for RemembersRuns {
         Decision::Reject
     }
 
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1990,6 +2031,10 @@ impl Confirmer for ReadsOutput {
 
     /// Refuses. This double answers no question about reach.
     fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
     }
 
@@ -2066,6 +2111,10 @@ impl Confirmer for VetsContent {
 
     /// Refuses. This double answers no question about reach.
     fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
     }
 
@@ -2148,6 +2197,10 @@ impl Confirmer for ExposesReads {
         Decision::Reject
     }
 
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2215,6 +2268,10 @@ impl Confirmer for ApproveFetches {
 
     /// Refuses. This double answers no question about reach.
     fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
     }
 
@@ -2287,6 +2344,10 @@ impl Confirmer for ApprovePlans {
 
     /// Refuses. This double answers no question about reach.
     fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
     }
 
@@ -2380,6 +2441,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_path(&mut self, request: &PathRequest) -> Decision {
         self.timing(|inner| inner.confirm_path(request))
+    }
+
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+        self.timing(|inner| inner.confirm_host(request))
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -2686,6 +2751,10 @@ mod tests {
 
         /// Refuses. This double answers no question about reach.
         fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+            Decision::Reject
+        }
+
+        fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
             Decision::Reject
         }
 

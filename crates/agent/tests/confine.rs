@@ -950,6 +950,40 @@ fn a_stage_with_a_host_list_is_pointed_at_the_proxy_that_applies_it() {
     assert!(!connect_through(address, "mine.example").contains("403"));
 }
 
+/// SANDBOX-24: a host the person let programs reach for the session is carried by the stage's
+/// proxy, a host they did not is still refused, and a host the denied list names stays refused even
+/// when granted. The regressions it rejects: a grant that is recorded and never reaches the
+/// proxy, and a grant that outranks a denial.
+#[test]
+fn a_granted_host_is_carried_by_the_proxy_and_a_denied_one_still_is_not() {
+    if !can_hold_to_a_port() {
+        return;
+    }
+    let places = Places::new("hosts-granted");
+    let list = hosts(Some(&["mine.example"]), &["banned.example"]);
+    let grants = ["granted.example".to_string(), "banned.example".to_string()];
+    let address_of = |confinement: &Confinement| {
+        let told = proxy_variable(&places, &print_proxy(""), Some(confinement));
+        told.strip_prefix("http://")
+            .expect("a proxy url")
+            .to_string()
+    };
+
+    let before = address_of(&places.confinement().with_hosts(Some(&list)));
+    assert!(connect_through(&before, "granted.example").contains("403"));
+
+    let after = address_of(
+        &places
+            .confinement()
+            .with_hosts(Some(&list))
+            .with_host_grants(&grants),
+    );
+    assert!(!connect_through(&after, "granted.example").contains("403"));
+    assert!(!connect_through(&after, "mine.example").contains("403"));
+    assert!(connect_through(&after, "banned.example").contains("403"));
+    assert!(connect_through(&after, "other.example").contains("403"));
+}
+
 /// The regression it rejects: the proxy variables applied before the stage's own assignment, so a
 /// model-written `HTTPS_PROXY=` points the stage at a proxy of its choosing.
 #[test]

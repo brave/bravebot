@@ -7958,6 +7958,11 @@ fn manifest_animated(
                         bravebot_agent::confirm::Decision::Reject,
                     ));
                 }
+                crate::remote_confirm::ToMain::Host(_) => {
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Host(
+                        bravebot_agent::confirm::Decision::Reject,
+                    ));
+                }
                 // What is left announces rather than asks, so nothing waits on it. The manifest is the
                 // task list, so no list changes; there is no planner to delegate or to be interjected
                 // at; and a run's steps report through `Started` and `Finished` above.
@@ -8765,6 +8770,13 @@ fn run_turn_animated(
                     }
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Path(answer.decision()));
                 }
+                crate::remote_confirm::ToMain::Host(request) => {
+                    let answer = crate::confirm::ask_host(terminal, &request);
+                    if answer.stops_the_turn() {
+                        stop_what_is_running(session, &cancel);
+                    }
+                    let _ = answer_tx.send(crate::remote_confirm::Reply::Host(answer.decision()));
+                }
                 crate::remote_confirm::ToMain::Ask(asking) => {
                     // A planner that loops back over the same decision should not make the user
                     // restate it. The note is what keeps that from being invisible: an answer given
@@ -9102,6 +9114,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         ToMain::McpCall(_) => Reply::McpCall(CallDecision::reject()),
         ToMain::Move(_) => Reply::Move(Decision::Reject),
         ToMain::Path(_) => Reply::Path(Decision::Reject),
+        ToMain::Host(_) => Reply::Host(Decision::Reject),
         ToMain::Ask(_) => Reply::Ask(Vec::new()),
         ToMain::PromptRecorded(_)
         | ToMain::RequestBuilt(_)

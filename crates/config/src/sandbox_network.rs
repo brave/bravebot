@@ -177,7 +177,8 @@ pub fn settled() -> Option<&'static Resolved> {
 ///
 /// A managed `allowedHosts` is the whole allowed set, so a person's entries are not added to it,
 /// and a managed `onUnlisted` is the answer whichever the person said. A managed `deniedHosts`
-/// is added to theirs and nothing they wrote lifts it.
+/// is added to theirs and nothing they wrote lifts it. A person's `onUnlisted: ask` is not read
+/// beside a managed `allowedHosts` that does not pin `onUnlisted` itself.
 pub fn resolve(settings: &Settings, managed: &Managed) -> Resolved {
     let mut hosts = settings.sandbox_hosts().clone();
     let pin = managed.sandbox_hosts();
@@ -186,6 +187,11 @@ pub fn resolve(settings: &Settings, managed: &Managed) -> Resolved {
         out.pinned.push("sandbox.network.allowedHosts");
         out.unread = hosts.allowed.take().unwrap_or_default();
         hosts.allowed = Some(allowed.clone());
+        // A yes to a prompt adds a host to the allowed set, which is the widening a pin exists to
+        // prevent, so the person's `ask` is dropped unless the managed file says it too.
+        if pin.on_unlisted.is_none() {
+            hosts.on_unlisted = None;
+        }
     }
     if !pin.denied.is_empty() {
         out.pinned.push("sandbox.network.deniedHosts");
@@ -241,6 +247,26 @@ mod tests {
             managed
                 .pinned()
                 .any(|name| name == "sandbox.network.allowedHosts")
+        );
+    }
+
+    /// A person's `onUnlisted: ask` is not read beside a pinned `allowedHosts`, since a yes would
+    /// add a host to the set the administrator fixed; a managed `ask` is the administrator's own
+    /// word and stands. The regression it rejects is the person's `ask` surviving the pin.
+    #[test]
+    fn a_pinned_allowed_list_is_not_widened_by_the_persons_ask() {
+        let pinned = crate::managed::scratch(
+            "hosts-pin-allowed-ask",
+            r#"{"sandbox": {"network": {"allowedHosts": ["corp.example"]}}}"#,
+        );
+        assert_eq!(resolve(&own(), &pinned).hosts.on_unlisted, None);
+        let says_ask = crate::managed::scratch(
+            "hosts-pin-allowed-says-ask",
+            r#"{"sandbox": {"network": {"allowedHosts": ["corp.example"], "onUnlisted": "ask"}}}"#,
+        );
+        assert_eq!(
+            resolve(&Settings::default(), &says_ask).hosts.on_unlisted,
+            Some(OnUnlisted::Ask)
         );
     }
 
