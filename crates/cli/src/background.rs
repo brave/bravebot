@@ -353,7 +353,10 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
             ),
         );
     };
-    if writeln!(stream, "attach").is_err() {
+    let Some(token) = roster.attach_token(&seen.job.id) else {
+        return fail(Ending::Failed, t!(attach_not_running, name = name));
+    };
+    if writeln!(stream, "{token}\nattach").is_err() {
         return fail(Ending::Failed, t!(attach_not_running, name = name));
     }
     let Ok(listening) = stream.try_clone() else {
@@ -472,9 +475,12 @@ fn send(roster: &Roster, seen: &Seen, text: &str) -> ExitCode {
         return fail(Ending::Failed, t!(attach_not_running, name = name));
     };
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    let Some(token) = roster.attach_token(&seen.job.id) else {
+        return fail(Ending::Failed, t!(attach_not_running, name = name));
+    };
     // One line, as the socket reads it: a break in the text would end the reply early.
     let text = one_line(text);
-    if writeln!(stream, "reply\n{text}").is_err() {
+    if writeln!(stream, "{token}\nreply\n{text}").is_err() {
         return fail(Ending::Failed, t!(reply_not_sent, name = name));
     }
     let answer = crate::host::bounded_line(&mut BufReader::new(stream));

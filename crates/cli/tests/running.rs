@@ -7983,7 +7983,7 @@ fn typing_detach_leaves_a_session_running_without_sending_it() {
         terminal
             .set_read_timeout(Some(Duration::from_secs(60)))
             .expect("timeout");
-        writeln!(terminal, "attach").expect("attach");
+        writeln!(terminal, "{}\nattach", a_token(&socket)).expect("attach");
         let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
         shown_until(&mut seen, "trust this directory?");
         loop {
@@ -8081,7 +8081,7 @@ fn a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle() {
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("timeout");
-        write!(stream, "{text}").expect("write");
+        write!(stream, "{}\n{text}", a_token(&socket)).expect("write");
         let mut answer = String::new();
         BufReader::new(stream)
             .read_line(&mut answer)
@@ -8124,7 +8124,7 @@ fn a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle() {
     terminal
         .set_read_timeout(Some(Duration::from_secs(60)))
         .expect("timeout");
-    writeln!(terminal, "attach").expect("attach");
+    writeln!(terminal, "{}\nattach", a_token(&socket)).expect("attach");
     let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
     let mut transcript = String::new();
     let read_until = |seen: &mut BufReader<UnixStream>, transcript: &mut String, wanted: &str| {
@@ -8187,6 +8187,72 @@ fn a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle() {
     host.wait().expect("the host ends once stopped");
 }
 
+/// BG-15, end to end: a program that connects to the socket without the session's secret is closed
+/// without an answer. It cannot attach, so it cannot answer the question the session holds, and it
+/// does not take the one place a terminal attaches in.
+#[cfg(unix)]
+#[test]
+fn a_connection_without_the_sessions_secret_gets_nothing_from_it() {
+    use std::os::unix::net::UnixStream;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let (mut host, socket) = a_started_host(&home, &gateway, "{}");
+
+    let heard = |text: &str| -> String {
+        let mut stream = UnixStream::connect(&socket).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("timeout");
+        write!(stream, "{text}").expect("write");
+        let mut heard = String::new();
+        let _ = BufReader::new(stream).read_to_string(&mut heard);
+        heard
+    };
+    let wrong = "0".repeat(64);
+    for attempt in [
+        "reply\nyes\n".to_string(),
+        "attach\ny\n".to_string(),
+        format!("{wrong}\nattach\ny\n"),
+        format!("{wrong}\nreply\nyes\n"),
+        "\nattach\ny\n".to_string(),
+    ] {
+        let answer = heard(&attempt);
+        assert!(answer.is_empty(), "{attempt:?} was answered: {answer:?}");
+    }
+
+    let token = a_token(&socket);
+    assert_eq!(token.len(), 64, "{token}");
+    for attempt in [
+        format!("{}\nattach\ny\n", &token[..63]),
+        format!("{}\nattach\ny\n", &token[..1]),
+        format!("{token}0\nattach\ny\n"),
+        format!("{}\nreply\nyes\n", token.to_uppercase()),
+    ] {
+        let answer = heard(&attempt);
+        assert!(answer.is_empty(), "{attempt:?} was answered: {answer:?}");
+    }
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a connection without the secret answered the trust question"
+    );
+
+    // The place for a terminal is free, and the question is still held.
+    let mut terminal = UnixStream::connect(&socket).expect("attach");
+    terminal
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("timeout");
+    writeln!(terminal, "{token}\nattach").expect("attach");
+    let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
+    let transcript = shown_until(&mut seen, "trust this directory?");
+    assert!(transcript.starts_with("ok\n"), "{transcript}");
+    assert!(gateway.asked.try_recv().is_err(), "{transcript}");
+
+    let stopped = bravebot(&home.0, &[], &["sessions", "stop", SESSION_ID]);
+    assert!(stopped.status.success(), "{}", said(&stopped).1);
+    host.wait().expect("the host ends once stopped");
+}
+
 /// A background session that has had one turn and was then stopped, in `home`'s `work` directory.
 /// Returns that directory.
 #[cfg(unix)]
@@ -8198,7 +8264,7 @@ fn a_stopped_session_with_one_turn(home: &ShortHome, gateway: &Gateway) -> PathB
     terminal
         .set_read_timeout(Some(Duration::from_secs(60)))
         .expect("timeout");
-    writeln!(terminal, "attach").expect("attach");
+    writeln!(terminal, "{}\nattach", a_token(&socket)).expect("attach");
     let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
     shown_until(&mut seen, "trust this directory?");
     // The question is drawn a moment before the session reads an answer to it, and a line sent in
@@ -8268,7 +8334,7 @@ fn a_session_started_again_continues_the_conversation_it_stopped_with() {
     terminal
         .set_read_timeout(Some(Duration::from_secs(60)))
         .expect("timeout");
-    writeln!(terminal, "attach").expect("attach");
+    writeln!(terminal, "{}\nattach", a_token(&socket)).expect("attach");
     let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
     let transcript = shown_until(&mut seen, "earlier conversation (1 turn)");
     assert!(
@@ -8284,7 +8350,7 @@ fn a_session_started_again_continues_the_conversation_it_stopped_with() {
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("timeout");
-        write!(stream, "reply\nand the tests\n").expect("write");
+        write!(stream, "{}\nreply\nand the tests\n", a_token(&socket)).expect("write");
         let mut answer = String::new();
         BufReader::new(stream)
             .read_line(&mut answer)
@@ -8361,7 +8427,7 @@ fn a_session_started_after_an_interruption_tells_the_planner_and_one_after_a_sto
             stream
                 .set_read_timeout(Some(Duration::from_secs(30)))
                 .expect("timeout");
-            write!(stream, "reply\nand the tests\n").expect("write");
+            write!(stream, "{}\nreply\nand the tests\n", a_token(&socket)).expect("write");
             let mut answer = String::new();
             BufReader::new(stream)
                 .read_line(&mut answer)
@@ -8754,6 +8820,15 @@ fn a_started_host(
     (host, socket)
 }
 
+/// The secret a client opens a connection to `socket` with (BG-15): the first line it sends.
+#[cfg(unix)]
+fn a_token(socket: &Path) -> String {
+    std::fs::read_to_string(socket.with_file_name("attach.token"))
+        .expect("the host keeps a secret beside its socket")
+        .trim()
+        .to_string()
+}
+
 /// What a terminal attached to `socket` has been shown so far, read until it contains `wanted`.
 #[cfg(unix)]
 fn shown_until(seen: &mut BufReader<std::os::unix::net::UnixStream>, wanted: &str) -> String {
@@ -8823,7 +8898,7 @@ fn an_allow_rule_does_not_answer_a_write_a_background_session_holds() {
     terminal
         .set_read_timeout(Some(Duration::from_secs(60)))
         .expect("timeout");
-    writeln!(terminal, "attach").expect("attach");
+    writeln!(terminal, "{}\nattach", a_token(&socket)).expect("attach");
     let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
     shown_until(&mut seen, "trust this directory?");
     writeln!(terminal, "n").expect("answer the question");
@@ -8837,7 +8912,7 @@ fn an_allow_rule_does_not_answer_a_write_a_background_session_holds() {
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("timeout");
-        write!(stream, "reply\nyes\n").expect("write");
+        write!(stream, "{}\nreply\nyes\n", a_token(&socket)).expect("write");
         let mut answer = String::new();
         BufReader::new(stream)
             .read_line(&mut answer)
@@ -8896,7 +8971,7 @@ fn a_server_question_is_held() -> HeldServer {
     terminal
         .set_read_timeout(Some(Duration::from_secs(60)))
         .expect("timeout");
-    writeln!(terminal, "attach").expect("attach");
+    writeln!(terminal, "{}\nattach", a_token(&socket)).expect("attach");
     let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
     shown_until(&mut seen, "trust this directory?");
     writeln!(terminal, "n").expect("answer the question");

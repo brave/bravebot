@@ -28,6 +28,12 @@ const LIVE_FILE: &str = "live";
 /// The file the line that starts a session is left in for its process.
 const FIRST_PROMPT_FILE: &str = "first-prompt";
 
+/// The file the secret that opens a connection to the process is kept in (BG-15).
+const ATTACH_TOKEN_FILE: &str = "attach.token";
+
+/// How many random bytes the secret is made of.
+const ATTACH_TOKEN_BYTES: usize = 32;
+
 /// The longest prompt kept in the roster, in characters.
 ///
 /// A list shows a title cut from it, so the rest is never read; keeping a whole pasted file here
@@ -256,6 +262,19 @@ pub fn is_an_id(id: &str) -> bool {
         && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
+/// Whether `given` is the secret `wanted` (BG-15).
+///
+/// Every byte is looked at whatever the first difference is, so how long a refusal takes says
+/// nothing about how much of a guess was right. An empty secret matches nothing.
+pub fn is_the_attach_token(wanted: &str, given: &str) -> bool {
+    let (wanted, given) = (wanted.as_bytes(), given.as_bytes());
+    let mut differing = u8::from(wanted.len() != given.len() || wanted.is_empty());
+    for (at, byte) in wanted.iter().enumerate() {
+        differing |= byte ^ given.get(at).copied().unwrap_or(0);
+    }
+    differing == 0
+}
+
 /// An entry as it stands now: what the file says, and whether anything is running it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Seen {
@@ -457,6 +476,40 @@ impl Roster {
             .map(|directory| directory.join("attach.sock"))
     }
 
+    /// Make a new secret for the socket of `id`, keep it where only this user can read it, and
+    /// return it (BG-15).
+    ///
+    /// Made before the socket is bound, so there is never a socket that anything may talk to
+    /// without it. A secret left by an earlier process is replaced, not reused.
+    pub fn issue_attach_token(&self, id: &str) -> std::io::Result<String> {
+        use rand::RngCore;
+        let Some(directory) = self.directory_of(id) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "not a session id",
+            ));
+        };
+        bravebot_agent::home::create_directory(&directory)?;
+        let mut bytes = [0u8; ATTACH_TOKEN_BYTES];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        bravebot_agent::home::write_file(&directory.join(ATTACH_TOKEN_FILE), token.as_bytes())?;
+        Ok(token)
+    }
+
+    /// The secret of `id`'s process, or `None` where it has none.
+    pub fn attach_token(&self, id: &str) -> Option<String> {
+        let text = std::fs::read_to_string(self.directory_of(id)?.join(ATTACH_TOKEN_FILE)).ok()?;
+        Some(text.trim().to_string())
+    }
+
+    /// Remove the secret of `id`, once its process has no socket left to guard.
+    pub fn withdraw_attach_token(&self, id: &str) {
+        if let Some(directory) = self.directory_of(id) {
+            let _ = std::fs::remove_file(directory.join(ATTACH_TOKEN_FILE));
+        }
+    }
+
     /// Stop the process for `id` and record that it was stopped (BG-11).
     ///
     /// The process group is sent the terminate signal, which takes the programs a turn started
@@ -654,6 +707,54 @@ mod tests {
         assert_eq!(mode(&directory), 0o700);
         assert_eq!(mode(&directory.join(STATE_FILE)), 0o600);
         assert_eq!(mode(&directory.join(LIVE_FILE)), 0o600);
+    }
+
+    /// BG-15: the secret is 256 random bits kept readable by this user alone, a new one for every
+    /// process, and gone once the process has ended.
+    #[test]
+    fn the_secret_of_a_process_is_random_private_and_replaced_each_time() {
+        let (_dir, roster) = roster();
+        let first = roster.issue_attach_token(A).expect("issued");
+        assert_eq!(first.len(), 64, "{first}");
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()), "{first}");
+        assert_eq!(roster.attach_token(A).as_deref(), Some(first.as_str()));
+        assert_eq!(roster.attach_token(B), None);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode =
+                |path: &Path| std::fs::metadata(path).expect("stat").permissions().mode() & 0o777;
+            assert_eq!(mode(&roster.root.join(A)), 0o700);
+            assert_eq!(mode(&roster.root.join(A).join(ATTACH_TOKEN_FILE)), 0o600);
+        }
+
+        let second = roster.issue_attach_token(A).expect("issued");
+        assert_ne!(first, second);
+        assert_eq!(roster.attach_token(A).as_deref(), Some(second.as_str()));
+
+        roster.withdraw_attach_token(A);
+        assert_eq!(roster.attach_token(A), None);
+        assert!(roster.issue_attach_token("../x").is_err());
+    }
+
+    /// BG-15: only the whole secret opens a connection: not a part of it, not more than it, not a
+    /// secret that is empty on both sides.
+    #[test]
+    fn only_the_whole_secret_is_the_secret() {
+        let secret = "0123456789abcdef".repeat(4);
+        assert!(is_the_attach_token(&secret, &secret));
+        assert!(!is_the_attach_token(&secret, &secret[..63]));
+        assert!(!is_the_attach_token(&secret, &secret[..1]));
+        assert!(!is_the_attach_token(&secret, &format!("{secret}0")));
+        assert!(!is_the_attach_token(&secret, &secret.to_uppercase()));
+        assert!(!is_the_attach_token(&secret, &secret.replacen('0', "1", 1)));
+        assert!(!is_the_attach_token(
+            &secret,
+            &format!("{}e", &secret[..63])
+        ));
+        assert!(!is_the_attach_token(&secret, ""));
+        assert!(!is_the_attach_token("", ""));
+        assert!(!is_the_attach_token("", "x"));
     }
 
     /// BG-6: while something holds the lock the entry says what it said; once nothing does, a
