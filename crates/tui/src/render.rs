@@ -729,12 +729,7 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     frame.render_widget(Paragraph::new(beneath), areas[4]);
     draw_hint(frame, hint_row, session);
     if let Some(panel) = panel {
-        frame.render_widget(Clear, panel);
-        frame.render_widget(
-            Paragraph::new(crate::panel::lines(session, panel.width, panel.height))
-                .block(Block::default().borders(Borders::LEFT).border_style(dim())),
-            panel,
-        );
+        crate::panel::draw(frame.buffer_mut(), panel, session);
     }
 
     // Last, over everything: the selection is of the screen rather than of any one widget, and

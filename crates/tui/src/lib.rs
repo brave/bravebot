@@ -29,6 +29,7 @@ pub mod goals;
 pub mod hidden;
 pub mod history;
 pub mod history_search;
+pub mod hyperlink;
 pub mod indicator;
 pub mod init_command;
 pub mod input;

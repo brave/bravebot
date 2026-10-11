@@ -244,7 +244,9 @@ and so does setting [`terminalTitle`](../customize/configuration.md#terminaltitl
 The title says which session a terminal holds. The info panel says the rest: press Ctrl-X, or type
 `/panel`, and a column 36 wide opens on the right of the screen with
 
-- the session's name, its directory and its branch, and below them its id over two rows, the one
+- the session's name, with a GitHub pull request or issue address in it shown as
+  `brave/bravebot#1975` and still a link to the address in a terminal that supports links,
+  its directory and its branch, and below them its id over two rows, the one
   `bravebot --resume`, `--fork` and `/resume` take, so you can resume or fork a running session from
   another terminal without `/status`; it appears once the session has been saved,
 - the model you chose and the effort level in force,
