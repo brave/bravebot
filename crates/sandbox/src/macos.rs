@@ -23,6 +23,24 @@ const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 /// The socket every host name lookup on macOS goes through.
 const RESOLVER: &str = "/private/var/run/mDNSResponder";
 
+/// The Mach services a confined process may look up. Each answers a question about the machine
+/// (accounts, groups, network configuration, certificate trust, log and notification delivery) or
+/// is the keychain service the base reads a keychain file for. None starts a program, reads or
+/// writes the pasteboard, or opens a file or URL on the caller's behalf, which is what
+/// LaunchServices, the pasteboard and launchd do, so a lookup of any of those is refused.
+const MACH_SERVICES: &[&str] = &[
+    "com.apple.SecurityServer",
+    "com.apple.SystemConfiguration.DNSConfiguration",
+    "com.apple.SystemConfiguration.configd",
+    "com.apple.bsd.dirhelper",
+    "com.apple.logd",
+    "com.apple.system.notification_center",
+    "com.apple.system.opendirectoryd.libinfo",
+    "com.apple.system.opendirectoryd.membership",
+    "com.apple.trustd",
+    "com.apple.trustd.agent",
+];
+
 /// Refuses a write to any path with a `.git` component, in either case, since the default
 /// volume opens `.GIT` when git asks for `.git`.
 const GIT_DIRECTORY_WRITE: &str = "(deny file-write* (regex #\"/\\.[Gg][Ii][Tt](/|$)\"))\n";
@@ -82,12 +100,16 @@ impl SeatbeltSandbox {
     pub fn profile(policy: &SandboxPolicy) -> String {
         let mut out = String::from("(version 1)\n(deny default)\n");
 
-        // Without these the process cannot start at all: the loader must exec the
-        // binary and mach lookups are needed for basic runtime services. They grant no
-        // filesystem or network reach of their own.
+        // Without these the process cannot start at all: the loader must exec the binary and
+        // the system libraries look up the services in `MACH_SERVICES`. Those grant no filesystem
+        // or network reach of their own, and no other service is reachable.
         out.push_str("(allow process-exec)\n");
         out.push_str("(allow sysctl-read)\n");
-        out.push_str("(allow mach-lookup)\n");
+        out.push_str("(allow mach-lookup");
+        for service in MACH_SERVICES {
+            out.push_str(&format!(" (global-name {})", quote(service)));
+        }
+        out.push_str(")\n");
 
         // The dynamic loader reads the root directory entry itself, which a subpath
         // grant for e.g. /usr does not cover. Without this the process dies with
@@ -1208,6 +1230,171 @@ int main(void) {
             )
             .expect_err("must refuse a policy that confines nothing");
         assert!(matches!(err, SandboxError::PolicyTooPermissive));
+    }
+
+    /// `bootstrap_look_up` of the name in its argument, reported as an exit status the caller can
+    /// tell apart: 0 found, 10 refused to this process, 11 not registered, 12 anything else.
+    /// Built in `dir`, because no program macOS ships asks the bootstrap server for a name and
+    /// says which of those answers it got.
+    fn mach_lookup_probe(dir: &Path) -> PathBuf {
+        const SOURCE: &str = r#"#include <mach/mach.h>
+#include <servers/bootstrap.h>
+int main(int argc, char **argv) {
+    if (argc != 2) {
+        return 12;
+    }
+    mach_port_t port = MACH_PORT_NULL;
+    kern_return_t result = bootstrap_look_up(bootstrap_port, argv[1], &port);
+    if (result == KERN_SUCCESS) {
+        return 0;
+    }
+    if (result == BOOTSTRAP_NOT_PRIVILEGED) {
+        return 10;
+    }
+    return result == BOOTSTRAP_UNKNOWN_SERVICE ? 11 : 12;
+}
+"#;
+        let source = dir.join("lookup.c");
+        std::fs::write(&source, SOURCE).expect("the scratch directory is writable");
+        let program = dir.join("lookup");
+        let built = Command::new("cc")
+            .arg("-o")
+            .arg(&program)
+            .arg(&source)
+            .status()
+            .expect("cc, which linked this test binary, is on the machine");
+        assert!(built.success(), "the lookup probe did not compile");
+        program
+    }
+
+    const LOOKUP_FOUND: i32 = 0;
+    const LOOKUP_REFUSED: i32 = 10;
+
+    /// SANDBOX-31: the profile names the services a confined process may look up, and a lookup
+    /// of anything is not one of its rules. The regression it rejects is `(allow mach-lookup)`
+    /// written without a name, which grants every service the account's session registers.
+    #[test]
+    fn the_profile_allows_a_lookup_of_named_services_and_not_of_every_service() {
+        let profile = SeatbeltSandbox::profile(&reads_the_system_only());
+        let rules: Vec<&str> = profile
+            .lines()
+            .filter(|line| line.contains("mach-lookup"))
+            .collect();
+        assert_eq!(rules.len(), 1, "one rule decides the lookups: {profile}");
+        for service in MACH_SERVICES {
+            assert!(
+                rules[0].contains(&format!("(global-name {})", quote(service))),
+                "{service} is not named in {}",
+                rules[0]
+            );
+        }
+        assert_eq!(
+            rules[0].matches("(global-name ").count(),
+            MACH_SERVICES.len(),
+            "the rule grants something the list does not name: {}",
+            rules[0]
+        );
+        assert!(
+            !rules[0].contains("regex") && !rules[0].contains("prefix"),
+            "a pattern grants services the list does not name: {}",
+            rules[0]
+        );
+    }
+
+    /// SANDBOX-31: a confined process finds each service the list names and is refused the ones
+    /// that act on the person's behalf. Run against the bootstrap server, so a name the profile
+    /// spells wrongly is not found, and a list left empty fails the first half as readily as a
+    /// blanket allow fails the second.
+    ///
+    /// A refused service is compared with what this process finds unconfined, so a session that
+    /// registers no pasteboard does not pass for a profile that refuses it. LaunchServices is a
+    /// daemon of the system domain, so it is always there to be refused.
+    #[test]
+    fn a_confined_process_finds_the_services_programs_need_and_none_that_act_for_the_person() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-mach-lookup");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let probe = mach_lookup_probe(&dir);
+        let policy = reads_the_system_only().allow_read(&dir);
+        let lookup = |name: &str, confined: bool| -> i32 {
+            if !confined {
+                return Command::new(&probe)
+                    .arg(name)
+                    .status()
+                    .expect("the probe runs")
+                    .code()
+                    .expect("the probe exits");
+            }
+            sandbox
+                .spawn(
+                    probe.as_os_str(),
+                    &[name.into()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .code()
+                .expect("the probe exits")
+        };
+
+        for service in MACH_SERVICES {
+            assert_eq!(
+                lookup(service, false),
+                LOOKUP_FOUND,
+                "{service} is listed and is not a service this session registers"
+            );
+            assert_eq!(
+                lookup(service, true),
+                LOOKUP_FOUND,
+                "{service} is listed and could not be looked up"
+            );
+        }
+
+        // Each of these stopped a program when it was refused: account lookups (every program
+        // that asks who it runs as), notifications and logging (libSystem), the keychain (`gh`
+        // and git's `osxkeychain`), and certificate trust (a Go program such as `gh` verifying a
+        // TLS certificate through the platform, which fails with `x509: OSStatus -26276`).
+        for service in [
+            "com.apple.system.opendirectoryd.libinfo",
+            "com.apple.system.opendirectoryd.membership",
+            "com.apple.system.notification_center",
+            "com.apple.logd",
+            "com.apple.SecurityServer",
+            "com.apple.trustd.agent",
+        ] {
+            assert_eq!(
+                lookup(service, true),
+                LOOKUP_FOUND,
+                "{service} is what a program needs to run and could not be looked up"
+            );
+        }
+
+        assert_eq!(
+            lookup("com.apple.coreservices.launchservicesd", false),
+            LOOKUP_FOUND,
+            "LaunchServices is registered in every session, so a refusal of it is observable"
+        );
+        let mut refused = 0;
+        for service in [
+            "com.apple.coreservices.launchservicesd",
+            "com.apple.lsd.mapdb",
+            "com.apple.pasteboard.1",
+        ] {
+            if lookup(service, false) != LOOKUP_FOUND {
+                continue;
+            }
+            assert_eq!(
+                lookup(service, true),
+                LOOKUP_REFUSED,
+                "{service} acts for the person and could be looked up"
+            );
+            refused += 1;
+        }
+        assert!(refused >= 1, "no refused service was there to be refused");
     }
 
     #[test]
