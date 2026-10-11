@@ -88,9 +88,16 @@ Before that addition lands:
 
 No dependencies or build tooling are added by this proposal. Stage 1 covers the adapter and Rust additions; the first of stages 2b and 3d that adds the app covers its platform dependencies. Reassess the dependency cost at the UI checkpoint.
 
+### 10. One process-wide spawn gate, before the host exists
+
+- **Decision:** the creation of a control channel and every start of a program by a crate the bridge links take one process-wide lock, one at a time (`bravebot_sandbox::process::creating_a_channel` and `starting_a_program`). It lands with the channel work although `control_link::launch`, the only channel launcher, has test callers and the persistent host does not exist. A test reads the source of every linked crate and fails for a start outside the gate.
+- **Reason:** macOS marks a new socket pair or pipe close-on-exec in a second step, and Linux does it atomically (checked in the standard library source). A program another thread starts between the two steps holds both ends, and the bridge hands them on to its tools. That race was reproduced. A start also creates the pipes of its own standard streams inside `spawn`, so a start is a descriptor creation as well as a fork, and two starts overlapping can leave one holding the other's pipe ends open. A version in which starts shared the lock and only channel creation excluded them hung a test, most likely for that reason, and was reverted. The host will create channels while its other threads start hooks, commands, language servers and sandboxed programs, which is when the overlap happens. Adding the gate after the host exists means finding every start again; with the source test, a new start that skips it fails a check instead.
+- **Cost:** starts run one at a time. The lock is held until the program has started, since the standard library offers no narrower point between the fork that copies descriptors and the exec. On Linux that includes the Landlock rule setup before the exec, so a start stuck in its exec holds up every start behind it. The lock is not reentrant, and entering it again panics. A caller that waits for a program to finish starts it under the gate and waits outside, as the AWS CLI calls do. Start latency under the gate was not measured.
+- **Revisit when:** measured start latency shows contention, for example many delegates or hooks starting together. Reductions to assess in this order: take the gate only on macOS, where the race exists; create channels before any worker thread exists so tool starts need no gate; start programs through a helper process that holds none of the host's descriptors. Letting starts overlap each other is not a reduction. A change that drops the gate on a platform needs its own evidence from the `control_boundary` race tests.
+
 ## Open questions
 
-The [open-question record](open-questions.md) tracks U1–U3, implementation choices, and decisions awaiting validation, with the evidence and checkpoint each needs. Resolve entries there and link their decisions back here. Stages 1–2a can proceed while later security decisions remain open.
+The [open-question record](open-questions.md) tracks U1–U4, implementation choices, and decisions awaiting validation, with the evidence and checkpoint each needs. Resolve entries there and link their decisions back here. Stages 1–2a can proceed while later security decisions remain open.
 
 ## Maintaining this record
 
