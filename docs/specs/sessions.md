@@ -298,6 +298,7 @@ here would make the session's own advice look broken to the person who followed 
 still refused, since a fork continues a conversation and there is none to continue.
 
 `verified-by: bravebot_tui::sessions::a_manifest_run_is_recorded_and_cannot_be_resumed`
+`verified-by: bravebot_cli::running::naming_a_manifest_run_prints_its_report_and_succeeds`
 `verified-by: bravebot_tui::resume::a_manifest_session_cannot_be_resumed`
 `verified-by: bravebot_tui::resume::a_manifest_run_is_marked_in_the_list`
 
