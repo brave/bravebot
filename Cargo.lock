@@ -394,6 +394,8 @@ dependencies = [
  "bravebot-sandbox",
  "bravebot-session",
  "bravebot-stamp",
+ "libc",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "tempfile",

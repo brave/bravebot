@@ -22,6 +22,11 @@ pub mod acp;
 pub mod attached;
 pub mod bridge;
 pub mod connectors;
+// Public so the integration tests and the persistent host can reach it, and hidden from the
+// documentation until a caller outside the tests settles what it offers.
+#[cfg(unix)]
+#[doc(hidden)]
+pub mod control_link;
 pub mod definitions;
 pub mod emit;
 pub mod fork;
