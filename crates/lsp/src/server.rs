@@ -2388,6 +2388,7 @@ done
     }
 
     /// A server starts under the spawn gate, so it cannot overlap the creation of a control channel.
+    #[cfg(unix)]
     #[test]
     fn a_server_start_waits_for_a_channel_being_created() {
         bravebot_sandbox::process::start_waits_at_the_gate(|| {
