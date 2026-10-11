@@ -24,9 +24,9 @@
 
 use bravebot_agent::PermissionMode;
 use bravebot_agent::confirm::{
-    CallDecision, Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest, McpCallRequest,
-    MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest, ToolListRequest,
-    VetRequest, VouchRequest, WriteRequest,
+    CallDecision, Decision, ExposureRequest, FetchRequest, HostRequest, Intent, ManifestRequest,
+    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
+    ToolListRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::conversation::{Composed, Said};
 use bravebot_agent::diff::Change;
@@ -805,6 +805,17 @@ pub fn exposure_request(id: u64, request: &ExposureRequest) -> Value {
         "path": request.path,
         "credentials": request.credentials,
         "summary": request.summary(),
+    })
+}
+
+/// Hosts a confined program tried to reach that the allowed-hosts list does not name (SANDBOX-24).
+///
+/// `hosts` are names or addresses the program chose. They are the program's bytes, so a front end
+/// draws them as text and never as markup.
+pub fn host_request(id: u64, request: &HostRequest) -> Value {
+    json!({
+        "request": id,
+        "hosts": request.hosts,
     })
 }
 

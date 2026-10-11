@@ -376,6 +376,21 @@ pub fn exposure_lines(path: &str, findings: &[String]) -> Vec<String> {
     lines
 }
 
+/// The hosts a program asked for that `sandbox.network.allowedHosts` does not list, one to a row,
+/// and what a yes covers (SANDBOX-24).
+///
+/// The names are the program's bytes, so each goes through `printable`.
+pub fn host_lines(hosts: &[String]) -> Vec<String> {
+    let mut lines = vec![t!(host_asked, count = hosts.len()).to_string()];
+    lines.extend(
+        hosts
+            .iter()
+            .map(|host| t!(host_row, host = printable(host).as_str()).to_string()),
+    );
+    lines.push(t!(host_explained).to_string());
+    lines
+}
+
 /// A language server the planner would like started.
 pub struct Server<'a> {
     /// The agent's one-line description of the server.

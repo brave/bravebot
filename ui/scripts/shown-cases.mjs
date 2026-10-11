@@ -165,6 +165,16 @@ export const CASES = {
     tokens: ['zqd01', 'zqd02', 'zqd03'],
     standing: [],
   },
+  host: {
+    kind: 'host',
+    event: 'host.request',
+    request: {
+      request: 116,
+      hosts: range(60).map((n) => `${n === 0 ? 'zqh01' : n === 59 ? 'zqh60' : `host-${n}`}.example.com`),
+    },
+    tokens: ['zqh01.example.com', 'zqh60.example.com'],
+    standing: [],
+  },
   ask: {
     kind: 'ask',
     event: 'ask.request',

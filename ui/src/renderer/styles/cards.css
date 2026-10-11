@@ -598,6 +598,8 @@
 /* A file that holds a credential is bordered as a warning, since a yes discloses the value. */
 .confirm.exposure { border-color: var(--warn); border-width: 2px; }
 .exposure-findings { margin: var(--leo-spacing-xs) 0 0; padding-left: var(--leo-spacing-2xl); }
+.host-list { margin: var(--leo-spacing-xs) 0 0; padding-left: var(--leo-spacing-2xl); }
+.host-list code { font: var(--type-code); overflow-wrap: anywhere; }
 .exposure-findings code { font: var(--type-code); overflow-wrap: anywhere; }
 
 /* A plan to approve. The steps scroll inside the card so a long plan keeps its buttons in reach. */

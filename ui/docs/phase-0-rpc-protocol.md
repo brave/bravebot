@@ -747,7 +747,7 @@ See §8. Returns `{}`. An unknown or already-answered `request` errors
 
 `run.reply`, `output.reply`, `vouch.reply`, `fetch.reply`, `server.reply`,
 `manifest.reply`, `exposure.reply`, `mcp-server.reply`, `mcp-tools.reply`, `mcp-call.reply`,
-`mcp-move.reply` and `ask.reply` all require `session` and `request`, and
+`mcp-move.reply`, `host.reply` and `ask.reply` all require `session` and `request`, and
 must match the pending question's kind as well as its ID. `run.reply` accepts `decision` and `remember`; only an approval with literal
 `remember: true` records a command grant. Output, vouch, fetch, server, manifest and
 exposure replies accept `decision`. A fetch reply has no `remember`: an approval covers the one URL it was given
@@ -901,6 +901,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `mcp-tools.request` | `{ request, alias, tools, refused, changed, vetting }` | offer a server's tools to the model (SERVERS-8) |
 | `mcp-call.request` | `{ request, alias, tool, name, arguments, description, mayStand }` | call a server's tool (SERVERS-7) |
 | `mcp-move.request` | `{ request, alias, declared, destination, authority, mayRecord }` | a remote server's reply pointed elsewhere (SERVERS-11) |
+| `host.request` | `{ request, hosts }` | let programs reach hosts `sandbox.network.allowedHosts` does not list (SANDBOX-24) |
 | `ask.request` | `{ request, prompts }` | user questions |
 | `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
@@ -1391,6 +1392,11 @@ Still open:
   one line per finding, as the agent wrote it: the kind, where it is, and a mask of the value.
   No part of a value and no text of the file is sent. `exposure.reply` carries the session,
   request and explicit decision, and its kind is distinct from every other reply's.
+- `host.request` carries `request` and `hosts`, each a host name or IP address a confined program
+  asked the session proxy for and the allowed-hosts list did not cover. `host.reply` carries the
+  session, request and explicit decision. A yes allows the hosts for the rest of the session and
+  writes nothing, so a reopened or new session asks again. It is refused without a card in
+  bypass mode, as in the terminal.
 - An approval covers the file for the session, as the agent keeps it. It is not written to the
   record, so a reopened or new session asks again.
 - A session's first turn starts the MCP servers its settings request, after the trust question,

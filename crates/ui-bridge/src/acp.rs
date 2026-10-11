@@ -1037,6 +1037,11 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             bravebot_approval::exposure_lines(text("path"), &strings(&data["credentials"]))
                 .join("\n"),
         ),
+        "host" => (
+            "let programs reach more hosts".to_string(),
+            "other",
+            bravebot_approval::host_lines(&strings(&data["hosts"])).join("\n"),
+        ),
         "server" => (
             format!("start the {} language server", text("language")),
             "execute",
@@ -1429,6 +1434,7 @@ mod tests {
                 "manifest",
                 json!({"task": "tidy", "steps": ["1. read", "2. write"]}),
             ),
+            ("host", json!({"hosts": ["example.com", "10.0.0.1"]})),
         ]
     }
 
@@ -1483,6 +1489,21 @@ mod tests {
         call["description"] = json!(hostile);
         let (_, _, text) = shown("mcp-call", call);
         assert!(text.contains(&format!("{bar} ignore this")), "{text}");
+    }
+
+    #[test]
+    fn a_host_request_is_shown_with_each_host_on_a_row_and_its_escapes_pictured() {
+        let (title, kind, text) = shown(
+            "host",
+            json!({"hosts": ["registry.example.com", "evil\u{1b}[2J.example"]}),
+        );
+        assert_eq!(title, "let programs reach more hosts");
+        assert_eq!(kind, "other");
+        assert!(!text.contains('\u{1b}'), "{text}");
+        let rows: Vec<&str> = text.lines().collect();
+        assert!(rows.contains(&"registry.example.com"), "{text}");
+        assert!(rows.contains(&"evil\u{241b}[2J.example"), "{text}");
+        assert!(text.contains("sandbox.network.allowedHosts"), "{text}");
     }
 
     #[test]

@@ -2620,6 +2620,57 @@ function Card({
       )
     }
 
+    case 'host': {
+      const { request, decision } = entry
+      const count = request.hosts.length
+      return (
+        <div className="confirm host">
+          <div className="confirm-head" data-deciding="all">
+            <span className="intent">allow hosts</span>
+            <span className="counts">
+              {count} host{count === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          <p className="permission-scope" data-deciding="all">
+            A program this session started asked for {count === 1 ? 'a host' : 'hosts'} that
+            sandbox.network.allowedHosts does not list. It was refused.
+          </p>
+
+          {/* The names are the program’s own, drawn as text, one to a row. */}
+          <div className="permission-scope" data-deciding="all">
+            <strong>Asked for:</strong>
+            <ul className="host-list">
+              {request.hosts.map((host, index) => (
+                <li key={index}>
+                  <code>{host}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <p className="permission-scope" data-deciding="all">
+            A yes lets every command the model runs from now until this conversation ends reach{' '}
+            {count === 1 ? 'this host' : 'these hosts'}, unless sandbox.network.deniedHosts names{' '}
+            {count === 1 ? 'it' : 'them'}. Run the program again afterwards. Nothing is saved, so the
+            next conversation asks again.
+          </p>
+
+          <YesOrNo
+            kind="host"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            onDecide={onDecide}
+            reject="Keep them blocked"
+            approve="Allow for this session"
+            approved="You allowed these hosts for this session"
+            rejected="You kept these hosts blocked"
+          />
+        </div>
+      )
+    }
+
     case 'mcp-started': {
       const { servers, notes } = entry.started
       return (
@@ -2816,6 +2867,8 @@ function waitingOn(kind: t.Asking['kind']): string {
       return 'Answer the MCP call'
     case 'mcp-move':
       return 'Answer the moved MCP server'
+    case 'host':
+      return 'Answer the hosts'
     case 'vouch':
       return 'Answer the vouch'
     case 'ask':

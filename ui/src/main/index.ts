@@ -490,6 +490,7 @@ const ALLOWED = new Set([
   'mcp-tools.reply',
   'mcp-call.reply',
   'mcp-move.reply',
+  'host.reply',
   'ask.reply',
   'trust.reply',
   'permissions.list',
