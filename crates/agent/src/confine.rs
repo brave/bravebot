@@ -4230,9 +4230,9 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
-    /// Writes `~/.ssh/repo.pub` and starts an agent at `<home>/s` that holds the key it names.
+    /// Writes `~/.ssh/repo.pub` and starts an agent, at a socket short enough to bind under any checkout, that holds the key it names.
     #[cfg(unix)]
-    fn an_agent_holding_the_repo_key(home: &Path) -> PathBuf {
+    fn an_agent_holding_the_repo_key(home: &Path) -> (PathBuf, tempfile::TempDir) {
         use std::io::{Read, Write};
         const HELD: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
         std::fs::write(
@@ -4240,7 +4240,12 @@ mod tests {
             format!("ssh-ed25519 {HELD} comment\n"),
         )
         .unwrap();
-        let socket = home.join("s");
+        // A unix socket path is limited to about 100 bytes, so it cannot sit in a home under a deep checkout.
+        let directory = tempfile::Builder::new()
+            .prefix("bb-agent-")
+            .tempdir()
+            .unwrap();
+        let socket = directory.path().canonicalize().unwrap().join("s");
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -4263,7 +4268,7 @@ mod tests {
                 let _ = stream.write_all(&reply);
             }
         });
-        socket
+        (socket, directory)
     }
 
     /// SANDBOX-16: a stage that signs is lent a `.pub` in `~/.ssh` whose key the agent named by the
@@ -4277,7 +4282,7 @@ mod tests {
             SIGNS_WITH_A_KEY,
             &["keys/work.pub", ".ssh/unheld.pub"],
         );
-        let socket = an_agent_holding_the_repo_key(&home);
+        let (socket, _directory) = an_agent_holding_the_repo_key(&home);
         let step = step("/usr/bin/git", &["commit", "-m", "x"]);
         let held =
             |policy: &SandboxPolicy, file: &str| reads(policy, home.join(file).to_str().unwrap());
@@ -4311,7 +4316,7 @@ mod tests {
             SIGNS_WITH_A_KEY,
             &["keys/work.pub", ".ssh/unheld.pub"],
         );
-        let socket = an_agent_holding_the_repo_key(&home);
+        let (socket, _directory) = an_agent_holding_the_repo_key(&home);
         let environment = vec![(
             "SSH_AUTH_SOCK".to_string(),
             socket.to_str().unwrap().to_string(),
