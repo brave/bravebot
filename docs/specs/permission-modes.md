@@ -156,9 +156,11 @@ the stages of the lead session's `run` are given at the start every path a `requ
 writing would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), so a run does not fail on a
 sibling directory before the planner can ask. The refusals of that request hold: the home directory
 and the directories above it as wholes, `~/.ssh`, `~/.bravebot`, the credential locations and the
-person's `denyRead` and `denyWrite`. The mode never changes which sandbox mode is in force, so
-`strict` keeps the per-path request, and bypass does not approve a line that asks to start with no
-profile ([SANDBOX-29](sandboxing.md#SANDBOX-29)). A delegate's programs are not given it.
+person's `denyRead` and `denyWrite`. This widens `standard`'s writes, which is the one way the
+permission mode widens a sandbox mode ([SANDBOX-22](sandboxing.md#SANDBOX-22)). The mode never
+changes which sandbox mode is in force, so `strict` keeps the per-path request, and bypass does not
+approve a line that asks to start with no profile ([SANDBOX-29](sandboxing.md#SANDBOX-29)). A
+delegate's programs are not given it.
 
 **A write that would create a credential is answered too.** A value the credential scan inferred is
 a question for the person under MODE-2, and here the flag is the person's answer to it, as it is to

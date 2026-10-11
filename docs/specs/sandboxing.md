@@ -1283,12 +1283,13 @@ name the mode in force after the command. The desktop has no such command: it of
 has a line that shows the mode.
 
 The mode is chosen separately from the permission mode ([MODE-1](permission-modes.md#MODE-1))
-and from `--dangerously-skip-permissions`: neither changes which mode is in force. One line may
-start with no profile where a person approves it ([SANDBOX-29](#SANDBOX-29)), which is the mode
-`off` for that line only. Under `standard` the permission mode that answers every question
-([MODE-4](permission-modes.md#MODE-4)) does decide one thing inside the profile: the stages of the
-lead session's `run` are given at the start what a `request_path` for writing would be granted
-([SANDBOX-28](#SANDBOX-28)), so a run does not fail before the planner can ask.
+and from `--dangerously-skip-permissions`. Neither changes which mode is in force, and neither
+widens a mode, with one exception. Under bypass ([MODE-4](permission-modes.md#MODE-4)) and
+`standard`, on macOS and Linux, the stages of the lead session's `run` may write every path a
+`request_path` for writing would be granted ([SANDBOX-28](#SANDBOX-28)) without the planner asking.
+This widens `standard`'s writes and nothing else: no read, no network access, nothing under
+`strict`, nothing for a delegate, and nothing on Windows. One line may start with no profile where a
+person approves it ([SANDBOX-29](#SANDBOX-29)), which is the mode `off` for that line only.
 
 Under `off` the opening screen and `/status` do not report a closed network, since nothing then holds
 a program to it.
@@ -1308,12 +1309,17 @@ stricter mode, which takes nothing from them, on the footing the `permissions` k
 refuse already have ([PERM-18](permissions.md#PERM-18)). The pin is a floor because it is the
 administrator's rule about the machine, and a flag that overrode it would be the setting they wrote
 the pin to prevent. A pin looser than what a person asks for is not applied, so a person may be
-stricter than the machine requires.
+stricter than the machine requires. Bypass may widen `standard`'s writes because under bypass every
+`request_path` is already granted without asking, so a stage starts with what the planner could
+get with one request instead of failing first. `strict` is not widened, since a person who chose it
+asked for less than the default.
 
 **What it costs.** `strict` fails any program that reads a place its binary's list and its argv do
 not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and chooses `standard` or
 adds the directory. `off` is the whole of the confinement removed: a window never offers it, and
-the command line prints it on its opening line.
+the command line prints it on its opening line. Under bypass, a `standard` stage of the lead
+session writes every path outside the refusals [SANDBOX-28](#SANDBOX-28) lists, which includes
+shell start-up files and other repositories on the machine.
 
 `verified-by: bravebot_sandbox::mode::a_mode_is_read_only_from_its_exact_word`
 `verified-by: bravebot_sandbox::mode::strict_is_the_tightest_and_off_the_loosest`
@@ -1936,9 +1942,10 @@ rules, and the reason is drawn for the person and recorded.
 
 Under bypass nobody is there to answer, and a run that fails with `Operation not permitted` on a
 sibling directory costs the planner a turn to learn what the profile already knows it will be
-granted. Giving those stages the rows a yes would have given them removes the failed run and
-widens nothing: the same refusals hold, and the permission mode already answers the request with
-a yes.
+granted. Giving those stages the rows a yes would have given them removes the failed run and gives
+them nothing a request would not: the same refusals hold, and the permission mode already answers
+the request with a yes. It is the one way the permission mode widens a sandbox mode
+([SANDBOX-22](#SANDBOX-22)).
 
 **What it costs.** A program that writes anywhere the account can reaches more than the session's
 directories, including a unix socket under such a row on macOS, where a network-outbound row
