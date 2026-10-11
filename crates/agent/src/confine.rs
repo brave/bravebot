@@ -4371,7 +4371,7 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
-    /// Writes `~/.ssh/repo.pub` and starts an agent at `<home>/s` that holds the key it names.
+    /// Writes `~/.ssh/repo.pub` and starts an agent that holds the key it names, at a socket path short enough to bind under any checkout.
     #[cfg(unix)]
     fn an_agent_holding_the_repo_key(home: &Path) -> PathBuf {
         use std::io::{Read, Write};
@@ -4381,7 +4381,11 @@ mod tests {
             format!("ssh-ed25519 {HELD} comment\n"),
         )
         .unwrap();
-        let socket = home.join("s");
+        // A socket path must fit in sun_path, which a home under a deep checkout does not.
+        let name = home.file_name().unwrap().to_str().unwrap();
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let socket = std::env::temp_dir().join(format!("bb{}-{name}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&socket);
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -4437,6 +4441,7 @@ mod tests {
         assert!(held(&policy, "keys/work.pub"));
         assert!(!held(&policy, ".ssh/repo.pub"));
 
+        std::fs::remove_file(&socket).unwrap();
         std::fs::remove_dir_all(&home).unwrap();
     }
 
@@ -4488,6 +4493,7 @@ mod tests {
             assert!(lent(".ssh/repo.pub"), "{way}");
             assert!(!lent(".ssh/unheld.pub"), "{way}");
         }
+        std::fs::remove_file(&socket).unwrap();
         std::fs::remove_dir_all(&home).unwrap();
     }
 
