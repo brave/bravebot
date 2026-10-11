@@ -1581,7 +1581,8 @@ program choosing to print nothing chose what the planner is told no more than it
 While the turn waits on a line it runs in the foreground, the person may press a key that stops the
 wait. The line is not stopped: it goes on as a job exactly as one [RUN-15](#RUN-15) started, under a
 name the driver mints, and the call returns at once. Moving changes when the turn stops waiting and
-nothing else about the line.
+nothing else about the line. A prompt the person sends while the line runs makes the same move
+([INPUT-42](../terminal-input.md#INPUT-42)).
 
 **Only a line a job can hold.** One pipeline with no redirection, which is RUN-15's shape and for
 the same reasons: a line with `&&` or `||` waits on its own first part to decide on the second, and

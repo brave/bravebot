@@ -8999,6 +8999,7 @@ fn run_turn_animated(
         if !carrying_on {
             break;
         }
+        session.give_way_to_the_queue(Instant::now());
     }
 
     let finished = worker.join().unwrap_or_else(|_| {

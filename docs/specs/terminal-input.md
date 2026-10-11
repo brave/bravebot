@@ -548,6 +548,35 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::app::a_stop_is_recorded_at_the_press_that_asks_for_it`
 `verified-by: bravebot_agent::turn::a_prompt_typed_before_a_stop_is_left_for_the_next_turn`
 
+<a id="INPUT-42"></a>
+### INPUT-42: a prompt waiting on a long command moves the command to the background
+
+While a prompt waits to go into the turn in flight ([INPUT-10](#INPUT-10)) and the turn is waiting
+on a line the move key could move ([RUN-25](tools/run.md#RUN-25)), the line is moved once it has run
+for 10 seconds. A line that has run that long when the prompt is sent is moved at once. The line
+goes on as a job, and the turn takes the prompt at the round boundary the move lets it reach.
+
+**Only for a prompt the turn will take.** A command or a command line waiting moves nothing, since
+those wait for the turn to end whatever the line does. Nor does a prompt behind a turn being
+stopped, which takes nothing more. A line the key could not move is waited for as before.
+
+**Not in the first 10 seconds.** Counted from when the line started. A line about to finish would
+otherwise hand the turn a job to ask about in place of output that was on its way.
+
+**It is the move the key makes.** Everything [RUN-25](tools/run.md#RUN-25) says of a moved line
+holds: it has no deadline, the planner is told the user moved it and reads its output with
+`job_output`, and the trail records the `handoff`. Sending the prompt was the request.
+
+**Why.** A waiting prompt goes in only once every call in the round has run, and a test run or a
+build can take minutes, up to [RUN-11](tools/run.md#RUN-11)'s limit. The person had to wait, stop
+the turn and lose the line, or know to press ctrl-b. A prompt typed during that wait is meant for
+the turn now.
+
+`verified-by: bravebot_tui::state::a_waiting_prompt_moves_a_command_that_has_run_long_enough`
+`verified-by: bravebot_tui::state::a_waiting_prompt_leaves_a_command_that_only_just_started`
+`verified-by: bravebot_tui::state::only_a_waiting_prompt_moves_the_command`
+`verified-by: bravebot_tui::state::a_turn_being_stopped_moves_nothing`
+
 <a id="INPUT-11"></a>
 ### INPUT-11: what is attached is drawn nearest the box, above what is waiting
 
