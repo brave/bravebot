@@ -26,9 +26,28 @@ fn sent(prompt: &str) -> Entry {
 /// once and see each other's HOME.
 static HOME_LOCK: Mutex<()> = Mutex::new(());
 
+/// A listener standing in for the proxy `HTTPS_PROXY` names, so a request this process makes shows
+/// up as a connection without a network.
+///
+/// The transport reads the variable once for the process, so every test that takes the home sets
+/// it first: one that ran earlier without it would fix the transport on the real network.
+/// `127.0.0.1` is spelled out because `localhost` does not resolve on every host these run on.
+fn proxy_listener() -> &'static std::net::TcpListener {
+    static LISTENER: std::sync::OnceLock<std::net::TcpListener> = std::sync::OnceLock::new();
+    LISTENER.get_or_init(|| {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a listener");
+        listener.set_nonblocking(true).expect("a polling listener");
+        let port = listener.local_addr().expect("an address").port();
+        // SAFETY: this runs once, under the lock `with_temp_home` holds, before any request.
+        unsafe { std::env::set_var("HTTPS_PROXY", format!("http://127.0.0.1:{port}")) };
+        listener
+    })
+}
+
 /// Point HOME at a scratch directory for the duration of the closure.
 fn with_temp_home<T>(name: &str, body: impl FnOnce() -> T) -> T {
     let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    proxy_listener();
 
     let dir = std::env::temp_dir().join(format!("bravebot-home-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -686,6 +705,44 @@ fn a_check_turned_off_leaves_the_record_as_it_was() {
             std::fs::read_to_string(&record).expect("the record"),
             seeded,
             "a session with the check off rewrote the record"
+        );
+    });
+}
+
+/// UPDATE-8, the ordinary half: a session that may write asks the registry when the record is old.
+///
+/// The request is seen by a listener standing in for the proxy. This is what makes the silence in
+/// `incognito.rs` mean something: the same call, the same stale record, and here the connection
+/// arrives.
+#[test]
+fn a_session_that_records_asks_for_a_newer_version_when_the_record_is_old() {
+    with_temp_home("update-asks", || {
+        let directory = store::directory().expect("a home");
+        std::fs::create_dir_all(&directory).expect("the directory");
+        let running = std::env::current_exe().expect("the test binary");
+        std::fs::write(
+            directory.join("installed-by"),
+            format!("{}\n", running.display()),
+        )
+        .expect("seed the installation");
+        std::fs::write(
+            directory.join("update-check"),
+            "1700000000\treleases\t99.0.0\n",
+        )
+        .expect("seed the record");
+        let listener = proxy_listener();
+
+        assert!(bravebot_tui::update::at_startup(None).is_some());
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut connected = false;
+        while !connected && std::time::Instant::now() < deadline {
+            connected = listener.accept().is_ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            connected,
+            "an ordinary session with an old record did not ask"
         );
     });
 }

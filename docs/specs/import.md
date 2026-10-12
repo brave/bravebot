@@ -467,6 +467,9 @@ list every model twice in the model picker.
 `verified-by: bravebot_cli::import::an_opencode_entry_for_the_same_server_leaves_the_ollama_source_with_nothing_to_add`
 `verified-by: bravebot_cli::running::a_first_run_with_nothing_listening_refuses_as_before`
 `verified-by: bravebot_cli::running::a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_once`
+`verified-by: bravebot_cli::running::a_start_with_no_service_asks_the_ollama_on_this_machine_once`
+`verified-by: bravebot_cli::running::an_incognito_start_opens_no_connection_to_ollama`
+`verified-by: bravebot_cli::running::a_start_with_a_service_configured_asks_ollama_nothing`
 
 <a id="IMPORT-11"></a>
 ### IMPORT-11: a session is copied only when a person runs the command, and only as words to read

@@ -58,6 +58,7 @@ impl Scratch {
         // is reading or writing the variable while this one owns it.
         unsafe { std::env::set_var("HOME", &home) };
         bravebot_core::incognito::engage();
+        proxy_listener();
         Self {
             home,
             project,
@@ -109,6 +110,37 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(self.home.parent().expect("a root"));
     }
+}
+
+/// A listener standing in for the proxy `HTTPS_PROXY` names, so a request this process makes shows
+/// up as a connection without a network.
+///
+/// The transport reads the variable once for the process, so every test here sets it as it
+/// starts. A test that ran earlier without it would fix the transport on the real network, and a
+/// request made by a later one would go past the listener. `127.0.0.1` is spelled out because
+/// `localhost` does not resolve on every host these run on.
+fn proxy_listener() -> &'static std::net::TcpListener {
+    static LISTENER: std::sync::OnceLock<std::net::TcpListener> = std::sync::OnceLock::new();
+    LISTENER.get_or_init(|| {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a listener");
+        listener.set_nonblocking(true).expect("a polling listener");
+        let port = listener.local_addr().expect("an address").port();
+        // SAFETY: this runs once, before any test in this binary has made a request.
+        unsafe { std::env::set_var("HTTPS_PROXY", format!("http://127.0.0.1:{port}")) };
+        listener
+    })
+}
+
+/// Whether a connection reaches `listener` within `wait`.
+fn connected_within(listener: &std::net::TcpListener, wait: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < deadline {
+        if listener.accept().is_ok() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
 }
 
 /// A prompt sent now from nowhere in particular.
@@ -329,6 +361,33 @@ fn the_answer_about_updating_is_still_read() {
             .expect("the seeded file"),
         "1700000000\treleases\t99.0.0\n",
         "an incognito session overwrote the recorded answer"
+    );
+}
+
+/// UPDATE-8: an incognito session makes no request to the registry, though the record it reads is
+/// old enough that an ordinary session would ask.
+///
+/// The record is the one an ordinary session left, so the line is still said and the stamp is
+/// stale: the only thing keeping the request back is the session being unable to write. A
+/// proxy that records connections is what sees a request, because nothing written afterwards
+/// can show one that was thrown away on arrival. The ordinary session in `persist.rs` makes the
+/// same call and does connect, so a silence here is the mode and not a listener nothing reaches.
+#[test]
+fn a_session_that_records_nothing_makes_no_request_for_a_newer_version() {
+    let scratch = Scratch::incognito("updates-ask");
+    let running = std::env::current_exe().expect("the test binary");
+    scratch.seed("installed-by", &format!("{}\n", running.display()));
+    scratch.seed("update-check", "1700000000\treleases\t99.0.0\n");
+    let listener = proxy_listener();
+
+    assert!(
+        bravebot_tui::update::at_startup(None).is_some(),
+        "the recorded answer was not read back, so the silence below proves nothing"
+    );
+
+    assert!(
+        !connected_within(listener, std::time::Duration::from_millis(1500)),
+        "an incognito session asked the registry for a version it has nowhere to record"
     );
 }
 

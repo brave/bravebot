@@ -168,6 +168,8 @@ answer is thrown away on arrival.
 
 `verified-by: bravebot_tui::update::a_session_that_records_nothing_asks_nothing`
 `verified-by: bravebot_tui::incognito::the_answer_about_updating_is_still_read`
+`verified-by: bravebot_tui::incognito::a_session_that_records_nothing_makes_no_request_for_a_newer_version`
+`verified-by: bravebot_tui::persist::a_session_that_records_asks_for_a_newer_version_when_the_record_is_old`
 `verified-by: by-construction (the write resolves the directory through the writing answer, which is what that mode answers nothing to)`
 
 <a id="UPDATE-9"></a>
