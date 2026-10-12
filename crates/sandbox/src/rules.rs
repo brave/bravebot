@@ -575,9 +575,10 @@ fn credential_spellings(home: &Path) -> Vec<PathBuf> {
 }
 
 /// The places under the home directory where a write becomes code that runs later as the account
-/// with no profile around it: what a shell reads as it starts or ends, the per-user jobs launchd,
-/// systemd and a desktop session start, and git's own configuration, whose `core.fsmonitor`,
-/// `core.pager`, `!` aliases and credential helpers git runs.
+/// with no profile around it: what a shell or an X session reads as it starts or ends, the per-user
+/// jobs launchd, systemd and a desktop session start, the variables systemd sets for every program
+/// of the account, and git's own configuration, whose `core.fsmonitor`, `core.pager`, `!` aliases
+/// and credential helpers git runs.
 const PERSISTENCE_LOCATIONS: &[&str] = &[
     ".zshenv",
     ".zprofile",
@@ -587,12 +588,16 @@ const PERSISTENCE_LOCATIONS: &[&str] = &[
     ".bash_profile",
     ".bash_login",
     ".bashrc",
+    ".bash_aliases",
     ".bash_logout",
     ".profile",
     ".config/fish",
+    ".xprofile",
+    ".xsessionrc",
     "Library/LaunchAgents",
     ".config/systemd/user",
     ".config/autostart",
+    ".config/environment.d",
     ".gitconfig",
     ".config/git/config",
 ];

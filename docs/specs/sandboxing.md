@@ -1150,10 +1150,14 @@ refusal of a read is not a refusal of a write, so each location the stage is ref
 lies inside a directory it may write is refused writing too, as is each place under the home
 directory where a write becomes code that runs later outside the profile: the shell startup and
 logout files `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, `~/.zlogout`, `~/.bash_profile`,
-`~/.bash_login`, `~/.bashrc`, `~/.bash_logout` and `~/.profile`, the directory `~/.config/fish`, the
-per-user job directories `~/Library/LaunchAgents`, `~/.config/systemd/user` and
-`~/.config/autostart`, and git's own configuration `~/.gitconfig` and `~/.config/git/config`. These
-persistence locations are refused for writing only and are read as the rest of the home directory is. A session
+`~/.bash_login`, `~/.bashrc`, `~/.bash_aliases` (which Debian's `~/.bashrc` reads),
+`~/.bash_logout` and `~/.profile`, the directory `~/.config/fish`, the files an X session reads as
+it starts, `~/.xprofile` and `~/.xsessionrc`, the per-user job directories `~/Library/LaunchAgents`,
+`~/.config/systemd/user` and `~/.config/autostart`, the directory `~/.config/environment.d` whose
+variables systemd sets for every program of the account, and git's own configuration `~/.gitconfig`
+and `~/.config/git/config`. These persistence locations are named at those fixed paths, so a
+`ZDOTDIR` or an `XDG_CONFIG_HOME` that moves one leaves the file it moved it to unrefused. They
+are refused for writing only and are read as the rest of the home directory is. A session
 opened on the home directory or on a directory above it therefore writes beneath it except the
 credential locations and the persistence locations, and a session opened on a directory that holds
 none of them has nothing to refuse. `/add-dir`,
