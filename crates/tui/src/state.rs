@@ -6521,6 +6521,21 @@ impl Session {
         self.completion = 0;
     }
 
+    /// What Tab would make of a level started after `/effort `, with the caret at the end of it.
+    pub fn argument_completion(&self) -> Option<String> {
+        if self.shell || self.caret() != self.input.len() {
+            return None;
+        }
+        crate::app::complete_argument(&self.input)
+    }
+
+    /// Finish the level started after `/effort ` as far as the levels that fit it agree.
+    pub fn accept_argument_completion(&mut self) {
+        if let Some(line) = self.argument_completion() {
+            self.put_in_the_box(line);
+        }
+    }
+
     /// Where the line's last word begins, which is where a completion of it is written.
     fn last_word_starts_at(&self) -> usize {
         self.input
