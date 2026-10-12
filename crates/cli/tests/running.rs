@@ -302,6 +302,115 @@ fn a_configured_gateway_is_not_refused() {
     );
 }
 
+/// The connections an Ollama has taken, read once the run that made them has ended.
+///
+/// The listener counts on a thread of its own, so a request the run made just before it exited may
+/// not be counted yet. The wait is for that thread, and a run that opened a connection had it
+/// open before it ended.
+fn connections_to(ollama: &Arc<AtomicUsize>) -> usize {
+    std::thread::sleep(Duration::from_millis(500));
+    ollama.load(Ordering::SeqCst)
+}
+
+/// The configuration a released binary arrives with: Brave's own hosts and nothing imported.
+const BRAVE_HOSTS: [(&str, &str); 4] = [
+    ("SERVICES_KEY_AICHAT", "a-services-key"),
+    ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+    ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+    (
+        "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+        "https://ai-chat-premium.bsg.brave.com",
+    ),
+];
+
+/// IMPORT-10, the ordinary half: a start with no service configured asks the Ollama on this
+/// machine once.
+///
+/// This is what gives the two silences below their meaning: the same run, the same address, and
+/// here the request arrives.
+#[test]
+fn a_start_with_no_service_asks_the_ollama_on_this_machine_once() {
+    let scratch = Scratch::new("cli-running-ollama-asked");
+    let (address, ollama) = an_ollama();
+
+    let output = bravebot(
+        &scratch.path,
+        &[BRAVE_HOSTS.as_slice(), &[("OLLAMA_HOST", &address)]].concat(),
+        &["-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert_eq!(connections_to(&ollama), 1, "{stderr}");
+}
+
+/// IMPORT-10: an incognito start opens no connection to Ollama.
+///
+/// The session has no settings file it could write, so an answer found would have nowhere to go.
+/// The run is the one above with the flag added, and it still ends on the refusal for no service,
+/// so the silence is the mode and not a run that stopped earlier.
+#[test]
+fn an_incognito_start_opens_no_connection_to_ollama() {
+    let scratch = Scratch::new("cli-running-ollama-incognito");
+    let (address, ollama) = an_ollama();
+
+    let output = bravebot(
+        &scratch.path,
+        &[BRAVE_HOSTS.as_slice(), &[("OLLAMA_HOST", &address)]].concat(),
+        &["--incognito", "-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert_eq!(
+        connections_to(&ollama),
+        0,
+        "an incognito start asked Ollama: {stderr}"
+    );
+}
+
+/// IMPORT-10: a start with a service configured asks Ollama nothing, though nothing configured
+/// serves the model in force and the start is refused.
+///
+/// The block is the one a person copies from another tool, which names a model and no default.
+/// It is the case that reaches the import with a service configured, since a start that is served
+/// returns before it. The run ends on the refusal naming the `model` key, so the silence is the
+/// gate and not a run that stopped earlier.
+#[test]
+fn a_start_with_a_service_configured_asks_ollama_nothing() {
+    let scratch = Scratch::new("cli-running-ollama-configured").with_settings(
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }
+        }"#,
+    );
+    let (address, ollama) = an_ollama();
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            BRAVE_HOSTS.as_slice(),
+            &[("OPENROUTER_API_KEY", "a-token"), ("OLLAMA_HOST", &address)],
+        ]
+        .concat(),
+        &["-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("`model` key"), "{stderr}");
+    assert_eq!(
+        connections_to(&ollama),
+        0,
+        "a configured start asked Ollama: {stderr}"
+    );
+}
+
 /// CLI-21. An advisor nothing is configured to serve stops the run before the first round, as the
 /// same name given to `--model` would, rather than starting a run whose first question could not be
 /// sent. The control is the run without the flag, which reaches the gateway, so the stop is known to
