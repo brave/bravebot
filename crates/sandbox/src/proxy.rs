@@ -199,18 +199,33 @@ impl Drop for Proxy {
     }
 }
 
+/// The pause after the first `accept` that fails in a row, and the longest one.
+const ACCEPT_PAUSE: Duration = Duration::from_millis(5);
+const ACCEPT_PAUSE_MAX: Duration = Duration::from_secs(1);
+
 /// Serves each connection `incoming` yields, on a thread of its own, until `stop` is set.
+///
+/// An `accept` that fails for want of a descriptor leaves the connection queued, so the next one
+/// fails at once and a loop that only retried would spin a core until a descriptor came free. Each
+/// failure in a row therefore waits twice as long as the last, up to [`ACCEPT_PAUSE_MAX`], and a
+/// connection accepted starts the count again.
 fn accept_on<S: Peer>(
     incoming: impl Iterator<Item = io::Result<S>>,
     stop: &AtomicBool,
     config: &Arc<ProxyConfig>,
     decisions: &Arc<Mutex<Log>>,
 ) {
+    let mut pause = ACCEPT_PAUSE;
     for stream in incoming {
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        let Ok(stream) = stream else { continue };
+        let Ok(stream) = stream else {
+            thread::sleep(pause);
+            pause = (pause * 2).min(ACCEPT_PAUSE_MAX);
+            continue;
+        };
+        pause = ACCEPT_PAUSE;
         let (config, decisions) = (config.clone(), decisions.clone());
         let _ = thread::Builder::new()
             .name("allowed-hosts-tunnel".into())
@@ -393,6 +408,34 @@ fn tunnel<C: Peer>(client: C, upstream: TcpStream, first: &[u8]) -> io::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An `accept` that keeps failing, as one does with no descriptor left, is retried after a
+    /// pause that doubles each time rather than at once. The regression it rejects is a loop that
+    /// retries immediately and holds a core for as long as the descriptors stay spent.
+    #[test]
+    fn a_failing_accept_is_retried_after_a_pause_that_doubles() {
+        let failures = 3;
+        let mut asked = Vec::new();
+        let incoming = (0..=failures).map_while(|n| {
+            asked.push(std::time::Instant::now());
+            (n < failures).then(|| Err::<TcpStream, _>(io::Error::other("no descriptor left")))
+        });
+        accept_on(
+            incoming,
+            &AtomicBool::new(false),
+            &Arc::new(ProxyConfig::new(HostList::default())),
+            &Arc::new(Mutex::new(Log::default())),
+        );
+
+        let gaps: Vec<Duration> = asked.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        assert_eq!(gaps.len(), failures);
+        for (gap, least) in gaps.iter().zip([1, 2, 4].map(|n| ACCEPT_PAUSE * n)) {
+            assert!(
+                *gap >= least,
+                "a retry came sooner than {least:?}: {gaps:?}"
+            );
+        }
+    }
 
     /// The unix socket a Linux stage reaches the proxy by is served by the same code as the
     /// loopback port, and is gone with the proxy. The regressions it rejects: a socket nobody

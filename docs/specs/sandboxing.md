@@ -1727,7 +1727,10 @@ own reasons bring, the remote scope's hosts and its toolchain's registries, so t
 different lists. One proxy is started for each distinct list the first time a stage needs it, and
 is kept for the rest of the process. A denied entry that is not a rule fails the stage, since
 dropping it would let the host through, and so does a proxy that cannot be started: a stage is
-never started without the filter its list asks for.
+never started without the filter its list asks for. An `accept` that fails, as one does with no
+descriptor left, is retried after a pause that doubles from 5 milliseconds up to a second and starts
+again at the next connection accepted, so the proxy does not hold a core while the descriptors stay
+spent.
 
 A stage held to a proxy has a policy that allows outbound TCP to that proxy's loopback port and to
 no other address, and reaches no name resolver, since the proxy resolves the name it tunnels to. A
@@ -1781,11 +1784,21 @@ refusal, so a session that leaves it asks about the same host. The answer is rec
 `host_grant` with the hosts. The hosts are a program's own bytes: they go to the person's screen
 and the trail, the planner is told nothing about them, and nothing branches on one.
 
+**What it costs.** A proxy holds no secret: it serves whatever connects to its port or its socket,
+so a process that reaches one is held to that proxy's list and not to its own. That is any process
+of another user that can reach the loopback port; on Linux a stage of any list, or one with no
+network, since the socket's directory is under the temporary directory every stage writes and a
+write row reaches a socket beneath it; and on macOS a stage lent loopback and held to no proxy,
+which connects to every loopback port. A proxy starts a thread for each connection with no limit on
+how many it holds, and keeps a tunnel open until one side closes it, so a stage can open connections
+until the session process has no thread or descriptor left to give.
+
 The tests that hold a stage to the proxy through the namespace need a kernel that lets an
 unprivileged user make one. They say so and do not run where it does not, so a green run there
 says nothing about them.
 
 `verified-by: bravebot_sandbox::policy::the_port_egress_is_limited_to_is_carried_and_goes_with_the_network`
+`verified-by: bravebot_sandbox::proxy::a_failing_accept_is_retried_after_a_pause_that_doubles`
 `verified-by: bravebot_sandbox::macos::egress_limited_to_a_port_names_the_port_and_no_other_address`
 `verified-by: bravebot_sandbox::macos::a_process_limited_to_a_port_reaches_that_port_and_not_another`
 `verified-by: bravebot_sandbox::macos::a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port`
