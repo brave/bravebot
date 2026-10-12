@@ -834,10 +834,16 @@ impl Confinement {
             policy = policy.allow_write(row);
         }
         let mut policy = self.filesystem.apply(policy);
-        // Seatbelt's refusal of a read does not stop a write, and a request for writing is refused
-        // under the person's denyRead, so a read refusal inside an unasked row is a write refusal.
-        if !unasked.is_empty() {
-            for refused in policy.unreadable.clone() {
+        // Seatbelt's refusal of a read does not stop a write, so a read refusal inside a writable
+        // row is a write refusal too: a row given without a request, or on macOS any row, a
+        // session directory at or above the home among them (SANDBOX-12, SANDBOX-18). The places
+        // a write would run code later, or loosen this profile, are refused beside them.
+        if !unasked.is_empty() || self.prelude == Prelude::MacOs {
+            let mut refused = policy.unreadable.clone();
+            if let (Prelude::MacOs, Some(home)) = (self.prelude, self.home.as_deref()) {
+                refused.extend(persistence_locations(home));
+            }
+            for refused in refused {
                 let inside = policy
                     .writable
                     .iter()
@@ -1520,6 +1526,26 @@ fn process_environment() -> Vec<(String, String)> {
     std::env::vars().collect()
 }
 
+/// The places under `home` that a write turns into code that runs unconfined later, which a
+/// session directory at or above the home must not be able to write on macOS (SANDBOX-18): the
+/// shell startup files and the directory the launch daemon reads per-user jobs from.
+fn persistence_locations(home: &Path) -> Vec<PathBuf> {
+    [
+        ".zshenv",
+        ".zprofile",
+        ".zshrc",
+        ".zlogin",
+        ".bash_profile",
+        ".bash_login",
+        ".bashrc",
+        ".profile",
+        "Library/LaunchAgents",
+    ]
+    .iter()
+    .map(|name| home.join(name))
+    .collect()
+}
+
 fn variable(environment: &[(String, String)], name: &str) -> Option<String> {
     lookup(environment, name, FOLD_CASE)
 }
@@ -1875,6 +1901,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// SANDBOX-12, SANDBOX-18: a macOS session on the home directory or above it grants a row that
+    /// covers the credential locations, and Seatbelt's read refusal does not stop a write there.
+    /// The regression it rejects: the refusal left as a read refusal, so `~/.ssh`, `~/.bravebot`
+    /// and the persistence locations can be written from a home-rooted session.
+    #[test]
+    fn a_macos_session_at_or_above_home_cannot_write_where_it_cannot_read() {
+        for root in [HOME, "/"] {
+            let confined = reading_confinement(Prelude::MacOs, &[root]);
+            let policy = confined.policy(&step("/bin/cat", &["f"]), Path::new(root), &[]);
+            for name in [
+                ".ssh",
+                ".aws",
+                ".bravebot",
+                ".zshrc",
+                "Library/LaunchAgents",
+            ] {
+                let path = Path::new(HOME).join(name);
+                assert!(
+                    policy.unwritable.contains(&path),
+                    "{root}: {name} is writable: {:?}",
+                    policy.unwritable
+                );
+            }
+        }
+        let beside = reading_confinement(Prelude::MacOs, &["/home/person/project"]);
+        let policy = beside.policy(
+            &step("/bin/cat", &["f"]),
+            Path::new("/home/person/project"),
+            &[],
+        );
+        assert!(policy.unwritable.is_empty(), "{:?}", policy.unwritable);
     }
 
     #[test]
