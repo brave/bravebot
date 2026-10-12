@@ -43145,17 +43145,26 @@ fn a_run_turn_scanning(
     command: &str,
     programs: bravebot_core::programs::TrustedPrograms,
 ) -> (Scratch, bravebot_agent::report::RecordingReporter, String) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    a_run_turn_scanning_in(&workspace, command, programs)
+}
+
+/// The same, in a workspace the caller has already opened directories beside.
+fn a_run_turn_scanning_in(
+    workspace: &Workspace,
+    command: &str,
+    programs: bravebot_core::programs::TrustedPrograms,
+) -> (Scratch, bravebot_agent::report::RecordingReporter, String) {
     // Named after the tree it holds the record for, so two tests running at once do not write
     // into one file and read each other's findings back.
     let home = Scratch::new(&format!(
         "{}-home",
-        scratch
-            .path
+        workspace
+            .root()
             .file_name()
             .expect("the scratch tree is a named directory")
             .to_string_lossy()
     ));
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
         tool_request_2("run", &format!(r#"{{"command":"{command}"}}"#)),
         reply_with("done"),
@@ -43165,7 +43174,7 @@ fn a_run_turn_scanning(
     turn::resume(
         &config_for(&endpoint),
         &bravebot_net::Egress::new(),
-        &workspace,
+        workspace,
         &Task::new("back the file up before changing it").with_home(Some(home.path.clone())),
         &mut bravebot_agent::Conversation::new(),
         &mut bravebot_agent::confirm::ApproveRuns,
@@ -43301,6 +43310,158 @@ fn a_refused_line_is_not_put_back_through_a_directory_it_linked_out_of_the_works
     assert!(
         answered.contains("d/credentials could not be put back"),
         "the planner was not told the destination did not go back: {answered}"
+    );
+}
+
+/// A redirection is confined where it lands when it is opened, and not only when its line is
+/// compiled. The parts of the line before it have run by then, and a program in one of them, a build
+/// script or a test, can leave a link out of the workspace at the name the person approved. The
+/// driver opens that name itself, outside any sandbox, so without the second check it truncates or
+/// appends to a file such as a shell startup file the person keeps outside the tree.
+///
+/// Every operator that opens a file for writing reaches the open by its own route, so each is
+/// asked about. `2>` writes nothing here, and its open alone empties the file.
+#[cfg(unix)]
+#[test]
+fn a_redirection_an_earlier_part_of_its_line_linked_out_of_the_workspace_is_refused_when_opened() {
+    for (case, operator) in [
+        ("out", ">"),
+        ("append", ">>"),
+        ("err", "2>"),
+        ("both", "&>"),
+    ] {
+        let scratch = Scratch::new(&format!("redirect-relinked-{case}"));
+        let elsewhere = Scratch::new(&format!("redirect-relinked-{case}-elsewhere"));
+        let victim = elsewhere.path.join("victim");
+        std::fs::write(&victim, "kept\n").unwrap();
+        let away = victim.to_str().expect("a UTF-8 scratch path");
+
+        let (_home, _reporter, answered) = a_run_turn_scanning(
+            &scratch,
+            &format!("ln -s {away} out && echo hi {operator} out"),
+            bravebot_core::programs::TrustedPrograms::new(),
+        );
+
+        assert!(
+            scratch.path.join("out").is_symlink(),
+            "{operator}: the first part did not leave a link, so nothing here asks where the open \
+             goes: {answered}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "kept\n",
+            "{operator}: the driver opened a file outside the workspace through a link"
+        );
+        assert!(
+            answered.contains("resolves outside the workspace"),
+            "{operator}: the planner was not told why the destination was not opened: {answered}"
+        );
+    }
+}
+
+/// A destination the line has opened once is confined again when a later part opens it. The first
+/// open made it one of the line's effects, and a part run in between can have replaced the file
+/// with a link out of the tree, so a check skipped for a path already entered is a check skipped
+/// exactly where the tree has changed.
+#[cfg(unix)]
+#[test]
+fn a_destination_reopened_after_an_earlier_part_linked_it_out_of_the_workspace_is_refused() {
+    let scratch = Scratch::new("redirect-relinked-reopened");
+    let elsewhere = Scratch::new("redirect-relinked-reopened-elsewhere");
+    let victim = elsewhere.path.join("victim");
+    std::fs::write(&victim, "kept\n").unwrap();
+    let away = victim.to_str().expect("a UTF-8 scratch path");
+
+    let (_home, _reporter, answered) = a_run_turn_scanning(
+        &scratch,
+        &format!("echo a > out && rm out && ln -s {away} out && echo b > out"),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    assert!(
+        scratch.path.join("out").is_symlink(),
+        "the line did not replace its destination with a link: {answered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&victim).unwrap(),
+        "kept\n",
+        "reopening a destination wrote through a link to a file outside the workspace"
+    );
+    assert!(
+        answered.contains("resolves outside the workspace"),
+        "the planner was not told why the destination was not opened: {answered}"
+    );
+}
+
+/// A directory opened beside the workspace is confined at the open as the root is: a destination
+/// in it is written, and one a stage has turned into a link out of it is not. A check at the open
+/// that admitted only the root would refuse every redirection into an added directory, and one
+/// that admitted the added directory by name would follow the link.
+#[cfg(unix)]
+#[test]
+fn a_redirection_into_an_added_directory_is_confined_again_when_it_is_opened() {
+    let scratch = Scratch::new("redirect-relinked-added");
+    let beside = Scratch::new("redirect-relinked-added-beside");
+    let elsewhere = Scratch::new("redirect-relinked-added-elsewhere");
+    let victim = elsewhere.path.join("victim");
+    std::fs::write(&victim, "kept\n").unwrap();
+    let away = victim.to_str().expect("a UTF-8 scratch path");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(beside.path.to_str().expect("a UTF-8 scratch path"))
+        .expect("directory added");
+    let opened = added.to_str().expect("a UTF-8 scratch path");
+
+    let (_home, _reporter, answered) = a_run_turn_scanning_in(
+        &workspace,
+        &format!("echo hi > {opened}/ok && ln -s {away} {opened}/out && echo hi > {opened}/out"),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(added.join("ok")).ok().as_deref(),
+        Some("hi\n"),
+        "a destination in an added directory was not written: {answered}"
+    );
+    assert!(
+        added.join("out").is_symlink(),
+        "the line did not leave a link in the added directory: {answered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&victim).unwrap(),
+        "kept\n",
+        "the driver opened a file outside every opened directory through a link"
+    );
+    assert!(
+        answered.contains("resolves outside the workspace"),
+        "the planner was not told why the destination was not opened: {answered}"
+    );
+}
+
+/// A link a stage leaves inside the workspace is followed at the open, as every write through the
+/// workspace follows one (TRUST-10). Refusing any link at the final component would close the
+/// window between the check and the open for a link out of the tree, and would also refuse a line
+/// that writes through a link the tree itself keeps.
+#[cfg(unix)]
+#[test]
+fn a_redirection_an_earlier_part_linked_inside_the_workspace_lands_at_the_link_target() {
+    let scratch = Scratch::new("redirect-relinked-inside");
+    std::fs::write(scratch.path.join("real"), "before\n").unwrap();
+
+    let (_home, _reporter, answered) = a_run_turn_scanning(
+        &scratch,
+        "ln -s real out && echo hi > out",
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    assert!(
+        scratch.path.join("out").is_symlink(),
+        "the first part did not leave a link: {answered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("real")).unwrap(),
+        "hi\n",
+        "a redirection through a link inside the workspace did not land at its target: {answered}"
     );
 }
 

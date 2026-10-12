@@ -7920,7 +7920,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     };
 
     // A redirection names a file the run opens itself, so the confinement every other write goes
-    // through is applied here to the path.
+    // through is applied here to the path, and again immediately before the run opens it.
     for path in &plan.writes {
         if let Err(escape) = tools.workspace.confines(path) {
             let target = path.display().to_string();
@@ -8392,6 +8392,18 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             supplied.as_ref().map(|(bytes, _)| bytes.as_str()),
             confinement.as_ref(),
             &mut |path| {
+                // Confined again where it lands now, since the parts of the line before this one
+                // have run since the check above and may have left a link at this name. At every
+                // open and not only the first, because a part run between two opens of one
+                // destination can have replaced it with a link (CMDLINE-5).
+                if let Err(escape) = tools.workspace.confines(path) {
+                    let target = path.display().to_string();
+                    let detail = workspace_failure(policy, "run", "command", &escape, &target);
+                    return Err(crate::exec::ExecError::Redirection {
+                        path: target,
+                        detail,
+                    });
+                }
                 let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
                 if effects.contains_key(&key) {
                     return Ok(());
