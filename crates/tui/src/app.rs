@@ -107,7 +107,7 @@ const MODEL_COMMAND: &str = "/model";
 const THEME_COMMAND: &str = "/theme";
 
 /// The line that opens the effort picker, or takes a level named after the word.
-pub(crate) const EFFORT_COMMAND: &str = "/effort";
+const EFFORT_COMMAND: &str = "/effort";
 
 /// The line that names the model the planner may consult, says which it may, or drops the choice.
 const ADVISOR_COMMAND: &str = "/advisor";
@@ -634,36 +634,6 @@ pub fn completions(line: &str) -> Vec<Command> {
         .filter(|command| command.name.starts_with(trimmed))
         .copied()
         .collect()
-}
-
-/// The line `/effort ` plus the start of a level becomes, or `None` where Tab has nothing to add.
-///
-/// The level words are this program's own, so completing one reads nothing a person did not type.
-/// A start that fits one level becomes that level, and a start that fits several is carried as far
-/// as they agree.
-pub(crate) fn complete_argument(line: &str) -> Option<String> {
-    let typed = line
-        .trim_start()
-        .strip_prefix(EFFORT_COMMAND)?
-        .strip_prefix(' ')?;
-    if typed.is_empty() || typed.contains(char::is_whitespace) {
-        return None;
-    }
-    let typed = typed.to_ascii_lowercase();
-    let mut fits = bravebot_aichat::protocol::Effort::ALL
-        .iter()
-        .map(|level| level.as_str())
-        .filter(|level| level.starts_with(&typed));
-    let mut shared = fits.next()?.to_string();
-    for level in fits {
-        let agreed = shared
-            .bytes()
-            .zip(level.bytes())
-            .take_while(|(a, b)| a == b)
-            .count();
-        shared.truncate(agreed);
-    }
-    (shared != typed).then(|| format!("{EFFORT_COMMAND} {shared}"))
 }
 
 /// The argument given to `command`, if that is what the line is.
@@ -2689,12 +2659,6 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // typed: with nothing offered it inserts nothing, rather than a stray character.
         KeyCode::Tab if session.is_completing() => {
             session.accept_completion();
-            Action::Redraw
-        }
-        // The level after `/effort `, which the list above does not offer since the command is
-        // already settled once a space follows it.
-        KeyCode::Tab if session.argument_completion().is_some() => {
-            session.accept_argument_completion();
             Action::Redraw
         }
         // While the list is open the arrows walk it. History and scrolling get them back the moment
@@ -15892,45 +15856,6 @@ mod tests {
 
         assert_eq!(command.typed_hint(), "[low | medium | high | xhigh | max]");
         assert_eq!(command.argument, "[level]");
-    }
-
-    /// Tab on a started level finishes it, so `/effort h` becomes `/effort high`.
-    #[test]
-    fn tab_finishes_a_level_started_after_the_effort_command() {
-        for (typed, finished) in [
-            ("/effort h", "/effort high"),
-            ("/effort x", "/effort xhigh"),
-            ("/effort L", "/effort low"),
-            ("/effort me", "/effort medium"),
-        ] {
-            let mut session = Session::new("none");
-            for c in typed.chars() {
-                session.type_char(c);
-            }
-            assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
-            assert_eq!(session.input(), finished, "{typed:?}");
-        }
-    }
-
-    /// Nothing is guessed: `m` fits `medium` and `max`, a finished level and an unknown word stay
-    /// as typed, and another command or a prompt mentioning the command is not touched.
-    #[test]
-    fn tab_leaves_alone_a_start_it_cannot_finish() {
-        for typed in [
-            "/effort m",
-            "/effort ",
-            "/effort high",
-            "/effort nope",
-            "/theme h",
-            "tell me about /effort h",
-        ] {
-            let mut session = Session::new("none");
-            for c in typed.chars() {
-                session.type_char(c);
-            }
-            handle_key(&mut session, key(KeyCode::Tab));
-            assert_eq!(session.input(), typed, "{typed:?}");
-        }
     }
 
     /// A command, not a prompt: asking how hard to think must not also ask the planner about it.
