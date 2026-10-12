@@ -21,8 +21,8 @@ use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 use landlock::{
-    ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, RulesetAttr,
-    RulesetCreatedAttr, RulesetError, RulesetStatus, Scope, path_beneath_rules,
+    ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, PathFdError,
+    RulesetAttr, RulesetCreatedAttr, RulesetError, RulesetStatus, Scope, path_beneath_rules,
 };
 use std::ffi::{OsStr, OsString};
 use std::os::unix::process::CommandExt;
@@ -162,6 +162,49 @@ fn rules_for_every_path(
     Ok(rules)
 }
 
+/// Opens every row of `policy` once. Returns the policy without the listed rows whose names are
+/// gone, or `None` where every row opened, or the error for the first row that cannot be.
+///
+/// A listed row is an entry a directory had when it was listed. When its name is gone by the time
+/// the row is opened there is nothing to grant, so the row is left out where any other row
+/// refuses the policy. A name is gone when it is not found, is under something that is no longer
+/// a directory, or is a stale handle on a network file system. The same open decides it, so a
+/// name present at that open and removed later is the installer's to skip. A listed row that is
+/// there and cannot be opened, and a path the caller named, are refused (SANDBOX-6).
+fn opened_rows(policy: &SandboxPolicy) -> Result<Option<SandboxPolicy>, PathFdError> {
+    for path in &policy.readable {
+        PathFd::new(path)?;
+    }
+    let mut gone = Vec::new();
+    for (index, row) in policy.writable.iter().enumerate() {
+        match PathFd::new(&row.path) {
+            Ok(_) => {}
+            Err(PathFdError::OpenCall { source, .. })
+                if row.listed
+                    && matches!(
+                        source.kind(),
+                        std::io::ErrorKind::NotFound
+                            | std::io::ErrorKind::NotADirectory
+                            | std::io::ErrorKind::StaleNetworkFileHandle
+                    ) =>
+            {
+                gone.push(index);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if gone.is_empty() {
+        return Ok(None);
+    }
+    let mut kept = policy.clone();
+    let mut index = 0;
+    kept.writable.retain(|_| {
+        index += 1;
+        !gone.contains(&(index - 1))
+    });
+    Ok(Some(kept))
+}
+
 /// Landlock-based confinement.
 #[derive(Debug, Default)]
 pub struct LandlockSandbox;
@@ -211,7 +254,8 @@ impl Sandbox for LandlockSandbox {
             network_denial_enforced: namespaces,
             egress_limited_to_a_port: namespaces,
             // A rule is a right attached to an open descriptor, so a path nothing can
-            // open cannot be named in one and a policy naming one is refused.
+            // open cannot be named in one and a policy naming one is refused. A row that
+            // stands for an entry a listing produced is left out instead when its name is gone.
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
         }
@@ -323,21 +367,15 @@ impl LandlockSandbox {
         // the rest of the policy instead would hand the caller a narrower confinement
         // than the one it asked for with nothing saying so. The caller hears it here,
         // before a process exists, rather than from a program refused a path the policy
-        // named.
-        if let Some(e) = policy
-            .readable
-            .iter()
-            .chain(policy.writable.iter().map(|row| &row.path))
-            .find_map(|path| PathFd::new(path).err())
-        {
-            return Err(SandboxError::SetupFailed {
-                mechanism: "landlock",
-                detail: format!(
-                    "the policy names a path no rule can be built for ({e}); refusing \
-                     rather than confining to less than it asked for"
-                ),
-            });
-        }
+        // named. A listed row whose name is gone is the exception: it is left out.
+        let trimmed = opened_rows(policy).map_err(|e| SandboxError::SetupFailed {
+            mechanism: "landlock",
+            detail: format!(
+                "the policy names a path no rule can be built for ({e}); refusing \
+                 rather than confining to less than it asked for"
+            ),
+        })?;
+        let policy = trimmed.as_ref().unwrap_or(policy);
 
         let mut command = Command::new(program);
         command.args(args);
@@ -1498,6 +1536,145 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A policy with a refusal beneath `top`, which is what makes a caller list the directories
+    /// above the refusal and pass each entry as a row of its own.
+    fn a_policy_with_a_refusal_beneath(top: &Path) -> SandboxPolicy {
+        loadable_policy()
+            .allow_read(top)
+            .deny_read(top.join("refused"))
+    }
+
+    /// A directory another process is changing has entries that are gone by the time a row for
+    /// each is opened, and a stage refused for that is refused over a path nobody named. A name
+    /// under something that has stopped being a directory is as gone as a name that was removed.
+    /// A listed row that is still there is granted as before: leaving every listed row out would
+    /// pass the first assertion and fail the write. The row whose name is not UTF-8 is there
+    /// beside the row spelled with its replacement character, which is not, so an implementation
+    /// that opened the lossy spelling would take the first for the second.
+    #[test]
+    fn a_listed_row_whose_name_went_away_is_left_out_and_the_ones_still_there_are_granted() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-listed-row-gone");
+        std::fs::create_dir_all(top.join("refused")).expect("the refused directory is creatable");
+        std::fs::create_dir_all(top.join("kept")).expect("the kept directory is creatable");
+        let not_utf8 = top.join(OsStr::from_bytes(b"kept-\xff"));
+        std::fs::create_dir_all(&not_utf8).expect("the not UTF-8 directory is creatable");
+        std::fs::write(top.join("now-a-file"), "").expect("the file is writable");
+        let policy = a_policy_with_a_refusal_beneath(&top)
+            .allow_write_listed(top.join("kept"))
+            .allow_write_listed(&not_utf8)
+            .allow_write_listed(top.join("listed-then-removed"))
+            .allow_write_listed(top.join("kept-\u{FFFD}"))
+            .allow_write_listed(top.join("now-a-file").join("entry"));
+        let written = [top.join("kept"), not_utf8].map(|directory| directory.join("written"));
+
+        for written in &written {
+            let mut child = sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/touch"),
+                    &[written.clone().into_os_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("a listed name that is gone leaves nothing to grant, so the stage starts");
+
+            assert_eq!(
+                child.wait().expect("should wait").code(),
+                Some(0),
+                "the listed row that is there was not granted: {written:?}"
+            );
+            assert!(written.exists(), "the write did not land: {written:?}");
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// Only a row a listing produced may be left out. The same path named by the caller, in the
+    /// same policy with the same refusal, is a grant the caller asked for and is refused
+    /// (SANDBOX-6), so a backend that ignored every missing path whenever a policy lists would pass
+    /// the test above and fail this one. The caller also names a path that a listing produced as
+    /// well, as the whole-machine rows of a session can include a path it holds already, and the
+    /// named row is still the one that refuses.
+    #[test]
+    fn a_row_the_caller_named_is_refused_when_it_went_away_in_a_policy_that_lists() {
+        let top = a_temporary_directory("bravebot-landlock-named-row-gone");
+        std::fs::create_dir_all(top.join("refused")).expect("the refused directory is creatable");
+        let gone = top.join("named-then-removed");
+
+        for policy in [
+            a_policy_with_a_refusal_beneath(&top).allow_write(&gone),
+            a_policy_with_a_refusal_beneath(&top)
+                .allow_write(&gone)
+                .allow_write_listed(&gone),
+            a_policy_with_a_refusal_beneath(&top)
+                .allow_write_listed(&gone)
+                .allow_write(&gone),
+        ] {
+            let err = LandlockSandbox
+                .spawn(
+                    OsStr::new("/bin/true"),
+                    &[],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect_err("a named row that is gone must refuse the policy");
+            match err {
+                SandboxError::SetupFailed { mechanism, detail } => {
+                    assert_eq!(mechanism, "landlock");
+                    assert!(
+                        detail.contains(&gone.display().to_string()),
+                        "the refusal has to name the path: {detail}"
+                    );
+                }
+                other => panic!("expected SetupFailed naming the path, got: {other:?}"),
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// A listed row is left out because its name is not there, and for no other reason. One that
+    /// is there and cannot be opened is a grant this backend cannot install, which is refused like
+    /// any other. A pair of links that lead to each other cannot be opened by any account, so the
+    /// row is there and unopenable without depending on a mode that root ignores.
+    #[test]
+    fn a_listed_row_that_is_there_and_cannot_be_opened_is_refused() {
+        let top = a_temporary_directory("bravebot-landlock-listed-row-looping");
+        std::fs::create_dir_all(top.join("refused")).expect("the refused directory is creatable");
+        let looping = top.join("looping");
+        std::os::unix::fs::symlink(top.join("other-end"), &looping).expect("the link is creatable");
+        std::os::unix::fs::symlink(&looping, top.join("other-end")).expect("the link is creatable");
+
+        let err = LandlockSandbox
+            .spawn(
+                OsStr::new("/bin/true"),
+                &[],
+                &a_policy_with_a_refusal_beneath(&top).allow_write_listed(&looping),
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect_err("a listed row that cannot be opened must refuse the policy");
+
+        match err {
+            SandboxError::SetupFailed { mechanism, detail } => {
+                assert_eq!(mechanism, "landlock");
+                assert!(
+                    detail.contains(&looping.display().to_string()),
+                    "the refusal has to name the path: {detail}"
+                );
+            }
+            other => panic!("expected SetupFailed naming the path, got: {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
     }
 
     /// The refusal above is the right answer to a caller that named the wrong path and the

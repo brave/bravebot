@@ -833,7 +833,7 @@ impl Confinement {
         };
         let held: Vec<PathBuf> = policy.writable.iter().map(|row| row.path.clone()).collect();
         for row in &unasked {
-            policy = policy.allow_write(row);
+            policy = policy.allow_write_listed(row);
         }
         let mut policy = self.filesystem.apply(policy);
         // Seatbelt's refusal of a read does not stop a write, so a read refusal inside a writable
@@ -5089,6 +5089,39 @@ mod tests {
             ] {
                 assert!(!covered(&refused), "{prelude:?}: {}", refused.display());
             }
+        }
+    }
+
+    /// SANDBOX-6: the rows a bypass stage holds without a request are the entries the directories
+    /// above the home had when they were listed, and a name can be gone by the time a backend opens
+    /// it. Each is marked as listed and nothing the confinement was given itself is, so a backend
+    /// that leaves out a listed row that is gone never leaves out a path somebody named. The same
+    /// confinement without the flag is the control that none of them is there to begin with.
+    #[test]
+    fn the_rows_a_bypass_stage_holds_without_a_request_are_marked_as_listed() {
+        let (home, beside) = unasked_places("listed");
+        let root = beside.join("project");
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let step = step("/bin/cat", &["f"]);
+            let control = bypass_confinement(prelude, &home, &root)
+                .with_unasked_writes(false)
+                .policy(&step, &root, &[]);
+            let policy = bypass_confinement(prelude, &home, &root).policy(&step, &root, &[]);
+            let added: Vec<_> = policy
+                .writable
+                .iter()
+                .filter(|row| !control.writable.contains(row))
+                .collect();
+
+            assert!(!added.is_empty(), "{prelude:?}: the flag added no row");
+            assert!(
+                added.iter().all(|row| row.listed),
+                "{prelude:?}: a row listed from a directory was named as a path: {added:?}"
+            );
+            assert!(
+                control.writable.iter().all(|row| !row.listed),
+                "{prelude:?}: a row the confinement was given was marked as listed"
+            );
         }
     }
 

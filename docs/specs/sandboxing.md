@@ -261,15 +261,29 @@ cannot, the refusal arrives before the process starts, and again where a path go
 that refusal and the exec. Which of the two a backend does is in its capabilities
 ([SANDBOX-5](#SANDBOX-5)).
 
+A row that is an entry of a directory the caller listed is not a path the caller named. A caller
+that grants a directory except what is refused beneath it passes the entries the directory had
+when it was listed, marked as listed. A backend that opens each row before the process starts
+leaves out a listed row whose name is no longer there, or is under something that is no longer a
+directory, and refuses one that is there and cannot be opened. The same path named by the caller is
+refused as before, in a policy that lists as in one that does not, and when a listed row names it
+too.
+
 **Why.** A policy is the list a caller decided a program may reach, so a process running under
 fewer of those paths than the policy names is the silent degradation [SANDBOX-1](#SANDBOX-1)
 forbids, reached one grant at a time: the process runs, the record says the policy was applied,
 and the program is refused a path somebody granted it. Which paths a backend can name is a
 platform difference a caller can work with, and a grant that vanished without being reported is
-not.
+not. A name gone from a directory since it was listed is no longer among the entries the caller
+meant, so there is no grant to lose, and refusing the stage over it would make starting a program
+depend on whatever else was changing that directory.
 
 `verified-by: bravebot_sandbox::linux::a_path_that_cannot_be_opened_is_refused_rather_than_dropped`
 `verified-by: bravebot_sandbox::linux::a_ruleset_is_not_built_with_a_path_missing_from_it`
+`verified-by: bravebot_sandbox::linux::a_listed_row_whose_name_went_away_is_left_out_and_the_ones_still_there_are_granted`
+`verified-by: bravebot_sandbox::linux::a_row_the_caller_named_is_refused_when_it_went_away_in_a_policy_that_lists`
+`verified-by: bravebot_sandbox::linux::a_listed_row_that_is_there_and_cannot_be_opened_is_refused`
+`verified-by: bravebot_agent::confine::the_rows_a_bypass_stage_holds_without_a_request_are_marked_as_listed`
 `verified-by: bravebot_sandbox::macos::a_path_that_is_not_there_yet_is_granted_as_named`
 `verified-by: bravebot_sandbox::windows::a_path_that_is_not_on_disk_is_named_rather_than_left_out`
 `verified-by: bravebot_sandbox::windows::a_policy_whose_paths_are_all_there_names_none`
@@ -429,7 +443,8 @@ A row granting a write says whether the path it names is a file, a directory, or
 policy is resolved against a backend that cannot name a path which does not exist
 ([SANDBOX-9](#SANDBOX-9)), every write row saying which of the two it is and not on disk is created:
 a file empty, with the directory holding it, and a directory empty, each reachable by the account
-that owns it and by nobody else. A row saying neither is not created. A path already there is left
+that owns it and by nobody else. A row saying neither is not created, and a row a listing produced is one of those
+([SANDBOX-6](#SANDBOX-6)). A path already there is left
 as it is, contents and all. A row that could not be created is absent still, so resolution leaves it
 out and names it. Nothing is created where the backend names an absent path, and nothing where it
 confines nothing at all, since a process that will be refused reaches no path made for it.
@@ -462,6 +477,7 @@ not built.
 `verified-by: bravebot_sandbox::policy::a_row_naming_a_file_that_is_not_there_is_created_as_a_file`
 `verified-by: bravebot_sandbox::policy::a_file_row_is_created_with_the_directory_holding_it`
 `verified-by: bravebot_sandbox::policy::a_row_that_does_not_say_what_it_names_is_not_created`
+`verified-by: bravebot_sandbox::policy::a_row_a_listing_produced_is_not_created`
 `verified-by: bravebot_sandbox::policy::a_backend_that_grants_an_absent_path_has_nothing_created_for_it`
 `verified-by: bravebot_sandbox::policy::a_backend_that_confines_nothing_has_nothing_created_for_it`
 `verified-by: bravebot_sandbox::policy::what_is_created_is_reachable_by_its_owner_and_nobody_else`
