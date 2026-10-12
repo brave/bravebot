@@ -653,9 +653,22 @@ and "...", since a call is one row. A command line that carries a credential the
 on any of its lines, is drawn as the verb alone, since `run` refuses it before anyone is shown it
 ([CRED-11](credential-protection.md#CRED-11)).
 
+For a server's tool it is `alias:tool` and the arguments the server is sent, as compact JSON, so a
+call no prompt is put for, under an allow rule, a standing answer or bypassing
+([SERVERS-7](mcp-servers.md#SERVERS-7)), is still shown with what it sends. Compact JSON escapes a
+line break inside a value, so the arguments are one line, and arguments wider than a previewed
+line are cut to its width and "...", since one argument holding a document would otherwise wrap
+across the screen. A reference in them is drawn as the planner wrote it, since that is what the
+server receives. Arguments in which any key or string value carries a credential the planner
+declared are left off, and the call is drawn as `alias:tool` alone
+([CRED-11](credential-protection.md#CRED-11)).
+
 The desktop window draws the reason after the call on the call's own row. A resumed session draws
 each recorded call with the reason it was made with, as it draws the calls themselves under
-[VIEW-2](#VIEW-2).
+[VIEW-2](#VIEW-2). A recorded call to a server's tool is drawn from the name it was offered under
+and its arguments, as it was drawn live. Where that name can be divided into an alias and a tool in
+more than one place, since either may hold `__`, it is drawn as offered. A live call naming a
+server's tool that no offer holds is drawn from its name in the same way, so the two rows agree.
 
 **Why.** The line before a round says what the step is for, and a round of calls made for
 different reasons was explained only as far as that one line went. The call's own reason is the
@@ -672,6 +685,13 @@ one place left to say what each of them was for.
 `verified-by: bravebot_agent::turn::a_run_call_is_drawn_with_the_command_it_runs`
 `verified-by: bravebot_agent::turn::a_run_call_of_several_lines_is_drawn_as_its_first`
 `verified-by: bravebot_agent::turn::a_credential_the_line_itself_carries_stops_the_line`
+`verified-by: bravebot_agent::mcp::a_call_answer_two_lets_through_is_drawn_with_what_it_sends`
+`verified-by: bravebot_agent::mcp::a_call_carrying_a_credential_is_drawn_without_its_arguments`
+`verified-by: bravebot_agent::mcp::a_call_to_a_tool_no_server_offers_is_drawn_as_a_resumed_session_draws_it`
+`verified-by: bravebot_agent::tools::a_servers_call_is_drawn_with_the_arguments_it_is_sent`
+`verified-by: bravebot_agent::tools::a_stored_call_to_a_servers_tool_shows_what_it_sent_but_not_a_credential`
+`verified-by: bravebot_tui::render::a_resumed_call_to_a_servers_tool_shows_what_it_sent`
+`verified-by: bravebot_ui_bridge::servers::a_call_to_a_servers_tool_reaches_the_window_with_what_it_sends`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom, live and replayed, and asserts that the reason reaches the markup while the call runs and once it is over and that a call with none draws nothing for it; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
 <a id="VIEW-26"></a>

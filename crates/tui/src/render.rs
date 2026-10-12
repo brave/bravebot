@@ -9827,6 +9827,37 @@ mod tests {
         );
     }
 
+    /// A resumed session draws a call to a server's tool with the server, the tool and what it
+    /// sent, as the live call was drawn. A call no prompt was put for showed its arguments
+    /// nowhere else, and the record is all a resumed transcript has to draw it from.
+    #[test]
+    fn a_resumed_call_to_a_servers_tool_shows_what_it_sent() {
+        use bravebot_aichat::protocol::{Message, ToolCallRequest, ToolCallRequestFunction};
+
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(Message::user("the forecast for Lyon"));
+        conversation.push(Message::assistant_calling(
+            "",
+            vec![ToolCallRequest {
+                id: "call-1".to_string(),
+                kind: "function".to_string(),
+                function: ToolCallRequestFunction {
+                    name: "mcp__weather__get_forecast".to_string(),
+                    arguments: r#"{"city":"Lyon"}"#.to_string(),
+                },
+                extra_content: None,
+            }],
+        ));
+        let mut session = Session::new("none");
+        session.replay(&conversation, "a title", &Default::default());
+
+        let drawn = rendered(&session);
+        assert!(
+            drawn.contains(r#"MCP(weather:get_forecast {"city":"Lyon"})"#),
+            "the resumed call does not show what it sent: {drawn}"
+        );
+    }
+
     /// And drawn without the marker a live call earns. Green says the call finished cleanly, and
     /// nothing in the record says that: what it holds is that the call was made.
     #[test]

@@ -1089,6 +1089,166 @@ fn answer_two_stops_asking_for_the_one_tool_in_the_one_project() {
     assert!(called[1].contains(r#""city":"Lyon""#), "{}", called[1]);
 }
 
+/// One turn in `project`, as [`run_turn`] runs it, with every call it announced recorded.
+fn reported_turn<C: Confirmer + Send>(
+    endpoint: &str,
+    project: &Path,
+    task: Task,
+    confirmer: &mut C,
+) -> bravebot_agent::report::RecordingReporter {
+    let workspace = Workspace::new(project).expect("workspace");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turn::run_cancellable(
+        &config_for(endpoint),
+        &Egress::new(),
+        &workspace,
+        &task,
+        confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_agent::workspace::trust_store(workspace.root()),
+        &Cancel::new(),
+    )
+    .expect("the turn runs");
+    reporter
+}
+
+/// Every line a turn drew for its calls, started and finished, in order.
+fn drawn_calls(reporter: &bravebot_agent::report::RecordingReporter) -> Vec<String> {
+    reporter
+        .started
+        .iter()
+        .chain(&reporter.finished)
+        .map(|activity| activity.line())
+        .collect()
+}
+
+/// A call answer 2 lets through puts no prompt in front of the person, so the transcript row is
+/// the one place they see what it sent. The row carries the arguments of that call, from the
+/// moment it is announced to the moment it is summarised, and not those of the call that was
+/// asked about.
+#[test]
+fn a_call_answer_two_lets_through_is_drawn_with_what_it_sends() {
+    let scratch = Scratch::new("standing-drawn");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        reply_with("done again"),
+    ]);
+    let mut standing = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(session.clone())),
+        &mut standing,
+    );
+
+    let mut refusing = Answering::new(Decision::Reject, CallDecision::reject());
+    let reporter = reported_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Lyon").with_mcp(Some(session)),
+        &mut refusing,
+    );
+    assert!(
+        refusing.calls.is_empty(),
+        "the call was asked about, so this is not the unasked road"
+    );
+    let called: Vec<String> = server.try_iter().collect();
+    assert!(
+        called
+            .last()
+            .is_some_and(|sent| sent.contains(r#""city":"Lyon""#)),
+        "the server was sent {called:?}"
+    );
+    assert_eq!(
+        drawn_calls(&reporter),
+        vec![r#"MCP(weather:get_forecast {"city":"Lyon"})"#.to_string(); 2]
+    );
+    assert_eq!(
+        drawn_calls(&reporter)[0],
+        bravebot_agent::tools::describe_stored_call(FORECAST, r#"{"city":"Lyon"}"#),
+        "a resumed session draws the call differently"
+    );
+}
+
+/// A call to a server's tool that no offer holds is answered as an unknown name, and drawn from
+/// the name alone. That is how a resumed session draws every recorded call to a server's tool,
+/// since the record keeps no offer, so the live row and the resumed one describe it alike.
+#[test]
+fn a_call_to_a_tool_no_server_offers_is_drawn_as_a_resumed_session_draws_it() {
+    const ALERTS: &str = "mcp__weather__get_alerts";
+    let scratch = Scratch::new("unoffered-drawn");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(ALERTS, r#"{"city":"Lyon"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    let reporter = reported_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("any alerts").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    assert!(
+        methods(&server).is_empty(),
+        "a tool nobody offered reached the server"
+    );
+    let sent = rounds(&chat);
+    assert!(sent[1].contains("no such tool"), "{}", sent[1]);
+
+    let resumed = bravebot_agent::tools::describe_stored_call(ALERTS, r#"{"city":"Lyon"}"#);
+    assert_eq!(resumed, r#"MCP(weather:get_alerts {"city":"Lyon"})"#);
+    assert_eq!(drawn_calls(&reporter), vec![resumed; 2]);
+}
+
+/// A call an allow rule makes with nobody asked still sends its arguments, and where they carry
+/// a value that declared itself a credential the row names the server and the tool and leaves
+/// the arguments off, since a transcript is one of the places CRED-11 keeps a credential out of.
+#[test]
+fn a_call_carrying_a_credential_is_drawn_without_its_arguments() {
+    let scratch = Scratch::new("credential-drawn");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Lyon","key":"AKIAIOSFODNN7EXAMPLE"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+    let reporter = reported_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session))
+            .with_permissions(allowing_the_weather()),
+        &mut confirmer,
+    );
+    assert!(
+        confirmer.calls.is_empty(),
+        "the call was asked about, so this is not the unasked road"
+    );
+    assert_eq!(
+        methods(&server),
+        ["tools/call"],
+        "the call the rule allows was not made"
+    );
+    assert_eq!(
+        drawn_calls(&reporter),
+        vec!["MCP(weather:get_forecast)".to_string(); 2]
+    );
+}
+
 /// Answer 2 is about the project the session is in when it is read, so once the session has moved
 /// to another one the next call asks again and its answer 2 names the new project.
 #[test]

@@ -588,7 +588,7 @@ const PREVIEW_LINES: usize = 12;
 
 /// The width a previewed line is trimmed to. A minified file is one line and would otherwise
 /// wrap across the whole screen.
-const PREVIEW_WIDTH: usize = 160;
+pub(crate) const PREVIEW_WIDTH: usize = 160;
 
 /// The first lines of some quarantined content, released for a screen.
 struct Preview {
