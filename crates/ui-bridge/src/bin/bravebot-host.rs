@@ -70,7 +70,9 @@ fn main() {
         );
         std::process::exit(1);
     }
-    bravebot_ui_bridge::settings::settle_for_process(settings.as_deref());
+    // The host works in several workspaces and is started from wherever its person was, so the
+    // directory it was started in contributes no settings of its own.
+    bravebot_ui_bridge::settings::settle_for_process(None, settings.as_deref());
 
     let mut host = bravebot_ui_bridge::host::Host::new(bravebot_ui_bridge::host::Setup {
         workspaces,

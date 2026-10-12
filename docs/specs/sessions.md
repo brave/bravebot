@@ -1389,7 +1389,8 @@ stay behind because they were given for work that the brief describes only in wo
 <a id="SESSION-35"></a>
 ### SESSION-35: a process can keep its records in a directory of its own
 
-A process that owns its sessions, and must keep them apart from the ones a terminal or a window resumes, can be told once to keep every record it reads, lists or writes under a directory of its choosing, in place of the state directory's `sessions`. Only that directory moves. The per-project layout inside it, the modes, and degrading to nothing where there is no state directory or in an incognito session are unchanged. A second choice in the same process is refused. [HOST-4](local-host.md#HOST-4) is the process that does this.
+A process that owns its sessions, and must keep them apart from the ones a terminal or a window resumes, can be told once to keep every record it reads, lists or writes under a directory of its choosing, in place of the state directory's `sessions`. Only that directory moves. The per-project layout inside it, the modes, and degrading to nothing where there is no state directory or in an incognito session are unchanged. A second choice in the same process is refused, naming the root in force. [HOST-4](local-host.md#HOST-4) is the process that does this.
 
 `verified-by: bravebot_session::sessions::a_chosen_root_replaces_the_sessions_directory_and_only_that`
 `verified-by: bravebot_session::sessions::a_chosen_root_does_not_make_a_session_writable_where_there_is_no_state_directory`
+`verified-by: bravebot_session::keeping_in_a_root::a_second_choice_is_refused_and_names_the_root_in_force`

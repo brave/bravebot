@@ -12,9 +12,13 @@ pub fn layers(project: Option<&Path>, selected: Option<&Path>) -> Settings {
 /// in it reads: the network its programs keep, the lists of paths a person wrote and the hosts a
 /// stage is held to (SANDBOX-20, SANDBOX-25, SANDBOX-24). Nothing a window or a client sends sets
 /// them; the person's settings, the file the process was started on and the managed pin decide.
-pub fn settle_for_process(selected: Option<&Path>) {
-    let here = std::env::current_dir().ok();
-    let layers = layers(here.as_deref(), selected);
+///
+/// `project` is the directory whose own settings join the person's. A process started in the
+/// directory it works in passes that directory. One that works in several, and is started from
+/// wherever its person happened to be, passes none, so a settings file in the directory it was
+/// launched from does not decide the answer for every session.
+pub fn settle_for_process(project: Option<&Path>, selected: Option<&Path>) {
+    let layers = layers(project, selected);
     bravebot_config::settle_run_network_in(None, &layers);
     bravebot_config::settle_sandbox_filesystem_in(
         &bravebot_sandbox::rules::Lists::default(),

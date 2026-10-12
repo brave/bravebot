@@ -65,12 +65,13 @@ The replies that widen what a session may do or read (`output.reply`, `vouch.rep
 
 The host keeps every session record it reads, lists or writes under `--sessions-root`, in place of the `sessions` directory of the state directory. Only that directory moves: settings, trust, credentials and prompt history stay where they are. A terminal or a window running on the same home does not list a record the host wrote and cannot open one by naming its id. The host makes the root readable by its owner only when it makes it. A root that already exists is used only if it is a directory (not a link) that other users cannot reach; the host does not change the mode of a directory it did not make, and refuses to start on one that others can reach or that it cannot write to, which it finds by writing a marker file there at startup. A process in an incognito session, or on a machine with no state directory, still writes nothing.
 
-The root is chosen once, before the first record is read or written, and a second choice is refused (`sessions::keep_in`).
+The root is chosen once, before the first record is read or written, and a second choice is refused and the host says which root is in force (`sessions::keep_in`). The directory the host was started in contributes no settings of its own to the process-wide answers (the network its programs keep, the lists of paths, the hosts a stage is held to): only the person's settings, the file named with `--settings` and the managed pin do.
 
 `verified-by: bravebot_ui_bridge::host_process::the_host_keeps_its_records_apart_from_a_windows`
 `verified-by: bravebot_ui_bridge::host_process::an_existing_sessions_root_that_others_can_read_or_a_link_is_refused`
 `verified-by: bravebot_session::sessions::a_chosen_root_replaces_the_sessions_directory_and_only_that`
 `verified-by: bravebot_session::sessions::a_chosen_root_does_not_make_a_session_writable_where_there_is_no_state_directory`
+`verified-by: bravebot_session::keeping_in_a_root::a_second_choice_is_refused_and_names_the_root_in_force`
 
 <a id="HOST-5"></a>
 ### HOST-5: the host has an instance that changes when it restarts

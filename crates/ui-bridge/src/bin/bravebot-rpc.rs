@@ -66,7 +66,10 @@ fn main() {
     // Before a session is assembled, so every turn this process runs reads one answer for the
     // network its programs keep, for the lists of paths a person wrote and for the hosts a stage is
     // held to. Nothing in a window sets them. See SANDBOX-20, SANDBOX-25 and SANDBOX-24.
-    bravebot_ui_bridge::settings::settle_for_process(settings.as_deref());
+    bravebot_ui_bridge::settings::settle_for_process(
+        std::env::current_dir().ok().as_deref(),
+        settings.as_deref(),
+    );
 
     // One writer behind a lock, so a line from an event and a line from a response cannot
     // interleave. Shared with the bridge, which emits events from whichever thread a turn

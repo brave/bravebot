@@ -151,7 +151,9 @@ static CHOSEN_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 /// resumes. Set once, before the first record is read or written; a second call is refused with
 /// the root already in force.
 pub fn keep_in(root: PathBuf) -> Result<(), PathBuf> {
-    CHOSEN_ROOT.set(root)
+    CHOSEN_ROOT
+        .set(root)
+        .map_err(|_| CHOSEN_ROOT.get().cloned().unwrap_or_default())
 }
 
 /// The sessions directory under `state`, or the root this process was told to keep them in.

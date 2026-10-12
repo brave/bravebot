@@ -12,6 +12,10 @@
 //! someone decides it should not be. `tests/host_allowlist.rs` fails when the bridge has a method
 //! this file does not classify.
 //!
+//! The list is for a client that is the person's own program, started over a channel it shares with
+//! the host alone. It offers answers that grant trust, run a command and fetch a page, so a client
+//! reached any other way, such as over a network, needs a list of its own and not this one.
+//!
 //! The parameters are checked as well as the method. A parameter the bridge would read but the
 //! list does not name is refused, not ignored: `turn.send` carries `prompt` and nothing that
 //! attaches a file, and `run.reply` carries no `remember`.

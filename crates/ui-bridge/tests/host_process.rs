@@ -463,6 +463,10 @@ fn the_host_keeps_its_records_apart_from_a_windows() {
     );
     let id = kept[0].file_stem().unwrap().to_string_lossy().into_owned();
     assert!(
+        !scratch.home().join(".bravebot/sessions").exists(),
+        "the host made a sessions directory in the state directory"
+    );
+    assert!(
         records_under(&scratch.home()).is_empty(),
         "the host wrote a record into the state directory: {:?}",
         records_under(&scratch.home())
