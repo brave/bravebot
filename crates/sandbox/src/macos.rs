@@ -10,7 +10,7 @@
 //! (curl fails to resolve or connect) and cannot create files, while still being able
 //! to exec and read permitted paths.
 
-use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
+use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy, with_their_resolved_spelling};
 use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 use std::ffi::{OsStr, OsString};
@@ -127,11 +127,16 @@ impl SeatbeltSandbox {
         // narrowest: a refusal follows the grants it narrows, a row beneath a refusal lifts it, and
         // a refusal beneath that row holds again. At one path a read row follows the refusal, which
         // is how a credential scope lifts a location the base refuses.
+        //
+        // Seatbelt matches the path a process ends up opening, so a refusal written as a link
+        // matches nothing. Each refusal is therefore written where it stands and where it leads
+        // (SANDBOX-12), the way the Linux backend holds one.
+        let refused_reads = with_their_resolved_spelling(&policy.unreadable);
         let mut reads: Vec<(&Path, bool)> = policy
             .readable
             .iter()
             .map(|path| (path.as_path(), true))
-            .chain(policy.unreadable.iter().map(|path| (path.as_path(), false)))
+            .chain(refused_reads.iter().map(|path| (path.as_path(), false)))
             .collect();
         reads.sort_by_key(|(path, allows)| (depth(path), *allows));
         for (path, allows) in reads {
@@ -144,12 +149,13 @@ impl SeatbeltSandbox {
 
         // Written the same way, except that a row at a refused path is withdrawn and not lifted:
         // the refusal of a write is a person's, and it wins at the path it names.
+        let refused_writes = with_their_resolved_spelling(&policy.unwritable);
         let mut writes: Vec<(&Path, bool)> = policy
             .writable
             .iter()
             .filter(|row| !policy.unwritable.contains(&row.path))
             .map(|row| (row.path.as_path(), true))
-            .chain(policy.unwritable.iter().map(|path| (path.as_path(), false)))
+            .chain(refused_writes.iter().map(|path| (path.as_path(), false)))
             .collect();
         writes.sort_by_key(|(path, allows)| (depth(path), *allows));
         for (path, allows) in writes {
@@ -715,6 +721,39 @@ mod argument_tests {
             "a write row at a refused path was kept: {profile}"
         );
         assert!(profile.contains(r#"(deny file-write* (subpath "/h/gone"))"#));
+    }
+
+    /// Seatbelt matches the path a process ends up opening, so a refusal written as the link a
+    /// person spelled holds nothing when the credential directory is a link into a dotfiles
+    /// repository. The profile carries each refusal where it stands and where it leads.
+    #[test]
+    fn a_refusal_of_a_link_is_written_where_the_link_leads_as_well() {
+        let home = crate::testutil::scratch_dir("bravebot-sandbox-refused-link-home");
+        let _ = std::fs::remove_dir_all(&home);
+        let real = home.join("dotfiles/aws");
+        std::fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, home.join(".aws")).unwrap();
+        let real = std::fs::canonicalize(&real).unwrap();
+        let link = home.join(".aws");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/")
+            .allow_write(&home)
+            .deny_read(&link)
+            .deny_write(&link);
+        let profile = SeatbeltSandbox::profile(&policy);
+        for (operation, path) in [
+            ("file-read*", &link),
+            ("file-read*", &real),
+            ("file-write*", &link),
+            ("file-write*", &real),
+        ] {
+            let row = format!(
+                "(deny {operation} (subpath {}))",
+                quote(&path.to_string_lossy())
+            );
+            assert!(profile.contains(&row), "{row} is not in:\n{profile}");
+        }
     }
 }
 

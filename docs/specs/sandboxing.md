@@ -557,6 +557,8 @@ directory so that `aws-vault.keychain-db` and every other keychain file stay ref
 `verified-by: bravebot_agent::confine::the_security_cache_is_written_by_a_macos_stage_that_reads_the_machine_only`
 `verified-by: bravebot_sandbox::macos::a_stage_under_the_run_base_writes_the_security_cache_and_no_other_cache`
 `verified-by: bravebot_sandbox::macos::the_user_cache_directory_is_an_existing_path_with_its_links_followed`
+`verified-by: bravebot_sandbox::macos::a_refusal_of_a_link_is_written_where_the_link_leads_as_well`
+`verified-by: bravebot_sandbox::rules::a_request_reaching_a_linked_credential_directory_is_refused_where_it_leads`
 `verified-by: bravebot_sandbox::base::the_run_base_on_windows_is_the_keyed_base`
 `verified-by: bravebot_sandbox::base::the_run_base_without_a_home_refuses_only_the_machine_wide_keychains`
 `verified-by: bravebot_sandbox::macos::a_stage_under_the_run_base_is_refused_each_credential_location_and_reads_the_rest`
