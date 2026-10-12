@@ -2186,15 +2186,11 @@ fn run_task(
             let ending = exit::ending_of(&cause);
             let stopped = fail(ending, &cause);
             say_notices(&mut std::io::stderr().lock(), reporter.notices());
-            let report = attempt.describe();
-            if !report.is_empty() {
-                eprintln!();
-                eprint!("{report}");
-            }
-            if trace {
-                eprintln!();
-                print_trace(&mut std::io::stderr().lock(), sink.recorded());
-            }
+            say_what_a_stopped_manifest_produced(
+                &mut std::io::stderr().lock(),
+                &attempt,
+                trace.then(|| sink.recorded()),
+            );
             if as_json {
                 say_the_result(&what_ran(
                     ending,
@@ -2920,6 +2916,26 @@ fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Finished<'_>) {
 fn say_notices(beside: &mut impl Write, notices: &[String]) {
     for notice in notices {
         let _ = writeln!(beside, "{}", t!(cli_notice, notice = notice));
+    }
+}
+
+/// What a manifest run that stopped leaves for a person to read (MANIFEST-3): the plan or the
+/// document that would not become one, and the steps that ran. Only the audit trail waits on
+/// `--trace`; the attempt is printed either way, since a failed plan with no plan to look at is a
+/// one-line complaint about a document nobody can see.
+fn say_what_a_stopped_manifest_produced(
+    output: &mut impl Write,
+    attempt: &bravebot_agent::manifest::Attempt,
+    trail: Option<&RecordingSink>,
+) {
+    let report = attempt.describe();
+    if !report.is_empty() {
+        let _ = writeln!(output);
+        let _ = write!(output, "{report}");
+    }
+    if let Some(trail) = trail {
+        let _ = writeln!(output);
+        print_trace(output, trail);
     }
 }
 
@@ -8001,6 +8017,34 @@ mod tests {
         assert_eq!(reply, "ok\n");
         assert!(beside.contains("not usable"), "got: {beside}");
         assert!(!reply.contains("not usable"));
+    }
+
+    /// A manifest run that stopped is the one worth looking at, so what it produced is printed
+    /// whether or not `--trace` was asked for. Only the audit trail is the flag's to add.
+    #[test]
+    fn a_stopped_manifest_prints_what_it_produced_without_the_trace_flag() {
+        let attempt = bravebot_agent::manifest::Attempt {
+            proposed: Some("not JSON at all".to_string()),
+            steps: vec!["1. read notes.md: done".to_string()],
+            ..Default::default()
+        };
+        let sink = trail_of(vec![Event::GatePassed {
+            gate: "display",
+            detail: "assistant reply shown to the user".into(),
+        }]);
+
+        let mut untraced = Vec::new();
+        say_what_a_stopped_manifest_produced(&mut untraced, &attempt, None);
+        let untraced = String::from_utf8(untraced).expect("utf-8");
+        assert!(untraced.contains("not JSON at all"), "got: {untraced}");
+        assert!(untraced.contains("read notes.md"), "got: {untraced}");
+        assert!(!untraced.contains("audit trail"), "got: {untraced}");
+
+        let mut traced = Vec::new();
+        say_what_a_stopped_manifest_produced(&mut traced, &attempt, Some(&sink));
+        let traced = String::from_utf8(traced).expect("utf-8");
+        assert!(traced.contains("not JSON at all"), "got: {traced}");
+        assert!(traced.contains("audit trail"), "got: {traced}");
     }
 
     /// Nobody is watching a one-shot run, so the list that answers a prompt in advance answers
