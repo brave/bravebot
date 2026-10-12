@@ -23,11 +23,11 @@ const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 /// The socket every host name lookup on macOS goes through.
 const RESOLVER: &str = "/private/var/run/mDNSResponder";
 
-/// The Mach services a confined process may look up. Each answers a question about the machine
-/// (accounts, groups, network configuration, certificate trust, log and notification delivery) or
-/// is the keychain service the base reads a keychain file for. None starts a program, reads or
-/// writes the pasteboard, or opens a file or URL on the caller's behalf, which is what
-/// LaunchServices, the pasteboard and launchd do, so a lookup of any of those is refused.
+/// The Mach services every confined process may look up. Each answers a question about the machine
+/// (accounts, groups, network configuration, log and notification delivery) or is the keychain
+/// service the base reads a keychain file for. None starts a program, reads or writes the
+/// pasteboard, or opens a file or URL on the caller's behalf, which is what LaunchServices, the
+/// pasteboard and launchd do, so a lookup of any of those is refused.
 const MACH_SERVICES: &[&str] = &[
     "com.apple.SecurityServer",
     "com.apple.SystemConfiguration.DNSConfiguration",
@@ -37,9 +37,24 @@ const MACH_SERVICES: &[&str] = &[
     "com.apple.system.notification_center",
     "com.apple.system.opendirectoryd.libinfo",
     "com.apple.system.opendirectoryd.membership",
-    "com.apple.trustd",
-    "com.apple.trustd.agent",
 ];
+
+/// The certificate trust services, looked up only by a process that may reach the network. Trust
+/// evaluation makes these fetch an issuer from the certificate's Authority Information Access URL
+/// from their own unconfined process, so a profile with no egress that allowed them would let the
+/// process make a request to any URL it names.
+const TRUST_SERVICES: &[&str] = &["com.apple.trustd", "com.apple.trustd.agent"];
+
+/// The services a policy's profile allows a lookup of: the trust services only where the policy
+/// allows network egress.
+fn mach_services(policy: &SandboxPolicy) -> impl Iterator<Item = &'static &'static str> {
+    let trust: &[&str] = if policy.allow_network {
+        TRUST_SERVICES
+    } else {
+        &[]
+    };
+    MACH_SERVICES.iter().chain(trust)
+}
 
 /// Refuses a write to any path with a `.git` component, in either case, since the default
 /// volume opens `.GIT` when git asks for `.git`.
@@ -101,12 +116,13 @@ impl SeatbeltSandbox {
         let mut out = String::from("(version 1)\n(deny default)\n");
 
         // Without these the process cannot start at all: the loader must exec the binary and
-        // the system libraries look up the services in `MACH_SERVICES`. Those grant no filesystem
-        // or network reach of their own, and no other service is reachable.
+        // the system libraries look up the services in `MACH_SERVICES`, and `TRUST_SERVICES` where
+        // the network is allowed. Those grant no filesystem or network reach of their own, and no
+        // other service is reachable.
         out.push_str("(allow process-exec)\n");
         out.push_str("(allow sysctl-read)\n");
         out.push_str("(allow mach-lookup");
-        for service in MACH_SERVICES {
+        for service in mach_services(policy) {
             out.push_str(&format!(" (global-name {})", quote(service)));
         }
         out.push_str(")\n");
@@ -1301,6 +1317,44 @@ int main(int argc, char **argv) {
         );
     }
 
+    /// SANDBOX-31: the certificate trust services are in a profile only where the policy allows
+    /// network egress, whether to every host or to one proxy port. The regression it rejects is the
+    /// constant list of both, which lets a stage with no egress ask trustd to fetch a URL for it.
+    #[test]
+    fn the_trust_services_are_looked_up_only_where_the_network_is_allowed() {
+        let lookups = |policy: &SandboxPolicy| -> Vec<String> {
+            SeatbeltSandbox::profile(policy)
+                .lines()
+                .filter(|line| line.contains("mach-lookup"))
+                .flat_map(|line| line.split("(global-name ").skip(1))
+                .map(|name| {
+                    let name = name.trim_end().trim_end_matches(')');
+                    name.trim_matches('"').to_owned()
+                })
+                .collect()
+        };
+        let closed = lookups(&reads_the_system_only());
+        for service in TRUST_SERVICES {
+            assert!(
+                !closed.contains(&(*service).to_owned()),
+                "{service} in {closed:?}"
+            );
+        }
+        assert_eq!(closed.len(), MACH_SERVICES.len());
+        for policy in [
+            reads_the_system_only().allow_network_egress(),
+            reads_the_system_only().allow_network_egress_only_to(8080),
+        ] {
+            let open = lookups(&policy);
+            for service in TRUST_SERVICES.iter().chain(MACH_SERVICES) {
+                assert!(
+                    open.contains(&(*service).to_owned()),
+                    "{service} not in {open:?}"
+                );
+            }
+        }
+    }
+
     /// SANDBOX-31: a confined process finds each service the list names and is refused the ones
     /// that act on the person's behalf. Run against the bootstrap server, so a name the profile
     /// spells wrongly is not found, and a list left empty fails the first half as readily as a
@@ -1317,6 +1371,22 @@ int main(int argc, char **argv) {
         std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
         let probe = mach_lookup_probe(&dir);
         let policy = reads_the_system_only().allow_read(&dir);
+        let networked = policy.clone().allow_network_egress();
+        let lookup_under = |name: &str, policy: &SandboxPolicy| -> i32 {
+            sandbox
+                .spawn(
+                    probe.as_os_str(),
+                    &[name.into()],
+                    policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .code()
+                .expect("the probe exits")
+        };
         let lookup = |name: &str, confined: bool| -> i32 {
             if !confined {
                 return Command::new(&probe)
@@ -1364,12 +1434,31 @@ int main(int argc, char **argv) {
             "com.apple.system.notification_center",
             "com.apple.logd",
             "com.apple.SecurityServer",
-            "com.apple.trustd.agent",
         ] {
             assert_eq!(
                 lookup(service, true),
                 LOOKUP_FOUND,
                 "{service} is what a program needs to run and could not be looked up"
+            );
+        }
+
+        // Certificate trust is found by a process that may reach the network, and refused to one
+        // that may not, which would otherwise have trustd fetch a URL on its behalf.
+        for service in TRUST_SERVICES {
+            assert_eq!(
+                lookup(service, false),
+                LOOKUP_FOUND,
+                "{service} is registered"
+            );
+            assert_eq!(
+                lookup_under(service, &networked),
+                LOOKUP_FOUND,
+                "{service} is what a program verifying a certificate needs"
+            );
+            assert_eq!(
+                lookup_under(service, &policy),
+                LOOKUP_REFUSED,
+                "{service} fetches for a process that has no network"
             );
         }
 
