@@ -276,6 +276,18 @@ set, it is shown at the prompt, and it is subject to every rule that governs wri
 permission rules, the trust map's answer for that path, and the confinement that keeps a write
 inside the workspace.
 
+That confinement is applied when the line is compiled and again immediately before each destination
+is opened, including one the line has already opened once. The parts of the line before it have run
+by then, and a program in one of them can have left a link at the name the person approved. A
+destination that lands outside the workspace and every opened directory at that moment is not
+opened, and the line stops there. The window between that check and the open is the one the known
+costs of [trust-map.md](../trust-map.md) accept for every write.
+
+`verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_of_its_line_linked_out_of_the_workspace_is_refused_when_opened`
+`verified-by: bravebot_agent::turn::a_destination_reopened_after_an_earlier_part_linked_it_out_of_the_workspace_is_refused`
+`verified-by: bravebot_agent::turn::a_redirection_into_an_added_directory_is_confined_again_when_it_is_opened`
+`verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_linked_inside_the_workspace_lands_at_the_link_target`
+
 `>>` is a write. `<` is a read and joins the read set, and it is standard input as well: the
 file's bytes go into a program, so the plan reports it as private input and it takes the
 standard-input gate of [run.md](run.md#RUN-6) whichever file it names. `2>&1` renames a
