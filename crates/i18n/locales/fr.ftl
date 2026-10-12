@@ -577,6 +577,7 @@ doctor-kernel-enforced = imposé par le noyau
 doctor-not-enforced = NON imposé
 doctor-confinement-unavailable = confinement indisponible
 doctor-no-network-namespace = espaces de noms réseau : indisponibles ({ $reason }). Une étape sans réseau, ou limitée par sandbox.network.allowedHosts, est refusée ici. Autorisez les espaces de noms utilisateur non privilégiés pour utiliser l'un ou l'autre.
+doctor-sockets-with-a-path-reachable = sockets unix avec un chemin : accessibles. Landlock sur ce noyau est antérieur à l'ABI 9 (Linux 7.1), donc en mode bac à sable standard un programme atteint chacun de ces sockets, dont le D-Bus de l'utilisateur, SSH_AUTH_SOCK et docker.sock. Une étape en mode strict est refusée ici.
 doctor-network = réseau
 doctor-trust-roots = racines de confiance
 doctor-trust-roots-bundled = intégrées ({ $variables } en désigne d'autres)
@@ -1796,6 +1797,9 @@ status-network-by-settings = fermé par run.network dans { $path }
 status-network-by-a-setting = fermé par run.network dans un fichier de réglages
 status-network-pinned = imposé fermé par { $path }, ni un drapeau ni un fichier de réglages ne peut le changer
 status-network-pinned-by-policy = imposé fermé par les réglages gérés, ni un drapeau ni un fichier de réglages ne peut le changer
+status-path-sockets = Sockets unix des programmes
+status-path-sockets-reachable = tout socket avec un chemin est accessible, dont le D-Bus de l'utilisateur, SSH_AUTH_SOCK et docker.sock
+status-path-sockets-why = Landlock sur ce noyau est antérieur à l'ABI 9 (Linux 7.1), et le mode bac à sable strict y refuse les programmes
 status-sandbox-filesystem = Règles de fichiers
 status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 status-sandbox-filesystem-files = de { $files }
@@ -2662,6 +2666,7 @@ agent-checkout-not-applied =
 opening-confinement = confinement disponible : { $level }
 opening-network-closed = réseau fermé
 opening-filesystem-rules = règles de fichiers en vigueur
+opening-path-sockets-reachable = les programmes atteignent les sockets avec un chemin : D-Bus, agent SSH, docker.sock
 opening-invitation = Posez une question sur cet espace de travail.
 
 

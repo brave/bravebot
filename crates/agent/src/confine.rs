@@ -1155,7 +1155,8 @@ impl Confinement {
                 wanted = wanted.with_egress_through(socket);
             }
         }
-        if let Some(detail) = cannot_close_the_network(&wanted, &capabilities)
+        if let Some(detail) = cannot_keep_strict_from_sockets(self.mode, &capabilities)
+            .or_else(|| cannot_close_the_network(&wanted, &capabilities))
             .or_else(|| cannot_hold_to_the_proxy(&wanted, &capabilities))
         {
             return Err(not_confined(detail));
@@ -1440,6 +1441,25 @@ fn stated(
         }
     }
     Some(said)
+}
+
+/// Why a stage cannot run under `mode`, where the mode is strict and the backend cannot hold a
+/// connect to a unix socket that has a path to the stage's write rows, or `None`.
+///
+/// Such a socket reaches whatever serves it with that server's authority: `systemd-run --user`
+/// through the user's D-Bus starts a program outside the sandbox. Strict keeps a program from
+/// everything it was not granted, so it is refused where that cannot hold. Standard runs the stage,
+/// and `doctor`, `/status` and the opening screen say the sockets are reachable (SANDBOX-3).
+fn cannot_keep_strict_from_sockets(
+    mode: SandboxMode,
+    capabilities: &bravebot_sandbox::policy::Capabilities,
+) -> Option<String> {
+    (mode == SandboxMode::Strict && !capabilities.governs_sockets_with_a_path).then(|| {
+        "the sandbox mode is strict (sandbox.mode) and this kernel cannot keep a program from a \
+         unix socket that has a path, such as the user's D-Bus, the SSH agent or docker.sock; \
+         strict needs Landlock ABI 9, which is Linux 7.1 or newer"
+            .to_string()
+    })
 }
 
 /// Why a backend cannot apply `policy`, where the policy withholds the network and the backend does
@@ -4027,6 +4047,66 @@ mod tests {
         assert!(!plain.profile(&[&make]).contains("allowedHosts"));
     }
 
+    /// SANDBOX-22: strict is refused where a backend cannot hold a connect to a socket that has a
+    /// path, with the mode and the kernel it needs named, and standard is not. The regressions it
+    /// rejects: a strict stage started where the user's D-Bus and the SSH agent are reachable,
+    /// standard refused along with it, and strict refused on a backend that governs the sockets.
+    #[test]
+    fn strict_is_refused_where_sockets_with_a_path_are_not_governed() {
+        let backend = |governs_sockets_with_a_path| bravebot_sandbox::policy::Capabilities {
+            level: bravebot_sandbox::policy::ConfinementLevel::Partial,
+            mechanisms: Vec::new(),
+            network_denial_enforced: true,
+            egress_limited_to_a_port: true,
+            grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
+            governs_sockets_with_a_path,
+        };
+        let (ungoverned, governed) = (backend(false), backend(true));
+
+        let detail =
+            cannot_keep_strict_from_sockets(SandboxMode::Strict, &ungoverned).expect("refused");
+        assert!(detail.contains("strict (sandbox.mode)"), "{detail}");
+        assert!(detail.contains("Landlock ABI 9"), "{detail}");
+        assert!(detail.contains("Linux 7.1"), "{detail}");
+        assert_eq!(
+            cannot_keep_strict_from_sockets(SandboxMode::Standard, &ungoverned),
+            None
+        );
+        assert_eq!(
+            cannot_keep_strict_from_sockets(SandboxMode::Strict, &governed),
+            None
+        );
+    }
+
+    /// A strict stage is prepared on this machine's backend exactly where that backend governs a
+    /// connect to a socket that has a path, and refused naming the kernel requirement where it
+    /// does not, while a standard stage is prepared either way. The regression it rejects is the
+    /// refusal written and never asked by the path every stage is started through.
+    #[test]
+    fn a_strict_stage_is_prepared_only_where_sockets_with_a_path_are_governed() {
+        let (session, standard) = a_session("strict-path-sockets");
+        let strict = standard.clone().with_mode(SandboxMode::Strict);
+        let cat = step("/bin/cat", &["a"]);
+        let Ok(sandbox) = bravebot_sandbox::for_current_platform() else {
+            return;
+        };
+
+        standard
+            .prepared(&Command::new("/bin/cat"), &cat, &session)
+            .expect("a standard stage is confined whatever the kernel governs");
+        match strict.prepared(&Command::new("/bin/cat"), &cat, &session) {
+            Ok(_) => assert!(sandbox.capabilities().governs_sockets_with_a_path),
+            Err(error) => {
+                assert!(
+                    !sandbox.capabilities().governs_sockets_with_a_path,
+                    "{error}"
+                );
+                assert!(error.to_string().contains("Landlock ABI 9"), "{error}");
+            }
+        }
+    }
+
     /// A stage under a host list is prepared with a policy limited to the proxy's port, and one
     /// with no list is not. The regression it rejects is the list applied through the variables
     /// alone, which a program that ignores them walks around.
@@ -4226,6 +4306,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: true,
             subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: true,
         };
         let (cannot, can) = (backend(false), backend(true));
 
@@ -4700,6 +4781,7 @@ mod tests {
             egress_limited_to_a_port,
             grants_paths_that_do_not_exist: true,
             subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: true,
         };
         let (unable, able) = (backend(false), backend(true));
 

@@ -1164,6 +1164,7 @@ fn status_report(
         theme: &theme,
         config,
         confinement: &session.confinement,
+        sockets_with_a_path_reachable: session.sockets_with_a_path_reachable,
         sandbox_mode: session.sandbox_mode(),
         servers: &session.servers,
         permission_mode: session.permission_mode(),
@@ -3369,6 +3370,7 @@ pub fn run(
     config: &mut Config,
     workspace: &Workspace,
     confinement: String,
+    sockets_with_a_path_reachable: bool,
     mut servers: crate::state::Servers,
     start: Start,
     agent: Option<String>,
@@ -3440,6 +3442,7 @@ pub fn run(
                     config,
                     &workspace,
                     confinement.clone(),
+                    sockets_with_a_path_reachable,
                     sandbox.clone(),
                     &mut servers,
                     start,
@@ -4020,6 +4023,7 @@ fn event_loop(
     config: &mut Config,
     workspace: &Workspace,
     confinement: String,
+    sockets_with_a_path_reachable: bool,
     sandbox: crate::sandbox_command::Sandboxed,
     servers: &mut crate::state::Servers,
     start: Start,
@@ -4042,6 +4046,7 @@ fn event_loop(
 
     // The one place persistence is turned on: history in ~/.bravebot outlives the session.
     let mut session = Session::new(confinement)
+        .with_sockets_with_a_path_reachable(sockets_with_a_path_reachable)
         .with_sandbox(sandbox)
         .with_stored_history()
         .in_workspace(workspace.root())

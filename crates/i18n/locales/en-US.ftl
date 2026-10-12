@@ -683,6 +683,9 @@ doctor-kernel-enforced = kernel-enforced
 doctor-not-enforced = NOT enforced
 doctor-confinement-unavailable = confinement unavailable
 doctor-no-network-namespace = network namespaces: unavailable ({ $reason }). A stage with no network, or held to sandbox.network.allowedHosts, is refused here. Allow unprivileged user namespaces to use either.
+# Said only where the kernel cannot hold a connect to a unix socket that has a path to a stage's
+# grants, which is Landlock below ABI 9.
+doctor-sockets-with-a-path-reachable = unix sockets with a path: reachable. Landlock on this kernel is below ABI 9 (Linux 7.1), so under sandbox mode standard a program reaches every such socket, the user's D-Bus, SSH_AUTH_SOCK and docker.sock among them. A stage under strict is refused here.
 # The network a request actually crosses: which certificate authorities a handshake is validated
 # against, and which proxy it is routed through. Both are stated outside this program, and neither
 # is visible anywhere else when a connection fails.
@@ -2033,6 +2036,11 @@ status-network-by-settings = closed by run.network in { $path }
 status-network-by-a-setting = closed by run.network in a settings file
 status-network-pinned = pinned closed by { $path } and not changeable by a flag or a settings file
 status-network-pinned-by-policy = pinned closed by the managed settings and not changeable by a flag or a settings file
+# Said only under sandbox mode standard, where the kernel leaves every unix socket that has a path
+# open to the programs a command starts. The note says why, and what strict does there.
+status-path-sockets = Programs' unix sockets
+status-path-sockets-reachable = every socket with a path is reachable, the user's D-Bus, SSH_AUTH_SOCK and docker.sock among them
+status-path-sockets-why = Landlock on this kernel is below ABI 9 (Linux 7.1), and sandbox mode strict refuses programs here
 # Said only where one of the four sandbox.filesystem lists has an entry. The note names the files.
 status-sandbox-filesystem = Filesystem rules
 status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
@@ -3126,6 +3134,7 @@ agent-checkout-not-applied =
 opening-confinement = confinement available: { $level }
 opening-network-closed = network closed
 opening-filesystem-rules = filesystem rules in force
+opening-path-sockets-reachable = programs reach sockets with a path: D-Bus, SSH agent, docker.sock
 opening-invitation = Ask a question about this workspace.
 
 

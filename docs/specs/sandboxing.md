@@ -140,10 +140,15 @@ where a policy asks for it, is to IP addresses. A unix socket that has a path is
 a path the policy names for writing, and not under one it names for reading. On macOS a connect to
 a socket counts as egress, so there a write row reaches a socket only while egress is granted, and
 egress also reaches the resolver's socket, which every host name lookup goes through. On Linux the
-socket rule holds on a kernel carrying Landlock ABI version 9. Below it every socket that has a
-path is reachable whatever the policy names, which includes the user's D-Bus (where
-`systemd-run --user` starts a program outside the sandbox), the agent `SSH_AUTH_SOCK` names (every
-key it holds) and `docker.sock`. A connect to a socket in the abstract namespace, which has no path,
+socket rule holds on a kernel carrying Landlock ABI version 9, which is Linux 7.1. Below it, which
+is most Linux machines in use, every socket that has a path is reachable whatever the policy names,
+which includes the user's D-Bus (where `systemd-run --user` starts a program outside the sandbox),
+the agent `SSH_AUTH_SOCK` names (every key it holds) and `docker.sock`. The Linux backend reports
+whether the kernel governs these sockets. Where it does not, a stage under sandbox mode `strict`
+([SANDBOX-22](#SANDBOX-22)) is refused with the kernel it needs named, and a stage under `standard`
+runs while `doctor`, `/status` and the opening screen say the sockets are reachable. Under `off`
+the two reports say nothing of them, since the confinement line already says nothing is confined.
+A connect to a socket in the abstract namespace, which has no path,
 is refused when the socket was made outside the confined process's Landlock domain, on a kernel
 carrying ABI version 6, and is reachable below it. The domain is that of one stage, so a socket made
 by the session or by another stage is refused too. On Linux signals are not scoped. On macOS a
@@ -201,6 +206,12 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_drive_a_device_it_was_granted_for_reading`
 `verified-by: bravebot_sandbox::linux::the_ruleset_handles_every_right_this_crate_knows_of`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_connect_to_an_abstract_socket_made_outside_it`
+`verified-by: bravebot_sandbox::linux::sockets_with_a_path_are_reported_governed_from_landlock_abi_9`
+`verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
+`verified-by: bravebot_agent::confine::a_strict_stage_is_prepared_only_where_sockets_with_a_path_are_governed`
+`verified-by: bravebot_cli::main::doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs`
+`verified-by: bravebot_tui::status::reachable_sockets_with_a_path_are_reported_under_standard_alone`
+`verified-by: bravebot_tui::logo::reachable_sockets_with_a_path_are_named_on_the_opening_screen_under_standard_alone`
 `verified-by: bravebot_sandbox::windows::a_policy_that_did_not_ask_for_the_network_asks_for_no_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_withholding_the_network_is_applied_rather_than_refused`
@@ -1488,7 +1499,9 @@ program printed goes to a log file under the suite's directory, and neither the 
 There are three sandbox modes. `strict` starts every stage under the deny-by-default profile
 [SANDBOX-18](#SANDBOX-18) composes where the machine cannot be read: the base, the list its program's
 binary brings, the credential scope its argv names and the session's directories, so a program reads
-nothing else on the machine. `standard` is what [SANDBOX-17](#SANDBOX-17) and
+nothing else on the machine. On a Linux kernel below Landlock ABI 9, where a stage reaches every
+unix socket that has a path, a `strict` stage is refused ([SANDBOX-3](#SANDBOX-3)). `standard` is
+what [SANDBOX-17](#SANDBOX-17) and
 [SANDBOX-18](#SANDBOX-18) describe, and is the mode when nothing chose another. `off` starts the
 stage with no profile. The network is not part of a mode: whether a stage keeps egress is the setting
 [SANDBOX-20](#SANDBOX-20) describes, and `strict` and `standard` honour it the same way. `off` starts
@@ -1595,6 +1608,7 @@ shell start-up files and other repositories on the machine.
 `verified-by: bravebot_config::settings::a_closed_network_pin_refuses_off_and_leaves_the_rest`
 `verified-by: bravebot_config::settings::a_key_beside_the_sandbox_mode_is_reported_as_unread`
 `verified-by: bravebot_tui::logo::a_closed_network_is_not_claimed_for_programs_nothing_confines`
+`verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
 `verified-by: bravebot_cli::main::a_refused_mode_stops_what_runs_programs_and_not_what_does_not`
 `verified-by: bravebot_config::settings::a_window_never_runs_unconfined_and_keeps_the_pin`
 `verified-by: bravebot_cli::main::the_sandbox_flag_takes_one_of_three_words_and_the_last_wins`

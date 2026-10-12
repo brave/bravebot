@@ -363,6 +363,8 @@ impl Sandbox for SeatbeltSandbox {
             // not there yet is named in one and the file can be created afterwards.
             grants_paths_that_do_not_exist: true,
             subtracts_from_a_grant: true,
+            // A connect to a socket is checked against the profile's write rows.
+            governs_sockets_with_a_path: true,
         }
     }
 
@@ -1536,6 +1538,7 @@ int main(int argc, char **argv) {
         assert_eq!(caps.level, ConfinementLevel::Kernel);
         assert!(caps.network_denial_enforced);
         assert!(caps.egress_limited_to_a_port);
+        assert!(caps.governs_sockets_with_a_path);
         assert!(caps.mechanisms.contains(&"seatbelt"));
     }
 

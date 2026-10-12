@@ -2029,6 +2029,7 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> Transcript {
         lines.extend(logo::lines(
             &session.confinement,
             session.sandbox_mode(),
+            session.sockets_with_a_path_reachable,
             &session.tier,
             width,
             height,

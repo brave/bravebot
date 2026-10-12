@@ -335,6 +335,9 @@ fn capabilities() -> Capabilities {
         // A grant is written onto an object with everything beneath it, and nothing narrower
         // than the grant can be taken from it, so `refusal_for` starts no stage holding a refusal.
         subtracts_from_a_grant: false,
+        // A socket with a path is a file on disk, so a connect to one is decided by its access
+        // list like any other object the container opens.
+        governs_sockets_with_a_path: true,
     }
 }
 
@@ -1028,6 +1031,7 @@ mod tests {
         assert!(!reported.egress_limited_to_a_port);
         assert!(!reported.grants_paths_that_do_not_exist);
         assert!(!reported.subtracts_from_a_grant);
+        assert!(reported.governs_sockets_with_a_path);
         assert!(reported.mechanisms.contains(&"appcontainer"));
     }
 

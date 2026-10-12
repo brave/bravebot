@@ -3133,11 +3133,22 @@ fn interactive(
 
     // What the platform offers, which is what the session reports: this confines a process running
     // code we did not write, which is an MCP server this session starts and nothing else it runs.
-    // Read once here because the answer cannot change while the session runs.
-    let confinement = match bravebot_sandbox::for_current_platform() {
-        Ok(sandbox) => named(sandbox.capabilities().level),
-        Err(_) => named(bravebot_sandbox::policy::ConfinementLevel::None),
-    };
+    // Read once here because the answer cannot change while the session runs. With no backend no
+    // stage starts, so nothing is said about the sockets one would reach.
+    let (confinement, sockets_with_a_path_reachable) =
+        match bravebot_sandbox::for_current_platform() {
+            Ok(sandbox) => {
+                let capabilities = sandbox.capabilities();
+                (
+                    named(capabilities.level),
+                    !capabilities.governs_sockets_with_a_path,
+                )
+            }
+            Err(_) => (
+                named(bravebot_sandbox::policy::ConfinementLevel::None),
+                false,
+            ),
+        };
 
     // Settled on the plain terminal before the screen takes it, so a question about a server this
     // checkout requests is a line somebody answers rather than a dialog drawn over a session that
@@ -3164,6 +3175,7 @@ fn interactive(
         &mut config,
         &workspace,
         confinement,
+        sockets_with_a_path_reachable,
         started,
         start,
         agent,
@@ -5130,7 +5142,7 @@ fn report_confinement(found: Result<Capabilities, SandboxError>) -> Option<Strin
 fn confinement(found: Result<Capabilities, SandboxError>) -> Confinement {
     match found {
         Ok(caps) => Confinement {
-            lines: vec![
+            lines: [
                 t!(doctor_confinement, level = named(caps.level)).to_string(),
                 aligned(t!(doctor_mechanisms), caps.mechanisms.join(", "), DETAIL),
                 aligned(
@@ -5142,7 +5154,13 @@ fn confinement(found: Result<Capabilities, SandboxError>) -> Confinement {
                     },
                     DETAIL,
                 ),
-            ],
+            ]
+            .into_iter()
+            .chain(
+                (!caps.governs_sockets_with_a_path)
+                    .then(|| t!(doctor_sockets_with_a_path_reachable).to_string()),
+            )
+            .collect(),
             established: true,
         },
         Err(err) => Confinement {
@@ -5426,6 +5444,7 @@ mod tests {
             // Nothing `doctor` prints depends on this, so the report reads the same either way.
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: true,
         }))
         .lines
     }
@@ -5495,6 +5514,42 @@ mod tests {
             .expect("a note where the namespace cannot be made");
         assert!(note.contains("Permission denied (os error 13)"), "{note}");
         assert!(note.contains("sandbox.network.allowedHosts"), "{note}");
+    }
+
+    /// SANDBOX-3: below Landlock ABI 9 a program under standard reaches every unix socket that has
+    /// a path and a strict stage is refused, and `doctor` is where a person learns both. The
+    /// regressions it rejects: no line on such a kernel, a line where the sockets are governed,
+    /// and a line that names neither the sockets, the kernel it needs, nor what strict does.
+    #[test]
+    fn doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs() {
+        let report = |governs_sockets_with_a_path| {
+            confinement(Ok(Capabilities {
+                level: ConfinementLevel::Partial,
+                mechanisms: vec!["landlock"],
+                network_denial_enforced: true,
+                egress_limited_to_a_port: true,
+                grants_paths_that_do_not_exist: false,
+                subtracts_from_a_grant: true,
+                governs_sockets_with_a_path,
+            }))
+            .lines
+        };
+        let (governed, reachable) = (report(true), report(false));
+
+        let expected = t!(doctor_sockets_with_a_path_reachable).to_string();
+        assert!(!governed.contains(&expected), "{governed:?}");
+        assert_eq!(reachable.len(), governed.len() + 1, "{reachable:?}");
+        assert_eq!(reachable.last(), Some(&expected));
+        for word in [
+            "D-Bus",
+            "SSH_AUTH_SOCK",
+            "docker.sock",
+            "ABI 9",
+            "Linux 7.1",
+            "strict",
+        ] {
+            assert!(expected.contains(word), "{word}: {expected}");
+        }
     }
 
     /// Without a backend, untrusted work is refused rather than run unconfined, so this is a thing
@@ -8340,6 +8395,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant,
+            governs_sockets_with_a_path: true,
         };
         let cannot = t!(sandbox_rule_cannot_subtract).to_string();
         let flag = t!(doctor_sandbox_filesystem_source_flag);

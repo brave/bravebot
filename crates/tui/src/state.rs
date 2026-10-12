@@ -1502,6 +1502,10 @@ pub struct Session {
     /// The platform's level alone: the sandbox mode is [`Session::sandbox_mode`], and the two are put
     /// together where they are drawn, so `/sandbox` changes what the screen says.
     pub confinement: String,
+    /// Whether this kernel leaves every unix socket that has a path reachable from a confined
+    /// stage, which the opening screen and `/status` say under `standard` (SANDBOX-3). Read at
+    /// start-up with the confinement above, since the kernel does not change while the session runs.
+    pub sockets_with_a_path_reachable: bool,
     /// The sandbox mode programs `run` starts are held to, and who chose it (SANDBOX-22).
     ///
     /// Held here and not read from `bravebot_config::sandbox::in_force`, which is what start-up
@@ -2033,6 +2037,7 @@ impl Session {
             history_search: None,
             laid: Laid::default(),
             confinement: confinement.into(),
+            sockets_with_a_path_reachable: false,
             sandbox: crate::sandbox_command::Sandboxed::at_start(),
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
@@ -2152,6 +2157,12 @@ impl Session {
     /// Start under the mode a `/resume` carried over, which is the one the person last chose.
     pub fn with_sandbox(mut self, sandbox: crate::sandbox_command::Sandboxed) -> Self {
         self.sandbox = sandbox;
+        self
+    }
+
+    /// The session, told whether this kernel leaves sockets with a path reachable from a stage.
+    pub fn with_sockets_with_a_path_reachable(mut self, reachable: bool) -> Self {
+        self.sockets_with_a_path_reachable = reachable;
         self
     }
 

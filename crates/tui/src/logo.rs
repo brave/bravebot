@@ -203,6 +203,9 @@ fn mark_row(stops: &[Rgb; 3], index: usize, row: &str, face: &[Span<'static>]) -
 /// `mode` is the sandbox mode in force, which `/sandbox` can change, so the opening screen names the
 /// mode the next turn runs under and not the one the process started with (SANDBOX-22).
 ///
+/// `sockets_with_a_path_reachable` says this kernel leaves every unix socket that has a path open to
+/// a stage, which the screen says under `standard` (SANDBOX-3).
+///
 /// `tier` says whether this build can reach the premium host, and is deliberately about the
 /// configuration rather than about the credentials: a batch on disk may be expired, exhausted, or
 /// issued for another environment, so finding one would not settle the tier either. What was
@@ -214,6 +217,7 @@ fn mark_row(stops: &[Rgb; 3], index: usize, row: &str, face: &[Span<'static>]) -
 pub fn lines(
     confinement: &str,
     mode: bravebot_sandbox::SandboxMode,
+    sockets_with_a_path_reachable: bool,
     tier: &str,
     width: u16,
     available: u16,
@@ -224,6 +228,7 @@ pub fn lines(
         network_shown(bravebot_config::run_network(), mode),
         bravebot_config::settled_sandbox_filesystem()
             .is_some_and(|settled| !settled.lists.is_empty()),
+        crate::status::sockets_with_a_path_open(sockets_with_a_path_reachable, mode),
         width,
         available,
     )
@@ -242,14 +247,15 @@ fn network_shown(
 }
 
 /// [`lines`] for a session whose programs have `network`, which is named under the tier where it is
-/// not open, and which says where the person wrote filesystem rules. Said here and not only in
-/// `/status` because each changes what a command can do, and a session that set one should not have
-/// to be asked.
+/// not open, and which says where the person wrote filesystem rules and where its programs reach
+/// every unix socket that has a path. Said here and not only in `/status` because each changes what
+/// a command can do, and a session that set one should not have to be asked.
 pub fn lines_with_network(
     confinement: &str,
     tier: &str,
     network: bravebot_sandbox::network::Network,
     filesystem_rules: bool,
+    sockets_open: bool,
     width: u16,
     available: u16,
 ) -> Vec<Line<'static>> {
@@ -308,6 +314,15 @@ pub fn lines_with_network(
             ),
         ]));
     }
+    if sockets_open {
+        lines.push(Line::from(vec![
+            Span::raw(INDENT),
+            Span::styled(
+                t!(opening_path_sockets_reachable).to_string(),
+                Style::default().fg(theme::muted()),
+            ),
+        ]));
+    }
 
     lines
 }
@@ -335,6 +350,7 @@ mod tests {
         lines(
             "kernel-enforced",
             bravebot_sandbox::SandboxMode::Standard,
+            false,
             "premium available",
             width,
             available,
@@ -408,6 +424,7 @@ mod tests {
                 "premium available",
                 Network::Open,
                 rules,
+                false,
                 WIDE,
                 24,
             )
@@ -430,6 +447,7 @@ mod tests {
                 "kernel-enforced",
                 "premium available",
                 network,
+                false,
                 false,
                 WIDE,
                 24,
@@ -461,6 +479,40 @@ mod tests {
             network_shown(Network::Closed, SandboxMode::Off),
             Network::Open
         );
+    }
+
+    /// SANDBOX-3: a session whose programs reach every unix socket that has a path says so on the
+    /// screen it opens on, under `standard` alone. The regressions it rejects: no word on such a
+    /// kernel, the line on a kernel that governs the sockets, and the line under `strict`, which
+    /// refuses the stage, or under `off`, which confines nothing.
+    #[test]
+    fn reachable_sockets_with_a_path_are_named_on_the_opening_screen_under_standard_alone() {
+        use bravebot_sandbox::SandboxMode;
+        let drawn = |mode, reachable| {
+            lines(
+                "kernel-enforced",
+                mode,
+                reachable,
+                "premium available",
+                WIDE,
+                24,
+            )
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+        };
+        let said = t!(opening_path_sockets_reachable).to_string();
+        let open = drawn(SandboxMode::Standard, true);
+        assert!(open.contains(&said), "{open}");
+        for (mode, reachable) in [
+            (SandboxMode::Standard, false),
+            (SandboxMode::Strict, true),
+            (SandboxMode::Off, true),
+        ] {
+            let screen = drawn(mode, reachable);
+            assert!(!screen.contains("socket"), "{mode} {reachable}: {screen}");
+        }
     }
 
     /// A pane too narrow for the mark still has to say what the platform offers, since dropping
@@ -685,6 +737,7 @@ mod tests {
             "kernel-enforced",
             "premium available",
             bravebot_sandbox::network::Network::Open,
+            false,
             false,
             width,
             24,
