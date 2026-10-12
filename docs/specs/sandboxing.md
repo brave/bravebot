@@ -2444,7 +2444,7 @@ not built is marked where it appears.
 **What a stage reads on Linux and macOS is the machine except where a credential sits.** The
 network is unchanged, so a token a program can read is a token it can send to any host the plan
 lets it reach, which is why the files a tool reads by name to do its job (`~/.config/gh`,
-`~/.npmrc`, `~/.vault-token` and the rest [SANDBOX-12](#SANDBOX-12) names) are
+`~/.git-credentials`, `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.pypirc`) are
 readable and the table is what the account would not want a script to read at all. The rest of this
 section describes the keyed lists, which are what a stage on Windows and an MCP server start from.
 
