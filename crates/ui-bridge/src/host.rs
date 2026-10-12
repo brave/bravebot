@@ -42,7 +42,7 @@ pub const MAX_LINE: usize = 8 * 1024 * 1024;
 /// The connection being served, and where its lines go. Empty between clients.
 struct Attached {
     connection: u64,
-    writer: Box<dyn Write + Send>,
+    writer: UnixStream,
 }
 
 type Sink = Arc<Mutex<Option<Attached>>>;
@@ -155,10 +155,7 @@ impl Host {
         let writer = channel.try_clone()?;
         writer.set_write_timeout(Some(WRITE_PATIENCE))?;
         if let Ok(mut output) = self.output.lock() {
-            *output = Some(Attached {
-                connection,
-                writer: Box::new(writer),
-            });
+            *output = Some(Attached { connection, writer });
         }
         self.bridge.ready();
 
@@ -166,6 +163,8 @@ impl Host {
         let ended = loop {
             let line = match read_line(&mut reader) {
                 Ok(Next::Line(line)) => line,
+                // A write that failed shut the channel to end this read; say why.
+                Ok(Next::End) | Err(_) if !self.attached(connection) => break Ended::Unwritable,
                 Ok(Next::End) | Err(_) => break Ended::Closed,
                 Ok(Next::Oversized) => break Ended::Oversized,
             };
@@ -408,7 +407,7 @@ fn write_line(output: &Sink, connection: u64, value: &Value) {
         None => false,
     };
     if failed {
-        *output = None;
+        give_up_on(&mut output);
     }
 }
 
@@ -437,7 +436,16 @@ fn write_event(output: &Sink, owners: &Owners, event: &Event) {
         None => false,
     };
     if failed {
-        *output = None;
+        give_up_on(&mut output);
+    }
+}
+
+/// The client reads nothing or is gone. Shut the channel so that the thread reading it sees the
+/// end and loses the connection's sessions: left open, the controller would be taken to be there
+/// and a question would wait for an answer nobody can read.
+fn give_up_on(output: &mut Option<Attached>) {
+    if let Some(attached) = output.take() {
+        let _ = attached.writer.shutdown(std::net::Shutdown::Both);
     }
 }
 
@@ -484,6 +492,7 @@ fn read_line(reader: &mut BufReader<UnixStream>) -> io::Result<Next> {
 mod tests {
     use super::*;
     use bravebot_sandbox::inspection::Inspection;
+    use std::io::Read;
 
     /// A refusal the kernel did not make is not a protected channel, and a platform with no switch
     /// is a different thing from one whose switch failed.
@@ -493,5 +502,43 @@ mod tests {
         assert_eq!(inspection_report(Inspection::NotOffered), Ok("not_offered"));
         let failed = inspection_report(Inspection::Failed(1)).expect_err("a failure");
         assert!(failed.contains("non-dumpable"), "{failed}");
+    }
+
+    /// A client that reads nothing is treated as gone when a write to it gives up. The thread
+    /// that reads the channel is told by the end of its input, so the connection is lost and a
+    /// question its session asks is refused, and not left waiting for an answer nobody can read.
+    #[test]
+    fn a_write_that_gives_up_ends_the_connection_the_host_is_reading() {
+        let (host_end, _client_end) = UnixStream::pair().unwrap();
+        host_end
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let writer = host_end.try_clone().unwrap();
+        writer
+            .set_write_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let mut filling = writer.try_clone().unwrap();
+        let chunk = [b'x'; 64 * 1024];
+        while filling.write(&chunk).is_ok() {}
+        let sink: Sink = Arc::new(Mutex::new(Some(Attached {
+            connection: 1,
+            writer,
+        })));
+        let owners: Owners = Arc::new(Mutex::new(HashMap::new()));
+
+        write_event(&sink, &owners, &Event::global("agent.ready", json!({})));
+
+        assert!(
+            sink.lock().unwrap().is_none(),
+            "the connection stayed attached"
+        );
+        let mut read = [0u8; 1];
+        assert_eq!(
+            (&host_end)
+                .read(&mut read)
+                .expect("the read ended, not timed out"),
+            0,
+            "the channel was left open for reading"
+        );
     }
 }

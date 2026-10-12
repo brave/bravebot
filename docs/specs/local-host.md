@@ -116,7 +116,7 @@ When a connection ends, the turn or run each of its sessions has going is cancel
 <a id="HOST-8"></a>
 ### HOST-8: a request line has a limit
 
-A write to a client that waits more than five seconds, or fails, ends the connection: requests already read are not executed after that, because nobody can hear their answers. A client that reads nothing therefore cannot stop the host reading the connection and seeing it end. The answer to a `session.close` is written before the `session.closed` that follows it.
+A write to a client that waits more than five seconds, or fails, ends the connection: requests already read are not executed after that, because nobody can hear their answers. The channel is shut when the write gives up, so the host's read of it ends and the connection is lost even if the client sends nothing more. A client that reads nothing therefore cannot stop the host reading the connection and seeing it end. The answer to a `session.close` is written before the `session.closed` that follows it.
 
 A request line is at most 8 MiB, newline excluded. A line that reaches the limit without ending ends the connection without being answered or dispatched. A line of exactly the limit is read. Bytes that arrive without their end of line before the client closes its end are not a request and are not run.
 
@@ -124,6 +124,7 @@ A request line is at most 8 MiB, newline excluded. A line that reaches the limit
 `verified-by: bravebot_ui_bridge::host::a_request_at_the_limit_is_read`
 `verified-by: bravebot_ui_bridge::host::a_last_line_with_no_newline_is_not_run`
 `verified-by: bravebot_ui_bridge::host::a_client_that_never_reads_does_not_wedge_the_host`
+`verified-by: bravebot_ui_bridge::host::a_write_that_gives_up_ends_the_connection_the_host_is_reading`
 `verified-by: bravebot_ui_bridge::host_process::quit_stops_the_host_while_a_client_is_connected`
 `verified-by: bravebot_ui_bridge::host_process::a_line_of_input_that_is_not_text_does_not_stop_the_host`
 `verified-by: bravebot_ui_bridge::host_process::a_client_path_that_is_not_utf8_is_not_a_panic`
