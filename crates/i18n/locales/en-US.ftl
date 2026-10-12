@@ -3021,6 +3021,8 @@ paste-invisible-removed = { $count ->
     [one] removed { $count } invisible character from that paste
    *[other] removed { $count } invisible characters from that paste
     }
+drop-name-not-written =
+    a dropped file's name holds a control character or one a terminal draws as nothing, so no path was written into the command
 kilobytes = { $size } KB
 megabytes = { $size } MB
 gigabytes = { $size } GB

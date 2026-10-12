@@ -143,7 +143,22 @@ what was attached to it. Dispatching a slash command counts as sending it: the l
 box with what it named, so nothing is left staged behind a box that no longer names it.
 
 A line armed for the shell (`!`) has no markers. A file dropped onto it is written as its path and
-nothing is staged, because the shell is handed the line as it stands.
+nothing is staged, because the shell is handed the line as it stands. Each path is one word of the
+line: a path made only of ASCII letters, digits and `_@+:,./-` is written as it is, and any other
+is put in single quotes, with each `'` and `\` in it written outside them as `\'` and `\\`. A drop
+any of whose names holds a control character, or a character [PASTE-10](pasting.md#PASTE-10)
+removes from a paste, writes none of its paths, and the person is told why.
+
+**Why.** A file's name is chosen by whoever made the file, which can be a repository, an archive or
+a download, and recognising the drop undoes the terminal's own escaping ([DROP-7](#DROP-7)). Written
+bare, a space splits the name into several words and a `;`, `|`, `$(...)` or backtick in it runs a
+command nobody typed. A backslash is kept out of the quotes because fish reads `\'` and `\\` inside
+single quotes as escapes where a POSIX shell does not. `=` and `%` are quoted too: a word holding
+`=` can be an assignment, zsh expands one starting with `=` to a program's path, and fish expands
+`%self`. Taking an invisible or control character out of a name would name another file, and leaving
+it in would let the line run something the box does not show, which for a carriage return is a
+newline. The whole drop is refused rather than the one name, because a command missing a file it was
+dropped with is not the command the person made.
 
 `verified-by: bravebot_tui::drop::several_files_dropped_together_each_get_a_marker`
 `verified-by: bravebot_tui::drop::a_second_drop_gets_its_own_number`
@@ -153,6 +168,12 @@ nothing is staged, because the shell is handed the line as it stands.
 `verified-by: bravebot_tui::app::dispatching_a_command_clears_what_was_dropped_on_its_line`
 `verified-by: bravebot_tui::app::a_command_line_whose_dropped_marker_was_deleted_carries_no_file`
 `verified-by: bravebot_tui::app::a_file_dropped_onto_a_shell_line_is_run_as_its_path`
+`verified-by: bravebot_tui::app::a_dropped_name_with_a_space_reaches_the_shell_as_one_word`
+`verified-by: bravebot_tui::app::a_dropped_name_holding_shell_syntax_runs_none_of_it`
+`verified-by: bravebot_tui::app::a_quote_in_a_dropped_name_does_not_end_its_quoting`
+`verified-by: bravebot_tui::app::a_dropped_name_holding_an_invisible_character_writes_nothing_and_says_why`
+`verified-by: bravebot_tui::app::a_drop_with_a_control_character_in_a_name_writes_none_of_its_paths`
+`verified-by: bravebot_tui::dropped::a_path_is_quoted_for_the_shell_only_when_it_needs_to_be`
 `verified-by: bravebot_tui::drop::a_drop_leaves_room_after_itself`
 
 <a id="DROP-7"></a>
@@ -294,6 +315,14 @@ narrowed to pastes rather than removed.
   string on the wire, and no check over a pipe tells them apart. A front end that mints one
   carelessly grants its session a trusted, unconfined read of that file, which is the grant the
   terminal's gesture buys and the only thing the bridge cannot ask for evidence of.
+- **A path on a shell line is quoted the way a POSIX shell and fish read quotes.** `$SHELL` is
+  whatever the person runs, and a shell with other quoting rules, such as nushell or PowerShell, can
+  read a dropped name holding a `'` or a `\` as something other than one word naming the file. csh
+  and tcsh expand `!` inside single quotes, so there a line naming a file with `!` in it fails to
+  run.
+- **The word is written for the place a word starts.** A drop is written at the caret whatever the
+  line before it holds, so a file dropped inside a quote the person opened lands in that quote, where
+  its own quoting does not hold.
 - **A screenshot somebody sent you is content you have not read and are vouching for.** It goes
   into the turn as trusted input, on the strength of the gesture alone. Be as careful about a drop
   as about answering yes to a directory.
