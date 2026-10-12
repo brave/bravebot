@@ -875,6 +875,33 @@ least likely to remember what it was doing, and the first thing they would do is
 `verified-by: bravebot_config::settings::only_a_boolean_turns_the_away_recap_off`
 `verified-by: bravebot_config::settings::the_away_recap_switch_is_among_the_names_reported`
 
+<a id="CMD-21"></a>
+### CMD-21: `/effort` spells out its levels after the word, and Tab finishes one
+
+Once `/effort ` is typed, the box draws the five levels it takes, `low`, `medium`, `high`, `xhigh`
+and `max`, after the caret in place of `[level]`. The completion list keeps `[level]` in the table,
+because every row's description starts after the longest word in the list and a spelled-out hint
+would push all of them to the right. `--help` prints the spelled-out form. Both are built from the
+set of levels the program accepts, so a level added there appears in both.
+
+Tab after `/effort ` and the start of a level, with the caret at the end of the line, replaces the
+start with the level it fits, so `/effort h` becomes `/effort high`. A start that fits several
+levels is carried as far as they agree and no further, so `m`, which fits `medium` and `max`, is left
+as typed. A finished level, a word that fits none, a bare `/effort `, another command, a prompt that
+only mentions `/effort`, and a line in shell mode are left as typed. Tab never submits the line.
+
+Nothing from the conversation reaches either. They read the typed line and the fixed set of levels.
+
+**Why.** The words a command takes are what a person cannot guess, and `[level]` did not say them.
+Completing a start from the same set the command accepts keeps the hint, the completion and the
+refusal for an unknown word in step.
+
+`verified-by: bravebot_tui::render::the_effort_command_offers_its_levels_after_its_word`
+`verified-by: bravebot_tui::app::the_effort_hint_lists_every_level_and_the_list_stays_short`
+`verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
+`verified-by: bravebot_tui::app::tab_finishes_a_level_started_after_the_effort_command`
+`verified-by: bravebot_tui::app::tab_leaves_alone_a_start_it_cannot_finish`
+
 ## Known costs
 
 - **The list is one row per command and per skill, and a screen with no room for it loses the
