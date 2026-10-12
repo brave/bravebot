@@ -3000,14 +3000,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
 /// value on a later line is as visible as one on the first. Several lines are drawn as the first
 /// and "...", because a transcript row is one row.
 fn command_as_drawn(line: &str) -> String {
-    let declared = bravebot_core::credentials::scan(
-        "the command line",
-        line,
-        bravebot_core::credentials::run_salt(),
-    )
-    .iter()
-    .any(|finding| finding.kind.is_declared());
-    if declared {
+    if declares_a_credential("the command line", line) {
         return String::new();
     }
     let mut lines = line.lines().map(str::trim).filter(|line| !line.is_empty());
@@ -3019,14 +3012,72 @@ fn command_as_drawn(line: &str) -> String {
     }
 }
 
+/// Whether `text` carries a value that declared itself a credential, on any of its lines.
+fn declares_a_credential(what: &str, text: &str) -> bool {
+    bravebot_core::credentials::scan(what, text, bravebot_core::credentials::run_salt())
+        .iter()
+        .any(|finding| finding.kind.is_declared())
+}
+
+/// How a call to a server's tool is drawn: `alias:tool`, then the arguments the server is sent,
+/// as compact JSON. Compact JSON escapes a line break inside a value, so the arguments are one
+/// row as they stand.
+///
+/// They are left off where any string in them, a key or a value, carries a value that declared
+/// itself a credential, since a transcript is one of the places CRED-11 keeps one out of. Each
+/// string is scanned as it is rather than as JSON spells it: the escaping takes the line breaks
+/// out of a private key's armour, and the armour is how the scan recognises one.
+fn server_call_as_drawn(named: &str, compact: &str) -> String {
+    let parsed: Value = serde_json::from_str(compact).unwrap_or(Value::Null);
+    let mut strings = Vec::new();
+    strings_in(&parsed, &mut strings);
+    if declares_a_credential("the arguments", &strings.join("\n")) {
+        return named.to_string();
+    }
+    format!("{named} {compact}")
+}
+
+/// Every key and string value in `value`, at any depth.
+fn strings_in<'a>(value: &'a Value, into: &mut Vec<&'a str>) {
+    match value {
+        Value::String(text) => into.push(text),
+        Value::Array(items) => items.iter().for_each(|item| strings_in(item, into)),
+        Value::Object(pairs) => pairs.iter().for_each(|(key, item)| {
+            into.push(key);
+            strings_in(item, into);
+        }),
+        _ => {}
+    }
+}
+
+/// `alias:tool` from the wire name a server's tool was offered under, less its `mcp__`.
+///
+/// An alias and a tool word may each hold `__`, so a name that can be divided in more than one
+/// place is drawn as it was offered rather than divided at a guess.
+fn server_named(wire: &str) -> String {
+    let dividers = wire
+        .as_bytes()
+        .windows(2)
+        .filter(|pair| *pair == b"__")
+        .count();
+    match wire.split_once("__") {
+        Some((alias, tool)) if dividers == 1 => format!("{alias}:{tool}"),
+        _ => wire.to_string(),
+    }
+}
+
 /// What a call is about, for the line shown while it runs.
 ///
 /// Which argument names the target depends on the tool, so the key is chosen from the tool's
 /// own name. The value is the model's word for it, released to a screen and nowhere else: it
 /// goes on a line a person reads and is never compared, matched, or routed anywhere.
+///
+/// `server` is `alias:tool` where the call is to a server's tool. A server is sent the whole of
+/// the arguments, so the whole of them is what such a call is about.
 fn target_of<S: Sink>(
     policy: &mut Policy<'_, S>,
     tool: &str,
+    server: Option<&str>,
     slots: &SlotStore,
     arguments: &Value,
 ) -> String {
@@ -3046,19 +3097,24 @@ fn target_of<S: Sink>(
     let named = if tool == "spawn_processor" {
         references_in(arguments)
     } else {
-        let Some(key) = target_key(tool) else {
-            return String::new();
-        };
-
-        // A call that named a reference instead of a path says so with the reference, which is
-        // then resolved below: it is the planner that cannot know the name, not the person.
-        let key = if !names(arguments, key) && names(arguments, "path_ref") {
-            "path_ref"
+        let text = if server.is_some() {
+            Some(arguments.to_string())
         } else {
-            key
+            let Some(key) = target_key(tool) else {
+                return String::new();
+            };
+
+            // A call that named a reference instead of a path says so with the reference, which
+            // is then resolved below: it is the planner that cannot know the name, not the person.
+            let key = if !names(arguments, key) && names(arguments, "path_ref") {
+                "path_ref"
+            } else {
+                key
+            };
+            target_text(arguments, key)
         };
 
-        match target_text(arguments, key) {
+        match text {
             Some(text) => Labelled::new(text, bravebot_core::label::Label::untrusted_public()),
             None => return String::new(),
         }
@@ -3074,6 +3130,10 @@ fn target_of<S: Sink>(
     // there is nothing left here to test it for.
     let display_names = policy.names_for_display(slots);
     let shaped = policy.render_in_place(tool, &named, |text| {
+        // A server is sent a reference as the planner wrote it, so it is drawn as written too.
+        if let Some(server) = server {
+            return server_call_as_drawn(server, &text);
+        }
         let text = if tool == "run" {
             command_as_drawn(&text)
         } else {
@@ -3127,7 +3187,12 @@ pub fn stored_why(arguments: &str) -> String {
 pub fn describe_stored_call(tool: &str, arguments: &str) -> String {
     let parsed: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
 
-    let target = if tool == "spawn_processor" {
+    let target = if let Some(wire) = tool.strip_prefix("mcp__") {
+        // A call whose arguments are not JSON is announced as the verb alone, since it never runs.
+        serde_json::from_str::<Value>(arguments)
+            .map(|parsed| server_call_as_drawn(&server_named(wire), &parsed.to_string()))
+            .unwrap_or_default()
+    } else if tool == "spawn_processor" {
         let names: Vec<&str> = parsed
             .get("reads")
             .and_then(Value::as_array)
@@ -3324,10 +3389,10 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             .find(&name)
             .map(|(alias, tool)| (offer, alias.to_string(), tool.to_string()))
     });
-    let target = match &server_tool {
-        Some((_, alias, tool)) => format!("{alias}:{tool}"),
-        None => target_of(policy, &name, tools.slots, &arguments),
-    };
+    let server = server_tool
+        .as_ref()
+        .map(|(_, alias, tool)| format!("{alias}:{tool}"));
+    let target = target_of(policy, &name, server.as_deref(), tools.slots, &arguments);
     // `load_tool` is offered only where a turn defers its server tools, so a definition's `tools:`
     // line cannot name it and `--tools` cannot take it away: a `tools:` line without `mcpServers:`
     // selects no server, and with either holding the server's tools back the offer is not deferred.
@@ -13598,6 +13663,7 @@ mod tests {
                 target_of(
                     &mut policy,
                     "read_file",
+                    None,
                     &slots,
                     &json!({"path_ref": "ref:1"}),
                 )
@@ -13652,6 +13718,98 @@ mod tests {
                     r#"{"command":"echo start\nprintf AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"}"#
                 ),
                 "Run"
+            );
+        }
+
+        /// A session read back off disk draws a call to a server's tool as the live one was
+        /// drawn: the server, the tool and the arguments the server was sent, on one row however
+        /// the record spaced them. Arguments carrying a credential are left off, including a
+        /// private key whose armour only reads as one with its line breaks in place.
+        #[test]
+        fn a_stored_call_to_a_servers_tool_shows_what_it_sent_but_not_a_credential() {
+            let drawn = |tool: &str, arguments: &str| describe_stored_call(tool, arguments);
+            let forecast = "mcp__weather__get_forecast";
+
+            assert_eq!(
+                drawn(forecast, r#"{"city":"Lyon"}"#),
+                r#"MCP(weather:get_forecast {"city":"Lyon"})"#
+            );
+            assert_eq!(
+                drawn(forecast, "{\n  \"city\": \"Lyon\",\n  \"days\": [1, 2]\n}"),
+                r#"MCP(weather:get_forecast {"city":"Lyon","days":[1,2]})"#
+            );
+            assert_eq!(
+                drawn(forecast, r#"{"city":"Lyon","key":"AKIAIOSFODNN7EXAMPLE"}"#),
+                "MCP(weather:get_forecast)"
+            );
+            let armoured = format!(
+                "-----BEGIN {kind} KEY-----\nbm90IGEga2V5\n-----END {kind} KEY-----\n",
+                kind = "RSA PRIVATE"
+            );
+            assert_eq!(
+                drawn(
+                    forecast,
+                    &json!({"city": "Lyon", "key": armoured}).to_string()
+                ),
+                "MCP(weather:get_forecast)"
+            );
+            assert_eq!(
+                drawn("mcp__my__weather__get_forecast", r#"{"city":"Lyon"}"#),
+                r#"MCP(my__weather__get_forecast {"city":"Lyon"})"#
+            );
+            assert_eq!(drawn(forecast, "{\"city\":"), "MCP");
+        }
+
+        /// A live call to a server's tool is drawn with the arguments as the server is sent them.
+        /// A reference stays the reference the planner wrote, since the server receives that
+        /// and not the file it stands for, and the arguments are shaped inside the kernel before
+        /// they are released to the screen.
+        #[test]
+        fn a_servers_call_is_drawn_with_the_arguments_it_is_sent() {
+            use bravebot_core::capability::{Capability, CapabilitySet};
+            use bravebot_core::event::RecordingSink;
+            use bravebot_core::policy::{ReleasePlan, Routing};
+
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "send the notes");
+
+            let mut sink = RecordingSink::new();
+            let line = {
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut slots = SlotStore::new();
+                policy
+                    .defer(
+                        "read_file",
+                        SlotId::new("ref:1"),
+                        "notes.md",
+                        &Labelled::trusted("notes.md".to_string()),
+                        7,
+                        &mut slots,
+                    )
+                    .expect("the file is reserved");
+
+                target_of(
+                    &mut policy,
+                    "mcp__notes__send",
+                    Some("notes:send"),
+                    &slots,
+                    &json!({"body": "ref:1", "to": "ops"}),
+                )
+            };
+
+            assert_eq!(line, r#"notes:send {"body":"ref:1","to":"ops"}"#);
+            let reshaped = super::gate_at(&sink, "render", "mcp__notes__send");
+            let released = super::gate_at(&sink, "display", "what a tool is working on");
+            assert!(
+                reshaped < released,
+                "the arguments were released before they were shaped: {:?}",
+                sink.events()
             );
         }
     }
