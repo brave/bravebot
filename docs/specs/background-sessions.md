@@ -89,6 +89,10 @@ background session has none of those ([Not decided](#not-decided)). The backgrou
 its sandbox mode from the settings and the managed file as start-up did
 ([SANDBOX-22](sandboxing.md#SANDBOX-22)), so a session moved to `strict` would go on in `standard`
 with nothing said; the refusal names both modes and the `/sandbox` line that moves the session back.
+The background process reads the settings of the directory the session is in when `/bg` is typed,
+and the check compares with the mode start-up chose, so after `/cd` into or out of a checkout whose
+settings choose another mode the session is handed over and goes on in the mode that checkout's
+settings choose, with nothing said.
 
 Nothing else starts one. The planner has no tool for it, a delegate cannot, and neither can a hook,
 a loop tick, a watch or a file the session read. A prompt that arrived on a pipe is untrusted input
