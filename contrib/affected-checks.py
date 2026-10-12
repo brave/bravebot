@@ -76,7 +76,7 @@ PACKAGE_FILES = (
 
 # Read by nothing heavier than the checks that always run.
 QUIET = (
-    "README.md", "CHANGELOG.md", "LICENSE", ".gitignore", ".envrc.example",
+    "README.md", "CHANGELOG.md", "LICENSE", "SECURITY.md", ".gitignore", ".envrc.example",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
 QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
@@ -337,6 +337,7 @@ CASES = (
     ("agents/skills/rebase/SKILL.md", NOTHING),
     ("contrib/check-locales.py", NOTHING),
     ("README.md", NOTHING),
+    ("SECURITY.md", NOTHING),
 )
 
 # One crate reached each way a manifest can name another, one reached only through another, and
