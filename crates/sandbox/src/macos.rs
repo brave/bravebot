@@ -363,6 +363,9 @@ impl Sandbox for SeatbeltSandbox {
             // not there yet is named in one and the file can be created afterwards.
             grants_paths_that_do_not_exist: true,
             subtracts_from_a_grant: true,
+            // A connect to a socket is network egress there, so a stage without egress reaches
+            // none by path, and one with egress is held to the socket paths its profile names.
+            governs_path_socket_connects: true,
         }
     }
 

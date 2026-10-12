@@ -395,6 +395,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant,
+            governs_path_socket_connects: true,
         }
     }
 

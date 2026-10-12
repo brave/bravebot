@@ -335,6 +335,9 @@ fn capabilities() -> Capabilities {
         // A grant is written onto an object with everything beneath it, and nothing narrower
         // than the grant can be taken from it, so `refusal_for` starts no stage holding a refusal.
         subtracts_from_a_grant: false,
+        // The gap is Landlock's: unix sockets by path are objects with an access list, which a
+        // container is denied unless the list names it.
+        governs_path_socket_connects: true,
     }
 }
 

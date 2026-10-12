@@ -267,6 +267,8 @@ impl Sandbox for Unavailable {
             // would be a claim about a process this backend never starts.
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
+            // No process is started, so no socket is reached.
+            governs_path_socket_connects: true,
         }
     }
 

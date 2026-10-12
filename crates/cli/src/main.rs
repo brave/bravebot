@@ -3135,7 +3135,7 @@ fn interactive(
     // code we did not write, which is an MCP server this session starts and nothing else it runs.
     // Read once here because the answer cannot change while the session runs.
     let confinement = match bravebot_sandbox::for_current_platform() {
-        Ok(sandbox) => named(sandbox.capabilities().level),
+        Ok(sandbox) => offered_confinement(&sandbox.capabilities()),
         Err(_) => named(bravebot_sandbox::policy::ConfinementLevel::None),
     };
 
@@ -3217,6 +3217,18 @@ fn resume_hint(left: &Resumable, started_in: &Path) -> String {
         ),
     };
     format!("{heading}\nbravebot --resume {}", left.id)
+}
+
+/// The level the opening screen and `/status` report for what the platform offers, with the one
+/// gap a person choosing `standard` has to know of: where the kernel does not govern a connect to a
+/// unix socket that has a path, a confined program reaches the user's D-Bus, the SSH agent and
+/// `docker.sock`.
+fn offered_confinement(capabilities: &Capabilities) -> String {
+    let level = named(capabilities.level);
+    match capabilities.governs_path_socket_connects {
+        true => level,
+        false => t!(confinement_with_reachable_path_sockets, level = level).to_string(),
+    }
 }
 
 /// What to call the confinement that was achieved.
@@ -5134,6 +5146,15 @@ fn confinement(found: Result<Capabilities, SandboxError>) -> Confinement {
                 t!(doctor_confinement, level = named(caps.level)).to_string(),
                 aligned(t!(doctor_mechanisms), caps.mechanisms.join(", "), DETAIL),
                 aligned(
+                    t!(doctor_path_sockets),
+                    if caps.governs_path_socket_connects {
+                        t!(doctor_path_sockets_governed)
+                    } else {
+                        t!(doctor_path_sockets_reachable)
+                    },
+                    DETAIL,
+                ),
+                aligned(
                     t!(doctor_network_denial),
                     if caps.network_denial_enforced {
                         t!(doctor_kernel_enforced)
@@ -5426,8 +5447,68 @@ mod tests {
             // Nothing `doctor` prints depends on this, so the report reads the same either way.
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
+            governs_path_socket_connects: true,
         }))
         .lines
+    }
+
+    /// The opening screen and `/status` carry the level a person reads before trusting `standard`.
+    /// A kernel that leaves sockets with a path reachable has to read differently from one that
+    /// governs them, and the level word has to stay in the line either way.
+    #[test]
+    fn the_offered_confinement_says_where_sockets_with_a_path_are_reachable() {
+        let offered = |governs_path_socket_connects| {
+            offered_confinement(&Capabilities {
+                level: ConfinementLevel::Partial,
+                mechanisms: vec!["a mechanism"],
+                network_denial_enforced: true,
+                egress_limited_to_a_port: false,
+                grants_paths_that_do_not_exist: false,
+                subtracts_from_a_grant: true,
+                governs_path_socket_connects,
+            })
+        };
+
+        assert_eq!(offered(true), named(ConfinementLevel::Partial));
+        let exposed = offered(false);
+        assert_ne!(exposed, offered(true));
+        assert!(
+            exposed.contains(&named(ConfinementLevel::Partial)),
+            "the level is missing from the line that reports the gap: {exposed}"
+        );
+    }
+
+    /// Below Landlock ABI 9 a confined program reaches every unix socket that has a path, which
+    /// includes the user's D-Bus, the SSH agent and `docker.sock`. `doctor` is where somebody
+    /// learns that before trusting `standard`, so the two states must read differently and the
+    /// reachable one must name what is reachable.
+    #[test]
+    fn doctor_says_whether_sockets_with_a_path_are_governed() {
+        let report = |governs_path_socket_connects| {
+            confinement(Ok(Capabilities {
+                level: ConfinementLevel::Partial,
+                mechanisms: vec!["a mechanism"],
+                network_denial_enforced: true,
+                egress_limited_to_a_port: false,
+                grants_paths_that_do_not_exist: false,
+                subtracts_from_a_grant: true,
+                governs_path_socket_connects,
+            }))
+            .lines
+            .join("\n")
+        };
+
+        let governed = report(true);
+        let ungoverned = report(false);
+        assert_ne!(governed, ungoverned);
+        assert!(
+            ungoverned.contains("docker.sock") && ungoverned.contains("ABI 9"),
+            "the reachable state does not say what is reachable: {ungoverned}"
+        );
+        assert!(
+            !governed.contains("docker.sock"),
+            "a kernel that governs path sockets is reported as exposing them: {governed}"
+        );
     }
 
     /// The guarantee genuinely differs by platform and kernel, so which of the three is in force
@@ -8340,6 +8421,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant,
+            governs_path_socket_connects: true,
         };
         let cannot = t!(sandbox_rule_cannot_subtract).to_string();
         let flag = t!(doctor_sandbox_filesystem_source_flag);

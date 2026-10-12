@@ -143,7 +143,11 @@ egress also reaches the resolver's socket, which every host name lookup goes thr
 socket rule holds on a kernel carrying Landlock ABI version 9. Below it every socket that has a
 path is reachable whatever the policy names, which includes the user's D-Bus (where
 `systemd-run --user` starts a program outside the sandbox), the agent `SSH_AUTH_SOCK` names (every
-key it holds) and `docker.sock`. A connect to a socket in the abstract namespace, which has no path,
+key it holds) and `docker.sock`. A stage under the mode `strict` ([SANDBOX-22](#SANDBOX-22)) is
+refused on such a kernel, with a sentence naming the requirement; a stage under `standard` runs, and
+`bravebot doctor`, the opening screen and `/status` say that sockets with a path are reachable. A
+connect to a socket in the abstract
+namespace, which has no path,
 is refused when the socket was made outside the confined process's Landlock domain, on a kernel
 carrying ABI version 6, and is reachable below it. The domain is that of one stage, so a socket made
 by the session or by another stage is refused too. On Linux signals are not scoped. On macOS a
@@ -201,6 +205,12 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_drive_a_device_it_was_granted_for_reading`
 `verified-by: bravebot_sandbox::linux::the_ruleset_handles_every_right_this_crate_knows_of`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_connect_to_an_abstract_socket_made_outside_it`
+`verified-by: bravebot_sandbox::linux::the_path_socket_rule_is_reported_only_from_abi_9`
+`verified-by: bravebot_sandbox::linux::the_reported_capability_follows_this_kernels_abi`
+`verified-by: bravebot_agent::confine::only_a_strict_stage_is_refused_on_a_kernel_that_cannot_govern_path_sockets`
+`verified-by: bravebot_agent::confine::a_strict_stage_is_refused_exactly_where_this_kernel_cannot_govern_path_sockets`
+`verified-by: bravebot_cli::main::doctor_says_whether_sockets_with_a_path_are_governed`
+`verified-by: bravebot_cli::main::the_offered_confinement_says_where_sockets_with_a_path_are_reachable`
 `verified-by: bravebot_sandbox::windows::a_policy_that_did_not_ask_for_the_network_asks_for_no_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_withholding_the_network_is_applied_rather_than_refused`
@@ -424,6 +434,8 @@ code we did not write. Neither reports the session as running inside it, and `/s
 the level what the session confines: the MCP servers it started, where it started a local one, and
 nothing otherwise. Under a sandbox mode other than `standard` ([SANDBOX-22](#SANDBOX-22)) both
 lines say so beside the level: `strict` names itself, and `off` says that programs run unconfined.
+On a Linux kernel below Landlock ABI 9 the level is followed by a note that sockets with a path are
+reachable ([SANDBOX-3](#SANDBOX-3)).
 
 **Why.** The level is a fact about the machine, read before the session opens. What it bounds is a
 process started to run somebody else's code, and a session that starts none of those is inside no

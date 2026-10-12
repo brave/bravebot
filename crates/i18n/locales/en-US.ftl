@@ -673,6 +673,9 @@ doctor-confinement = confinement { $level }
 confinement-kernel = kernel-enforced
 confinement-partial = partial
 confinement-none = none
+# The platform level where the kernel does not govern a connect to a unix socket that has a path
+# (below Landlock ABI 9), so a confined program reaches the user's D-Bus, the SSH agent and docker.sock.
+confinement-with-reachable-path-sockets = { $level }, sockets with a path reachable
 # The platform level, then the sandbox mode a person chose. `off` says what it means because nothing
 # else on the screen shows that a program `run` starts is not confined.
 confinement-with-mode = { $level }, sandbox { $mode }
@@ -681,6 +684,11 @@ doctor-mechanisms = mechanisms
 doctor-network-denial = network denial
 doctor-kernel-enforced = kernel-enforced
 doctor-not-enforced = NOT enforced
+doctor-path-sockets = sockets with a path
+doctor-path-sockets-governed = a connect is limited to the paths the policy writes
+# Shown where the kernel has no Landlock rule for a connect to a unix socket that has a path
+# (below ABI 9), so a confined program can reach whatever listens on one.
+doctor-path-sockets-reachable = reachable (user D-Bus, SSH agent, docker.sock); needs Landlock ABI 9
 doctor-confinement-unavailable = confinement unavailable
 doctor-no-network-namespace = network namespaces: unavailable ({ $reason }). A stage with no network, or held to sandbox.network.allowedHosts, is refused here. Allow unprivileged user namespaces to use either.
 # The network a request actually crosses: which certificate authorities a handshake is validated

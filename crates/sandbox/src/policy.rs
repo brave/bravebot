@@ -688,6 +688,14 @@ pub struct Capabilities {
     /// refusal asks this of the backend, so it does not say a refusal is in force where the stage
     /// it applies to is refused.
     pub subtracts_from_a_grant: bool,
+    /// Whether a connect to a unix socket that has a path is held to the paths a policy names for
+    /// writing.
+    ///
+    /// A backend that does not leaves every such socket reachable whatever the policy names,
+    /// which includes the user's D-Bus, the agent `SSH_AUTH_SOCK` names and `docker.sock`. A
+    /// caller that promises a stage cannot reach them asks this of the backend, so it does not
+    /// promise it on a kernel that cannot deliver it.
+    pub governs_path_socket_connects: bool,
 }
 
 #[cfg(test)]
@@ -819,6 +827,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist,
             subtracts_from_a_grant: true,
+            governs_path_socket_connects: true,
         }
     }
 
@@ -832,6 +841,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
+            governs_path_socket_connects: true,
         }
     }
 

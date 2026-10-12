@@ -1157,6 +1157,7 @@ impl Confinement {
         }
         if let Some(detail) = cannot_close_the_network(&wanted, &capabilities)
             .or_else(|| cannot_hold_to_the_proxy(&wanted, &capabilities))
+            .or_else(|| cannot_govern_path_sockets(self.mode, &capabilities))
         {
             return Err(not_confined(detail));
         }
@@ -1476,6 +1477,29 @@ fn cannot_hold_to_the_proxy(
             .to_string()
     })
 }
+
+/// Why a backend cannot start a stage under `strict`, where the backend does not govern a connect
+/// to a unix socket that has a path, or `None`.
+///
+/// On Linux that is a kernel below Landlock ABI 9. Every socket with a path is then reachable
+/// whatever the policy names, including the user's D-Bus, the agent `SSH_AUTH_SOCK` names and
+/// `docker.sock`, and `strict` promises a stage reaches nothing it was not given. Under `standard`
+/// the stage runs and `bravebot doctor` says the sockets are reachable;
+/// `off` promises nothing. The decision is taken from the mode and the backend's capability alone.
+fn cannot_govern_path_sockets(
+    mode: SandboxMode,
+    capabilities: &bravebot_sandbox::policy::Capabilities,
+) -> Option<String> {
+    (mode == SandboxMode::Strict && !capabilities.governs_path_socket_connects)
+        .then(|| PATH_SOCKETS_UNGOVERNED_REFUSAL.to_string())
+}
+
+/// The sentence a `strict` stage is refused with on a kernel that cannot hold it away from sockets
+/// that have a path.
+const PATH_SOCKETS_UNGOVERNED_REFUSAL: &str = "the sandbox mode is strict and this kernel is below \
+     Landlock ABI 9, which is what holds a program away from unix sockets that have a path, so \
+     the user's D-Bus, the agent SSH_AUTH_SOCK names and docker.sock would be reachable; \
+     upgrade the kernel to one carrying Landlock ABI 9, or choose the standard mode";
 
 /// What a step is started with, once its policy is decided.
 struct Prepared {
@@ -4226,6 +4250,7 @@ mod tests {
             egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: true,
             subtracts_from_a_grant: true,
+            governs_path_socket_connects: true,
         };
         let (cannot, can) = (backend(false), backend(true));
 
@@ -4233,6 +4258,63 @@ mod tests {
         assert!(refused.contains("run.network"), "{refused}");
         assert_eq!(cannot_close_the_network(&denied, &can), None);
         assert_eq!(cannot_close_the_network(&kept, &cannot), None);
+    }
+
+    /// `strict` promises a stage reaches no socket it was not given, so a kernel that cannot hold
+    /// a program away from sockets that have a path refuses the stage, naming the requirement.
+    /// `standard` still runs it (and discloses the gap elsewhere) and `off` promises nothing, so a
+    /// refusal in every mode, or in none, is the fault this distinguishes.
+    #[test]
+    fn only_a_strict_stage_is_refused_on_a_kernel_that_cannot_govern_path_sockets() {
+        use bravebot_sandbox::policy::{Capabilities, ConfinementLevel};
+        let backend = |governs_path_socket_connects| Capabilities {
+            level: ConfinementLevel::Partial,
+            mechanisms: Vec::new(),
+            network_denial_enforced: true,
+            egress_limited_to_a_port: true,
+            grants_paths_that_do_not_exist: true,
+            subtracts_from_a_grant: true,
+            governs_path_socket_connects,
+        };
+        let (cannot, can) = (backend(false), backend(true));
+
+        let refused = cannot_govern_path_sockets(SandboxMode::Strict, &cannot).expect("refused");
+        assert!(refused.contains("Landlock ABI 9"), "{refused}");
+        assert!(refused.contains("docker.sock"), "{refused}");
+        assert!(refused.contains("SSH_AUTH_SOCK"), "{refused}");
+        assert_eq!(cannot_govern_path_sockets(SandboxMode::Strict, &can), None);
+        assert_eq!(
+            cannot_govern_path_sockets(SandboxMode::Standard, &cannot),
+            None
+        );
+        assert_eq!(cannot_govern_path_sockets(SandboxMode::Off, &cannot), None);
+    }
+
+    /// The refusal is made where a stage is prepared, from the mode the confinement holds, so a
+    /// `strict` confinement over a backend that cannot govern the sockets never starts a stage.
+    /// Run only where this machine confines at all, and then on whatever its kernel reports.
+    #[test]
+    fn a_strict_stage_is_refused_exactly_where_this_kernel_cannot_govern_path_sockets() {
+        if Prelude::current().is_none() {
+            return;
+        }
+        let Ok(sandbox) = bravebot_sandbox::for_current_platform() else {
+            return;
+        };
+        let governed = sandbox.capabilities().governs_path_socket_connects;
+        let (session, strict) = a_session("strict-path-sockets");
+        let strict = strict.with_mode(SandboxMode::Strict);
+        let git = step("/usr/bin/git", &["status"]);
+        let result = strict.prepared(&Command::new("/usr/bin/git"), &git, &session);
+        match result {
+            Err(ExecError::NotConfined { detail, .. }) if detail.contains("Landlock ABI 9") => {
+                assert!(!governed, "a kernel that governs the sockets was refused");
+            }
+            _ => assert!(
+                governed,
+                "a kernel that cannot govern the sockets started a strict stage"
+            ),
+        }
     }
 
     /// A session directory under the build directory, which no row of the base reaches, and a
@@ -4700,6 +4782,7 @@ mod tests {
             egress_limited_to_a_port,
             grants_paths_that_do_not_exist: true,
             subtracts_from_a_grant: true,
+            governs_path_socket_connects: true,
         };
         let (unable, able) = (backend(false), backend(true));
 

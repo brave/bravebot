@@ -131,6 +131,19 @@ fn abi_meets_minimum(version: libc::c_long) -> Result<(), SandboxError> {
     Ok(())
 }
 
+/// The Landlock ABI version from which the connect to a unix socket that has a path is governed.
+///
+/// It is the version that added the right to connect to a pathname socket. Below it every such
+/// socket is reachable whatever the policy names.
+const PATH_SOCKET_ABI_VERSION: libc::c_long = 9;
+
+/// Whether a kernel reporting `version` governs a connect to a unix socket that has a path.
+///
+/// A version rather than the syscall, for the reason [`abi_meets_minimum`] is.
+fn abi_governs_path_socket_connects(version: libc::c_long) -> bool {
+    version >= PATH_SOCKET_ABI_VERSION
+}
+
 /// A rule for every path in `paths`, or an error saying how many produced none.
 ///
 /// A Landlock rule is a right attached to an open descriptor, so a path nothing can open
@@ -258,6 +271,8 @@ impl Sandbox for LandlockSandbox {
             // stands for an entry a listing produced is left out instead when its name is gone.
             grants_paths_that_do_not_exist: false,
             subtracts_from_a_grant: true,
+            // Landlock governs the connect to a socket that has a path from ABI 9 only.
+            governs_path_socket_connects: abi_governs_path_socket_connects(landlock_abi_version()),
         }
     }
 
@@ -637,6 +652,34 @@ mod tests {
         assert!(
             AccessFs::from_all(HANDLED_ABI).contains(AccessFs::Truncate),
             "the right that governs emptying a file has to be one the ruleset handles"
+        );
+    }
+
+    /// The kernel this suite runs on reports one ABI version and no test can change it, so the
+    /// decision is made by a function of the version. A kernel below 9 leaves every socket that
+    /// has a path reachable; claiming otherwise would overstate the capability ([SANDBOX-5]).
+    #[test]
+    fn the_path_socket_rule_is_reported_only_from_abi_9() {
+        for version in [-1, 0, 1, 2, 6, 8] {
+            assert!(
+                !abi_governs_path_socket_connects(version),
+                "abi {version} was reported as governing a connect to a socket with a path"
+            );
+        }
+        for version in [9, 10] {
+            assert!(
+                abi_governs_path_socket_connects(version),
+                "abi {version} was reported as not governing a connect to a socket with a path"
+            );
+        }
+    }
+
+    /// The capability a backend reports is the one for the kernel it is on, not a constant.
+    #[test]
+    fn the_reported_capability_follows_this_kernels_abi() {
+        assert_eq!(
+            LandlockSandbox.capabilities().governs_path_socket_connects,
+            abi_governs_path_socket_connects(landlock_abi_version())
         );
     }
 
