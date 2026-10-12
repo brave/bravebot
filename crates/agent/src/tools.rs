@@ -7919,6 +7919,24 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         Err(crate::cmdline::Stopped::Rule(denial)) => return refused_by_a_rule(&denial),
     };
 
+    // A read as well as a write. The rules below are matched against the spelling, and a name
+    // Windows reads as another file would have them judge one file while the run opens the other.
+    // Before the confinement, which cannot say where a stream or a device lands. `> NUL` is how
+    // output is discarded on Windows, so a refused write names the one spelling a line may use for
+    // that; a read has none, since `/dev/null` discards only output.
+    let discard = ". If this was meant to discard output, redirect it to /dev/null instead";
+    for (paths, hint) in [(&plan.writes, discard), (&plan.reads, "")] {
+        for path in paths {
+            if let Err(misleading) = tools.workspace.refuse_misleading(path) {
+                let target = path.display().to_string();
+                return Produced::problem(format!(
+                    "refused: {}{hint}",
+                    workspace_failure(policy, "run", "command", &misleading, &target)
+                ));
+            }
+        }
+    }
+
     // A redirection names a file the run opens itself, so the confinement every other write goes
     // through is applied here to the path.
     for path in &plan.writes {
@@ -17037,6 +17055,55 @@ mod tests {
                 !released_for_display(&sink, "a proposed run directory"),
                 "the directory was released for a screen and branched on from that: {:?}",
                 sink.events()
+            );
+        }
+
+        /// PERM-7: a redirection's target is opened by the run rather than resolved, so it is held
+        /// here to the refusal a file tool's path gets for a name Windows reads as another file, or
+        /// `Edit(.env)` is asked about `ENV~1` while the line overwrites `.env`. The workspace is
+        /// told to answer as Windows does, so the call in `run` is exercised on every host. The
+        /// regressions it rejects are the call left out, a read left out of it, and the way to
+        /// discard output offered for a read, where `/dev/null` discards nothing.
+        #[cfg(unix)]
+        #[test]
+        fn a_redirection_through_a_name_windows_reads_as_another_file_is_refused_before_it_runs() {
+            let scratch = Scratch::new("run-misleading-target");
+            std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+            let workspace = Workspace::new(&scratch.path)
+                .expect("workspace")
+                .with_windows_names();
+            let said = |command: &str| {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let produced = with_tools(&workspace, |tools| {
+                    run(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::Unattended,
+                        &mut crate::report::IgnoreReports,
+                        &json!({ "command": command }),
+                    )
+                });
+                told(&mut policy, &produced.text)
+            };
+            let refusal = "names something other than the file it spells on Windows";
+
+            for target in ["'.env::$DATA'", "ENV~1", ".env.", "NUL"] {
+                let written = said(&format!("echo overwritten > {target}"));
+                assert!(
+                    written.contains(refusal) && written.contains("redirect it to /dev/null"),
+                    "the write to {target} was not refused with the way to discard output: \
+                     {written}"
+                );
+                let read = said(&format!("cat < {target}"));
+                assert!(
+                    read.contains(refusal) && !read.contains("/dev/null"),
+                    "the read from {target} was not refused, or was offered /dev/null: {read}"
+                );
+            }
+            assert_eq!(
+                std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+                "SECRET_TOKEN=hunter2"
             );
         }
 

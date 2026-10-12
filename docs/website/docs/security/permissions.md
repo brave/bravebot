@@ -460,8 +460,9 @@ spelling you approved.
   other, in every list. On a volume that keeps them apart, or where it cannot be told, a rule about
   `Docs` says nothing about `docs`.
 - **Windows names.** A name that reads as something other than the file it spells, such as a stream, a
-  device, a trailing dot or space, or an 8.3 short name, is refused outright, since no rule can be
-  matched against it. A path on a drive is a full path: `Read(//D:/added/**)` covers `d:\added\secret`.
+  device, a trailing dot or space, or an 8.3 short name, is refused outright, in a call's path or a
+  redirection's target, since no rule can be matched against it. A path on a drive is a full path:
+  `Read(//D:/added/**)` covers `d:\added\secret`.
 - **Hosts.** A host written with a trailing dot, `https://evil.example./`, is the host without it, so
   a `WebFetch(domain:evil.example)` rule covers both.
 - **Commands.** A command rule is matched against the program and each argument as the line was split,

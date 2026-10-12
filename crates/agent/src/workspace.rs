@@ -496,6 +496,9 @@ pub struct Workspace {
     /// standing refusal to override, and a session whose own directory went unreachable would fail
     /// every read and write in it (TRUST-16).
     reads_stay_inside: bool,
+    /// Whether a name a run opens is judged as Windows reads it: the host's answer, and one a test
+    /// supplies so the run tool's refusal is exercised on any host.
+    windows_names: bool,
     /// The home directory a leading `~` stands for, read from the environment when the workspace
     /// is built (TRUST-10).
     ///
@@ -1194,6 +1197,7 @@ impl Workspace {
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
             reads_stay_inside: false,
+            windows_names: cfg!(windows),
             home: crate::home::profile(),
             backups: Arc::new(Mutex::new(Vec::new())),
             rewind: Arc::default(),
@@ -1242,6 +1246,16 @@ impl Workspace {
     #[must_use]
     pub fn with_reads_kept_inside(mut self, kept: bool) -> Self {
         self.reads_stay_inside = kept;
+        self
+    }
+
+    /// Judge the names a run opens as Windows reads them, whatever the host.
+    ///
+    /// Compiled where its test is: on Windows the host's answer is already this one.
+    #[cfg(all(test, unix))]
+    #[must_use]
+    pub(crate) fn with_windows_names(mut self) -> Self {
+        self.windows_names = true;
         self
     }
 
@@ -1363,6 +1377,35 @@ impl Workspace {
             .chain(destination(path))
             .map(|reached| self.relative_display(&reached))
             .collect()
+    }
+
+    /// Refuse an absolute path something else opens where Windows would read a name in it as
+    /// another file (PERM-7), the names [`Workspace::resolve`] refuses in a file tool's path.
+    ///
+    /// A redirection in a command line is such a path, read or written. The open directory it
+    /// lands in may be spelled by a short name, which names that one directory, and the rules are
+    /// asked about the file under the name it reaches as well ([`Workspace::names_reached`]). What
+    /// is written below that directory may not be, and a path that reaches no open directory
+    /// through an ancestor of its own, because it lands in none or arrives through a link into the
+    /// middle of one, is exempt nowhere.
+    pub(crate) fn refuse_misleading(&self, path: &Path) -> Result<(), WorkspaceError> {
+        self.refuse_misleading_on(path, self.windows_names)
+    }
+
+    /// [`Workspace::refuse_misleading`] with the host supplied, so either answer is exercised.
+    fn refuse_misleading_on(&self, path: &Path, windows: bool) -> Result<(), WorkspaceError> {
+        if !windows {
+            return Ok(());
+        }
+        let named = path.display().to_string();
+        let below = destination(path)
+            .and_then(|resolved| self.landed_in(&resolved))
+            .and_then(|opened| written_below(path, &opened));
+        let Some(below) = below else {
+            return refuse_misleading_names(path, &named, false, windows);
+        };
+        refuse_misleading_names(path, &named, true, windows)?;
+        refuse_misleading_names(&below, &named, false, windows)
     }
 
     /// The directory a name would open, without opening it.
@@ -1908,8 +1951,10 @@ impl Workspace {
     ///
     /// A permission rule is written about a file (PERM-7), and a name reaches the file it lands on
     /// by more routes than its own spelling: a symbolic link, a case variant on a volume that
-    /// ignores case, an 8.3 short name. `None` where the name lands on itself, and where it lands
-    /// nowhere the workspace reaches, which the operation refuses on its own.
+    /// ignores case, an 8.3 short name. `None` where the name lands on itself, and where
+    /// [`Workspace::resolve`] refuses it. A file tool resolves the name and so refuses it on its
+    /// own; a path something else opens has to be held to [`Workspace::confines`] and
+    /// [`Workspace::refuse_misleading`] instead.
     ///
     /// Asked of the file system, not of any file's contents, and it is only ever used to ask the
     /// rules a second question, so the answer can add a refusal or an approval and can never
@@ -6466,6 +6511,107 @@ mod tests {
         assert!(refuse_misleading_names(inside, "x", true, true).is_ok());
         let stream = Path::new("/tmp/RUNNER~1/.env:stream");
         assert!(refuse_misleading_names(stream, "x", true, true).is_err());
+    }
+
+    /// A redirection's target is opened by the run rather than resolved, so it has to be refused
+    /// as a file tool's path is, or `Edit(.env)` is asked about `ENV~1` while the run overwrites
+    /// `.env`. The open directories are spelled as short names here, so a refusal that judged the
+    /// whole path, or none of it, would be seen. A link to an open directory is another spelling of
+    /// it, and a link into the middle of one spells no open directory, so nothing in a path through
+    /// it is exempt.
+    #[test]
+    fn a_path_a_run_opens_is_refused_where_windows_reads_a_name_in_it_as_another_file() {
+        let base = crate::testutil::scratch_dir("misleading-run-target");
+        let _ = std::fs::remove_dir_all(&base);
+        for directory in ["WORK~1", "ADDED~1", "elsewhere"] {
+            std::fs::create_dir_all(base.join(directory)).expect("directory");
+        }
+        let base = base.canonicalize().expect("canonical base");
+        let workspace = Workspace::new(base.join("WORK~1")).expect("workspace");
+        let root = workspace.root().to_path_buf();
+        std::fs::write(root.join(".env"), "SECRET_TOKEN=hunter2").expect(".env");
+        let added = workspace
+            .open_directory(&base.join("ADDED~1").to_string_lossy())
+            .expect("added directory");
+        let outside = base.join("elsewhere");
+
+        for refused in [
+            root.join(".env::$DATA"),
+            root.join("ENV~1"),
+            root.join(".env."),
+            root.join("sub").join("NUL"),
+            added.join("SECRET~1.TXT"),
+            outside.join("SSH~1").join("id_rsa"),
+        ] {
+            assert!(
+                matches!(
+                    workspace.refuse_misleading_on(&refused, true),
+                    Err(WorkspaceError::Invalid { .. })
+                ),
+                "{} was accepted",
+                refused.display()
+            );
+            assert!(
+                workspace.refuse_misleading_on(&refused, false).is_ok(),
+                "{} was refused on a host that reads it as written",
+                refused.display()
+            );
+        }
+        for accepted in [
+            root.join(".env"),
+            root.join("sub").join("notes.md"),
+            added.join("notes.md"),
+            outside.join("ssh").join("id_rsa"),
+        ] {
+            assert!(
+                workspace.refuse_misleading_on(&accepted, true).is_ok(),
+                "{} was refused",
+                accepted.display()
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            std::fs::create_dir_all(root.join("sub")).expect("sub");
+            let linked = outside.join("linked");
+            symlink(root.join("sub"), &linked).expect("link into the root");
+            std::fs::create_dir_all(added.join("sub")).expect("sub of the added directory");
+            let into_added = outside.join("into-added");
+            symlink(added.join("sub"), &into_added).expect("link into the added directory");
+            let root_alias = base.join("ROOTAL~1");
+            symlink(&root, &root_alias).expect("link to the root");
+            let added_alias = base.join("ADDAL~1");
+            symlink(&added, &added_alias).expect("link to the added directory");
+
+            for refused in [
+                linked.join("SECRET~1.TXT"),
+                into_added.join("SECRET~1.TXT"),
+                root_alias.join("ENV~1"),
+            ] {
+                assert!(
+                    matches!(
+                        workspace.refuse_misleading_on(&refused, true),
+                        Err(WorkspaceError::Invalid { .. })
+                    ),
+                    "{} was accepted",
+                    refused.display()
+                );
+            }
+            for accepted in [
+                linked.join("secret.txt"),
+                into_added.join("secret.txt"),
+                root_alias.join("notes.md"),
+                added_alias.join("notes.md"),
+            ] {
+                assert!(
+                    workspace.refuse_misleading_on(&accepted, true).is_ok(),
+                    "{} was refused",
+                    accepted.display()
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[cfg(unix)]

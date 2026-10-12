@@ -4511,6 +4511,53 @@ fn a_redirection_through_a_parent_directory_to_a_file_no_rule_names_still_runs()
     );
 }
 
+/// PERM-7 on Windows: `.env::$DATA`, `ENV~1` and `.env.` open `.env`, and a rule is matched against
+/// the spelling, so a redirection through one of them overwrote or read the file `Edit(.env)` or
+/// `Read(.env)` protects. The spelling is refused before any rule is asked.
+#[cfg(windows)]
+#[test]
+fn a_redirection_through_a_name_windows_reads_as_another_file_is_refused() {
+    let refusal = "names something other than the file it spells on Windows";
+    for (index, target) in ["'.env::$DATA'", "ENV~1", ".env."].into_iter().enumerate() {
+        let (left, told) = run_against_a_denied_env(
+            &format!("permissions-run-redirect-alias-write-{index}"),
+            &format!("cmd /c echo overwritten > {target}"),
+            "Edit(.env)",
+        );
+        assert_eq!(left, "SECRET_TOKEN=hunter2", "{target} overwrote .env");
+        assert!(
+            told.contains(refusal),
+            "{target}: the planner was not told the name was refused: {told}"
+        );
+
+        let (_, told) = run_against_a_denied_env(
+            &format!("permissions-run-redirect-alias-read-{index}"),
+            &format!("cmd /c more < {target}"),
+            "Read(.env)",
+        );
+        assert!(
+            told.contains(refusal) && !told.contains("/dev/null"),
+            "{target}: the planner was not told the name was refused, or was told to read from \
+             a device that discards only output: {told}"
+        );
+        assert!(
+            !told.contains("hunter2"),
+            "{target}: the denied file's contents reached the planner: {told}"
+        );
+    }
+
+    // `NUL` is the device, refused like any other, and the planner is told what discards output.
+    let (_, told) = run_against_a_denied_env(
+        "permissions-run-redirect-alias-device",
+        "cmd /c echo discarded > NUL",
+        "Edit(.env)",
+    );
+    assert!(
+        told.contains(refusal) && told.contains("redirect it to /dev/null"),
+        "the planner was not told how to discard output: {told}"
+    );
+}
+
 /// A quoted program word is one word however many spaces it holds. `"ls /x"` names a script at
 /// `ls /x` in the workspace, and an allow rule for `ls` used to stop the prompt for it, because the
 /// rule was matched against the words run together, which read as `ls` given `/x`.
