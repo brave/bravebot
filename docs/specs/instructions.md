@@ -351,7 +351,7 @@ gate and reads each import through it, so nothing untrusted decides what is read
 
 `/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`)
 or one of the person's own, `/style off` clears the pick and `/style` alone says which is in force and lists the names. The
-pick lasts for the session and is not recorded, so a resumed session starts with none. A name is
+pick lasts for the session and is not stored, so a resumed session starts with none. Each turn whose prompt opens with a style's words records it in the trail by name and by whether it is built in or the person's own file, never by its words ([TRACE-7](trace.md#TRACE-7)); a turn where `--system-prompt` stood in its place records none. A name is
 compared whole against the built-in list and the person's own files, and nothing a person types after
 `/style` reaches the prompt.
 
@@ -384,7 +384,7 @@ this program or by the person, typed or kept in the person's own configuration, 
 read from a project reaches that place.
 
 **Known costs.** Only the terminal interface has `/style`. Styles are not read from a project, there
-is no `style` setting, and the choice is not written to the trace. Each needs the trust map or the
+and there is no `style` setting. Each needs the trust map or the
 settings layers to say who may name a style, and none is built.
 
 `verified-by: bravebot_agent::turn::a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt`
@@ -396,6 +396,7 @@ settings layers to say who may name a style, and none is built.
 `verified-by: bravebot_agent::styles::a_link_an_empty_file_and_a_long_file_are_not_styles`
 `verified-by: bravebot_agent::styles::the_offered_names_are_the_built_ins_then_the_accepted_files_in_order`
 `verified-by: bravebot_agent::turn::a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt`
+`verified-by: bravebot_agent::turn::a_turn_records_the_output_style_that_opened_it`
 `verified-by: bravebot_tui::app::a_style_file_in_the_home_directory_is_listed_and_picked_by_name`
 `verified-by: bravebot_tui::app::the_style_command_takes_a_name_or_nothing`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt`

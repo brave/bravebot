@@ -46834,6 +46834,82 @@ fn a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt() {
     }
 }
 
+/// INSTR-12, TRACE-7. The trail names the style whose words opened the turn, by name and source and
+/// never by its words, and says nothing where the style did not reach the prompt: none picked, or
+/// `--system-prompt` standing in its place.
+#[test]
+fn a_turn_records_the_output_style_that_opened_it() {
+    let scratch = Scratch::new("style-recorded");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join("styles")).unwrap();
+    std::fs::write(home.join("styles/terse.md"), "SECRET-FILE-WORDS").unwrap();
+    let config_cases = [
+        (
+            "concise",
+            None,
+            vec!["the turn began in the concise style (built in)"],
+        ),
+        (
+            "terse",
+            None,
+            vec!["the turn began in the terse style (a file of the person's own)"],
+        ),
+        ("concise", Some("You are REPLACEMENT-PERSONA."), vec![]),
+    ];
+    for (name, replacing, expected) in config_cases {
+        let (endpoint, _received) = serve(&reply_with("done"));
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let task = Task::new("go")
+            .with_style(bravebot_agent::styles::find(Some(&home), name))
+            .with_system_prompts(prompts(replacing, None));
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::Unattended,
+            &mut sink,
+        )
+        .expect("turn runs");
+        let recorded: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "output_style",
+                    detail,
+                } => Some(detail.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recorded, expected, "{name} {replacing:?}");
+        assert!(!format!("{:?}", sink.events()).contains("SECRET-FILE-WORDS"));
+    }
+    // No style picked: nothing is recorded.
+    let (endpoint, _received) = serve(&reply_with("done"));
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("go"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+    assert!(!sink.events().iter().any(|e| matches!(
+        e,
+        Event::GatePassed {
+            gate: "output_style",
+            ..
+        }
+    )));
+}
+
 /// INSTR-10 and INSTR-4. The appended words are the last standing source, after the project's
 /// own instructions, so where the two disagree the person who typed the flag has the last word.
 #[test]

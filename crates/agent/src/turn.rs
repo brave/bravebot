@@ -3347,6 +3347,15 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
     let started_in = task.permission_mode.get();
     policy.record_permission_mode(started_in.name());
+    // The opening a style takes the place of is the one a person's own turn gets, and
+    // `--system-prompt` outranks it, so only a style that reaches the prompt is recorded.
+    if let (None, None, Some(style)) = (
+        task.delegate.as_ref(),
+        task.system_prompts.replacing.as_deref(),
+        &task.style,
+    ) {
+        policy.record_output_style(style.name.as_ref(), style.from_file);
+    }
 
     // Before every turn rather than as a session opens, since a session's map is made at a start,
     // a clear and a resume and moved by `/cd` (MEMORY-5).

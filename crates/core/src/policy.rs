@@ -6396,6 +6396,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("permission_mode", format!("the turn began in {mode} mode"));
     }
 
+    /// Record the output style whose words open a turn's system prompt, by name and by whether the
+    /// person's own file or this build supplied it (INSTR-12).
+    ///
+    /// The style is a thing a person switches mid-session with no word in the transcript, and it
+    /// changes how every later answer reads, so the trail is the only place to see which was in
+    /// force. `name` is a built-in's static text or a slug, never the words of the file.
+    pub fn record_output_style(&mut self, name: &str, from_file: bool) {
+        let source = if from_file {
+            "a file of the person's own"
+        } else {
+            "built in"
+        };
+        self.allow(
+            "output_style",
+            format!("the turn began in the {name} style ({source})"),
+        );
+    }
+
     /// Record the sandbox mode a `run` starts its programs under, by its name (SANDBOX-22).
     ///
     /// Said per run rather than per turn, because the record that matters is what bound the
