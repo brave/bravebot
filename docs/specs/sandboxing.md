@@ -1125,8 +1125,10 @@ rules and a quoting that is safe for every other program is not safe for it. Any
 platform cannot confine is refused as it is elsewhere. The stage is created suspended and put in a
 job of its own before it runs, so every program it starts is in that job too. Killing the stage
 ends the job, and the job also ends when its one handle is closed, which the backend does when the
-process is let go of and the platform does when this process ends, a crash included. A stage the
-platform will not put in a job is not started. The stage is given a console of its own with no
+process is let go of and the platform does when this process ends, a crash included. The executor
+kills each stage of a line when the line is done, so a program a stage started and left running
+ends then too, which is when the grants it ran under are taken off. A stage the platform will not
+put in a job is not started. The stage is given a console of its own with no
 window rather than the one this process runs in, since any process attached to a console can write
 input into it, which on the terminal's console is typing an answer to a prompt. The programs it
 starts share that console, so none of them opens a window.

@@ -46,17 +46,16 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ,
 };
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject,
+    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
-    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
-    GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-    PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
-    TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
+    EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, INFINITE,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 /// The numbers the parent module writes its grants in are the platform's own rights.
@@ -308,10 +307,6 @@ fn readable_by_every_container() -> Vec<PathBuf> {
     .collect()
 }
 
-/// The code a killed process reports. One rather than zero, so a caller reading the status cannot
-/// mistake a process this ended for one that succeeded.
-const KILLED: u32 = 1;
-
 /// A process started under a container, with the job it and every process it starts are in.
 ///
 /// The standard library's [`Child`](std::process::Child) cannot be built from a handle,
@@ -386,6 +381,10 @@ impl CreatedProcess {
     /// and keeps its token, its network and the pipes it was handed.
     #[allow(unsafe_code)]
     pub(crate) fn kill(&mut self) -> Result<()> {
+        // The code a killed process reports. One rather than zero, so a caller reading the
+        // status cannot mistake a process this ended for one that succeeded.
+        const KILLED: u32 = 1;
+
         let job = self.job.as_raw_handle() as HANDLE;
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let ended = unsafe { TerminateJobObject(job, KILLED) };
@@ -822,6 +821,9 @@ impl Wiring {
 }
 
 /// Start the process, or refuse.
+///
+/// The job is made first, so a job the platform will not make is a refusal to confine that costs
+/// no process, as against a process that could not be created.
 fn start(
     sid: &Sid,
     capabilities: &[Sid],
@@ -831,6 +833,13 @@ fn start(
     environment: &Environment,
     directory: Option<&Path>,
 ) -> std::result::Result<ConfinedChild, SandboxError> {
+    let job = job_ending_on_close().map_err(|e| SandboxError::SetupFailed {
+        mechanism: "appcontainer",
+        detail: format!(
+            "the job that ends a process with everything it starts could not be made ({e}); \
+             refusing rather than starting a program whose children would outlive it"
+        ),
+    })?;
     started(
         sid,
         capabilities,
@@ -839,11 +848,12 @@ fn start(
         wiring,
         environment,
         directory,
+        job,
     )
     .map_err(SandboxError::SpawnFailed)
 }
 
-#[allow(unsafe_code)]
+#[allow(unsafe_code, clippy::too_many_arguments)]
 fn started(
     sid: &Sid,
     capabilities: &[Sid],
@@ -852,6 +862,7 @@ fn started(
     wiring: Wiring,
     environment: &Environment,
     directory: Option<&Path>,
+    job: OwnedHandle,
 ) -> Result<ConfinedChild> {
     let mut line = wide(OsStr::new(&command_line(program, args)))?;
 
@@ -880,7 +891,11 @@ fn started(
         stderr.child.as_raw_handle() as HANDLE,
     ];
 
-    let mut attributes = AttributeList::holding(2)?;
+    // The process is in the job from the moment it exists, so nothing it starts is ever outside
+    // the job, and a job the platform will not put it in is a process that is not created.
+    let jobs: [HANDLE; 1] = [job.as_raw_handle() as HANDLE];
+
+    let mut attributes = AttributeList::holding(3)?;
     attributes.set(
         PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
         std::ptr::from_ref(&security).cast::<c_void>(),
@@ -890,6 +905,11 @@ fn started(
         PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
         inherited.as_ptr().cast::<c_void>(),
         size_of_val(&inherited),
+    )?;
+    attributes.set(
+        PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+        jobs.as_ptr().cast::<c_void>(),
+        size_of_val(&jobs),
     )?;
 
     let mut startup = STARTUPINFOEXW {
@@ -912,13 +932,7 @@ fn started(
     let directory = directory.map(|path| wide(path.as_os_str())).transpose()?;
     let start_in = directory.as_ref().map_or(null(), |path| path.as_ptr());
 
-    // Made before the process, so a job the platform will not create costs no process.
-    let job = job_ending_on_close()?;
-
     let mut created = PROCESS_INFORMATION::default();
-    // Suspended, so the process runs nothing before it is in the job: a child it started first
-    // would be outside the job and outlive a kill.
-    //
     // On a console of its own with no window, rather than on this process's: any process attached
     // to a console can write input into it, which on the terminal's console is typing an answer
     // to a prompt. Detaching it instead would give each console program it starts a console, and
@@ -931,7 +945,7 @@ fn started(
             null(),
             null(),
             1,
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW | unicode,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | unicode,
             block,
             start_in,
             std::ptr::from_mut(&mut startup).cast::<STARTUPINFOW>(),
@@ -942,37 +956,15 @@ fn started(
         return Err(Error::last_os_error());
     }
 
-    // Sound because the call reported success, which means it wrote a process handle and a
-    // thread handle nothing else owns.
+    // Nothing here resumes or waits on the initial thread, and a handle to it left open
+    // keeps the thread object alive for as long as this process runs.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-    let (handle, thread) = unsafe {
-        (
-            OwnedHandle::from_raw_handle(created.hProcess as RawHandle),
-            OwnedHandle::from_raw_handle(created.hThread as RawHandle),
-        )
-    };
+    unsafe { CloseHandle(created.hThread) };
 
+    // Sound because the call reported success, which means it wrote a process handle
+    // nothing else owns.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-    let assigned = unsafe {
-        AssignProcessToJobObject(
-            job.as_raw_handle() as HANDLE,
-            handle.as_raw_handle() as HANDLE,
-        )
-    };
-    if assigned == 0 {
-        let refused = Error::last_os_error();
-        // Outside the job nothing else ends it, and suspended it never ends by itself.
-        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-        unsafe { TerminateProcess(handle.as_raw_handle() as HANDLE, KILLED) };
-        return Err(refused);
-    }
-
-    // A thread that is not resumed has run nothing. Returning drops the job, which ends it.
-    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-    let resumed = unsafe { ResumeThread(thread.as_raw_handle() as HANDLE) };
-    if resumed == u32::MAX {
-        return Err(Error::last_os_error());
-    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(created.hProcess as RawHandle) };
 
     Ok(crate::process::confined(
         CreatedProcess {
