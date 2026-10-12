@@ -1838,9 +1838,10 @@ mod tests {
             &confinement(&["/home/person/AppData/Local"]),
             "BraveSoftware",
         );
+        // The location as the refusal quotes it, which the session directory inside it is not.
         refused_naming(
             &confinement(&["/home/person/AppData/Local/Google/Chrome/User Data"]),
-            "Chrome",
+            "/Google/Chrome`",
         );
         refused_naming(
             &confinement(&["/home/person/AppData/Roaming/Microsoft"]),
