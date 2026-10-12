@@ -739,6 +739,10 @@ fn sockets_every_child_inherits() -> Vec<String> {
         .collect()
 }
 
+/// `an_unconfined_hook_the_host_runs_holds_no_socket` compares the descriptors in the hook's listing
+/// with the ones every child of the test process inherits. If `descriptor` read the wrong field, the
+/// two would be compared by the wrong names: a real leak could be dropped as inherited, or an
+/// inherited socket could fail the test. One line of each system's format pins the field.
 #[test]
 fn the_descriptor_is_named_before_the_arrow_on_linux_and_last_on_macos() {
     assert_eq!(
