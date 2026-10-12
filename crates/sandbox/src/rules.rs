@@ -709,7 +709,7 @@ fn refused_for_adding_reach(path: &Path, home: Option<&Path>) -> Option<Reason> 
 /// the location itself excluded.
 ///
 /// A location is compared in the spelling it has under `home` and where its links lead.
-fn holds_a_credential_location(path: &Path, home: &Path) -> bool {
+pub fn holds_a_credential_location(path: &Path, home: &Path) -> bool {
     credential_locations(Prelude::Windows, home)
         .into_iter()
         .any(|location| {

@@ -804,7 +804,9 @@ impl Confinement {
         }
 
         if !self.reads_the_machine() {
-            let searched: Vec<PathBuf> = variable(environment, "PATH")
+            // This process's own `PATH`, never the step's: a `PATH=` assignment on the line is a
+            // value the model supplied, and SANDBOX-18 lets no such value choose a read row.
+            let searched: Vec<PathBuf> = std::env::var_os("PATH")
                 .map(|path| std::env::split_paths(&path).collect())
                 .unwrap_or_default();
             for path in program_reads(resolved, &searched, self.home.as_deref()) {
@@ -1567,7 +1569,8 @@ fn temporary_directory() -> PathBuf {
 /// directory above it, is left out, and so is a parent inside it, since `~/.cargo` holds a registry
 /// token beside `~/.cargo/bin`. The program's own `bin` directory is the exception where it sits
 /// deeper in the home than that, as `nvm` installs one, since that parent is the installation the
-/// program came from.
+/// program came from. A row that is, holds or lies inside a credential location is left out
+/// whatever named it.
 pub(crate) fn program_reads(
     program: &Path,
     searched: &[PathBuf],
@@ -1610,6 +1613,12 @@ pub(crate) fn program_reads(
             reads.push(parent.to_path_buf());
         }
         reads.push(directory);
+    }
+    if let Some(home) = home.as_deref() {
+        reads.retain(|row| {
+            !(bravebot_sandbox::rules::inside_a_credential_location(row, home)
+                || bravebot_sandbox::rules::holds_a_credential_location(row, home))
+        });
     }
     reads
 }
@@ -3486,6 +3495,65 @@ mod tests {
         assert!(rows.contains(&PathBuf::from("/opt/tools/bin")));
         assert!(rows.contains(&PathBuf::from("/opt/tools")));
         assert!(!rows.contains(&PathBuf::from(format!("{HOME}/.cargo"))));
+    }
+
+    /// A directory the search names is no read row where it holds a credential location or lies
+    /// inside one, whatever put it in the search (SANDBOX-18, SANDBOX-12).
+    #[test]
+    fn a_search_directory_at_or_over_a_credential_location_is_no_read_row() {
+        let searched = vec![
+            PathBuf::from(format!("{HOME}/.ssh")),
+            PathBuf::from(format!("{HOME}/.aws/bin")),
+            PathBuf::from(format!("{HOME}/work/bin")),
+        ];
+
+        let rows = program_reads(Path::new("/usr/bin/ls"), &searched, Some(Path::new(HOME)));
+
+        for refused in [
+            format!("{HOME}/.ssh"),
+            format!("{HOME}/.aws/bin"),
+            format!("{HOME}/.aws"),
+        ] {
+            assert!(
+                !rows.contains(&PathBuf::from(&refused)),
+                "{refused}: {rows:?}"
+            );
+        }
+        assert!(rows.contains(&PathBuf::from(format!("{HOME}/work/bin"))));
+    }
+
+    /// A `PATH=` assignment on a line is a value the model supplied, so it chooses no read row on a
+    /// platform that lists what a step reaches: not a credential location and not any other
+    /// directory in the home.
+    #[test]
+    fn a_path_assignment_on_the_line_grants_no_read_row_on_a_listing_platform() {
+        for prelude in [Prelude::Windows, Prelude::Linux, Prelude::MacOs] {
+            let confined = Confinement::new(
+                prelude,
+                PathBuf::from("/tmp"),
+                Some(Path::new(HOME)),
+                vec![PathBuf::from("/work/project")],
+                Some(Path::new("/var/scratch")),
+            );
+            let environment = vec![(
+                "PATH".to_string(),
+                format!("{HOME}/.ssh:{HOME}/Documents/bin:/opt/assigned/bin"),
+            )];
+
+            let policy =
+                confined.policy(&step("/usr/bin/ls", &[]), Path::new("/work"), &environment);
+
+            if confined.reads_the_machine() {
+                continue;
+            }
+            for row in [
+                format!("{HOME}/.ssh"),
+                format!("{HOME}/Documents/bin"),
+                "/opt/assigned/bin".to_string(),
+            ] {
+                assert!(!reads(&policy, &row), "{prelude:?} read {row}");
+            }
+        }
     }
 
     /// A planner not told that its programs are confined reads `Operation not permitted` as a fault
