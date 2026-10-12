@@ -146,7 +146,9 @@ path is reachable whatever the policy names, which includes the user's D-Bus (wh
 key it holds) and `docker.sock`. A connect to a socket in the abstract namespace, which has no path,
 is refused when the socket was made outside the confined process's Landlock domain, on a kernel
 carrying ABI version 6, and is reachable below it. The domain is that of one stage, so a socket made
-by the session or by another stage is refused too. Signals are not scoped. A backend that cannot
+by the session or by another stage is refused too. On Linux signals are not scoped. On macOS a
+confined process signals the processes its own profile started and no other: not the session, which
+shares its process group, not another stage, and no other process of the account. A backend that cannot
 enforce the network denial refuses the policy instead, so the guarantee never degrades into one
 that is not in force. On Linux the network is denied by a new user and network namespace, in which
 the stage has its own loopback and nothing else, whatever the address, port or protocol. Landlock's
@@ -166,7 +168,8 @@ to that port alone, since another local port could be a service that carries it 
 **Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
 that reaches a Docker daemon's socket can start a container with the home directory mounted, which
 is every file the profile withheld. Landlock counts the connect as a write, so both backends apply
-one rule to a connect.
+one rule to a connect. A program that cannot signal a child it started cannot stop it, so a test
+runner or a `timeout` that gives up on one waits until it ends by itself.
 
 `verified-by: bravebot_sandbox::macos::network_is_only_allowed_when_requested`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_reach_the_network`
@@ -179,6 +182,8 @@ one rule to a connect.
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_can_reach_the_resolver`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_write_outside_its_grants`
 `verified-by: bravebot_sandbox::macos::a_confined_process_runs`
+`verified-by: bravebot_sandbox::macos::a_confined_process_can_signal_a_process_it_started`
+`verified-by: bravebot_sandbox::macos::a_confined_process_cannot_signal_a_process_outside_its_sandbox`
 `verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused_where_no_namespace_can_be_made`
 `verified-by: bravebot_sandbox::linux::a_kernel_that_refuses_the_namespace_refuses_the_stage`
 `verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
