@@ -428,9 +428,36 @@ mod tests {
     use super::*;
     use crate::hosts::HostList;
     use crate::proxy::{Proxy, ProxyConfig};
+    use std::ffi::OsStr;
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::{Duration, Instant};
+
+    /// The proxy's socket address holds the bytes of its path, so a directory whose name is not
+    /// UTF-8 is reached and is not mistaken for the one its replacement-character spelling names.
+    /// The regression it rejects: a lossy conversion of the path, which would send the forwarder
+    /// to a socket that is not the proxy's.
+    #[test]
+    fn the_socket_address_holds_the_bytes_of_a_path_that_is_not_utf8() {
+        let invalid = Path::new(OsStr::from_bytes(b"/tmp/proxy-\xff.sock"));
+        let lookalike = Path::new("/tmp/proxy-\u{FFFD}.sock");
+        let address = |path: &Path| {
+            let namespace = Namespace::prepare(Some((8123, path))).expect("a forward");
+            namespace
+                .forward
+                .as_ref()
+                .expect("a forward")
+                .socket
+                .sun_path
+        };
+
+        let held = address(invalid);
+        let bytes = invalid.as_os_str().as_bytes();
+        let expected: Vec<libc::c_char> = bytes.iter().map(|byte| *byte as libc::c_char).collect();
+        assert_eq!(held[..bytes.len()], expected[..]);
+        assert_eq!(held[bytes.len()], 0, "the address ends where the path does");
+        assert_ne!(held, address(lookalike));
+    }
 
     /// The forwarder on its own, in the host's network, which needs no namespace and so runs on a
     /// kernel that refuses one: a connection to its port is relayed to the proxy's socket and
