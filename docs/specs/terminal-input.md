@@ -2487,3 +2487,48 @@ pass, so only the idle loop needs this event.
 
 `verified-by: bravebot_tui::app::a_resize_while_the_box_is_idle_asks_for_a_frame`
 `verified-by: bravebot_tui::render::a_frame_drawn_after_a_resize_is_the_frame_of_a_terminal_that_size_from_the_start`
+
+<a id="INPUT-42"></a>
+### INPUT-42: an empty box may hold one suggested next prompt, which only Tab or Right takes
+
+With the `suggestions` setting `true`, a turn that ended with a reply is followed by one request, to
+the model `summaryModel` names where it names one, as [compaction.md](compaction.md) has it, and the session's own model
+otherwise, over the exchange the planner already holds and with no tools. The request asks for the
+prompt the person is most likely to type next. It is not made in plan mode, in an incognito
+session, after a turn that failed or was stopped, or while a loop or a watch has a prompt to send.
+It is made once per turn, without the box waiting for it.
+
+What comes back is offered only if it holds 2 to 12 words, fewer than 100 characters and one line.
+The driver counts and nothing else: it does not read what the words say, and an answer outside the
+counts is not offered, rather than being cut to something the model did not write. An offer is
+drawn dimmed in the box where the invitation is, and only while the box is empty and the session
+idle.
+
+Tab or Right pressed bare moves the offer into the box as text, which the person edits and sends as
+any line. Nothing sends it, and one that begins with `/` is words in the box until Enter is pressed
+on it, as [commands.md](commands.md) has it. Any other key removes it and is then read as it always was. A modifier pressed alone
+does not remove it. What the request cost is charged to the session and its trail kept, whether or
+not the answer was offered.
+
+Only a boolean `true` turns the setting on; a quoted `"true"` is absence, and the default is off,
+because the request spends on every turn.
+
+**Why.** The request is the driver's own words over the planner's own context, which holds no
+untrusted content, and the answer is text a person must take and send themselves, so it decides
+nothing. Counting is the only judgement the driver makes of it, which keeps this on the right side
+of the rule that the driver does not branch on what a model wrote. Off by default because a spend
+nobody asked for on each turn is the cost this setting exists to let a person choose.
+
+`verified-by: bravebot_agent::aside::a_suggestion_is_offered_only_inside_its_counts`
+`verified-by: bravebot_agent::aside::the_suggestion_limit_counts_characters_rather_than_bytes`
+`verified-by: bravebot_agent::aside::a_suggestion_asks_its_own_question_and_leaves_the_exchange_alone`
+`verified-by: bravebot_config::settings::only_a_boolean_turns_suggestions_on`
+`verified-by: bravebot_tui::app::tab_and_right_move_the_suggestion_into_the_box_and_send_nothing`
+`verified-by: bravebot_tui::app::a_suggestion_that_begins_with_a_slash_is_text_until_enter`
+`verified-by: bravebot_tui::app::any_other_key_removes_the_suggestion_and_still_types`
+`verified-by: bravebot_tui::app::a_modifier_on_its_own_leaves_the_suggestion_standing`
+`verified-by: bravebot_tui::app::a_suggestion_is_offered_only_to_an_idle_empty_box_with_the_setting_on`
+`verified-by: bravebot_tui::app::a_suggestion_is_asked_for_only_after_a_turn_that_answered`
+`verified-by: bravebot_tui::app::a_suggestions_cost_is_charged_to_the_session`
+`verified-by: bravebot_tui::render::a_suggestion_is_drawn_in_the_empty_box_in_place_of_the_invitation`
+`verified-by: bravebot_tui::render::a_suggestion_is_dimmed_as_the_invitation_is`

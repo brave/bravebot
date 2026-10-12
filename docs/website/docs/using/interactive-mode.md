@@ -371,6 +371,13 @@ and sending any prompt drops it. It lasts for the session only, is not written t
 and does not appear in the Ctrl-R search. A line put away with Ctrl-S is a separate slot, which a
 clear does not touch.
 
+## Suggested next prompts
+
+With [`suggestions`](../customize/configuration.md#suggestions) set to `true`, the empty box shows the
+next prompt the model expects you to type, dimmed, after a turn that ended with a reply. **Tab** or
+**Right** moves it into the box to edit; nothing sends it. Any other key removes it. It costs a
+request per turn, and none is made in plan mode or an incognito session.
+
 ## Searching the prompts you have sent
 
 **Ctrl-R** opens a search over every prompt in your history, drawn over the transcript in place of the
