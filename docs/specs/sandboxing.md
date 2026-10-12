@@ -2734,7 +2734,12 @@ reported as what it is.
   ([SANDBOX-18](#SANDBOX-18)), so a program installed under `/opt/homebrew` or `/usr/local` starts.
   That makes every directory on a person's `PATH` outside the home readable to every stage, which is
   wider than the stage's own program needs and is the price of a runner finding the interpreter it
-  names.
+  names. On Windows each of those rows outside the system and Program Files directories is an
+  entry the platform writes onto every file and directory beneath it as a stage starts and
+  removes as the stage ends, so the time a stage takes to start grows with what those directories
+  hold, and the parent of a `bin` directory is a whole installation. With the `PATH` of the Windows
+  CI runner a stage takes minutes to start, so the agent's tests that start a program there keep
+  only the `PATH` directories under the system and Program Files directories.
 - A `run` argument that names a path outside the directories the session was opened on is refused
   ([SANDBOX-17](#SANDBOX-17)). Whether the compiler should read such an argument as a path and put
   it in the plan is not settled.
