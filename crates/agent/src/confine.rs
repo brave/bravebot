@@ -2850,6 +2850,86 @@ mod tests {
         assert!(with.unreadable.contains(&PathBuf::from(&known_hosts)));
     }
 
+    /// The regression it rejects: a row the default gives every stage outliving a person's refusal
+    /// of it. The macOS run base reads the login keychain file as a lift beneath its own refusal of
+    /// `~/Library/Keychains`, and on Linux and macOS every stage writes every toolchain's cache;
+    /// these lists are what security.md tells a person to write, so a lift or a cache row that
+    /// survived them would leave the keychain or a cache a later unconfined build runs code from in
+    /// reach while the page says it is withheld. The same stage without the lists is the control
+    /// that the default reaches each.
+    #[test]
+    fn what_the_default_leaves_every_stage_is_withheld_by_the_persons_lists() {
+        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/confine-unit-default-reach-home");
+        std::fs::create_dir_all(&home).expect("home directory");
+        let home = home.canonicalize().expect("canonical home");
+        let at = |rest: &str| {
+            rest.split('/')
+                .fold(home.clone(), |path, part| path.join(part))
+                .display()
+                .to_string()
+        };
+        let (npmrc, keychain) = (at(".npmrc"), at("Library/Keychains/login.keychain-db"));
+        let caches = [at(".cargo/registry"), at(".gradle/wrapper")];
+        let written = |policy: &SandboxPolicy, path: &str| {
+            policy
+                .writable
+                .iter()
+                .any(|row| Path::new(path).starts_with(&row.path))
+                && !policy
+                    .unwritable
+                    .iter()
+                    .any(|row| Path::new(path).starts_with(row))
+        };
+        let install = step("/usr/local/bin/npm", &["install"]);
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let plain = Confinement::new(
+                prelude,
+                PathBuf::from("/tmp"),
+                Some(&home),
+                vec![PathBuf::from("/work/project")],
+                Some(Path::new("/var/scratch")),
+            );
+            let held = plain.clone().with_filesystem(&listed(
+                &[&npmrc, &keychain],
+                &[],
+                &[&caches[0], &caches[1]],
+            ));
+
+            let without = plain.policy(&install, Path::new("/work/project"), &[]);
+            let with = held.policy(&install, Path::new("/work/project"), &[]);
+
+            assert!(
+                reads(&without, "/") && !refuses(&without, &npmrc),
+                "{prelude:?}: the default does not read the token file"
+            );
+            assert!(
+                refuses(&with, &npmrc),
+                "{prelude:?}: a token file the person refused is read"
+            );
+            for cache in &caches {
+                assert!(
+                    written(&without, cache),
+                    "{prelude:?}: the default does not write {cache}"
+                );
+                assert!(
+                    !written(&with, cache),
+                    "{prelude:?}: a cache row outlived the refusal of {cache}"
+                );
+            }
+            if prelude == Prelude::MacOs {
+                assert!(
+                    reads(&without, &keychain),
+                    "the base does not lift the keychain file"
+                );
+                assert!(
+                    refuses(&with, &keychain),
+                    "the base's lift outlived the refusal"
+                );
+            }
+        }
+    }
+
     /// Every stage of a line is built by the one function, so a stage of a pipeline and a stage of a
     /// line left running hold the lists as the first does; a stage that carries a toolchain or a
     /// scope holds them as well.

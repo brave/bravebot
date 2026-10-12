@@ -1868,7 +1868,10 @@ A narrower path beats a wider one, so an `allowWrite` beneath a `denyWrite` is a
 a `denyRead` beneath an `allowRead` is a refusal that holds. At one path a refusal wins over the
 person's own allowance. A refusal also wins over the rows a stage brings for itself at or beneath it,
 a credential scope's and a toolchain cache's among them: the person said no program reads `~/.config/gh`,
-and a program that is given its scope is still a program. A refusal with no grant above it holds back
+and a program that is given its scope is still a program. It wins over the rows of the run base and
+the mode `standard` as well, so a `denyRead` of `~/Library/Keychains/login.keychain-db` refuses the
+file the base reads on macOS ([SANDBOX-12](#SANDBOX-12)), and a `denyWrite` of a cache refuses a row
+every stage is given ([SANDBOX-18](#SANDBOX-18)). A refusal with no grant above it holds back
 nothing and is not added.
 
 `denyRead` and `denyWrite` are read from every layer, since they only take reach away. `allowRead`
@@ -1977,6 +1980,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_agent::permissions::a_denial_beneath_an_allowance_is_not_in_force_where_the_backend_cannot_subtract`
 `verified-by: bravebot_cli::main::doctor_reports_a_denial_the_backend_cannot_subtract_as_not_in_force`
 `verified-by: bravebot_agent::confine::a_refusal_of_the_persons_is_not_lifted_by_the_scope_a_stage_carries`
+`verified-by: bravebot_agent::confine::what_the_default_leaves_every_stage_is_withheld_by_the_persons_lists`
 `verified-by: bravebot_agent::confine::every_kind_of_stage_holds_the_lists`
 `verified-by: bravebot_agent::confine::the_counts_reach_the_description_and_the_profile_and_no_path_does`
 `verified-by: bravebot_agent::confine::a_refusal_spelled_with_a_home_the_session_lacks_is_unapplied`
@@ -2409,8 +2413,31 @@ not built is marked where it appears.
 network is unchanged, so a token a program can read is a token it can send to any host the plan
 lets it reach, which is why the files a tool reads by name to do its job (`~/.config/gh`,
 `~/.git-credentials`, `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.pypirc`) are
-readable and the table is what the account would not want a script to read at all. The rest of this
-section describes the keyed lists, which are what a stage on Windows and an MCP server start from.
+readable and the table is what the account would not want a script to read at all.
+
+**The default keeps four things in reach of every stage on Linux and macOS:** those token files
+and any other a tool keeps outside the table, such as `~/.m2/settings.xml` and
+`~/.gradle/gradle.properties`; the environment, less this agent's own credentials
+([RUN-12](tools/run.md#RUN-12)), so `GITHUB_TOKEN`, `NPM_TOKEN` and `AWS_*` reach a stage; on macOS
+the login keychain file, through which a lookup of the keychain service reaches the items in it
+([SANDBOX-12](#SANDBOX-12), [SANDBOX-31](#SANDBOX-31)); and in the mode `standard` the write rows
+of every toolchain's cache, which a build started later outside the sandbox runs code from
+([SANDBOX-18](#SANDBOX-18)). With the network `open`, the default ([SANDBOX-20](#SANDBOX-20)), a
+stage can send what it read to any host. Each stays because `git`, `gh`, `npm` and `cargo` need it
+when a script starts them (`make`, a `just` recipe), and the binary that script's stage resolves to
+does not name the program it starts, so reach keyed on the program is withheld from the script.
+Keying would not cover the install script either: an `npm install` runs a package's scripts inside
+its own stage, so a lift of `~/.npmrc` keyed on `npm` reaches each of them. A person withholds each
+with a setting: a list of hosts bounds where a stage can send what it read
+([SANDBOX-24](#SANDBOX-24)), `denyRead` refuses a token file or the keychain file and `denyWrite` a
+cache ([SANDBOX-25](#SANDBOX-25)), `run.scrubEnv` withholds a variable
+([RUN-12](tools/run.md#RUN-12)), and the mode `strict` reads a credential only where a stage's
+credential scope names it, reads no keychain file, and writes only the cache of a toolchain the
+stage resolved to or asked for ([SANDBOX-22](#SANDBOX-22)). None of them closes the sockets a Linux
+kernel below Landlock ABI version 9 leaves reachable ([SANDBOX-3](#SANDBOX-3)).
+
+The rest of this section describes the keyed lists, which are what a stage on Windows and an MCP
+server start from.
 
 **The grant is the plan, not the prompt.** A command line compiles to a plan carrying its read set,
 its write set and each stage's resolved binary, and that plan is what a person is shown and what an
