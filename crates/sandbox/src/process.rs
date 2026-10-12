@@ -23,6 +23,154 @@ use std::process::Child;
 use std::process::Command;
 use std::process::{ExitStatus, Stdio};
 
+/// Every start of a program and every creation of a control channel takes this, one at a time.
+static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Runs `spawn`, the start of a program, with no other start and no creation of a control channel
+/// under way in this process.
+///
+/// **Why.** macOS creates a socket pair, or a pipe, and then marks it close-on-exec, so a process
+/// another thread starts between the two steps holds both ends and the bridge hands them on to its
+/// tools. Linux creates them already marked, so the race is macOS's, but the lock is taken
+/// everywhere so every platform runs the same code. The pipes the agent makes for a stage's standard streams, and
+/// a socket pair, are made under [`creating_a_channel`] for the same reason. A start creates the pipes of its own standard
+/// streams inside `spawn`, so a start is also an fd creation and a fork: two starts must not
+/// overlap either, or each could inherit the other's pipe ends and keep them open. Every start of a
+/// program by a crate the bridge links goes through here, and every creation of a control channel
+/// goes through [`creating_a_channel`]. A test in `crates/ui-bridge/tests/layering.rs` reads their
+/// source and fails for a start outside the gate, which is what keeps a new start from skipping it.
+/// See RPCVIEW-8 in `docs/specs/session-view.md`.
+///
+/// **What it costs.** Starts run one at a time. The lock is held until `spawn` returns, which for
+/// `Command::spawn` is after the program has started: the standard library offers no point between
+/// the fork that copies the descriptors and the exec that follows it, and the fork is the step that
+/// has to be kept apart from creating a descriptor. A start stuck in its exec, which includes the
+/// Landlock rule setup on Linux, therefore holds up every start behind it. A start that waits for
+/// its program to finish, rather than to start, would hold the lock that long, so a caller spawns
+/// here and waits outside. The gate is not reentrant: `spawn` must not enter it again, and
+/// entering it again panics instead of waiting for itself. That guard sees only the same thread: a
+/// `spawn` that waits on another thread which itself needs the gate would still hang, so `spawn`
+/// starts the program and nothing else. Start latency under it has not been measured.
+///
+/// **When to reduce it.** If measured latency shows contention, take it only on macOS, create
+/// channels before any worker thread exists, or start programs through a helper that holds none of
+/// the host's descriptors, in that order. Letting starts overlap each other is not on the list:
+/// that is the race above. The reasoning is in decision 10 of
+/// `docs/design/mobile/decisions-and-tradeoffs.md`.
+pub fn starting_a_program<T>(spawn: impl FnOnce() -> T) -> T {
+    let _inside = Inside::enter();
+    let _held = waiting(|| GATE.lock().unwrap_or_else(|p| p.into_inner()));
+    spawn()
+}
+
+/// Runs `create`, which makes a descriptor pair a process could inherit, under the same gate as a
+/// start of a program. A launcher that creates the pair and starts the program that holds its far
+/// end in one step does both here.
+pub fn creating_a_channel<T>(create: impl FnOnce() -> T) -> T {
+    let _inside = Inside::enter();
+    let _held = waiting(|| GATE.lock().unwrap_or_else(|p| p.into_inner()));
+    create()
+}
+
+/// The threads that have asked for the gate and are waiting for it, so a test can see that a start
+/// has reached the gate and is held there, which a timeout cannot tell from a start that is slow.
+static WAITING: std::sync::Mutex<Vec<std::thread::ThreadId>> = std::sync::Mutex::new(Vec::new());
+
+/// The threads waiting at the gate now. For tests; nothing else needs it.
+#[doc(hidden)]
+pub fn threads_waiting_at_the_gate() -> Vec<std::thread::ThreadId> {
+    WAITING.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+/// For tests of a caller that starts a program: runs `start` on another thread while this one holds
+/// the gate, and checks that the start is seen waiting at the gate, has not finished, and finishes
+/// once the gate is released. A start that never reaches the gate fails after ten seconds.
+#[doc(hidden)]
+pub fn start_waits_at_the_gate(start: impl FnOnce() + Send + 'static) {
+    start_waits_at_the_gate_within(start, std::time::Duration::from_secs(10));
+}
+
+/// As [`start_waits_at_the_gate`], with `to_reach` as the time a start gets to reach the gate.
+#[doc(hidden)]
+pub fn start_waits_at_the_gate_within(
+    start: impl FnOnce() + Send + 'static,
+    to_reach: std::time::Duration,
+) {
+    use std::sync::mpsc::{TryRecvError, channel};
+    use std::time::{Duration, Instant};
+    let (finished, done) = channel();
+    let (named, who) = channel();
+    let thread = creating_a_channel(|| {
+        let thread = std::thread::spawn(move || {
+            let _ = named.send(std::thread::current().id());
+            start();
+            let _ = finished.send(());
+        });
+        let id = who
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the start thread runs");
+        let deadline = Instant::now() + to_reach;
+        while !threads_waiting_at_the_gate().contains(&id) {
+            match done.try_recv() {
+                Err(TryRecvError::Empty) => {}
+                Ok(()) => panic!("a program was started while a control channel was being created"),
+                Err(TryRecvError::Disconnected) => {
+                    panic!("the start thread failed instead of waiting")
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the start never reached the gate, so it does not wait for it (or it now starts \
+                 on a thread other than the one this test runs it on)"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            matches!(done.try_recv(), Err(TryRecvError::Empty)),
+            "a program was started while a control channel was being created"
+        );
+        thread
+    });
+    done.recv_timeout(Duration::from_secs(30))
+        .expect("the start never went ahead once the gate was released");
+    thread.join().expect("the start thread ends");
+}
+
+/// Takes the gate with `acquire`, listing this thread as waiting until it has it.
+fn waiting<G>(acquire: impl FnOnce() -> G) -> G {
+    let me = std::thread::current().id();
+    WAITING.lock().unwrap_or_else(|p| p.into_inner()).push(me);
+    let held = acquire();
+    let mut list = WAITING.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(at) = list.iter().position(|id| *id == me) {
+        list.swap_remove(at);
+    }
+    held
+}
+
+std::thread_local! {
+    static INSIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// This thread is inside the gate. Entering again would wait for itself, so it panics first.
+struct Inside;
+
+impl Inside {
+    fn enter() -> Self {
+        assert!(
+            !INSIDE.with(|inside| inside.replace(true)),
+            "the spawn gate was entered again from inside it"
+        );
+        Self
+    }
+}
+
+impl Drop for Inside {
+    fn drop(&mut self) {
+        INSIDE.with(|inside| inside.set(false));
+    }
+}
+
 /// What one of a confined process's standard streams is attached to.
 ///
 /// This crate's own description of the three rather than [`Stdio`], which a backend
@@ -305,7 +453,7 @@ pub(crate) fn start(
         .stdout(Stdio::from(streams.stdout))
         .stderr(Stdio::from(streams.stderr));
 
-    let mut child = command.spawn().map_err(SandboxError::SpawnFailed)?;
+    let mut child = starting_a_program(|| command.spawn()).map_err(SandboxError::SpawnFailed)?;
 
     // The pipe ends are moved into files this crate owns. Neither of the standard
     // library's pipe types can be built from a descriptor, so a backend that creates the
@@ -352,6 +500,129 @@ mod tests {
         let mut text = String::new();
         pipe.read_to_string(&mut text).expect("a readable pipe");
         text
+    }
+
+    /// A confined start waits while a control channel is being created, so the program cannot hold
+    /// a descriptor of the channel in the window before it is marked close-on-exec.
+    #[test]
+    fn a_start_waits_for_a_channel_being_created() {
+        use std::sync::mpsc::{TryRecvError, channel};
+        use std::time::{Duration, Instant};
+        let (finished, done) = channel();
+        let (named, who) = channel();
+        let thread = creating_a_channel(|| {
+            let thread = std::thread::spawn(move || {
+                let _ = named.send(std::thread::current().id());
+                let mut child = start(shell("true"), EVERY_STREAM_PIPED, &Environment::Inherited)
+                    .expect("/bin/sh runs");
+                child.wait().expect("should wait");
+                let _ = finished.send(());
+            });
+            let id = who
+                .recv_timeout(Duration::from_secs(30))
+                .expect("the start thread runs");
+            // The start has to be seen held at the gate, not merely unfinished after a while.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !threads_waiting_at_the_gate().contains(&id) {
+                match done.try_recv() {
+                    Err(TryRecvError::Empty) => {}
+                    Ok(()) => {
+                        panic!("a program was started while a control channel was being created")
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        panic!("the start thread failed instead of waiting")
+                    }
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the start never reached the gate, so it does not wait for it"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(matches!(done.try_recv(), Err(TryRecvError::Empty)));
+            thread
+        });
+        done.recv_timeout(Duration::from_secs(30))
+            .expect("the start never went ahead once the gate was released");
+        thread.join().expect("the start thread ends");
+    }
+
+    /// A start creates the pipes of its standard streams inside `spawn`, and macOS marks those
+    /// close-on-exec in a second step like a socket pair, so a start that overlapped another could
+    /// inherit its pipe ends and keep them open. Starts exclude each other as well as channel
+    /// creation.
+    #[test]
+    fn two_starts_do_not_overlap() {
+        use std::sync::mpsc::channel;
+        use std::time::{Duration, Instant};
+        let (inside, hears) = channel::<()>();
+        let (leave, leaves) = channel::<()>();
+        let first = std::thread::spawn(move || {
+            starting_a_program(|| {
+                let _ = inside.send(());
+                let _ = leaves.recv_timeout(Duration::from_secs(10));
+            });
+        });
+        hears
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first start is inside the gate");
+        let (entered, second_in) = channel::<()>();
+        let second = std::thread::spawn(move || {
+            starting_a_program(|| {
+                let _ = entered.send(());
+            });
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let second_id = second.thread().id();
+        while !threads_waiting_at_the_gate().contains(&second_id) {
+            assert!(
+                second_in.try_recv().is_err(),
+                "a second start was inside the gate with the first"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "the second start never reached the gate"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            second_in.try_recv().is_err(),
+            "a second start was inside the gate with the first"
+        );
+        let _ = leave.send(());
+        first.join().unwrap();
+        second.join().unwrap();
+        assert!(second_in.try_recv().is_ok(), "the second start never ran");
+    }
+
+    /// Entering the gate from inside it would wait for itself. That is a panic, which says where,
+    /// rather than a process whose every start hangs.
+    #[test]
+    fn entering_the_gate_again_panics_rather_than_waiting_for_itself() {
+        use std::time::Duration;
+        let entered_again: [(&str, fn()); 3] = [
+            ("a start inside a start", || {
+                starting_a_program(|| starting_a_program(|| ()));
+            }),
+            ("a start inside a creation", || {
+                creating_a_channel(|| starting_a_program(|| ()));
+            }),
+            ("a creation inside a start", || {
+                starting_a_program(|| creating_a_channel(|| ()));
+            }),
+        ];
+        for (what, enter) in entered_again {
+            let (outcome, hears) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let panicked = std::panic::catch_unwind(enter).is_err();
+                let _ = outcome.send(panicked);
+            });
+            assert_eq!(
+                hears.recv_timeout(Duration::from_secs(3)),
+                Ok(true),
+                "{what} did not panic"
+            );
+        }
     }
 
     /// Each stream asked for a pipe is carried by a pipe of its own, so what a process said

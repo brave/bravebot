@@ -760,7 +760,8 @@ impl<'a> Running<'a> {
                 ),
                 _ => {
                     let (reader, writer) =
-                        std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
+                        bravebot_sandbox::process::creating_a_channel(std::io::pipe)
+                            .map_err(|e| ExecError::Io(e.to_string()))?;
                     (Handle::from(writer), Some(reader))
                 }
             };
@@ -907,7 +908,8 @@ fn destination(
         }
         Where::Discard => Ok((nowhere()?, None, Some(nowhere()?))),
         _ => {
-            let (reader, writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
+            let (reader, writer) = bravebot_sandbox::process::creating_a_channel(std::io::pipe)
+                .map_err(|e| ExecError::Io(e.to_string()))?;
             let duplicate = writer.try_clone().ok().map(Handle::from);
             Ok((Handle::from(writer), Some(reader), duplicate))
         }
@@ -992,8 +994,7 @@ fn launch(
                 .stdin(Stdio::from(stdin))
                 .stdout(Stdio::from(stdout))
                 .stderr(Stdio::from(stderr));
-            command
-                .spawn()
+            bravebot_sandbox::process::starting_a_program(|| command.spawn())
                 .map(Process::Plain)
                 .map_err(|e| ExecError::NotStarted {
                     program: step.program.clone(),
@@ -1062,7 +1063,8 @@ fn for_writing(path: &std::path::Path, append: bool) -> Result<std::fs::File, Ex
 /// the program doing what it was asked to do rather than a failure of the run, and a run that
 /// reported it would report one for every line that filters.
 fn feed(bytes: &str) -> Result<Handle, ExecError> {
-    let (reader, mut writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
+    let (reader, mut writer) = bravebot_sandbox::process::creating_a_channel(std::io::pipe)
+        .map_err(|e| ExecError::Io(e.to_string()))?;
     let bytes = bytes.as_bytes().to_vec();
     std::thread::spawn(move || {
         let _ = writer.write_all(&bytes);
@@ -1543,8 +1545,10 @@ pub fn start_steps(
             }
         };
 
-        let (out_reader, out_writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
-        let (err_reader, err_writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
+        let (out_reader, out_writer) = bravebot_sandbox::process::creating_a_channel(std::io::pipe)
+            .map_err(|e| ExecError::Io(e.to_string()))?;
+        let (err_reader, err_writer) = bravebot_sandbox::process::creating_a_channel(std::io::pipe)
+            .map_err(|e| ExecError::Io(e.to_string()))?;
 
         let child = match from_upstream(&mut upstream).and_then(|reading_from| {
             launch(

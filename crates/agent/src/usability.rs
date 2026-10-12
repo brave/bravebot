@@ -553,7 +553,8 @@ fn start(
     let output = std::fs::File::create(log).map_err(|_| Started::Other)?;
     let errors = output.try_clone().map_err(|_| Started::Other)?;
     command.stdin(Stdio::null()).stdout(output).stderr(errors);
-    let child = command.spawn().map_err(|_| Started::Other)?;
+    let child = bravebot_sandbox::process::starting_a_program(|| command.spawn())
+        .map_err(|_| Started::Other)?;
     Ok(wait_for(child))
 }
 
@@ -678,7 +679,8 @@ fn ask_for_the_login(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = command.spawn().map_err(|_| Started::Other)?;
+    let child = bravebot_sandbox::process::starting_a_program(|| command.spawn())
+        .map_err(|_| Started::Other)?;
     Ok(wait_for(child))
 }
 

@@ -25,8 +25,15 @@ enum Input {
 }
 
 fn main() {
-    // First of all, as the other entry points do: a credential is in this process's memory from
-    // the first turn, and a crash after this writes no image of it. See CRED-23.
+    // First of all, before anything else runs: the descriptors this process speaks over exist
+    // from the moment it starts, and they are the channel to the editor. Another process of the
+    // same user must not be able to copy them out of it. See RPCVIEW-8. The protection starts
+    // here, so a process already positioned to act before this runs is outside what it claims.
+    if let Some(notice) = bravebot_sandbox::inspection::refuse_same_user_inspection().notice() {
+        eprintln!("bravebot-acp: {notice}");
+    }
+    // And for the reason the terminal entry point does it early: a credential is in this process's
+    // memory from the first turn, and a crash after this writes no image of it. See CRED-23.
     let _ = bravebot_agent::crash::disable_core_dumps();
 
     // Not a security decision. The only argument is `--settings <path>`, which names a settings

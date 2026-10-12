@@ -263,6 +263,7 @@ version = "0.14.0"
 dependencies = [
  "bravebot-core",
  "bravebot-diag",
+ "bravebot-sandbox",
  "serde",
  "serde_json",
  "tempfile",
@@ -393,6 +394,8 @@ dependencies = [
  "bravebot-sandbox",
  "bravebot-session",
  "bravebot-stamp",
+ "libc",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "tempfile",

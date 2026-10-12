@@ -393,13 +393,33 @@ pub fn sign_in_if_needed(
     login(profile, say)
 }
 
+/// Start `command` with no input and both output streams piped, under the spawn gate. The wait for
+/// the program to finish belongs to the caller and is taken outside the gate, so a slow CLI holds up
+/// no other start.
+fn start_piped(command: &mut Command) -> std::io::Result<std::process::Child> {
+    bravebot_sandbox::process::starting_a_program(|| {
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    })
+}
+
+/// Run `command` to its end and collect what it printed, as `Command::output` does. It sets the
+/// standard streams the way `output` does by default and replaces any set before, which is harmless
+/// while `export_command` and `profiles_command` set none.
+fn output_of(command: &mut Command) -> std::io::Result<std::process::Output> {
+    start_piped(command)?.wait_with_output()
+}
+
 /// Ask the CLI for credentials, without trying to fix anything.
 fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
     let mut command = export_command(profile);
     if absent(&command) {
         return Err(CredentialError::NotInstalled);
     }
-    let mut output = command.output().map_err(|e| match e.kind() {
+    let mut output = output_of(&mut command).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
         _ => CredentialError::Refused {
             detail: e.to_string(),
@@ -427,7 +447,7 @@ fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
 /// Run only after something has already failed, so the check before every turn still costs one
 /// export and no more.
 fn profiles() -> Option<Vec<String>> {
-    let output = profiles_command().output().ok()?;
+    let output = output_of(&mut profiles_command()).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -482,21 +502,16 @@ fn login(profile: Option<&str>, mut say: impl FnMut(String)) -> Result<(), Crede
     if absent(&command) {
         return Err(CredentialError::NotInstalled);
     }
-    let mut child = command
-        // Both streams, because which one carries the code is the CLI's business and a person who
-        // cannot see it is stuck either way.
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // Nothing is typed at this: the code goes into a browser, and the terminal belongs to
-        // whoever called. A program left able to read stdin would fight for the keys.
-        .stdin(Stdio::null())
-        .spawn()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
-            _ => CredentialError::Refused {
-                detail: e.to_string(),
-            },
-        })?;
+    // Both output streams are piped, because which one carries the code is the CLI's business and a
+    // person who cannot see it is stuck either way. Nothing is typed at this: the code goes into a
+    // browser, and the terminal belongs to whoever called, so a program left able to read stdin
+    // would fight for the keys.
+    let mut child = start_piped(&mut command).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
+        _ => CredentialError::Refused {
+            detail: e.to_string(),
+        },
+    })?;
 
     // Drained on a thread apiece and merged over one channel, so neither stream blocks against a
     // pipe nobody is reading and the lines arrive in the order they were written.
@@ -747,6 +762,19 @@ mod tests {
                 "{what} was handed a different set from the one the configuration names"
             );
         }
+    }
+
+    /// Every start of the CLI, whether its output is collected or its lines are streamed as they
+    /// arrive, is taken under the spawn gate, so it cannot overlap the creation of a control channel.
+    #[cfg(unix)]
+    #[test]
+    fn a_start_of_the_cli_waits_for_a_channel_being_created() {
+        bravebot_sandbox::process::start_waits_at_the_gate(|| {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "true"]);
+            let output = output_of(&mut command).expect("the program runs");
+            assert!(output.status.success());
+        });
     }
 
     /// A directory outside the temp directory that starts empty, because one under it is a

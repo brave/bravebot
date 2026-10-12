@@ -34,4 +34,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# O_NONBLOCK and read(2) for the boundary test, whose value differs between Unixes.
+libc = { workspace = true }
 tempfile = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# pidfd_open(2) and pidfd_getfd(2), which the boundary test's attacker uses to try to copy a
+# descriptor out of the bridge. rustix rather than libc so the test needs no unsafe, as the agent
+# crate takes it for its own calls. It is already in Cargo.lock at this version.
+rustix = { workspace = true, features = ["process"] }
