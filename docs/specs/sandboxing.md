@@ -23,6 +23,17 @@ governs:
   - crates/sandbox/src/rules.rs
   - crates/sandbox/src/programs.rs
   - crates/tui/src/status.rs
+guards:
+  - symbol: find_in
+    sites:
+      - crates/agent/src/confine.rs: 1
+      - crates/agent/src/workspace.rs: 1
+      - crates/sandbox/src/programs.rs: 17
+      - crates/tui/src/clipboard.rs: 8
+      - crates/tui/src/editor.rs: 2
+  - symbol: find_in_with
+    sites:
+      - crates/sandbox/src/programs.rs: 6
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -2310,8 +2321,11 @@ the person's access, which the confinement exists to deny it.
 `verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_can_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_cannot_write_is_still_found`
 `verified-by: bravebot_sandbox::programs::a_registered_directory_is_kept_out_of_the_search`
+`verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_leaves_out_a_row_held_where_the_account_can_write`
+`verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_still_finds_a_program_in_a_held_row_the_account_cannot_write`
 `verified-by: bravebot_sandbox::programs::an_absolute_path_is_the_callers_own_choice`
 `verified-by: bravebot_bedrock::credentials::an_aws_a_confined_stage_wrote_at_the_front_of_path_is_not_the_one_run`
+`verified-by: bravebot_bedrock::credentials::an_aws_where_a_stage_given_the_whole_machine_may_write_is_not_the_one_run`
 `verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
 `verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
