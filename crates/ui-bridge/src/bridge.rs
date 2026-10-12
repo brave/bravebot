@@ -83,6 +83,8 @@ pub struct Bridge {
     next_handle: u64,
     settings: Option<PathBuf>,
     emitter: Emitter,
+    /// The worker threads each open session has started, so a close can say when they have ended.
+    workers: HashMap<String, Arc<crate::workers::Workers>>,
 }
 
 impl Bridge {
@@ -92,6 +94,7 @@ impl Bridge {
             next_handle: 0,
             settings: None,
             emitter: Emitter::new(emit),
+            workers: HashMap::new(),
         }
     }
 
@@ -810,7 +813,48 @@ impl Bridge {
     }
 
     fn close_session(&mut self, request: &Request) -> Result<Value, Failure> {
-        let handle = request.string("session")?;
+        self.close(&request.string("session")?)?;
+        Ok(json!({}))
+    }
+
+    /// Close every open session and return the workers each one still has running.
+    pub fn stop_all(&mut self) -> Vec<Arc<crate::workers::Workers>> {
+        let handles: Vec<String> = self.open.keys().cloned().collect();
+        handles
+            .iter()
+            .filter_map(|handle| self.close(handle).ok())
+            .collect()
+    }
+
+    /// Stop the turn or run a session has going and refuse the question it waits on, leaving the
+    /// session open. Nothing happens to a session with no work in flight.
+    pub fn stop_work(&mut self, handle: &str) {
+        if let Some(running) = self.open.get(handle).and_then(|open| open.running.as_ref()) {
+            running.cancel.cancel();
+            running.refuse_pending();
+        }
+    }
+
+    /// Whether a thread is still working for the session: a turn or a run that has not yet
+    /// returned, saving included.
+    pub fn is_working(&self, handle: &str) -> bool {
+        self.workers
+            .get(handle)
+            .is_some_and(|workers| !workers.is_idle())
+    }
+
+    /// The workers a session has started, which a close waits on.
+    fn workers_of(&mut self, handle: &str) -> Arc<crate::workers::Workers> {
+        Arc::clone(self.workers.entry(handle.to_string()).or_default())
+    }
+
+    /// Close a session: stop its work and refuse what that work waits on.
+    ///
+    /// Returns once the work has been told, not once it has stopped. The returned workers say when
+    /// the session's threads have ended, which is when it is closed: until then a turn can still
+    /// save its record.
+    pub fn close(&mut self, handle: &str) -> Result<Arc<crate::workers::Workers>, Failure> {
+        let handle = handle.to_string();
         let open = self
             .open
             .remove(&handle)
@@ -825,7 +869,7 @@ impl Bridge {
             running.cancel.cancel();
             running.refuse_pending();
         }
-        Ok(json!({}))
+        Ok(self.workers.remove(&handle).unwrap_or_default())
     }
 
     /// Choose what the session's next turn asks before it acts.
@@ -1065,7 +1109,7 @@ impl Bridge {
             open.model = model;
             open.definition = addressing.clone();
         }
-        thread::spawn(move || {
+        self.workers_of(&handle).spawn(move || {
             work(Work {
                 model: worker_model,
                 addressing,
@@ -1219,7 +1263,7 @@ impl Bridge {
         }
         let emitter = self.emitter.clone();
         let session = handle.clone();
-        thread::spawn(move || {
+        self.workers_of(&handle).spawn(move || {
             crate::manifest::walk(crate::manifest::Walk {
                 emitter,
                 session,
@@ -3426,6 +3470,10 @@ mod watch_tests {
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_tests;
+
+#[cfg(test)]
+#[path = "closing_tests.rs"]
+mod closing_tests;
 
 #[cfg(test)]
 #[path = "targets_tests.rs"]

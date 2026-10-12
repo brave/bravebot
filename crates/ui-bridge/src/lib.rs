@@ -42,6 +42,7 @@ pub mod store;
 pub mod turn;
 pub mod view;
 pub mod wire;
+pub mod workers;
 
 /// Which build of the agent this bridge is linked against.
 ///
