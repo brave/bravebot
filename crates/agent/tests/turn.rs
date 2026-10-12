@@ -16154,6 +16154,47 @@ fn a_redirection_carrying_untrusted_output_distrusts_the_file_it_wrote() {
     );
 }
 
+/// On a volume that folds case, `> summary.txt 2> SUMMARY.txt` names one file twice. The
+/// reservation the line holds for the first spelling covers the second, so the line is refused as
+/// a second writer to that file, and the file stays untrusted under either spelling. Taking the
+/// two as one effect instead would leave a second file whose name only folds the same, as
+/// `cla\u{df}.md` does to `class.md` on NTFS, with no effect and no scan of its own. A volume that
+/// holds the spellings apart is asked nothing more.
+#[test]
+fn a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer() {
+    let scratch = Scratch::new("run-redirect-two-cases");
+    std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+    if !trust.folds_case() {
+        return;
+    }
+    trust.trust(".");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn_with_trust(
+        &scratch,
+        r#"{"command":"cat notes.html > summary.txt 2> SUMMARY.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+        trust,
+    )
+    .expect("the turn runs");
+
+    assert!(
+        !std::fs::read_to_string(scratch.path.join("summary.txt"))
+            .unwrap_or_default()
+            .contains("from the web"),
+        "a line naming one file under two spellings ran as two writers to it"
+    );
+    for spelling in ["summary.txt", "SUMMARY.txt"] {
+        assert!(
+            !outcome.trust.is_trusted(spelling),
+            "{spelling} holds what an unvouched program printed and reads back trusted"
+        );
+    }
+}
+
 /// A line a person vouched for prints trusted output, and writing it somewhere does not make
 /// that file trusted: an append keeps whatever was already in it, and the label answers for the
 /// programs rather than for the file. Trusting the path on the strength of it would hand back the

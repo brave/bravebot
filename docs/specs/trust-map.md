@@ -100,7 +100,11 @@ a map that does not fold has never made trust cover a path it was not written ab
 without the answer compares bytes, and a map moved to another directory takes that directory's
 answer. Folding takes each letter to upper case and then to lower case, since APFS opens `ſrc`
 as `src` and `ſ` is its own lower case. Where two rules differ only in case on a volume that folds,
-the one that sorts first decides, and the map does not replace one with the other.
+the weaker decides every spelling, whichever sorts first and whichever was written last: untrusted
+over undecided, and undecided over trusted. A decision about one spelling replaces the rule about
+that spelling and leaves a lower rule about another in force, since a name that folds the same is
+not always the same file: NTFS holds `claß.md` and `class.md` apart, and a directory added from a
+case-sensitive volume holds `Docs` and `docs` apart.
 
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
@@ -124,7 +128,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_rule_covers_a_case_variant_spelling_of_the_same_file`
 `verified-by: bravebot_core::trust::a_folding_volume_applies_a_rule_in_both_polarities_to_the_other_spelling`
-`verified-by: bravebot_core::trust::a_folding_volume_lets_the_sort_first_case_variant_decide_both_spellings`
+`verified-by: bravebot_core::trust::a_folding_volume_lets_the_weakest_case_variant_decide_every_spelling`
 `verified-by: bravebot_core::trust::a_folding_volume_reads_a_long_s_as_the_letter_it_opens_as`
 `verified-by: bravebot_core::trust::a_case_sensitive_volume_keeps_spellings_apart`
 `verified-by: bravebot_core::trust::a_map_moved_takes_the_new_volumes_answer`
@@ -190,7 +194,10 @@ also retain current file decisions on every returned error or cancellation, as
 
 Approvals based on a preview are checked against the path's revision before effect entry or
 vouching. A changed path cannot spend the old approval. Changes to another path do not invalidate
-that approval. A backup records the trust of its bytes at capture under the same boundary.
+that approval. A backup records the trust of its bytes at capture under the same boundary. On a
+volume that folds case (TRUST-2), every spelling of a path is that path, both for the writer an
+active path refuses and for the revision an approval is checked against, so a run line redirecting
+to one file under two such spellings is refused as a second writer to it.
 
 `verified-by: bravebot_tui::sessions::failed_manifest_retains_file_decisions_live_and_resumed`
 `verified-by: bravebot_tui::sessions::cancelled_manifest_retains_file_decisions_live_and_resumed`
@@ -200,6 +207,11 @@ that approval. A backup records the trust of its bytes at capture under the same
 `verified-by: bravebot_agent::workspace::shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_writes`
 `verified-by: bravebot_core::file_authority::path_revisions_follow_whole_segment_ancestors`
 `verified-by: bravebot_core::file_authority::completion_observes_ancestor_decisions_but_not_sibling_decisions`
+`verified-by: bravebot_core::file_authority::an_untrusted_write_through_another_spelling_is_read_untrusted_under_both`
+`verified-by: bravebot_core::file_authority::a_second_writer_through_another_spelling_is_refused_while_the_first_is_open`
+`verified-by: bravebot_core::file_authority::a_decision_through_another_spelling_moves_the_revision_of_the_path`
+`verified-by: bravebot_agent::workspace::an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelling`
+`verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer`
 
 **Why writing trusted data never asks.** Trusted data means the turn observed nothing untrusted,
 so it holds no byte an attacker influenced, and the destination only ever gains trust. There is
