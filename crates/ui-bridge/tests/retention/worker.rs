@@ -67,6 +67,7 @@ fn take_turn(
             turn: if first { 1 } else { 2 },
             cancel,
             pending: Arc::new(Mutex::new(None)),
+            answerers: Default::default(),
             answers: receiver,
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })

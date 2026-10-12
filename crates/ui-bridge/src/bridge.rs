@@ -12,10 +12,11 @@
 //! store one: `session.list` returns the durable `(directory, id)`, and opening converts
 //! that into a handle again.
 
+use crate::answerers::Answerers;
 use crate::emit::{Emitter, Listener};
 use crate::protocol::{ErrorCode, Event, Failure, Request};
 use crate::running::{Mcp, Running, State};
-use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Reply};
+use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Kind, Reply};
 use crate::{store, wire};
 use bravebot_agent::confirm::Decision;
 use bravebot_agent::trusted;
@@ -85,6 +86,12 @@ pub struct Bridge {
     emitter: Emitter,
     /// The worker threads each open session has started, so a close can say when they have ended.
     workers: HashMap<String, Arc<crate::workers::Workers>>,
+    /// Who can answer each session's questions. A session with no entry is answered by anyone,
+    /// as every client of the stdio transports does.
+    answerers: HashMap<String, Answerers>,
+    /// Whether a session's set starts as nobody. A host sets it, so a session it did not mean to
+    /// make answerable is not.
+    refuse_until_set: bool,
 }
 
 impl Bridge {
@@ -95,7 +102,16 @@ impl Bridge {
             settings: None,
             emitter: Emitter::new(emit),
             workers: HashMap::new(),
+            answerers: HashMap::new(),
+            refuse_until_set: false,
         }
+    }
+
+    /// Refuse every question of a session until [`Bridge::set_answerable`] or
+    /// [`Bridge::attach_view`] says who can answer it.
+    pub fn refusing_questions_until_set(mut self) -> Self {
+        self.refuse_until_set = true;
+        self
     }
 
     /// Preserve the selected path even if it disappeared: future requests must fail rather
@@ -835,12 +851,53 @@ impl Bridge {
         }
     }
 
+    /// Say which kinds of question the session's controller can answer from now on. A question of
+    /// another kind is refused when it is asked, without being shown; one already waiting is not
+    /// touched. An empty list is nobody.
+    pub fn set_answerable(&mut self, handle: &str, kinds: &[Kind]) -> Result<(), Failure> {
+        if !self.open.contains_key(handle) {
+            return Err(Failure::no_such_session());
+        }
+        self.answerers_of(handle).only(kinds)
+    }
+
+    /// The session's controller is gone. Nobody can answer from now on, and the question waiting
+    /// is refused and shown as resolved. The turn or run goes on without it: what it asks next is
+    /// refused when asked. Nothing happens to a session with no question waiting.
+    pub fn lose_control(&mut self, handle: &str) {
+        if !self.open.contains_key(handle) {
+            return;
+        }
+        // First, so that a question asked from here on is refused and one asked just before this
+        // is registered where the refusal below finds it.
+        // Where the set cannot be written no question is answerable either, so a failure is the
+        // same refusal.
+        let _ = self.answerers_of(handle).nobody();
+        if let Some(running) = self.open.get(handle).and_then(|open| open.running.as_ref()) {
+            running.refuse_pending_with(|request| self.emitter.view_answered(handle, request));
+        }
+    }
+
     /// Whether a thread is still working for the session: a turn or a run that has not yet
     /// returned, saving included.
     pub fn is_working(&self, handle: &str) -> bool {
         self.workers
             .get(handle)
             .is_some_and(|workers| !workers.is_idle())
+    }
+
+    fn answerers_of(&mut self, handle: &str) -> Answerers {
+        let refuse = self.refuse_until_set;
+        self.answerers
+            .entry(handle.to_string())
+            .or_insert_with(|| {
+                if refuse {
+                    Answerers::none()
+                } else {
+                    Answerers::default()
+                }
+            })
+            .clone()
     }
 
     /// The workers a session has started, which a close waits on.
@@ -861,6 +918,7 @@ impl Bridge {
             .ok_or_else(Failure::no_such_session)?;
 
         self.emitter.detach_view(&handle);
+        self.answerers.remove(&handle);
 
         // Stop the work, then refuse whatever it was waiting on. Both, and in that order:
         // cancelling alone would leave a write blocked on an answer that is never coming,
@@ -1085,6 +1143,7 @@ impl Bridge {
 
         let emitter = self.emitter.clone();
         let session = handle.clone();
+        let answerers = self.answerers_of(&handle);
 
         let worker_model = model.clone();
 
@@ -1138,6 +1197,7 @@ impl Bridge {
                 turn: turn_number,
                 cancel,
                 pending,
+                answerers,
                 answers: answers_rx,
                 finished,
             });
@@ -1263,6 +1323,7 @@ impl Bridge {
         }
         let emitter = self.emitter.clone();
         let session = handle.clone();
+        let answerers = self.answerers_of(&handle);
         self.workers_of(&handle).spawn(move || {
             crate::manifest::walk(crate::manifest::Walk {
                 emitter,
@@ -1281,6 +1342,7 @@ impl Bridge {
                 run,
                 cancel,
                 pending,
+                answerers,
                 answers: answers_rx,
                 finished,
             });
@@ -2075,6 +2137,7 @@ struct Work {
     turn: usize,
     cancel: Cancel,
     pending: crate::turn::Pending,
+    answerers: Answerers,
     answers: mpsc::Receiver<crate::turn::Reply>,
     finished: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -2180,6 +2243,7 @@ fn work(work: Work) {
         turn,
         cancel,
         pending,
+        answerers,
         answers,
         finished,
     } = work;
@@ -2200,7 +2264,8 @@ fn work(work: Work) {
         answers,
         Arc::clone(&state.question_ids),
         cancel.clone(),
-    );
+    )
+    .answerable_by(answerers);
 
     // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
     // Here rather than when the session opened, so that the questions about them come after the
@@ -3482,3 +3547,7 @@ mod targets_tests;
 #[cfg(test)]
 #[path = "../tests/retention/worker.rs"]
 mod retention_tests;
+
+#[cfg(test)]
+#[path = "control_tests.rs"]
+mod control_tests;

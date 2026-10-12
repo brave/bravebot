@@ -46,6 +46,7 @@ pub(crate) struct Walk {
     pub run: usize,
     pub cancel: Cancel,
     pub pending: crate::turn::Pending,
+    pub answerers: crate::answerers::Answerers,
     pub answers: mpsc::Receiver<crate::turn::Reply>,
     pub finished: Arc<AtomicBool>,
 }
@@ -82,6 +83,7 @@ pub(crate) fn walk(walk: Walk) {
         run,
         cancel,
         pending,
+        answerers,
         answers,
         finished,
     } = walk;
@@ -118,7 +120,8 @@ pub(crate) fn walk(walk: Walk) {
         answers,
         Arc::clone(&state.question_ids),
         cancel.clone(),
-    );
+    )
+    .answerable_by(answerers);
     // Screening off the task, which asks for none: nothing fills in a verdict before the plan is
     // fixed, so a confirmer told to screen would refuse on a word nobody made.
     let mut confirmer = Confining::new(&mut asking, permission_mode, task.auto_vetting);
