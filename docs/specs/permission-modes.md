@@ -158,8 +158,9 @@ host is a name a program chose and a yes would open the network to it for every 
 the stages of the lead session's `run` are given at the start every path a `request_path` for
 writing would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), so a run does not fail on a
 sibling directory before the planner can ask. The refusals of that request hold: the home directory
-and the directories above it as wholes, `~/.ssh`, `~/.bravebot`, the credential locations and the
-person's `denyRead` and `denyWrite`. This widens `standard`'s writes, which is the one way the
+and the directories above it as wholes, `~/.ssh`, `~/.bravebot`, the credential locations, the
+places where a write becomes code that runs later (a shell's startup files, a per-user job, git's own
+configuration) and the person's `denyRead` and `denyWrite`. This widens `standard`'s writes, which is the one way the
 permission mode widens a sandbox mode ([SANDBOX-22](sandboxing.md#SANDBOX-22)). The mode never
 changes which sandbox mode is in force, so `strict` keeps the per-path request, and bypass does not
 approve a line that asks to start with no profile ([SANDBOX-29](sandboxing.md#SANDBOX-29)). A
@@ -222,7 +223,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
 `verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
 `verified-by: bravebot_agent::confine::a_stage_outside_standard_bypass_on_the_lead_session_is_given_no_extra_row`
-`verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_or_a_new_entry_in_the_home_directory`
+`verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home`
 `verified-by: bravebot_agent::permission_mode::bypassing_promotes_quarantined_content_where_nothing_screens_it`
 `verified-by: bravebot_agent::permission_mode::an_unscreened_unattended_release_is_credited_to_the_mode`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_the_output`

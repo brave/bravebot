@@ -1124,10 +1124,12 @@ compared without regard to case on macOS and exactly on Linux. A directory above
 home directory among them, is granted and the location inside it stays refused. On macOS Seatbelt's
 refusal of a read is not a refusal of a write, so each location the stage is refused reading that
 lies inside a directory it may write is refused writing too, as is each place under the home
-directory where a write becomes code that runs later outside the profile: the shell startup files
-`~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, `~/.bash_profile`, `~/.bash_login`,
-`~/.bashrc` and `~/.profile`, and the directory `~/Library/LaunchAgents`. These persistence
-locations are refused for writing only and are read as the rest of the home directory is. A session
+directory where a write becomes code that runs later outside the profile: the shell startup and
+logout files `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, `~/.zlogout`, `~/.bash_profile`,
+`~/.bash_login`, `~/.bashrc`, `~/.bash_logout` and `~/.profile`, the directory `~/.config/fish`, the
+per-user job directories `~/Library/LaunchAgents`, `~/.config/systemd/user` and
+`~/.config/autostart`, and git's own configuration `~/.gitconfig` and `~/.config/git/config`. These
+persistence locations are refused for writing only and are read as the rest of the home directory is. A session
 opened on the home directory or on a directory above it therefore writes beneath it except the
 credential locations and the persistence locations, and a session opened on a directory that holds
 none of them has nothing to refuse. `/add-dir`,
@@ -1144,9 +1146,11 @@ somebody answered. The `.git` hold-back ([SANDBOX-14](#SANDBOX-14)) is lifted be
 started in a directory it may write is where a person runs `git commit`, and a profile that refused
 it would be one somebody turns off; it is the same reach Linux gives. A program installed inside the
 home is read as the file a person read and not as its directory, so that granting a program does not
-open the home. The shell startup files and `~/Library/LaunchAgents` are refused for writing on macOS
-because a program started later by a shell or by the launch daemon runs as the account with no
-profile around it, so a write there reaches past the stage that made it.
+open the home. The persistence locations are refused for writing on macOS because a program started
+later by a shell, by launchd, systemd or a desktop session, or by git (`core.fsmonitor`,
+`core.pager`, a `!` alias, a credential helper) runs as the account with no profile around it, so a
+write there reaches past the stage that made it. The cost is that a stage of a session opened on the
+home directory cannot run `git config --global`.
 
 Every cache is written by every stage on Linux and macOS in the mode `standard` because a stage is as often a script or a
 wrapper (`make check`, a `just` recipe) as one program, and the binary it resolves to is not the
@@ -2156,7 +2160,9 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   write: `~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`,
   `~/.bravebot` and anything inside either, a credential location of the table
   ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one (`~/.config` holds
-  `~/.config/gcloud`), any path holding a control character, and any path holding `*` or `?`. The path is judged where it leads,
+  `~/.config/gcloud`), any path holding a control character, and any path holding `*` or `?`. A
+  request for writing is also refused at, inside or above a persistence location
+  ([SANDBOX-18](#SANDBOX-18)); a request to read one is not. The path is judged where it leads,
   through its links. A refused request is not put to the person, and the result says that no answer
   would change it. A path that does not exist is not asked about either.
 - **The person's own refusals still hold.** A `denyRead` or `denyWrite` entry covering the path
@@ -2183,7 +2189,8 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   directory and any directory above it as a whole (the entries already in them stay writable, and
   no new entry is made directly in one), `~/.ssh`, `~/.bravebot` and everything inside either, each
   credential location of the table ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one,
-  and every path the person's `denyRead` or `denyWrite` covers. Paths are judged where they lead,
+  each persistence location ([SANDBOX-18](#SANDBOX-18)) and any directory that holds one, and every
+  path the person's `denyRead` or `denyWrite` covers. Paths are judged where they lead,
   through links. It is for programs only: the file tools keep the reach
   [TRUST-10](trust-map.md#TRUST-10) gives them, and a `request_path` under bypass still opens a
   directory for them ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). Under `strict` each path is
@@ -2215,8 +2222,12 @@ left out of the places bravebot finds its own helpers ([SANDBOX-30](#SANDBOX-30)
 policy holds it, and stays left out for the life of the process, after the permission mode
 changes. The rows are read from the directories as they are when a stage's policy is built, so a
 directory made inside a directory spread around a refusal by an earlier stage of the same run is
-not covered until the next. The existing files and directories a request would be granted include
-the ones a shell reads at start; the refusals above are the whole of what is held back.
+not covered until the next. A program directory on the account's search path, such as
+`~/.local/bin`, `~/.cargo/bin` or a Homebrew prefix, is written like any other, so a program a stage
+leaves there runs unconfined when the person's shell finds it before the one they meant; refusing
+them would refuse `pip install --user`, `cargo install` and `brew` under bypass. A stage cannot run
+`git config --global`, since git's configuration is a persistence location. The refusals above are
+the whole of what is held back.
 
 `verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
 `verified-by: bravebot_sandbox::rules::a_request_at_inside_or_above_a_credential_location_is_refused`
@@ -2232,13 +2243,15 @@ the ones a shell reads at start; the refusals above are the whole of what is hel
 `verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
 `verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_the_home_directory_and_what_holds_a_credential`
+`verified-by: bravebot_sandbox::rules::what_is_written_without_a_request_leaves_out_where_a_write_runs_later`
+`verified-by: bravebot_sandbox::rules::a_request_to_write_where_a_write_runs_later_is_refused_and_one_to_read_it_is_not`
 `verified-by: bravebot_agent::confine::a_bypass_stage_holds_the_rows_a_request_would_be_granted_and_not_the_home_directory`
 `verified-by: bravebot_agent::confine::a_stage_outside_standard_bypass_on_the_lead_session_is_given_no_extra_row`
 `verified-by: bravebot_agent::confine::a_bypass_stage_keeps_the_persons_denied_write_and_says_what_it_writes`
 `verified-by: bravebot_agent::confine::a_bypass_stage_cannot_write_where_the_person_denied_a_read`
 `verified-by: bravebot_agent::tools::only_the_lead_session_in_bypass_is_given_what_a_request_would_be`
 `verified-by: bravebot_agent::confine::a_bypass_stage_writes_beside_the_working_directory_without_a_request`
-`verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_or_a_new_entry_in_the_home_directory`
+`verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home`
 `verified-by: bravebot_agent::confine::a_bypass_stage_keeps_a_denied_write_and_strict_keeps_the_request`
 `verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
 `verified-by: bravebot_agent::turn::a_delegate_of_a_confining_turn_cannot_write_outside_the_session`

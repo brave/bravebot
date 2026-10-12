@@ -366,45 +366,64 @@ fn a_bypass_stage_writes_beside_the_working_directory_without_a_request() {
 }
 
 /// SANDBOX-22 under bypass: what a `request_path` would never be granted is still refused. The
-/// regression it rejects is a row wide enough to cover a credential location, the home directory's
-/// own entries, or the directory above it. The first write is the control that the stage can write
-/// at all.
+/// regression it rejects is a row wide enough to cover a credential location, a file a shell or
+/// git runs later, a per-user job, the home directory's own entries, or the directory above it.
+/// The first write is the control that the stage can write at all.
 #[cfg(unix)]
 #[test]
-fn a_bypass_stage_still_cannot_write_a_credential_or_a_new_entry_in_the_home_directory() {
+fn a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home() {
     if !can_confine() {
         return;
     }
     let places = Places::new("unasked-refused");
     std::fs::create_dir_all(places.home.join(".config/gcloud")).expect("a credential directory");
+    for directory in ["Library/LaunchAgents", ".config/systemd/user"] {
+        std::fs::create_dir_all(places.home.join(directory)).expect("a job directory");
+    }
+    std::fs::write(places.home.join(".editorconfig"), "root = true\n").expect("a home file");
+    std::fs::write(places.home.join(".zshrc"), "export A=1\n").expect("a startup file");
     let confinement = places.confinement().with_unasked_writes(true);
     let top = places.home.parent().expect("a parent").to_path_buf();
     let attempt = |path: PathBuf| {
         let ran = places.run(&format!("touch '{}'", path.display()), Some(&confinement));
         (ran.ended_well, path.exists())
     };
+    let appended = |name: &str| {
+        places
+            .run(
+                &format!("tee -a '{}'", places.home.join(name).display()),
+                Some(&confinement),
+            )
+            .ended_well
+    };
 
     let beside = attempt(places.beside.join("control.txt"));
-    let existing = places.run(
-        &format!("tee -a '{}'", places.home.join(".gitconfig").display()),
-        Some(&confinement),
-    );
+    let existing = appended(".editorconfig");
     let new_in_existing_dir = attempt(places.home.join(".config/other.txt"));
     let refused = [
         ("ssh", places.home.join(".ssh/planted")),
         ("state directory", places.home.join(".bravebot/planted")),
         ("aws", places.home.join(".aws/planted")),
         ("gcloud", places.home.join(".config/gcloud/planted")),
+        (
+            "launch agent",
+            places.home.join("Library/LaunchAgents/planted.plist"),
+        ),
+        (
+            "systemd unit",
+            places.home.join(".config/systemd/user/planted.service"),
+        ),
         ("new entry in home", places.home.join("planted")),
         ("new entry above home", top.join("planted")),
     ]
     .map(|(what, path)| (what, attempt(path)));
+    let rewritten = [".zshrc", ".gitconfig"].map(|name| (name, appended(name)));
 
     assert_eq!(beside, (true, true), "the stage could not write at all");
-    assert!(
-        existing.ended_well,
-        "an existing file in home is writable: {existing:?}"
-    );
+    assert!(existing, "an existing file in home is not writable");
+    for (name, ended_well) in rewritten {
+        assert!(!ended_well, "{name} was written");
+    }
     assert!(
         !new_in_existing_dir.0,
         "a directory holding a credential is treated as home: its new entries are refused"

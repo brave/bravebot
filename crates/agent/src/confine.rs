@@ -23,7 +23,9 @@ use bravebot_sandbox::hosts::{HostRule, Refusal, Verdict};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::proxy::Proxy;
-use bravebot_sandbox::rules::{Lists, Rules, without_verbatim_prefix, writable_without_a_request};
+use bravebot_sandbox::rules::{
+    Lists, Rules, persistence_locations, without_verbatim_prefix, writable_without_a_request,
+};
 use bravebot_sandbox::scope::{Reach, Requested, Scope, environment_reach, requested_reach};
 use bravebot_sandbox::signing;
 use bravebot_sandbox::toolchain::Toolchain;
@@ -1537,26 +1539,6 @@ fn process_environment() -> Vec<(String, String)> {
     std::env::vars().collect()
 }
 
-/// The places under `home` that a write turns into code that runs unconfined later, which a
-/// session directory at or above the home must not be able to write on macOS (SANDBOX-18): the
-/// shell startup files and the directory the launch daemon reads per-user jobs from.
-fn persistence_locations(home: &Path) -> Vec<PathBuf> {
-    [
-        ".zshenv",
-        ".zprofile",
-        ".zshrc",
-        ".zlogin",
-        ".bash_profile",
-        ".bash_login",
-        ".bashrc",
-        ".profile",
-        "Library/LaunchAgents",
-    ]
-    .iter()
-    .map(|name| home.join(name))
-    .collect()
-}
-
 fn variable(environment: &[(String, String)], name: &str) -> Option<String> {
     lookup(environment, name, FOLD_CASE)
 }
@@ -1939,7 +1921,14 @@ mod tests {
                 ".bash_login",
                 ".bashrc",
                 ".profile",
+                ".zlogout",
+                ".bash_logout",
+                ".config/fish",
                 "Library/LaunchAgents",
+                ".config/systemd/user",
+                ".config/autostart",
+                ".gitconfig",
+                ".config/git/config",
             ] {
                 let path = Path::new(HOME).join(name);
                 assert!(
