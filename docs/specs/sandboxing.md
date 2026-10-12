@@ -1145,7 +1145,10 @@ are unchanged.
 **What it costs.** On Windows a program argument that names a path outside the directories the
 session was opened on is refused by the kernel, since only redirections are opened by this process
 on the stage's behalf: a `cat ~/notes.txt` fails, and a person adds the directory
-([trust-map.md](trust-map.md)). On Linux and macOS a stage reads the machine except the credential
+([trust-map.md](trust-map.md)). A Windows stage's console is one nobody can type into, so a program
+that asks its question on the console rather than on its input waits until the line is cancelled
+or runs out of time, and the console's code page is the system's rather than one a person set with
+`chcp` in the terminal bravebot runs in. On Linux and macOS a stage reads the machine except the credential
 table ([SANDBOX-12](#SANDBOX-12)), and writes only the session's directories, so what it costs is a
 write outside them and a read of a credential location its plan does not carry. On Linux each
 stage start lists every directory above a refused location, and the time that takes grows with the

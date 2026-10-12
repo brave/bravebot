@@ -389,6 +389,28 @@ fn on_this_console() -> Vec<u32> {
     }
 }
 
+/// Attach this process to a new console, leaving its standard streams where they were.
+///
+/// The platform points the three at the new console, and the other tests in this binary, which
+/// run beside this one, and the harness's own report write through them.
+fn give_this_process_a_console() {
+    use windows_sys::Win32::System::Console::{
+        AllocConsole, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        SetStdHandle,
+    };
+
+    let streams = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let held = streams.map(|stream| unsafe { GetStdHandle(stream) });
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let allocated = unsafe { AllocConsole() };
+    assert_ne!(allocated, 0, "{}", std::io::Error::last_os_error());
+    for (stream, handle) in streams.into_iter().zip(held) {
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        unsafe { SetStdHandle(stream, handle) };
+    }
+}
+
 /// The regression it rejects: a stage attached to the console this process runs in. Any process
 /// attached to a console can write input into it, so a program on the terminal's console can
 /// type an answer to the prompt a person is about to read.
@@ -398,8 +420,7 @@ fn on_this_console() -> Vec<u32> {
 #[test]
 fn a_stage_is_not_attached_to_the_console_this_process_runs_in() {
     if on_this_console().is_empty() {
-        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-        unsafe { windows_sys::Win32::System::Console::AllocConsole() };
+        give_this_process_a_console();
     }
     let sandbox = sandbox();
     let (child, input, _seen) = a_stage_with_a_child_waiting_on_its_input(&sandbox, "console");
