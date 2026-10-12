@@ -160,11 +160,12 @@ writing would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), so a run does
 sibling directory before the planner can ask. The refusals of that request hold: the home directory
 and the directories above it as wholes, `~/.ssh`, `~/.bravebot`, the credential locations, the
 places where a write becomes code that runs later (a shell's startup files, a per-user job, git's own
-configuration) and the person's `denyRead` and `denyWrite`. This widens `standard`'s writes, which is the one way the
-permission mode widens a sandbox mode ([SANDBOX-22](sandboxing.md#SANDBOX-22)). The mode never
-changes which sandbox mode is in force, so `strict` keeps the per-path request, and bypass does not
-approve a line that asks to start with no profile ([SANDBOX-29](sandboxing.md#SANDBOX-29)). A
-delegate's programs are not given it.
+configuration) and the person's `denyRead` and `denyWrite`. This widens `standard`'s writes, which
+is the one way the permission mode widens a sandbox mode ([SANDBOX-22](sandboxing.md#SANDBOX-22)).
+The mode never changes which sandbox mode is in force, so `strict` keeps the per-path request, and
+bypass does not approve a line that asks to start with no profile
+([SANDBOX-29](sandboxing.md#SANDBOX-29)), nor the start of a language server, which runs with no
+profile either ([LSP-5](tools/lsp.md#LSP-5)). A delegate's programs are not given it.
 
 **A write that would create a credential is answered too.** A value the credential scan inferred is
 a question for the person under MODE-2, and here the flag is the person's answer to it, as it is to
@@ -221,6 +222,7 @@ prompts, which in practice means a container with no network and nothing in it w
 the wrong mode everywhere else, and it is named `--dangerously-skip-permissions` for that reason.
 
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
+`verified-by: bravebot_agent::permission_mode::a_language_server_is_put_to_the_person_in_every_mode_bypass_included`
 `verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
 `verified-by: bravebot_agent::confine::a_stage_outside_standard_bypass_on_the_lead_session_is_given_no_extra_row`
 `verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home`
