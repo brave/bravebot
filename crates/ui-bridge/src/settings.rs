@@ -8,6 +8,21 @@ pub fn layers(project: Option<&Path>, selected: Option<&Path>) -> Settings {
     Settings::layered(bravebot_agent::home::directory(), project, selected)
 }
 
+/// Settle, for the life of the process and before a session is assembled, the answers every turn
+/// in it reads: the network its programs keep, the lists of paths a person wrote and the hosts a
+/// stage is held to (SANDBOX-20, SANDBOX-25, SANDBOX-24). Nothing a window or a client sends sets
+/// them; the person's settings, the file the process was started on and the managed pin decide.
+pub fn settle_for_process(selected: Option<&Path>) {
+    let here = std::env::current_dir().ok();
+    let layers = layers(here.as_deref(), selected);
+    bravebot_config::settle_run_network_in(None, &layers);
+    bravebot_config::settle_sandbox_filesystem_in(
+        &bravebot_sandbox::rules::Lists::default(),
+        &layers,
+    );
+    bravebot_config::sandbox_network::settle(&layers);
+}
+
 /// Whether a safe verdict releases quarantined content with nobody asked, resolved as the terminal does.
 pub fn auto_vetting(settings: &Settings) -> bool {
     resolve_vetting(settings, bravebot_session::store::load_vetting())
