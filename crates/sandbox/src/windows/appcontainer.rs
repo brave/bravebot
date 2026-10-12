@@ -51,9 +51,9 @@ use windows_sys::Win32::System::JobObjects::{
     SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
-    EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, INFINITE,
-    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
+    GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
     PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
     PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
     TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
@@ -918,6 +918,11 @@ fn started(
     let mut created = PROCESS_INFORMATION::default();
     // Suspended, so the process runs nothing before it is in the job: a child it started first
     // would be outside the job and outlive a kill.
+    //
+    // On a console of its own with no window, rather than on this process's: any process attached
+    // to a console can write input into it, which on the terminal's console is typing an answer
+    // to a prompt. Detaching it instead would give each console program it starts a console, and
+    // a window, of its own; with this they share the one it was given.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let started = unsafe {
         CreateProcessW(
@@ -926,7 +931,7 @@ fn started(
             null(),
             null(),
             1,
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | unicode,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW | unicode,
             block,
             start_in,
             std::ptr::from_mut(&mut startup).cast::<STARTUPINFOW>(),

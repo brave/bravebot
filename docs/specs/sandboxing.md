@@ -1122,7 +1122,10 @@ platform cannot confine is refused as it is elsewhere. The stage is created susp
 job of its own before it runs, so every program it starts is in that job too. Killing the stage
 ends the job, and the job also ends when its one handle is closed, which the backend does when the
 process is let go of and the platform does when this process ends, a crash included. A stage the
-platform will not put in a job is not started.
+platform will not put in a job is not started. The stage is given a console of its own with no
+window rather than the one this process runs in, since any process attached to a console can write
+input into it, which on the terminal's console is typing an answer to a prompt. The programs it
+starts share that console, so none of them opens a window.
 
 **Why.** A profile that is applied when it can be and skipped when it cannot is the silent
 degradation [SANDBOX-1](#SANDBOX-1) exists to forbid, and the person who endorsed a line believes it
@@ -1160,6 +1163,7 @@ number of entries in those directories, the home directory among them. On macOS 
 `verified-by: bravebot_sandbox::windows::a_batch_file_is_refused_and_an_executable_is_not`
 `verified-by: bravebot_sandbox::windows::killing_a_stage_ends_the_programs_it_started`
 `verified-by: bravebot_sandbox::windows::a_stage_let_go_of_while_running_leaves_no_program_behind`
+`verified-by: bravebot_sandbox::windows::a_stage_is_not_attached_to_the_console_this_process_runs_in`
 `verified-by: bravebot_agent::confine::variable_names_match_without_case_only_when_folding`
 
 <a id="SANDBOX-18"></a>

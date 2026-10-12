@@ -327,6 +327,56 @@ fn a_stage_let_go_of_while_running_leaves_no_program_behind() {
     );
 }
 
+/// The processes attached to this process's console, which the console itself keeps, or none
+/// where this process has no console.
+fn on_this_console() -> Vec<u32> {
+    use windows_sys::Win32::System::Console::GetConsoleProcessList;
+
+    let mut attached = vec![0u32; 64];
+    loop {
+        // Sound because the buffer holds as many identifiers as the count says, and the call
+        // writes none when it needs more.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let count =
+            unsafe { GetConsoleProcessList(attached.as_mut_ptr(), attached.len() as u32) } as usize;
+        if count <= attached.len() {
+            attached.truncate(count);
+            return attached;
+        }
+        attached.resize(count, 0);
+    }
+}
+
+/// The regression it rejects: a stage attached to the console this process runs in. Any process
+/// attached to a console can write input into it, so a program on the terminal's console can
+/// type an answer to the prompt a person is about to read.
+///
+/// A process with no console has nothing to share, and a stage started from it is on a console
+/// of its own whatever the backend asks for, so this one is given a console first.
+#[test]
+fn a_stage_is_not_attached_to_the_console_this_process_runs_in() {
+    if on_this_console().is_empty() {
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        unsafe { windows_sys::Win32::System::Console::AllocConsole() };
+    }
+    let sandbox = sandbox();
+    let (child, input, _seen) = a_stage_with_a_child_waiting_on_its_input(&sandbox, "console");
+
+    let attached = on_this_console();
+    let stage = child.id();
+    drop(input);
+    drop(child);
+
+    assert!(
+        attached.contains(&std::process::id()),
+        "this process is not on a console, so nothing was compared: {attached:?}"
+    );
+    assert!(
+        !attached.contains(&stage),
+        "the stage {stage} is attached to this process's console: {attached:?}"
+    );
+}
+
 /// The regression it rejects: a refusal of a read or a write that this backend cannot apply being
 /// dropped, so the program starts and reaches the path the person meant to hold back. The write
 /// is the one observable from outside: the file must not be there afterwards.
