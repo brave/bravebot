@@ -1250,7 +1250,9 @@ impl Workspace {
     }
 
     /// Judge the names a run opens as Windows reads them, whatever the host.
-    #[cfg(test)]
+    ///
+    /// Compiled where its test is: on Windows the host's answer is already this one.
+    #[cfg(all(test, unix))]
     #[must_use]
     pub(crate) fn with_windows_names(mut self) -> Self {
         self.windows_names = true;
