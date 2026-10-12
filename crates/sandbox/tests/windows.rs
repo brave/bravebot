@@ -141,7 +141,7 @@ fn a_program_writes_inside_its_grants_and_not_outside() {
     let write = |directory: &Path| {
         cmd(
             &sandbox,
-            &format!("echo wrote> {}", directory.join("made.txt").display()),
+            &format!("mkdir {}", directory.join("made").display()),
             &policy,
         )
         .expect("the program starts")
@@ -149,16 +149,11 @@ fn a_program_writes_inside_its_grants_and_not_outside() {
 
     let (code, printed) = write(&granted);
     assert_eq!(code, Some(0), "a granted write failed: {printed}");
-    assert_eq!(
-        std::fs::read_to_string(granted.join("made.txt"))
-            .expect("the file the program made")
-            .trim(),
-        "wrote"
-    );
+    assert!(granted.join("made").is_dir(), "{printed}");
 
     let (code, _) = write(&withheld);
     assert_ne!(code, Some(0), "a write outside the grants succeeded");
-    assert!(!withheld.join("made.txt").exists());
+    assert!(!withheld.join("made").exists());
 }
 
 /// The regression it rejects: an empty base that leaves a program unable to start. SANDBOX-3
@@ -218,9 +213,9 @@ fn git_starts_under_the_empty_base() {
 fn a_policy_that_refuses_a_read_or_a_write_starts_no_program() {
     let sandbox = sandbox();
     let directory = scratch("refusals");
-    let marker = directory.join("marker.txt");
+    let marker = directory.join("marker");
     let policy = the_base("refusals").allow_write(&directory);
-    let line = format!("echo ran> {}", marker.display());
+    let line = format!("mkdir {}", marker.display());
 
     let refused_read = cmd(
         &sandbox,
@@ -239,4 +234,32 @@ fn a_policy_that_refuses_a_read_or_a_write_starts_no_program() {
         );
     }
     assert!(!marker.exists(), "a program ran under a refused policy");
+}
+
+/// SANDBOX-4 for `cmd.exe` with a real process: a name holding `&` is refused before anything
+/// starts, so the directory is not made under any name. The regression it rejects is the backend
+/// quoting the argument and starting `cmd.exe`, which reads the `&` as its own rather than as part
+/// of the name.
+#[test]
+fn cmd_with_an_argument_holding_an_ampersand_starts_nothing() {
+    let sandbox = sandbox();
+    let directory = scratch("ampersand");
+    let policy = the_base("ampersand").allow_write(&directory);
+    let named = directory.join("R&D");
+
+    let refused = run(
+        &sandbox,
+        "cmd.exe",
+        &["/c", "mkdir", &named.display().to_string()],
+        &policy,
+    );
+
+    assert!(
+        matches!(refused, Err(SandboxError::SetupFailed { .. })),
+        "cmd.exe started: {refused:?}"
+    );
+    let made: Vec<_> = std::fs::read_dir(&directory)
+        .expect("the scratch directory")
+        .collect();
+    assert!(made.is_empty(), "cmd.exe made {made:?}");
 }
