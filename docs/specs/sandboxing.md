@@ -137,7 +137,11 @@ is refused when the socket was made outside the confined process's Landlock doma
 carrying ABI version 6, and is reachable below it. The domain is that of one stage, so a socket made
 by the session or by another stage is refused too. Signals are not scoped. A backend that cannot
 enforce the network denial refuses the policy instead, so the guarantee never degrades into one
-that is not in force. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
+that is not in force. On Linux the network is denied by a new user and network namespace, in which
+the stage has its own loopback and nothing else, whatever the address, port or protocol. Landlock's
+network rules are not used: they filter a TCP connect by port and not by address, and leave UDP
+open. A kernel that does not let an unprivileged user make the namespace (Ubuntu 24.04 restricts
+it by default, and many containers block it) cannot deny the network, and `doctor` says so. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
 
 On macOS the profile also refuses binding a port and accepting on it, so a confined stage cannot
 listen on the loopback interface, and a server it starts, such as the one `sccache` runs, or a test
@@ -164,7 +168,7 @@ one rule to a connect.
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_can_reach_the_resolver`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_write_outside_its_grants`
 `verified-by: bravebot_sandbox::macos::a_confined_process_runs`
-`verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused`
+`verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused_where_no_namespace_can_be_made`
 `verified-by: bravebot_sandbox::linux::a_confined_process_runs`
 `verified-by: bravebot_sandbox::linux::a_confined_process_can_write_inside_its_grants`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_write_outside_its_grants`
@@ -217,10 +221,10 @@ a path missing from the disk is nameable reads the platform instead, and then cr
 asked for, or names the directory holding it, on the platform where neither was necessary.
 
 `verified-by: bravebot_sandbox::macos::capabilities_report_kernel_enforcement`
-`verified-by: bravebot_sandbox::linux::capabilities_do_not_overstate_network_denial`
+`verified-by: bravebot_sandbox::linux::capabilities_report_the_network_only_where_a_namespace_can_be_made`
 `verified-by: bravebot_sandbox::linux::a_path_that_does_not_exist_is_granted_exactly_where_the_capability_says_so`
 `verified-by: bravebot_sandbox::macos::a_path_that_does_not_exist_is_granted_exactly_where_the_capability_says_so`
-`verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused`
+`verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused_where_no_namespace_can_be_made`
 `verified-by: bravebot_sandbox::linux::a_policy_requiring_subprocess_denial_is_refused`
 `verified-by: bravebot_sandbox::lib::an_unavailable_backend_reports_no_confinement`
 `verified-by: bravebot_sandbox::policy::confinement_levels_render_for_the_audit_trail`
@@ -1235,8 +1239,8 @@ when it starts, from the person's home layer, the file `--settings` named, when 
 directory it started in and the managed pin, and every window's turns read that answer. A project a
 window opens later does not close it, and neither does a settings file a window selects afterwards.
 
-Where the backend cannot deny the network (Landlock, [SANDBOX-5](#SANDBOX-5)) a stage that would
-lose egress is not started, and the result says that the network is closed and the platform cannot
+Where the backend cannot deny the network ([SANDBOX-5](#SANDBOX-5): Linux on a kernel that refuses
+the namespace [SANDBOX-3](#SANDBOX-3) describes) a stage that would lose egress is not started, and the result says that the network is closed and the platform cannot
 deny it, the refusal [SANDBOX-17](#SANDBOX-17) already gives. The planner is told once, in the `run`
 description, that the network is closed and which kinds of stage keep it. The failure sentence
 ([SANDBOX-19](#SANDBOX-19)) names the setting beside the directories. A closed network is named on
@@ -1261,6 +1265,7 @@ reach, but can ask for less of it.
 `verified-by: bravebot_agent::confine::a_closed_network_is_not_reopened_by_what_a_stage_is_started_with`
 `verified-by: bravebot_agent::confine::a_closed_network_is_told_to_the_planner_and_an_open_one_is_not`
 `verified-by: bravebot_agent::confine::a_backend_that_cannot_deny_the_network_refuses_a_closed_stage`
+`verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
 `verified-by: bravebot_agent::confine::the_trail_names_the_stages_that_kept_a_closed_network_by_place_and_reason`
 `verified-by: bravebot_agent::confine::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
 `verified-by: bravebot_agent::confirm::a_closed_network_is_said_once_and_each_stage_that_keeps_it_is_named`
@@ -1672,11 +1677,20 @@ which lets it listen and adds no port to connect to. That costs a stage the loop
 a test server, and a program that does not send its connections through the variables: `ssh`
 reads none of them, so a remote reached over ssh cannot connect while a list is set; an HTTPS
 remote can. A unix socket a write row already names is still reached. macOS applies
-this in the profile. Linux and Windows cannot limit egress to one port (the Landlock rules of a
-kernel this build supports filter by port and leave UDP open, and an AppContainer holds the internet
-capability or does not), so a stage is refused there while a list is set, with
+this in the profile. Linux applies it with a network namespace ([SANDBOX-3](#SANDBOX-3)): the
+proxy listens on a unix socket as well as its loopback port, in a directory only the account can
+enter, and a forwarder started in the namespace listens on the proxy's port on the namespace's
+loopback and relays each connection to that socket. The stage reaches no other address and no
+other protocol, and holds the loopback services it starts itself, since they live in the
+namespace. The forwarder is started before the stage's filesystem rules are installed, so the
+stage needs no grant to the socket, cannot attach to it, and it ends with the stage. Where the
+kernel will not make the namespace, a stage is refused while a list is set, with
 `sandbox.network.allowedHosts` named, as a stage is refused where the network cannot be closed
-([SANDBOX-20](#SANDBOX-20)). The stage is not started with the variables alone. The sentence the
+([SANDBOX-20](#SANDBOX-20)), and `doctor` says why. Windows keeps that refusal: letting an
+AppContainer reach loopback takes a loopback exemption, which is machine-wide and needs
+administrator rights, and so do the filtering rules of the Windows Filtering Platform, and a
+sandbox that changes the machine's network policy is a worse trade than refusing the stage. The
+stage is not started with the variables alone. The sentence the
 planner reads under SANDBOX-19 says the network is limited by that setting and names no host.
 
 After a foreground `run` has stopped, the trail records what the list decided for the hosts its
@@ -1707,20 +1721,22 @@ refusal, so a session that leaves it asks about the same host. The answer is rec
 `host_grant` with the hosts. The hosts are a program's own bytes: they go to the person's screen
 and the trail, the planner is told nothing about them, and nothing branches on one.
 
-Half built. The list, its defaults, the proxy, the settings that carry the list through the
-layers, the managed pin, the environment injection, the port-limited policy on macOS, the trace
-record, the `/status` line and the prompt for an unlisted host are written and tested. The prompt is
-drawn by the plain CLI, the terminal interface, the desktop app (`host.request`, answered by
-`host.reply`) and the editor bridge, and each lists the hosts as the program named them. Unbuilt: a
-backend on Linux and Windows that limits egress to the port, so a networked stage is refused there
-while a list is set.
+The tests that hold a stage to the proxy through the namespace need a kernel that lets an
+unprivileged user make one. They say so and do not run where it does not, so a green run there
+says nothing about them.
 
 `verified-by: bravebot_sandbox::policy::the_port_egress_is_limited_to_is_carried_and_goes_with_the_network`
 `verified-by: bravebot_sandbox::macos::egress_limited_to_a_port_names_the_port_and_no_other_address`
 `verified-by: bravebot_sandbox::macos::a_process_limited_to_a_port_reaches_that_port_and_not_another`
 `verified-by: bravebot_sandbox::macos::a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port`
 `verified-by: bravebot_sandbox::windows::a_policy_limiting_egress_to_one_port_is_refused`
-`verified-by: bravebot_sandbox::linux::a_policy_limiting_egress_to_one_port_is_refused`
+`verified-by: bravebot_sandbox::linux::a_policy_limiting_egress_to_one_port_without_the_proxys_socket_is_refused`
+`verified-by: bravebot_sandbox::linux::a_kernel_that_refuses_the_namespace_refuses_the_stage`
+`verified-by: bravebot_sandbox::linux::a_stage_held_to_the_proxy_reaches_it_through_the_forwarder`
+`verified-by: bravebot_sandbox::linux::a_stage_held_to_the_proxy_cannot_connect_around_it`
+`verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
+`verified-by: bravebot_cli::main::doctor_says_when_network_namespaces_are_unavailable_and_what_that_costs`
+`verified-by: bravebot_sandbox::netns::the_forwarder_relays_to_the_proxy_and_ends_with_the_process_that_started_it`
 `verified-by: bravebot_agent::confine::a_platform_that_cannot_hold_a_program_to_the_proxy_is_refused_naming_the_setting`
 `verified-by: bravebot_agent::confine::a_stage_under_a_host_list_is_prepared_limited_to_the_proxy_port`
 `verified-by: bravebot_agent::confine::the_profile_line_names_the_host_list_setting_and_no_host`

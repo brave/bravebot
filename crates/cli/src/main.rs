@@ -4313,6 +4313,12 @@ fn doctor() -> ExitCode {
     ) {
         doctor_found(&mut ending, Ending::Failed, problem);
     }
+    #[cfg(target_os = "linux")]
+    if let Some(note) =
+        network_namespace_note(bravebot_sandbox::linux::network_namespace_unavailable().as_deref())
+    {
+        println!("{note}");
+    }
 
     // Beside the confinement the platform offers, since the two answers are read together: what
     // can be enforced here, and how much of the machine a program is held out of. A mode the managed
@@ -5149,6 +5155,14 @@ fn confinement(found: Result<Capabilities, SandboxError>) -> Confinement {
     }
 }
 
+/// What `doctor` says where a stage cannot be given a network namespace of its own, which is what
+/// a closed network and `sandbox.network.allowedHosts` are applied with on Linux, and nothing
+/// where it can.
+#[cfg(any(target_os = "linux", test))]
+fn network_namespace_note(unavailable: Option<&str>) -> Option<String> {
+    unavailable.map(|reason| t!(doctor_no_network_namespace, reason = reason).to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5469,6 +5483,18 @@ mod tests {
             confinement_report(ConfinementLevel::Kernel, false).last(),
             "the report reads the same whether or not the kernel enforces network denial"
         );
+    }
+
+    /// A person whose kernel refuses user namespaces is refused every stage with no network or
+    /// under an allowed-hosts list, and is told why only here. The regressions it rejects: no word
+    /// at all, and a word that omits the reason or the setting it costs.
+    #[test]
+    fn doctor_says_when_network_namespaces_are_unavailable_and_what_that_costs() {
+        assert_eq!(network_namespace_note(None), None);
+        let note = network_namespace_note(Some("Permission denied (os error 13)"))
+            .expect("a note where the namespace cannot be made");
+        assert!(note.contains("Permission denied (os error 13)"), "{note}");
+        assert!(note.contains("sandbox.network.allowedHosts"), "{note}");
     }
 
     /// Without a backend, untrusted work is refused rather than run unconfined, so this is a thing

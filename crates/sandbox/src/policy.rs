@@ -44,6 +44,10 @@ pub struct SandboxPolicy {
     /// `None` is egress to any address. A unix socket under a write row is reached as before, and
     /// no resolver is granted: the proxy resolves the names it is asked for.
     pub egress_only_to: Option<u16>,
+    /// The unix socket the proxy behind `egress_only_to` also listens on, for a backend that
+    /// holds the process in a network of its own and so cannot reach the proxy's port. Linux
+    /// relays the port to this socket from inside that network; the other backends ignore it.
+    pub egress_through: Option<PathBuf>,
     /// Whether the process may spawn children. False stops a confined process from
     /// launching an unconfined helper.
     pub allow_subprocesses: bool,
@@ -77,6 +81,7 @@ impl SandboxPolicy {
             writable: Vec::new(),
             allow_network: false,
             egress_only_to: None,
+            egress_through: None,
             allow_subprocesses: false,
             starting_in: None,
             git_directories_writable: false,
@@ -161,6 +166,14 @@ impl SandboxPolicy {
         self
     }
 
+    /// Name the unix socket the proxy named by [`SandboxPolicy::allow_network_egress_only_to`]
+    /// listens on as well, which a backend that runs the process in an empty network uses to
+    /// bring the proxy's port into it.
+    pub fn with_egress_through(mut self, socket: impl Into<PathBuf>) -> Self {
+        self.egress_through = Some(socket.into());
+        self
+    }
+
     /// Permit listening on and connecting to a port of the loopback interface, and nothing
     /// that is not this machine. See [`SandboxPolicy::allow_loopback`].
     pub fn allow_loopback(mut self) -> Self {
@@ -173,6 +186,7 @@ impl SandboxPolicy {
     pub fn without_network_egress(mut self) -> Self {
         self.allow_network = false;
         self.egress_only_to = None;
+        self.egress_through = None;
         self
     }
 
@@ -236,6 +250,7 @@ impl SandboxPolicy {
                 writable,
                 allow_network: self.allow_network,
                 egress_only_to: self.egress_only_to,
+                egress_through: self.egress_through.clone(),
                 allow_subprocesses: self.allow_subprocesses,
                 starting_in: self.starting_in.clone(),
                 git_directories_writable: self.git_directories_writable,
@@ -870,6 +885,16 @@ mod tests {
                 .egress_only_to,
             Some(8123)
         );
+
+        let relayed = limited.clone().with_egress_through("/run/proxy.sock");
+        assert_eq!(
+            relayed
+                .nameable_under(&capabilities(false))
+                .policy
+                .egress_through,
+            Some(PathBuf::from("/run/proxy.sock"))
+        );
+        assert_eq!(relayed.without_network_egress().egress_through, None);
 
         let taken_back = limited.without_network_egress();
         assert!(!taken_back.allow_network);

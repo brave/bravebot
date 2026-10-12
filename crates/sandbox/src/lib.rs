@@ -30,6 +30,8 @@ pub mod linux;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 pub mod macos;
 pub mod mode;
+#[cfg(target_os = "linux")]
+pub(crate) mod netns;
 pub mod network;
 pub mod policy;
 pub mod process;

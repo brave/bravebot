@@ -1,4 +1,4 @@
-//! Linux confinement via Landlock.
+//! Linux confinement via Landlock and a network namespace.
 //!
 //! Filesystem restrictions are applied with Landlock, which needs kernel 5.19 or
 //! newer. Availability is probed at runtime rather than assumed: an older kernel, or a
@@ -6,13 +6,17 @@
 //! is refused instead of run unconfined.
 //!
 //! Landlock governs the filesystem, and with it the connect to a socket that has a path and
-//! to an abstract one. Network denial and subprocess denial need
-//! separate mechanisms (e.g. an empty network namespace, or seccomp filtering),
-//! which are not implemented yet, so [`Capabilities::network_denial_enforced`] is
-//! `false` and the reported level is [`ConfinementLevel::Partial`]. Claiming
-//! kernel-level network or subprocess denial here would misreport the guarantee;
-//! policies requiring either are refused.
+//! to an abstract one. The network is governed by a user and network namespace the stage is
+//! started in ([`crate::netns`]), which leaves it a loopback and nothing else, and a forwarder
+//! in it relays one port to the allowed-hosts proxy's unix socket. Landlock's own network
+//! rules are not used: they filter by port and not by address, and leave UDP open. Where the
+//! kernel will not make the namespace, [`Capabilities::network_denial_enforced`] and
+//! [`Capabilities::egress_limited_to_a_port`] are `false` and a policy needing either is
+//! refused. Subprocess denial needs a separate mechanism (e.g. seccomp filtering), which is
+//! not implemented yet, so the reported level is [`ConfinementLevel::Partial`] and a policy
+//! requiring it is refused.
 
+use crate::netns::Namespace;
 use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
@@ -192,14 +196,20 @@ impl LandlockSandbox {
 
 impl Sandbox for LandlockSandbox {
     fn capabilities(&self) -> Capabilities {
+        let namespaces = crate::netns::available().is_ok();
         Capabilities {
-            // Filesystem restrictions are kernel-enforced, but network and subprocess
-            // denial are not implemented yet, so this is deliberately not reported
+            // Filesystem restrictions and the network are kernel-enforced, but subprocess
+            // denial is not implemented yet, so this is deliberately not reported
             // as full kernel confinement.
             level: ConfinementLevel::Partial,
-            mechanisms: vec!["landlock"],
-            network_denial_enforced: false,
-            egress_limited_to_a_port: false,
+            mechanisms: if namespaces {
+                vec!["landlock", "network-namespace"]
+            } else {
+                vec!["landlock"]
+            },
+            // Both are the namespace's, so both are reported only where one can be made.
+            network_denial_enforced: namespaces,
+            egress_limited_to_a_port: namespaces,
             // A rule is a right attached to an open descriptor, so a path nothing can
             // open cannot be named in one and a policy naming one is refused.
             grants_paths_that_do_not_exist: false,
@@ -232,6 +242,40 @@ impl Sandbox for LandlockSandbox {
     }
 }
 
+/// The namespace a stage is started in, or the refusal where this kernel will not make one.
+fn namespace_for(forward: Option<(u16, &std::path::Path)>) -> Result<Namespace, SandboxError> {
+    namespace_given(crate::netns::available(), forward)
+}
+
+/// [`namespace_for`] given what this kernel answered, so the refusal can be held to without a
+/// kernel that gives it.
+fn namespace_given(
+    available: &Result<(), String>,
+    forward: Option<(u16, &std::path::Path)>,
+) -> Result<Namespace, SandboxError> {
+    if let Err(why) = available {
+        return Err(SandboxError::SetupFailed {
+            mechanism: "network namespace",
+            detail: format!(
+                "this kernel does not let an unprivileged user make a user and network \
+                 namespace ({why}), so a stage cannot be given no network or held to a proxy; \
+                 refusing rather than reporting confinement that is not applied"
+            ),
+        });
+    }
+    Namespace::prepare(forward).map_err(|detail| SandboxError::SetupFailed {
+        mechanism: "network namespace",
+        detail,
+    })
+}
+
+/// Why a stage cannot be put in a network namespace of its own here, or `None` where it can.
+/// `doctor` says it, since it decides whether a closed network or an allowed-hosts list can be
+/// applied on this machine.
+pub fn network_namespace_unavailable() -> Option<String> {
+    crate::netns::available().as_ref().err().cloned()
+}
+
 impl LandlockSandbox {
     /// The command for `program` with the ruleset installed between the fork and the exec, or
     /// a refusal of the policy.
@@ -244,28 +288,25 @@ impl LandlockSandbox {
             return Err(SandboxError::PolicyTooPermissive);
         }
 
-        // Network denial is not yet enforceable here, so a policy that requires it
-        // must not be silently downgraded.
-        if !policy.allow_network {
-            return Err(SandboxError::SetupFailed {
-                mechanism: "landlock",
-                detail: "network denial is not implemented on Linux yet; refusing rather \
-                         than reporting confinement that is not applied"
-                    .into(),
-            });
-        }
-
-        // Landlock's network rules filter TCP connects by port and leave UDP alone, and this
-        // backend installs none, so a policy limiting egress to a proxy's port would run with
-        // egress to everywhere.
-        if policy.egress_only_to.is_some() {
-            return Err(SandboxError::SetupFailed {
-                mechanism: "landlock",
-                detail: "limiting egress to one port is not implemented on Linux yet; refusing \
-                         rather than reporting confinement that is not applied"
-                    .into(),
-            });
-        }
+        // A stage with no network, or held to a proxy's port, runs in a network namespace of its
+        // own, where it has a loopback and nothing else. A kernel that will not make one refuses
+        // the stage rather than run it with the host's network.
+        let namespace = if !policy.allow_network {
+            Some(namespace_for(None)?)
+        } else if let Some(port) = policy.egress_only_to {
+            let Some(socket) = policy.egress_through.as_deref() else {
+                return Err(SandboxError::SetupFailed {
+                    mechanism: "network namespace",
+                    detail: "limiting egress to one port needs the unix socket the proxy listens \
+                             on, and the policy names none; refusing rather than reporting \
+                             confinement that is not applied"
+                        .into(),
+                });
+            };
+            Some(namespace_for(Some((port, socket)))?)
+        } else {
+            None
+        };
 
         // Subprocess denial is not yet enforceable here, so a policy that requires it
         // must not be silently downgraded.
@@ -325,6 +366,12 @@ impl LandlockSandbox {
                 // SAFETY: `setsid` takes no pointers and is async-signal-safe.
                 if libc::setsid() == -1 {
                     return Err(Error::last_os_error());
+                }
+
+                // Before the ruleset, so the forwarder it leaves behind is not confined by the
+                // stage's filesystem rules and the stage needs no grant to the proxy's socket.
+                if let Some(namespace) = &namespace {
+                    namespace.enter()?;
                 }
 
                 let mut ruleset = landlock::Ruleset::default()
@@ -396,6 +443,8 @@ impl LandlockSandbox {
 mod tests {
     use super::*;
     use crate::base::{Prelude, base};
+    use crate::hosts::HostList;
+    use crate::proxy::{Proxy, ProxyConfig};
     use crate::testutil::{
         capturing_stdout, nothing_attached, printed_by, variable_names_received_by,
     };
@@ -553,25 +602,40 @@ mod tests {
         );
     }
 
+    /// The two capabilities are the namespace's, so they are reported together and only where a
+    /// namespace can be made. The regression it rejects: either reported on a kernel that
+    /// refuses the namespace, which hands the caller a stage with the host's network.
     #[test]
-    fn capabilities_do_not_overstate_network_denial() {
+    fn capabilities_report_the_network_only_where_a_namespace_can_be_made() {
         let caps = LandlockSandbox.capabilities();
-        assert!(
-            !caps.network_denial_enforced,
-            "network denial is not implemented on Linux yet"
-        );
-        assert!(
-            !caps.egress_limited_to_a_port,
-            "limiting egress to one port is not implemented on Linux yet"
-        );
+        let made = network_namespace_unavailable().is_none();
+        assert_eq!(caps.network_denial_enforced, made);
+        assert_eq!(caps.egress_limited_to_a_port, made);
+        assert_eq!(caps.mechanisms.contains(&"network-namespace"), made);
         assert_eq!(caps.level, ConfinementLevel::Partial);
     }
 
-    /// A policy that limits egress to a proxy's port has nothing to stop a program connecting
-    /// around the proxy here, so it is refused and not run with open egress. Subprocesses are
-    /// allowed so the egress limit is the only reason for the refusal.
+    /// A kernel that refuses the namespace refuses the stage, with the namespace named. The
+    /// regression it rejects: running the stage with the host's network after the refusal.
     #[test]
-    fn a_policy_limiting_egress_to_one_port_is_refused() {
+    fn a_kernel_that_refuses_the_namespace_refuses_the_stage() {
+        let refusal = Err("Operation not permitted (os error 1)".to_string());
+        for forward in [None, Some((8123, std::path::Path::new("/run/proxy.sock")))] {
+            match namespace_given(&refusal, forward) {
+                Err(SandboxError::SetupFailed { mechanism, detail }) => {
+                    assert_eq!(mechanism, "network namespace");
+                    assert!(detail.contains("Operation not permitted"), "{detail}");
+                }
+                Err(other) => panic!("expected SetupFailed, got: {other:?}"),
+                Ok(_) => panic!("a refused namespace was made"),
+            }
+        }
+    }
+
+    /// A policy limiting egress to a port with no socket to relay it to is refused on any
+    /// kernel, since the stage would have a port named and nothing behind it.
+    #[test]
+    fn a_policy_limiting_egress_to_one_port_without_the_proxys_socket_is_refused() {
         let err = LandlockSandbox
             .spawn(
                 OsStr::new("/bin/true"),
@@ -585,36 +649,185 @@ mod tests {
             .expect_err("must refuse rather than under-enforce");
         match err {
             SandboxError::SetupFailed { mechanism, detail } => {
-                assert_eq!(mechanism, "landlock");
+                assert_eq!(mechanism, "network namespace");
                 assert!(detail.contains("one port"), "unexpected detail: {detail}");
             }
             other => panic!("expected SetupFailed for the egress limit, got: {other:?}"),
         }
     }
 
-    /// Until network denial is implemented, asking for it must be an error rather than
-    /// a sandbox that quietly permits sockets.
+    /// A policy that takes the network away is refused where this kernel cannot make a
+    /// namespace, and not run with sockets.
     #[test]
-    fn a_policy_requiring_network_denial_is_refused() {
+    fn a_policy_requiring_network_denial_is_refused_where_no_namespace_can_be_made() {
+        if network_namespace_unavailable().is_none() {
+            return;
+        }
         let err = LandlockSandbox
             .spawn(
                 OsStr::new("/bin/true"),
                 &[],
-                &SandboxPolicy::strict(),
+                &SandboxPolicy::strict().allow_subprocesses(),
                 nothing_attached(),
                 Environment::Inherited,
             )
             .expect_err("must refuse rather than under-enforce");
         match err {
-            SandboxError::SetupFailed { mechanism, detail } => {
-                assert_eq!(mechanism, "landlock");
-                assert!(
-                    detail.contains("network denial"),
-                    "unexpected detail: {detail}"
-                );
+            SandboxError::SetupFailed { mechanism, .. } => {
+                assert_eq!(mechanism, "network namespace");
             }
             other => panic!("expected SetupFailed for network denial, got: {other:?}"),
         }
+    }
+
+    /// Whether this kernel lets a stage be put in a namespace of its own, announcing the skip
+    /// where it does not. Ubuntu 24.04 restricts unprivileged user namespaces by default and
+    /// many containers block them, and a test of what runs inside one cannot say anything there.
+    fn can_make_a_namespace() -> bool {
+        match network_namespace_unavailable() {
+            None => true,
+            Some(why) => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "SKIPPED: this kernel does not let an unprivileged user make a network \
+                     namespace ({why})"
+                );
+                false
+            }
+        }
+    }
+
+    /// What `script` printed when run by bash in a stage under `policy`.
+    fn printed_by_bash(sandbox: &LandlockSandbox, policy: &SandboxPolicy, script: &str) -> String {
+        let mut child = sandbox
+            .spawn(
+                OsStr::new("/bin/bash"),
+                &["-c".into(), script.into()],
+                policy,
+                capturing_stdout(),
+                Environment::Inherited,
+            )
+            .expect("a stage in a namespace starts");
+        printed_by(&mut child)
+    }
+
+    /// A shell function that says whether a connection to `address` was made within three
+    /// seconds, over the transport `kind` (`tcp` or `udp`). The bound is what makes a stage
+    /// that reached the host's network fail the test and not hang it.
+    const PROBE: &str = "probe() { if timeout 3 bash -c \"exec 3<>/dev/$1/$2/$3\" 2>/dev/null; \
+                         then echo \"$1 $2:$3 connected\"; else echo \"$1 $2:$3 refused\"; fi; }";
+
+    fn a_listener_on_this_hosts_loopback() -> (std::net::TcpListener, u16) {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("a loopback port");
+        let port = listener.local_addr().expect("a bound address").port();
+        listener
+            .set_nonblocking(true)
+            .expect("a listener that can be polled");
+        (listener, port)
+    }
+
+    /// A stage given no network has a namespace with nothing in it: a listener on the host's
+    /// loopback is not there, and neither is any other address or protocol. The regression it
+    /// rejects: the stage running in the host's network, where the listener accepts it.
+    #[test]
+    fn a_stage_with_no_network_cannot_connect_to_anything() {
+        if !can_make_a_namespace() {
+            return;
+        }
+        let sandbox = LandlockSandbox;
+        let (listener, port) = a_listener_on_this_hosts_loopback();
+        let policy = loadable_policy().allow_subprocesses();
+        assert!(!policy.allow_network);
+
+        let printed = printed_by_bash(
+            &sandbox,
+            &policy,
+            &format!(
+                "{PROBE}; probe tcp 127.0.0.1 {port}; probe tcp 192.0.2.1 80; \
+                 probe udp 192.0.2.1 9; exit 0"
+            ),
+        );
+
+        assert!(!printed.contains("connected"), "{printed}");
+        assert!(
+            listener.accept().is_err(),
+            "the stage reached a listener on the host's loopback"
+        );
+    }
+
+    /// A stage held to the proxy reaches it through the forwarder, and the request arrives at
+    /// the proxy that was named. The regressions it rejects: a forwarder relaying to no socket or
+    /// the wrong one, which the proxy's own record of the host asked for shows.
+    #[test]
+    fn a_stage_held_to_the_proxy_reaches_it_through_the_forwarder() {
+        if !can_make_a_namespace() {
+            return;
+        }
+        let sandbox = LandlockSandbox;
+        let proxy = Proxy::start(ProxyConfig::new(HostList::default())).expect("a proxy");
+        let socket = proxy.socket_path().expect("a unix socket").to_path_buf();
+        let port = proxy.addr().port();
+        let policy = loadable_policy()
+            .allow_subprocesses()
+            .allow_network_egress_only_to(port)
+            .with_egress_through(socket);
+
+        let printed = printed_by_bash(
+            &sandbox,
+            &policy,
+            &format!(
+                "exec 3<>/dev/tcp/127.0.0.1/{port} || {{ echo no-forwarder; exit 0; }}; \
+                 printf 'CONNECT unlisted.example:443 HTTP/1.1\\r\\n\\r\\n' >&3; \
+                 read -r line <&3; echo \"$line\"; exit 0"
+            ),
+        );
+
+        assert!(printed.contains("403"), "{printed}");
+        let asked: Vec<_> = proxy
+            .decisions()
+            .into_iter()
+            .filter_map(|decision| decision.host)
+            .collect();
+        assert_eq!(asked, ["unlisted.example"]);
+    }
+
+    /// A stage held to the proxy has no other way out: not a host, not the proxy's port on
+    /// another address, not UDP. The regression it rejects: a namespace that still has the
+    /// host's interfaces, or one where only TCP is held.
+    #[test]
+    fn a_stage_held_to_the_proxy_cannot_connect_around_it() {
+        if !can_make_a_namespace() {
+            return;
+        }
+        let sandbox = LandlockSandbox;
+        let proxy = Proxy::start(ProxyConfig::new(HostList::default())).expect("a proxy");
+        let socket = proxy.socket_path().expect("a unix socket").to_path_buf();
+        let port = proxy.addr().port();
+        let (listener, other) = a_listener_on_this_hosts_loopback();
+        let policy = loadable_policy()
+            .allow_subprocesses()
+            .allow_network_egress_only_to(port)
+            .with_egress_through(socket);
+
+        let printed = printed_by_bash(
+            &sandbox,
+            &policy,
+            &format!(
+                "{PROBE}; probe tcp 127.0.0.1 {port}; probe tcp 127.0.0.1 {other}; \
+                 probe tcp 127.0.0.2 {port}; probe tcp 192.0.2.1 80; probe udp 192.0.2.1 9; \
+                 exit 0"
+            ),
+        );
+
+        assert!(
+            printed.contains(&format!("tcp 127.0.0.1:{port} connected")),
+            "the forwarder was not listening: {printed}"
+        );
+        assert_eq!(printed.matches("connected").count(), 1, "{printed}");
+        assert!(
+            listener.accept().is_err(),
+            "the stage reached a listener on the host's loopback"
+        );
     }
 
     /// Until subprocess denial is implemented, asking for it must be an error rather than

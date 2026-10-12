@@ -1135,6 +1135,11 @@ impl Confinement {
         let mut wanted = self.policy(step, directory, &readable);
         if let Some(proxy) = &proxy {
             wanted = wanted.allow_network_egress_only_to(proxy.addr().port());
+            // A Linux stage runs in a network of its own, which reaches the proxy by this socket.
+            #[cfg(target_os = "linux")]
+            if let Some(socket) = proxy.socket_path() {
+                wanted = wanted.with_egress_through(socket);
+            }
         }
         if let Some(detail) = cannot_close_the_network(&wanted, &capabilities)
             .or_else(|| cannot_hold_to_the_proxy(&wanted, &capabilities))
@@ -3833,6 +3838,9 @@ mod tests {
             Ok(held) => {
                 let proxy = listed.host_proxy(&curl).unwrap().expect("a proxy");
                 assert_eq!(held.policy.egress_only_to, Some(proxy.addr().port()));
+                // The namespace a Linux stage runs in reaches the proxy by its socket alone.
+                #[cfg(target_os = "linux")]
+                assert_eq!(held.policy.egress_through.as_deref(), proxy.socket_path());
             }
             Err(error) => assert!(!sandbox.capabilities().egress_limited_to_a_port, "{error}"),
         }
