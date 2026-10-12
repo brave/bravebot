@@ -206,6 +206,63 @@ fn a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted() {
     assert!(policy.finish());
 }
 
+/// On a volume that folds case, `README.md` and `readme.md` are one file, so a fetched page
+/// written through `readme.md` over a trusted write to `README.md` is what both spellings read.
+/// The page has to be read back untrusted under either, rather than under the trust the first
+/// write recorded. A volume that holds the spellings apart is asked nothing more.
+#[test]
+fn an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelling() {
+    let scratch = Scratch::new("case-spelled-rewrite");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+    if !trust.folds_case() {
+        return;
+    }
+    trust.trust(".");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+    .with_root(workspace.root());
+
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted("README.md".to_string()),
+            &Labelled::trusted("ours".to_string()),
+        )
+        .expect("trusted bytes are written");
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted("readme.md".to_string()),
+            &Labelled::new("a fetched page".to_string(), Label::untrusted_public()),
+        )
+        .expect("the fetched page is written");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("README.md")).unwrap(),
+        "a fetched page"
+    );
+
+    for spelling in ["README.md", "readme.md"] {
+        let contents = workspace
+            .read(&mut policy, &Labelled::trusted(spelling.to_string()))
+            .expect("the file is read");
+        assert_eq!(
+            contents.label().integrity,
+            Integrity::Untrusted,
+            "{spelling} read the fetched page as trusted content"
+        );
+    }
+    assert!(policy.finish());
+}
+
 /// The other half of that rule, at the spelling the reduction exists for. `/add-dir` will accept a
 /// directory the project sits inside, so from then on a project file has an absolute name that
 /// resolves through a directory other than the project. Asked under that name as written, a file

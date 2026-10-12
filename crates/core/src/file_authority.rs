@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 #[derive(Debug)]
 struct State {
     trust: TrustStore,
+    // Both keyed by `slot`, so every spelling the map reads as one path is one entry.
     active: BTreeSet<String>,
     revision: u64,
     // One latest revision per distinct path for outstanding preview approvals.
@@ -19,8 +20,19 @@ struct State {
 }
 
 impl State {
+    /// What `key` is reserved and revised under: the key with case folded where the map reads two
+    /// spellings differing only in case as one path (TRUST-4).
+    fn slot(&self, key: &str) -> String {
+        match self.trust.folds_case() {
+            true => crate::trust::fold_case(key),
+            false => key.to_string(),
+        }
+    }
+
     /// Look up only whole-segment ancestors, including the special root rules.
     fn revision_of(&self, key: &str) -> u64 {
+        let key = self.slot(key);
+        let key = key.as_str();
         let mut latest = self.versions.get("/").copied().unwrap_or(0);
         if !crate::trust::is_absolute_key(key) {
             latest = latest.max(self.versions.get("").copied().unwrap_or(0));
@@ -39,7 +51,8 @@ impl State {
     /// Record every effect, including one that leaves the effective trust unchanged.
     fn record_change(&mut self, key: String) -> u64 {
         self.revision = self.revision.wrapping_add(1);
-        self.versions.insert(key, self.revision);
+        let slot = self.slot(&key);
+        self.versions.insert(slot, self.revision);
         self.revision
     }
 }
@@ -204,7 +217,9 @@ impl FileAuthority {
     ///
     /// For a caller keeping its own record of the effects it entered. Two spellings of one path are
     /// one key, so a caller comparing the names it was handed would enter a second effect on a path
-    /// it is already writing and be refused by its own reservation.
+    /// it is already writing and be refused by its own reservation. Two spellings differing only in
+    /// case on a volume that folds are two keys and one reservation, so a second effect through the
+    /// other spelling is refused.
     pub fn key(&self, path: &str) -> String {
         self.state().trust.key(&self.spelled(path))
     }
@@ -232,7 +247,7 @@ impl FileAuthority {
         let path = path.as_ref();
         let mut state = self.state();
         let key = state.trust.key(path);
-        if integrity == Integrity::Trusted && state.active.contains(&key) {
+        if integrity == Integrity::Trusted && state.active.contains(&state.slot(&key)) {
             return false;
         }
         match integrity {
@@ -270,7 +285,8 @@ impl FileAuthority {
     fn begin(&self, path: &str) -> Option<FileEffect> {
         let mut state = self.state();
         let key = state.trust.key(&self.spelled(path));
-        if !state.active.insert(key.clone()) {
+        let slot = state.slot(&key);
+        if !state.active.insert(slot) {
             return None;
         }
         state.trust.distrust(&key);
@@ -317,7 +333,8 @@ impl FileEffect {
     pub fn complete(mut self, integrity: Integrity) {
         let _access = self.authority.capture();
         let mut state = self.authority.state();
-        state.active.remove(&self.key);
+        let slot = state.slot(&self.key);
+        state.active.remove(&slot);
         let unchanged = state.revision_of(&self.key) <= self.revision;
         match integrity {
             Integrity::Trusted if unchanged => state.trust.trust(&self.key),
@@ -332,7 +349,8 @@ impl Drop for FileEffect {
     fn drop(&mut self) {
         if !self.completed {
             let mut state = self.authority.state();
-            state.active.remove(&self.key);
+            let slot = state.slot(&self.key);
+            state.active.remove(&slot);
             state.trust.distrust(&self.key);
             state.record_change(self.key.clone());
         }
@@ -454,6 +472,84 @@ mod tests {
             "the decision was not filed under the checkout's full path"
         );
         assert_eq!(rooted.unrooted().key("src/a.rs"), "/work/src/a.rs");
+    }
+
+    /// On a volume that folds case, untrusted bytes written through one spelling of a file are
+    /// read as untrusted under every spelling, whichever spelling the earlier trusted write used
+    /// and whichever sorts first.
+    #[test]
+    fn an_untrusted_write_through_another_spelling_is_read_untrusted_under_both() {
+        for (trusted, untrusted) in [
+            ("Docs/a.md", "docs/a.md"),
+            ("docs/a.md", "Docs/a.md"),
+            ("README.md", "readme.md"),
+        ] {
+            let mut trust = TrustStore::new("/ws").folding_case(true);
+            trust.trust(".");
+            let authority = FileAuthority::new(trust);
+
+            let effect = authority.capture().begin(trusted).unwrap();
+            effect.complete(Integrity::Trusted);
+            let effect = authority.capture().begin(untrusted).unwrap();
+            effect.complete(Integrity::Untrusted);
+
+            for spelling in [trusted, untrusted] {
+                assert_eq!(
+                    authority.integrity_of(spelling),
+                    Some(Integrity::Untrusted),
+                    "{spelling} read as trusted after untrusted bytes were written as {untrusted}"
+                );
+            }
+        }
+    }
+
+    /// A writer through another spelling of a path being written is a second writer to that path
+    /// on a volume that folds case, and is refused as one. Where the volume keeps the spellings
+    /// apart they are two files, and each takes a writer of its own.
+    #[test]
+    fn a_second_writer_through_another_spelling_is_refused_while_the_first_is_open() {
+        for folds in [true, false] {
+            let authority = FileAuthority::new(TrustStore::new("/ws").folding_case(folds));
+
+            let first = authority.capture().begin("Docs/a.md").unwrap();
+            let second = authority.capture().begin("docs/a.md");
+            assert_eq!(
+                second.is_none(),
+                folds,
+                "folds case: {folds}, a second writer through docs/a.md while Docs/a.md is open"
+            );
+            drop(second);
+            first.complete(Integrity::Trusted);
+            assert!(authority.capture().begin("docs/a.md").is_some());
+        }
+    }
+
+    /// A decision made through another spelling of a path moves that path's revision on a volume
+    /// that folds case, so an approval given for the path does not outlive it. A volume that keeps
+    /// the spellings apart moves nothing for the other file.
+    #[test]
+    fn a_decision_through_another_spelling_moves_the_revision_of_the_path() {
+        for folds in [true, false] {
+            let mut trust = TrustStore::new("/ws").folding_case(folds);
+            trust.trust(".");
+            let authority = FileAuthority::new(trust);
+
+            let approved_at = authority.revision_of("docs/a.md");
+            let effect = authority.capture().begin("Docs/a.md").unwrap();
+            effect.complete(Integrity::Trusted);
+            assert_eq!(
+                authority.revision_of("docs/a.md") != approved_at,
+                folds,
+                "folds case: {folds}, a write to Docs/a.md"
+            );
+            let approved_at = authority.revision_of("docs/a.md");
+            authority.publish("DOCS", Integrity::Untrusted);
+            assert_eq!(
+                authority.revision_of("docs/a.md") != approved_at,
+                folds,
+                "folds case: {folds}, a decision about DOCS"
+            );
+        }
     }
 
     /// Making the copy moves no revision, since nothing beneath the checkout has been read.
