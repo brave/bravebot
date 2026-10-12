@@ -713,6 +713,8 @@ fn sockets_in(listing: &str) -> Vec<&str> {
         .collect()
 }
 
+/// A filter that missed one system's listing format would let `an_unconfined_hook_the_host_runs_holds_no_socket`
+/// pass on that system without checking anything. Here is one line of each format.
 #[test]
 fn a_listing_of_either_system_shows_its_sockets() {
     let listing = "srw-rw-rw-  0 runner  staff 0 Jan  1  1970 131\nlrwx------ 1 r r 64 Oct 12 8:00 7 -> socket:[1]\nlr-x------ 1 r r 64 Oct 12 8:00 0 -> pipe:[2]\nlrwx------ 1 r r 64 Oct 12 8:00 1 -> /dev/null\n";
