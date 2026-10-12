@@ -460,7 +460,7 @@ def check_exception_counts():
             "exception-count-disagreement",
             "the review pass names fewer admitted exceptions than the spec, so an unnamed one "
             "reads as a violation",
-            f"`{REVIEW_DOC}` says {review[0]} places in the kernel branch on untrusted bytes and "
+            f"`{REVIEW_DOC}` says {review[0]} places branch on untrusted bytes and "
             f"`{LABELS_SPEC}` names {spec[0]}",
             "trust",
             "low",

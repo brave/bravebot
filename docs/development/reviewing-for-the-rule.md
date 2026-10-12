@@ -55,14 +55,19 @@ data, so it is used everywhere legitimately, and only a reader can say which is 
 that count and `make check-spec` fails until somebody records it, which puts the question in front
 of a reviewer without answering it.
 
-Three places in the kernel do branch on untrusted bytes, deliberately. All three are named under
-Known costs in [specs/labels.md](../specs/labels.md), because an unlisted exception is
-indistinguishable from a violation. A further one that mints a witness of its own moves a pinned
-count and so cannot arrive quietly. One added inside a function that already holds a counted
-`declassify` moves nothing: the counts pin how many times the bytes are released, not how many
-decisions are then taken from them, so `crates/core/src/policy.rs` still has to be read rather
-than counted. `crates/core/src/vetting.rs` holds no `declassify` and so no count either, and the
-third exception reads its word there, out of bytes `policy.rs` released.
+Four places do branch on untrusted bytes, deliberately. Three are in the kernel and the fourth is
+the search in `bravebot-agent`. All four are named under Known costs in
+[specs/labels.md](../specs/labels.md), because an unlisted exception is indistinguishable from a
+violation. A further one that mints a witness of its own moves a pinned count and so cannot arrive
+quietly. One added inside a function that already holds a counted `declassify` moves nothing: the
+counts pin how many times the bytes are released, not how many decisions are then taken from them,
+so `crates/core/src/policy.rs` still has to be read rather than counted. `crates/core/src/vetting.rs`
+holds no `declassify` and so no count either, and the third exception reads its word there, out of
+bytes `policy.rs` released. The fourth holds none either: `Workspace::grep_shaped` in
+`crates/agent/src/workspace.rs` opens files with `std::fs::read_to_string` and compares each line
+with `Regex::matches`, and no pinned symbol counts that, so a second comparison of the same kind
+elsewhere is found by reading the diff. What the comparison decides reaches the planner through
+the `search` function in `crates/agent/src/tools.rs`, whose releases are counted gates.
 
 ## The inverse mistake: inventing a violation
 

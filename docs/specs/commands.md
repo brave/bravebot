@@ -674,7 +674,7 @@ A `/review` is a command, so a prompt file or skill of that name is shadowed by 
 **Why.** A review exists to read changes the planner may not be allowed to see, and the answer to
 that elsewhere is a processor whose output goes to the person. A typed record of findings that the
 planner could act on would be the driver branching on processor output, which the design reserves for
-the three exceptions in [labels.md](labels.md) and which needs the maintainers' agreement
+the exceptions in [labels.md](labels.md) that read a processor's or a check's answer and which needs the maintainers' agreement
 before it is built. This command is the part that needs none of that.
 
 `verified-by: bravebot_tui::app::the_review_command_starts_a_turn_with_the_drivers_own_prompt`
