@@ -490,7 +490,10 @@ pub fn judged_request(
     if confines_nothing(&path, Some(&home)) {
         return Err(RequestRefusal::Rule(Reason::ConfinesNothing));
     }
+    // A location is compared where it stands and where its links lead: a credential directory
+    // that is a link into a dotfiles repository resolves there, and so does `path`.
     if credential_rows(&home)
+        .flat_map(|location| [resolved(&location), location])
         .any(|location| path.starts_with(&location) || location.starts_with(&path))
     {
         return Err(RequestRefusal::CredentialLocation);
@@ -690,7 +693,7 @@ fn one(
 /// directory, or anything inside either.
 fn refused_for_adding_reach(path: &Path, home: Option<&Path>) -> Option<Reason> {
     home.and_then(|home| {
-        if path.starts_with(home.join(".ssh")) {
+        if path.starts_with(home.join(".ssh")) || path.starts_with(resolved(&home.join(".ssh"))) {
             Some(Reason::PrivateKey)
         } else if path.starts_with(home.join(STATE_DIRECTORY))
             || path.starts_with(resolved(&home.join(STATE_DIRECTORY)))
@@ -1654,6 +1657,36 @@ mod tests {
                 judged_request(&link, true, Some(&home), &rules),
                 Err(RequestRefusal::CredentialLocation)
             );
+        }
+    }
+
+    /// A credential directory that is a link into a dotfiles repository (stow, chezmoi, yadm) is
+    /// refused for a request that names where it leads, as it is for one that names the link
+    /// (SANDBOX-12). `~/.ssh` is refused by its own reason, and `~/.aws` as a credential location.
+    #[cfg(unix)]
+    #[test]
+    fn a_request_reaching_a_linked_credential_directory_is_refused_where_it_leads() {
+        let home = fresh("request-linked-credentials-home");
+        let dotfiles = fresh("request-linked-credentials-dotfiles");
+        let rules = Rules::none();
+        for (name, refusal) in [
+            (".aws", RequestRefusal::CredentialLocation),
+            (".ssh", RequestRefusal::Rule(Reason::PrivateKey)),
+        ] {
+            let target = dotfiles.join(name.trim_start_matches('.'));
+            fs::create_dir_all(&target).unwrap();
+            std::os::unix::fs::symlink(&target, home.join(name)).unwrap();
+            for write in [false, true] {
+                for named in [target.clone(), target.join("credentials"), home.join(name)] {
+                    fs::write(target.join("credentials"), "secret").unwrap();
+                    assert_eq!(
+                        judged_request(&named, write, Some(&home), &rules),
+                        Err(refusal),
+                        "{} (write: {write})",
+                        named.display()
+                    );
+                }
+            }
         }
     }
 
