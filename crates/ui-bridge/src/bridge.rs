@@ -842,15 +842,6 @@ impl Bridge {
             .collect()
     }
 
-    /// Stop the turn or run a session has going and refuse the question it waits on, leaving the
-    /// session open. Nothing happens to a session with no work in flight.
-    pub fn stop_work(&mut self, handle: &str) {
-        if let Some(running) = self.open.get(handle).and_then(|open| open.running.as_ref()) {
-            running.cancel.cancel();
-            running.refuse_pending();
-        }
-    }
-
     /// Say which kinds of question the session's controller can answer from now on. A question of
     /// another kind is refused when it is asked, without being shown; one already waiting is not
     /// touched. An empty list is nobody.
@@ -876,6 +867,38 @@ impl Bridge {
         if let Some(running) = self.open.get(handle).and_then(|open| open.running.as_ref()) {
             running.refuse_pending_with(|request| self.emitter.view_answered(handle, request));
         }
+    }
+
+    /// Give a session's view to a client that is taking it over.
+    ///
+    /// `hand_over` switches where the session's events go, and runs between the end of what the
+    /// previous client was sent and the start of what the new one is. The client is sent the
+    /// session's current state as `session.view.snapshot`, with the startup question again if it
+    /// is still unanswered, and is then able to answer the `kinds` named. The session must have
+    /// started a view.
+    pub fn attach_view(
+        &mut self,
+        handle: &str,
+        kinds: &[Kind],
+        hand_over: impl FnOnce() -> Result<(), Failure>,
+    ) -> Result<Value, Failure> {
+        if !self.open.contains_key(handle) {
+            return Err(Failure::no_such_session());
+        }
+        let answerers = self.answerers_of(handle);
+        let sequence = self.emitter.resume_view(handle, || {
+            // Who can answer is set first, so a failure to set it leaves the previous controller
+            // as it was. A hand-over that then fails puts it back to nobody, not to the kinds
+            // set here, since no client has the session.
+            answerers.only(kinds)?;
+            if let Err(failed) = hand_over() {
+                let _ = answerers.nobody();
+                return Err(failed);
+            }
+            Ok(())
+        })?;
+        self.ask_about_trust(handle);
+        Ok(json!({"version": 1, "sequence": sequence, "history": "omitted"}))
     }
 
     /// Whether a thread is still working for the session: a turn or a run that has not yet

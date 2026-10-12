@@ -77,9 +77,7 @@ eligibility share the emitter lock, so the next turn cannot publish ahead of the
 Closing a session detaches and removes its view; `detached` says nothing about worker termination,
 save success, or rollback. EOF retains the existing process-ending behavior.
 
-The bridge retains only current view metadata and the pending payload. Clients retain transcript
-rows. There is no history snapshot, late subscription, reconnect, or resynchronization operation.
-Connection loss or a sequence gap ends the view; a client must not claim recovered history.
+The bridge retains only current view metadata and the pending payload. Clients retain transcript rows. There is no history snapshot, late subscription, reconnect, or resynchronization operation on the stdio transports. Connection loss or a sequence gap ends the view; a client must not claim recovered history. The local host's `session.attach` ([HOST-11](local-host.md#HOST-11)) gives a client that takes a session over its current status with no rows and says the history is omitted.
 
 `verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::fetch::session_views_keep_two_sessions_and_terminal_outcomes_separate`

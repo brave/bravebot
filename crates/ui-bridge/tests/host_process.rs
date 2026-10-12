@@ -23,8 +23,6 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 const PATIENCE: Duration = Duration::from_secs(60);
-/// How long something that should not happen is waited for before it is said not to have.
-const QUIET: Duration = Duration::from_millis(500);
 /// Longer than a stopped turn needs and shorter than the minute after which a question nobody
 /// answers expires, so a turn still going at this point was not stopped.
 const STOPPED_WITHIN: Duration = Duration::from_secs(20);
@@ -174,7 +172,7 @@ fn ends_the_turn(_: &Value) -> Value {
 
 /// Writes `path` on the first round of a turn and ends it on the next.
 fn writes_a_file(path: &Path) -> impl Fn(&Value) -> Value + Send + Sync + 'static {
-    let arguments = json!({"path": path, "content": "written by the model"}).to_string();
+    let arguments = json!({"path": path, "contents": "written by the model"}).to_string();
     move |request| {
         let messages = request["messages"].as_array().expect("a conversation");
         let results = messages
@@ -539,21 +537,146 @@ fn a_session_is_reported_closed_only_after_its_turn_has_ended() {
     client.leave();
 }
 
-/// A client that goes away leaves its session in the host with its work stopped, not asking a
-/// person who is no longer there. The next client sees the same host and the session, and cannot
-/// act on it.
+impl Client {
+    /// A session in `project` whose directory the person declined to trust, so a write in it is
+    /// put to them, with the client's view started so it can answer.
+    fn viewed_session_in(&mut self, project: &Path) -> String {
+        let opened = self.call("session.new", json!({"directory": project}));
+        let session = opened["session"].as_str().expect("a handle").to_string();
+        self.call(
+            "session.view.start",
+            json!({"session": session, "version": 1}),
+        );
+        self.call("trust.reply", json!({"session": session, "trusted": false}));
+        session
+    }
+
+    /// As [`Client::viewed_session_in`], with no view started.
+    fn unviewed_session_in(&mut self, project: &Path) -> String {
+        let opened = self.call("session.new", json!({"directory": project}));
+        let session = opened["session"].as_str().expect("a handle").to_string();
+        self.call("trust.reply", json!({"session": session, "trusted": false}));
+        session
+    }
+
+    /// The next client the host starts, once the one before it has gone. It is served only after
+    /// the host has dealt with the loss of the one before.
+    fn next_client_of(host: &mut Host) -> Client {
+        host.command("launch");
+        host.client()
+    }
+
+    fn until_idle(&mut self, session: &str) {
+        let deadline = Instant::now() + STOPPED_WITHIN;
+        loop {
+            let held = self.the_session(session);
+            if held["working"] == false {
+                return;
+            }
+            assert!(Instant::now() < deadline, "the work never ended: {held}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// A model that writes `out.txt` in the project when the prompt says to and otherwise ends the
+/// turn, counting its requests.
+fn writes_on_request(
+    requests: &Arc<std::sync::atomic::AtomicUsize>,
+) -> impl Fn(&Value) -> Value + Send + Sync + 'static {
+    let writes = writes_a_file(Path::new("out.txt"));
+    let requests = Arc::clone(requests);
+    move |request| {
+        requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let asked_to_write = request["messages"]
+            .as_array()
+            .and_then(|messages| messages.iter().rev().find(|m| m["role"] == "user"))
+            .is_some_and(|message| message["content"].to_string().contains("write"));
+        if asked_to_write {
+            writes(request)
+        } else {
+            ends_the_turn(request)
+        }
+    }
+}
+
+/// A client that started its view is asked, and its approval lands.
 #[test]
-fn a_client_that_leaves_stops_its_work_and_the_next_client_cannot_act_on_the_session() {
+fn a_controller_that_started_its_view_is_asked_and_its_approval_lands() {
     let scratch = Scratch::new();
     let written = scratch.project().join("out.txt");
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let host = Host::start(&scratch, &endpoint);
+    let mut client = host.client();
+    let session = client.viewed_session_in(&scratch.project());
+    client.call(
+        "turn.send",
+        json!({"session": session, "prompt": "write it"}),
+    );
+    let asked = client.event("confirm.request");
+    client.call(
+        "confirm.reply",
+        json!({"session": session, "request": asked["data"]["request"], "decision": "approve"}),
+    );
+    client.event("turn.done");
+    assert_eq!(
+        std::fs::read_to_string(&written).expect("the approved write landed"),
+        "written by the model"
+    );
+    client.leave();
+}
+
+/// A client that never started a view is not ready to answer: what the turn asks is refused
+/// without being shown, and the turn goes on to its end.
+#[test]
+fn a_session_whose_client_never_started_a_view_has_its_questions_refused_unseen() {
+    let scratch = Scratch::new();
+    let written = scratch.project().join("out.txt");
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let mut host = Host::start(&scratch, &endpoint);
+    let mut client = host.client();
+    let session = client.unviewed_session_in(&scratch.project());
+    client.call(
+        "turn.send",
+        json!({"session": session, "prompt": "write it"}),
+    );
+    client.event("turn.done");
+
+    assert!(!written.exists(), "a write nobody could answer landed");
+    assert!(
+        client
+            .held
+            .iter()
+            .all(|message| message["event"] != "confirm.request"),
+        "a question was shown to a client that could not answer: {:?}",
+        client.held
+    );
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+    client.leave();
+
+    let mut next = Client::next_client_of(&mut host);
+    let taken = next.answered("session.attach", json!({"session": session}));
+    assert_eq!(taken["error"]["code"], "bad_request", "{taken}");
+    next.leave();
+}
+
+/// The controller leaves while the model is still working, so the turn asks nobody: its write is
+/// refused when asked, at once, and the turn goes on to finish rather than being stopped or left
+/// waiting.
+#[test]
+fn a_question_asked_after_the_controller_left_is_refused_and_the_turn_goes_on() {
+    let scratch = Scratch::new();
+    let written = scratch.project().join("out.txt");
+    let requests = Arc::default();
     let (before, reached, release) = a_gate();
-    let endpoint = a_model_service(writes_a_file(&written), before);
+    let endpoint = a_model_service(writes_on_request(&requests), before);
     let mut host = Host::start(&scratch, &endpoint);
 
     let mut first = host.client();
-    let instance = first.call("instance.info", json!({}))["instance"].clone();
-    let session = first.session_in(&scratch.project());
-    first.call(
+    let session = first.viewed_session_in(&scratch.project());
+    let sent = first.call(
         "turn.send",
         json!({"session": session, "prompt": "write it"}),
     );
@@ -561,37 +684,149 @@ fn a_client_that_leaves_stops_its_work_and_the_next_client_cannot_act_on_the_ses
         .recv_timeout(PATIENCE)
         .expect("the turn reached the model");
     first.leave();
-    // The host has to notice the client is gone before the model answers, or the turn would be
-    // waiting for a person at the write and not yet have been stopped.
-    std::thread::sleep(QUIET);
+
+    let mut second = Client::next_client_of(&mut host);
+    assert_eq!(second.the_session(&session)["controlled"], false);
+    // Both requests of the turn are let through now that nobody is there.
     release.send(()).unwrap();
+    release.send(()).unwrap();
+    second.until_idle(&session);
 
-    host.command("launch");
-    let mut second = host.client();
-    let info = second.call("instance.info", json!({}));
+    assert!(!written.exists(), "a write nobody could answer landed");
     assert_eq!(
-        info["instance"], instance,
-        "the host is not the one the first client left"
+        requests.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the turn did not go on to read the refusal"
     );
+    let taken = second.call("session.attach", json!({"session": session}));
+    assert_eq!(taken["history"], "omitted");
+    let snapshot = second.event("session.view.snapshot");
+    assert_eq!(snapshot["data"]["status"], "completed", "{snapshot}");
+    assert_eq!(snapshot["data"]["turn"], sent["turn"]);
+    assert_eq!(snapshot["data"]["target"], sent["target"]);
+    assert_eq!(snapshot["data"]["rows"], json!([]));
+    assert_eq!(snapshot["data"]["pending"], Value::Null);
+    second.leave();
+}
 
-    let deadline = Instant::now() + STOPPED_WITHIN;
-    loop {
-        let held = second.the_session(&session);
-        assert_eq!(held["state"], "open");
-        if held["working"] == false {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the work was never stopped: {held}"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
+/// The controller leaves while a write waits for it. The question is refused and shown resolved,
+/// the turn goes on, and the client that takes the session over is told so, is the one that is
+/// asked next, and cannot answer the old question by its number.
+#[test]
+fn a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answers_nothing() {
+    let scratch = Scratch::new();
+    let written = scratch.project().join("out.txt");
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let mut host = Host::start(&scratch, &endpoint);
+
+    let mut first = host.client();
+    let session = first.viewed_session_in(&scratch.project());
+    let sent = first.call(
+        "turn.send",
+        json!({"session": session, "prompt": "write it"}),
+    );
+    let asked = first.event("confirm.request");
+    let old = asked["data"]["request"].as_u64().expect("a number");
+    first.leave();
+
+    let mut second = Client::next_client_of(&mut host);
+    assert_eq!(second.the_session(&session)["controlled"], false);
+    second.until_idle(&session);
+    assert!(!written.exists(), "the question was answered by the loss");
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+    let taken = second.call("session.attach", json!({"session": session}));
+    assert_eq!(taken["history"], "omitted");
+    let snapshot = second.event("session.view.snapshot");
+    assert_eq!(snapshot["data"]["status"], "completed", "{snapshot}");
+    assert_eq!(snapshot["data"]["target"], sent["target"]);
+    assert_eq!(snapshot["data"]["pending"], Value::Null);
+    assert_eq!(second.the_session(&session)["controlled"], true);
+
+    // The next turn asks this client, with a number the old question did not have.
+    second.call(
+        "turn.send",
+        json!({"session": session, "prompt": "write again"}),
+    );
+    let asked_now = second.event("confirm.request");
+    let current = asked_now["data"]["request"].as_u64().expect("a number");
+    assert!(current > old, "{current} reuses {old}");
+    let stale = second.answered(
+        "confirm.reply",
+        json!({"session": session, "request": old, "decision": "approve"}),
+    );
+    assert_eq!(stale["error"]["code"], "no_such_request", "{stale}");
     assert!(
         !written.exists(),
-        "the model's write landed with nobody to ask"
+        "an answer to an old question landed a write"
     );
+    second.call(
+        "confirm.reply",
+        json!({"session": session, "request": current, "decision": "approve"}),
+    );
+    second.event("turn.done");
+    assert_eq!(
+        std::fs::read_to_string(&written).expect("the approved write landed"),
+        "written by the model"
+    );
+    second.leave();
+}
 
+/// A session left before its startup question was answered is still unanswered. The client that
+/// takes it over is asked, and no turn runs until it answers.
+#[test]
+fn a_session_left_with_its_startup_question_unanswered_asks_the_next_client() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::start(&scratch, &endpoint);
+
+    let mut first = host.client();
+    let opened = first.call("session.new", json!({"directory": scratch.project()}));
+    let session = opened["session"].as_str().unwrap().to_string();
+    first.call(
+        "session.view.start",
+        json!({"session": session, "version": 1}),
+    );
+    first.leave();
+
+    let mut second = Client::next_client_of(&mut host);
+    second.call("session.attach", json!({"session": session}));
+    let snapshot = second.event("session.view.snapshot");
+    assert_eq!(snapshot["data"]["status"], "awaiting_trust", "{snapshot}");
+    let asked = second.event("trust.request");
+    assert_eq!(asked["session"], session.as_str());
+
+    let early = second.answered("turn.send", json!({"session": session, "prompt": "hello"}));
+    assert_eq!(early["error"]["code"], "bad_request", "{early}");
+    second.call("trust.reply", json!({"session": session, "trusted": true}));
+    second.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    second.event("turn.done");
+    second.leave();
+}
+
+/// A client that has not taken a session over cannot act on it, whichever way it asks, and may
+/// close it. A session cannot be taken by the client that controls it, or by a client that names a
+/// session the host does not hold.
+#[test]
+fn a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::start(&scratch, &endpoint);
+
+    let mut first = host.client();
+    let instance = first.call("instance.info", json!({}))["instance"].clone();
+    let session = first.viewed_session_in(&scratch.project());
+    let own = first.answered("session.attach", json!({"session": session}));
+    assert_eq!(own["error"]["code"], "bad_request", "{own}");
+    first.leave();
+
+    let mut second = Client::next_client_of(&mut host);
+    assert_eq!(
+        second.call("instance.info", json!({}))["instance"],
+        instance,
+        "the host is not the one the first client left"
+    );
     for (method, params) in [
         (
             "turn.send",
@@ -599,6 +834,14 @@ fn a_client_that_leaves_stops_its_work_and_the_next_client_cannot_act_on_the_ses
         ),
         ("turn.cancel", json!({"session": session})),
         ("trust.reply", json!({"session": session, "trusted": true})),
+        (
+            "confirm.reply",
+            json!({"session": session, "request": 1, "decision": "approve"}),
+        ),
+        (
+            "session.view.start",
+            json!({"session": session, "version": 1}),
+        ),
     ] {
         let answered = second.answered(method, params);
         assert_eq!(
@@ -606,14 +849,18 @@ fn a_client_that_leaves_stops_its_work_and_the_next_client_cannot_act_on_the_ses
             "{method}: {answered}"
         );
     }
+    let unknown = second.answered("session.attach", json!({"session": "s99"}));
+    assert_eq!(unknown["error"]["code"], "no_such_session", "{unknown}");
     assert_eq!(second.the_session(&session)["state"], "open");
+    assert_eq!(second.the_session(&session)["controlled"], false);
 
-    // The one thing a later client can do with a session whose client has gone is close it.
     let closing = second.call("session.close", json!({"session": session}));
     assert_eq!(closing["state"], "closing");
     let closed = second.event("session.closed");
     assert_eq!(closed["session"], session.as_str());
     assert_eq!(second.the_session(&session)["state"], "closed");
+    let gone = second.answered("session.attach", json!({"session": session}));
+    assert_eq!(gone["error"]["code"], "no_such_session", "{gone}");
     second.leave();
 }
 

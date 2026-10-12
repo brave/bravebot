@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/ui-bridge/src/host.rs
   - crates/ui-bridge/src/allowlist.rs
+  - crates/ui-bridge/src/answerers.rs
   - crates/ui-bridge/src/workers.rs
   - crates/ui-bridge/src/bin/bravebot-host.rs
 documented-by: none (internal: the host is started by a person from a command line and driven by a program they chose; nothing in the product launches it yet)
@@ -14,7 +15,7 @@ documented-by: none (internal: the host is started by a person from a command li
 
 `bravebot-host`, one process that owns a bridge and keeps its sessions while the programs that drive it come and go. It serves one client at a time over the anonymous channel of [RPCVIEW-8](session-view.md#RPCVIEW-8). It has no socket path, port or token, and no network or remote client.
 
-Not here: what a client may do to a session it did not open (nothing yet), how a client that returns takes over a session, a snapshot of past events for a returning client, controller handover, pairing, and anything about a phone. A session that outlives its client stops its work and waits for those.
+Not here: a transcript for a client that returns (the snapshot of [HOST-11](#HOST-11) carries none), taking a session from a controller that is still connected, two clients acting at once, pairing, and anything about a phone.
 
 ## Clauses
 
@@ -31,7 +32,7 @@ The host starts the client over a new channel when it starts. The client ending 
 `verified-by: bravebot_ui_bridge::closing_tests::stopping_everything_closes_each_session_and_returns_its_running_workers`
 `verified-by: bravebot_ui_bridge::host::a_failed_attempt_to_refuse_inspection_is_an_error_and_the_other_outcomes_are_named`
 `verified-by: bravebot_ui_bridge::layering::every_binary_that_speaks_over_its_own_stdio_marks_itself_non_dumpable`
-`verified-by: bravebot_ui_bridge::host_process::a_client_that_leaves_stops_its_work_and_the_next_client_cannot_act_on_the_session`
+`verified-by: bravebot_ui_bridge::host_process::a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it`
 
 <a id="HOST-2"></a>
 ### HOST-2: a session opens only in a workspace the person gave
@@ -50,7 +51,7 @@ The host answers the methods in `allowlist::OFFERED` with the parameters listed 
 
 Every method the bridge answers is either offered or listed in `allowlist::DENIED`. A test reads the bridge's dispatch and fails while it answers a method that neither list names, and while either list names one it does not answer, so a method added to the bridge is not reachable through the host until someone classifies it.
 
-The replies that widen what a session may do or read (`output.reply`, `vouch.reply`, `vet.reply`, `server.reply`, `exposure.reply`, `host.reply`, the MCP replies and `manifest.reply`) are denied. A question of one of those kinds cannot be answered through the host. It stays unanswered until it expires or the session is cancelled or closed, or its client leaves, which refuse it.
+The replies that widen what a session may do or read (`output.reply`, `vouch.reply`, `vet.reply`, `server.reply`, `exposure.reply`, `host.reply`, the MCP replies and `manifest.reply`) are denied. A question of one of those kinds cannot be answered through the host, so it is refused when it is asked and is not shown ([HOST-10](#HOST-10)).
 
 `verified-by: bravebot_ui_bridge::host::a_method_the_host_does_not_offer_is_refused_and_does_nothing`
 `verified-by: bravebot_ui_bridge::allowlist::a_method_the_host_does_not_name_is_refused_whether_or_not_the_bridge_has_it`
@@ -104,14 +105,19 @@ Each run of the host has an instance ID, drawn from the seed the standard librar
 `verified-by: bravebot_ui_bridge::closing_tests::a_session_is_working_exactly_while_a_worker_runs`
 
 <a id="HOST-7"></a>
-### HOST-7: a session belongs to the connection that opened it
+### HOST-7: a session has one controller
 
-Requests naming a session are accepted only from the connection that opened it, and events of a session go only to that connection. A later connection sees the session in `instance.info` and is refused every request that names it with `not_allowed`, with one exception: once the connection that opened a session has ended, any later connection may close it with `session.close`, and then owns it for the `session.closed` that follows.
+The controller of a session is the connection that opened it, or that took it over ([HOST-11](#HOST-11)). Requests naming a session are accepted only from its controller, and events of a session go only to its controller. Another connection sees the session in `instance.info`, with `controlled` false unless it is the one served, and is refused every request that names it with `not_allowed`. Once the controller's connection has ended, any later connection may close the session with `session.close`, and then owns it for the `session.closed` that follows, or take it over with `session.attach`.
 
-When a connection ends, the turn or run each of its sessions has going is cancelled and the question it waits on is refused, so nothing is left asking a person who is no longer there. The sessions stay open, with no client, until the host stops.
+When the controller's connection ends the session stays open with no controller. The question it was waiting on is refused and shown as resolved in the session's view, and every question the turn asks from then on is refused when it is asked ([HOST-10](#HOST-10)). The turn goes on to its end: it is not cancelled, because the person who left may return, and an effect that needed an answer does not happen. Nothing is left asking a person who is no longer there. The session stays open until it is closed or the host stops. Events the turn produces meanwhile are not sent to anyone.
 
-`verified-by: bravebot_ui_bridge::host_process::a_client_that_leaves_stops_its_work_and_the_next_client_cannot_act_on_the_session`
-`verified-by: bravebot_ui_bridge::closing_tests::stopping_the_work_of_a_session_with_none_changes_nothing`
+`verified-by: bravebot_ui_bridge::host_process::a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it`
+`verified-by: bravebot_ui_bridge::host_process::a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answers_nothing`
+`verified-by: bravebot_ui_bridge::host_process::a_question_asked_after_the_controller_left_is_refused_and_the_turn_goes_on`
+`verified-by: bravebot_ui_bridge::host::only_the_controller_acts_on_a_session_and_another_may_close_or_take_over_one_left`
+`verified-by: bravebot_ui_bridge::host::a_closing_or_unknown_session_is_not_found_by_anyone`
+`verified-by: bravebot_ui_bridge::control_tests::losing_the_controller_refuses_the_waiting_question_and_does_not_stop_the_turn`
+`verified-by: bravebot_ui_bridge::closing_tests::losing_control_of_a_session_with_no_work_changes_nothing`
 
 <a id="HOST-8"></a>
 ### HOST-8: a request line has a limit
@@ -140,3 +146,44 @@ The host holds the near end of its client's channel while it runs the person's h
 `verified-by: bravebot_ui_bridge::host_process::a_program_handed_a_socket_lists_it`
 `verified-by: bravebot_ui_bridge::host_process::a_listing_of_either_system_shows_its_sockets`
 `verified-by: bravebot_ui_bridge::control_boundary::programs_a_host_starts_hold_no_end_of_the_channels_it_created`
+
+<a id="HOST-10"></a>
+### HOST-10: a question is put only to a client that can answer it
+
+A client can answer a session's questions once it has the view of the session: after `session.view.start` for a session it opened, or `session.attach` for one it took over. A host's session starts with nobody able to answer, whichever way it was opened. From the moment the connection ends, nobody can. A question is put to the client only if its kind is one the host offers a reply for (`confirm`, `run`, `fetch` and `ask`, from the same list as the allowlist) and a client can answer now. Any other question is refused when it is asked, in the shape its kind is refused in, and is not shown, not numbered and not left waiting. This holds for every kind, so a turn that asks for command output, a vouch or an MCP call does not hang.
+
+The check is made under the lock that registers a question, and the loss of the controller sets the state before it refuses the waiting question. A question is therefore either refused before it is registered or registered where the loss finds it. A controller lost between the two cannot leave a question waiting for nobody. A stdio client of the bridge is unaffected: it can answer every kind.
+
+`verified-by: bravebot_ui_bridge::answering_tests::a_question_nobody_can_answer_is_refused_before_it_is_shown_for_every_kind`
+`verified-by: bravebot_ui_bridge::answering_tests::only_the_kinds_the_controller_can_answer_are_asked`
+`verified-by: bravebot_ui_bridge::answering_tests::the_loss_of_a_controller_refuses_the_question_waiting_for_every_kind`
+`verified-by: bravebot_ui_bridge::answering_tests::a_question_refused_by_the_loss_of_its_controller_is_shown_as_resolved`
+`verified-by: bravebot_ui_bridge::answerers::a_new_set_answers_every_kind_so_a_client_that_never_chose_is_unchanged`
+`verified-by: bravebot_ui_bridge::answerers::only_the_kinds_named_can_be_answered_and_nobody_answers_none`
+`verified-by: bravebot_ui_bridge::answerers::a_set_that_cannot_be_written_fails_and_answers_nothing`
+`verified-by: bravebot_ui_bridge::allowlist::every_offered_reply_but_the_startup_answer_is_a_kind_a_client_is_asked`
+`verified-by: bravebot_ui_bridge::control_tests::a_set_of_answerers_is_only_made_for_a_session_that_is_open`
+`verified-by: bravebot_ui_bridge::control_tests::a_bridge_that_refuses_until_set_starts_every_session_unanswerable`
+`verified-by: bravebot_ui_bridge::host_process::a_controller_that_started_its_view_is_asked_and_its_approval_lands`
+`verified-by: bravebot_ui_bridge::host_process::a_session_whose_client_never_started_a_view_has_its_questions_refused_unseen`
+
+<a id="HOST-11"></a>
+### HOST-11: a client that takes a session over is told where it stands
+
+`session.attach` makes the connection the controller of an open session whose controller's connection has ended, and answers `{ "version": 1, "sequence": n, "history": "omitted" }`. A session that has a controller whose connection has not ended is not taken, by the controller itself or by another connection, and neither is a session that started no view, one that is closing or closed, or one the host does not hold.
+
+Before it answers, the connection is sent `session.view.snapshot`, with the shape of `session.view.initial`: the session's current sequence, turn, turn target, status and pending question, no rows, and `"history": "omitted"`. The host keeps no transcript for a client that was not there, and says so. Events are switched to the new controller and the snapshot is written as one step with respect to every update, so each update the client receives has a sequence after the snapshot's, and none is missed or repeated. A session whose startup question is unanswered is still `awaiting_trust` in the snapshot, and the question is sent again after it. Trust is not answered by taking the session over, and no turn runs until the new controller answers it.
+
+The new controller can answer the kinds of [HOST-10](#HOST-10) from the snapshot on. The question the previous controller was refused is resolved, and a later question has a number the earlier one did not. An answer naming the earlier question's number is refused with `no_such_request` and changes nothing, as is a cancel naming a target that has ended.
+
+`verified-by: bravebot_ui_bridge::host_process::a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answers_nothing`
+`verified-by: bravebot_ui_bridge::host_process::a_question_asked_after_the_controller_left_is_refused_and_the_turn_goes_on`
+`verified-by: bravebot_ui_bridge::host_process::a_session_left_with_its_startup_question_unanswered_asks_the_next_client`
+`verified-by: bravebot_ui_bridge::host_process::a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it`
+`verified-by: bravebot_ui_bridge::host_process::a_session_whose_client_never_started_a_view_has_its_questions_refused_unseen`
+`verified-by: bravebot_ui_bridge::control_tests::taking_a_session_over_hands_it_over_between_the_last_update_and_the_snapshot`
+`verified-by: bravebot_ui_bridge::control_tests::the_startup_question_is_asked_again_only_while_it_is_unanswered`
+`verified-by: bravebot_ui_bridge::control_tests::a_session_that_cannot_be_taken_over_is_not_handed_over`
+`verified-by: bravebot_ui_bridge::control_tests::a_hand_over_that_fails_sends_nothing_and_changes_who_can_answer_nothing`
+`verified-by: bravebot_ui_bridge::control_tests::updates_during_a_take_over_fall_on_one_side_of_the_snapshot`
+`verified-by: bravebot_ui_bridge::host::only_the_controller_acts_on_a_session_and_another_may_close_or_take_over_one_left`

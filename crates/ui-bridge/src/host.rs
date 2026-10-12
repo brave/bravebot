@@ -11,11 +11,15 @@
 //! the person's request, and sees the same host instance.
 //!
 //! What a client may ask is [`crate::allowlist`], and where its sessions may be opened is the
-//! workspaces the host was given. A session belongs to the connection that opened it. A later
-//! connection can see that it exists and cannot act on it, because what controls a session after
-//! its client has gone is not settled here. When a connection ends, the work its sessions have in
-//! flight is stopped and what it was waiting on is refused: nothing is left asking a person who
-//! is no longer there.
+//! workspaces the host was given. A session has one controller: the connection that opened it, or
+//! that took it over after the one before had gone. Nobody else can act on it, and its events go
+//! to that connection alone. A controller can answer questions only once it has a view of the
+//! session (`session.view.start`, or `session.attach`), and only the kinds the allowlist offers.
+//!
+//! When a controller's connection ends the session stays open with no controller. The question it
+//! was waiting on is refused, and so is every question the turn asks from then on, so nothing is
+//! left asking a person who is no longer there. The turn itself goes on. A later connection can
+//! take the session over with `session.attach`, which tells it where the session stands.
 //!
 //! A session is closed once every thread that worked on it has returned ([`crate::workers`]).
 //! Closing answers `closing` at once and says `session.closed` when that is so. Neither says
@@ -121,7 +125,9 @@ impl Host {
         let bridge = Bridge::new(Box::new(move |event: Event| {
             write_event(&events, &routes, &for_a_client(event));
         }))
-        .with_settings(setup.settings);
+        .with_settings(setup.settings)
+        // Nobody can answer a session's questions until its client has the view of it.
+        .refusing_questions_until_set();
         Self {
             instance: new_instance(),
             inspection: setup.inspection,
@@ -148,7 +154,8 @@ impl Host {
 
     /// Serve one client until it closes its end or sends a line that is too long.
     ///
-    /// Sessions the client opened stay open when this returns, with their work stopped.
+    /// Sessions the client controlled stay open when this returns, with no controller and their
+    /// work going on.
     pub fn serve(&mut self, channel: UnixStream) -> io::Result<Ended> {
         self.connections += 1;
         let connection = self.connections;
@@ -194,7 +201,7 @@ impl Host {
     /// Answer one request from `connection`.
     fn dispatch(&mut self, connection: u64, request: &Request) -> Result<Value, Failure> {
         let operation = allowlist::check(request)?;
-        if allowlist::BY_THE_HOST.contains(&operation.method) {
+        if operation.method == "instance.info" {
             return Ok(self.describe());
         }
         let handle = request.optional_string("session");
@@ -203,6 +210,20 @@ impl Host {
         }
         match operation.method {
             "session.new" => self.new_session(connection, request),
+            "session.attach" => {
+                let handle = handle.ok_or_else(|| Failure::bad_request("`session` is required"))?;
+                self.attach(connection, &handle)
+            }
+            "session.view.start" => {
+                let started = self.bridge.dispatch(request)?;
+                // The view is the control state and the subscription, so from here the client can
+                // answer.
+                if let Some(handle) = &handle {
+                    self.bridge
+                        .set_answerable(handle, &allowlist::answerable())?;
+                }
+                Ok(started)
+            }
             "session.close" => {
                 let handle = handle.ok_or_else(|| Failure::bad_request("`session` is required"))?;
                 self.close(connection, &handle)
@@ -217,6 +238,10 @@ impl Host {
         }
     }
 
+    /// Whether `connection` may make a `method` request naming `handle`.
+    ///
+    /// Its controller may. A connection that is not may close the session or take it over where
+    /// its controller has gone; it may do nothing else.
     fn controlled_by(&self, connection: u64, handle: &str, method: &str) -> Result<(), Failure> {
         let owner = self
             .owners
@@ -226,19 +251,20 @@ impl Host {
         match (self.sessions.get(handle), owner) {
             (None, _) | (Some(_), None) => Err(Failure::no_such_session()),
             (Some(Some(_)), _) => Err(Failure::no_such_session()),
-            // The one thing a later client may do with a session whose client has gone.
+            (Some(_), Some(owner)) if owner == connection && method == "session.attach" => Err(
+                Failure::bad_request("this connection controls that session"),
+            ),
+            (Some(_), Some(owner)) if owner == connection => Ok(()),
             (Some(_), Some(owner))
-                if owner != connection
-                    && method == "session.close"
+                if matches!(method, "session.close" | "session.attach")
                     && self.ended.contains(&owner) =>
             {
                 Ok(())
             }
-            (Some(_), Some(owner)) if owner != connection => Err(Failure::new(
+            (Some(_), Some(_)) => Err(Failure::new(
                 ErrorCode::NotAllowed,
                 "this connection does not control that session",
             )),
-            (Some(_), Some(_)) => Ok(()),
         }
     }
 
@@ -281,6 +307,22 @@ impl Host {
         Ok(opened)
     }
 
+    /// Make `connection` the controller of a session whose controller has gone.
+    fn attach(&mut self, connection: u64, handle: &str) -> Result<Value, Failure> {
+        let owners = Arc::clone(&self.owners);
+        let session = handle.to_string();
+        self.bridge
+            .attach_view(handle, &allowlist::answerable(), move || {
+                // Not taken over if the owners cannot be written: the client would be told it
+                // controls a session whose events still go to the connection before it.
+                let mut owners = owners
+                    .lock()
+                    .map_err(|_| Failure::bad_request("the host cannot change who controls it"))?;
+                owners.insert(session, connection);
+                Ok(())
+            })
+    }
+
     fn close(&mut self, connection: u64, handle: &str) -> Result<Value, Failure> {
         let workers = self.bridge.close(handle)?;
         // Whoever closes a session is told when it has closed.
@@ -308,6 +350,12 @@ impl Host {
     }
 
     fn describe(&self) -> Value {
+        let attached = self
+            .output
+            .lock()
+            .ok()
+            .and_then(|output| output.as_ref().map(|a| a.connection));
+        let owners = self.owners.lock().ok();
         let mut sessions: Vec<_> = self
             .sessions
             .iter()
@@ -317,7 +365,14 @@ impl Host {
                     Some(workers) if workers.is_idle() => ("closed", false),
                     Some(_) => ("closing", true),
                 };
-                json!({"session": handle, "state": state, "working": working})
+                let controlled = attached.is_some()
+                    && owners
+                        .as_ref()
+                        .and_then(|owners| owners.get(handle))
+                        .copied()
+                        == attached;
+                json!({"session": handle, "state": state, "working": working,
+                    "controlled": controlled})
             })
             .collect();
         sessions.sort_by_key(|session| session["session"].as_str().map(str::to_string));
@@ -355,7 +410,7 @@ impl Host {
         }
     }
 
-    /// A connection ended: stop what its sessions are doing and detach it from the output.
+    /// A connection ended: its sessions have no controller, so nothing they ask is put to anyone.
     fn lose(&mut self, connection: u64) {
         if let Ok(mut output) = self.output.lock()
             && output.as_ref().is_some_and(|a| a.connection == connection)
@@ -374,7 +429,7 @@ impl Host {
             Err(_) => Vec::new(),
         };
         for handle in owned {
-            self.bridge.stop_work(&handle);
+            self.bridge.lose_control(&handle);
         }
     }
 }
@@ -502,6 +557,80 @@ mod tests {
         assert_eq!(inspection_report(Inspection::NotOffered), Ok("not_offered"));
         let failed = inspection_report(Inspection::Failed(1)).expect_err("a failure");
         assert!(failed.contains("non-dumpable"), "{failed}");
+    }
+
+    fn a_host_with_a_session_controlled_by_connection_one() -> Host {
+        let mut host = Host::new(Setup {
+            workspaces: Vec::new(),
+            settings: None,
+            inspection: "refused",
+        });
+        host.sessions.insert("s1".into(), None);
+        host.owners.lock().unwrap().insert("s1".into(), 1);
+        host
+    }
+
+    fn code(host: &Host, connection: u64, method: &str) -> Option<ErrorCode> {
+        host.controlled_by(connection, "s1", method)
+            .err()
+            .map(|failure| failure.code)
+    }
+
+    /// While its controller is connected nobody else can act on a session, or take it. Closing
+    /// and taking over are for a session whose controller has gone, and nothing else is.
+    #[test]
+    fn only_the_controller_acts_on_a_session_and_another_may_close_or_take_over_one_left() {
+        let mut host = a_host_with_a_session_controlled_by_connection_one();
+        for method in [
+            "turn.send",
+            "trust.reply",
+            "session.close",
+            "session.attach",
+        ] {
+            assert_eq!(
+                code(&host, 2, method),
+                Some(ErrorCode::NotAllowed),
+                "{method}"
+            );
+        }
+        for method in ["turn.send", "trust.reply", "session.close"] {
+            assert_eq!(code(&host, 1, method), None, "{method}");
+        }
+        assert_eq!(
+            code(&host, 1, "session.attach"),
+            Some(ErrorCode::BadRequest),
+            "a controller took over a session it controls"
+        );
+
+        host.ended.insert(1);
+        for method in ["session.close", "session.attach"] {
+            assert_eq!(code(&host, 2, method), None, "{method}");
+        }
+        for method in ["turn.send", "turn.cancel", "trust.reply", "confirm.reply"] {
+            assert_eq!(
+                code(&host, 2, method),
+                Some(ErrorCode::NotAllowed),
+                "{method}"
+            );
+        }
+    }
+
+    /// A session being closed, or one the host never opened, is nobody's to take.
+    #[test]
+    fn a_closing_or_unknown_session_is_not_found_by_anyone() {
+        let mut host = a_host_with_a_session_controlled_by_connection_one();
+        host.ended.insert(1);
+        host.sessions
+            .insert("s2".into(), Some(Arc::new(Workers::default())));
+        host.owners.lock().unwrap().insert("s2".into(), 1);
+        for (handle, method) in [
+            ("s2", "session.attach"),
+            ("s2", "turn.send"),
+            ("s3", "session.attach"),
+        ] {
+            let failure = host.controlled_by(2, handle, method).expect_err("refused");
+            assert_eq!(failure.code, ErrorCode::NoSuchSession, "{handle} {method}");
+        }
     }
 
     /// A client that reads nothing is treated as gone when a write to it gives up. The thread
