@@ -13265,6 +13265,148 @@ mod tests {
             let _ = std::fs::remove_dir_all(&directory);
         }
 
+        /// A path the way macOS Terminal hands over a dropped file: a backslash before every
+        /// character a shell would not read as part of a word.
+        fn escaped_by_the_terminal(path: &str) -> String {
+            let mut escaped = String::new();
+            for c in path.chars() {
+                if !(c.is_ascii_alphanumeric() || "/._-".contains(c)) {
+                    escaped.push('\\');
+                }
+                escaped.push(c);
+            }
+            escaped
+        }
+
+        /// A path the way a terminal that hands over a URI writes it, percent-encoded.
+        fn as_a_file_uri(path: &str) -> String {
+            let mut uri = String::from("file://");
+            for byte in path.bytes() {
+                if byte.is_ascii_alphanumeric() || b"/.-_".contains(&byte) {
+                    uri.push(byte as char);
+                } else {
+                    uri.push_str(&format!("%{byte:02X}"));
+                }
+            }
+            uri
+        }
+
+        /// A file of this name dropped onto `printf '%s\n' ` in shell mode and run: the dropped
+        /// path, what the shell printed, one line per argument, and the names in the directory
+        /// after it ran.
+        fn printed_for_a_dropped(name: &str, file: &str) -> (String, String, Vec<String>) {
+            let (mut session, directory, path) = a_session_with(name, file);
+            type_line(&mut session, "!");
+            type_line(&mut session, "printf '%s\\n' ");
+            assert!(
+                session.drop_files(&escaped_by_the_terminal(&path)),
+                "not recognised as a drop"
+            );
+            let action = handle_key(&mut session, key(KeyCode::Enter));
+            let Action::Run(line) = action else {
+                panic!("the line was not run: {action:?}");
+            };
+            let ran =
+                bravebot_agent::shell::run(&line, &directory, &Cancel::new()).expect("it runs");
+            let mut names: Vec<String> = std::fs::read_dir(&directory)
+                .expect("list")
+                .map(|entry| {
+                    entry
+                        .expect("entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            names.sort();
+            let _ = std::fs::remove_dir_all(&directory);
+            (path, ran.stdout, names)
+        }
+
+        /// A screenshot's name has spaces in it, and written bare the shell hands the command a
+        /// word for each, none of which names the file.
+        #[test]
+        fn a_dropped_name_with_a_space_reaches_the_shell_as_one_word() {
+            let file = "Screen Shot 1.png";
+            let (path, printed, names) = printed_for_a_dropped("shell-space", file);
+            assert_eq!(printed, format!("{path}\n"));
+            assert_eq!(names, [file]);
+        }
+
+        /// A name is chosen by whoever made the file, which can be a repository, an archive or a
+        /// download. Written bare or in double quotes, this one runs two commands nobody typed.
+        #[test]
+        fn a_dropped_name_holding_shell_syntax_runs_none_of_it() {
+            let file = "a;touch semi;b$(touch sub)c`touch tick`.png";
+            let (path, printed, names) = printed_for_a_dropped("shell-syntax", file);
+            assert_eq!(printed, format!("{path}\n"));
+            assert_eq!(names, [file], "the name ran as a command");
+        }
+
+        /// Single quotes hold everything but a quote, so a quote in the name has to be written
+        /// outside them, and a backslash beside it has to come back as one backslash.
+        #[test]
+        fn a_quote_in_a_dropped_name_does_not_end_its_quoting() {
+            let file = r"it's a\';touch pwned;'.png";
+            let (path, printed, names) = printed_for_a_dropped("shell-quote", file);
+            assert_eq!(printed, format!("{path}\n"));
+            assert_eq!(names, [file], "the name ran as a command");
+        }
+
+        /// What a person cannot see on the line they cannot have meant to run, and taking the
+        /// character out would name some other file. So the drop writes nothing and says why,
+        /// whichever spelling the terminal handed the name over in.
+        #[test]
+        fn a_dropped_name_holding_an_invisible_character_writes_nothing_and_says_why() {
+            let (mut session, directory, path) =
+                a_session_with("shell-invisible", "shot\u{202E}gnp.png");
+            type_line(&mut session, "!");
+            type_line(&mut session, "printf '%s\\n' ");
+
+            for dropped in [escaped_by_the_terminal(&path), as_a_file_uri(&path)] {
+                let notes = session.transcript.len();
+                assert!(
+                    session.drop_files(&dropped),
+                    "not taken as a drop: {dropped}"
+                );
+                assert_eq!(session.input(), "printf '%s\\n' ", "written from {dropped}");
+                assert_eq!(
+                    session.transcript.len(),
+                    notes + 1,
+                    "nothing said for {dropped}"
+                );
+                assert_eq!(
+                    session.transcript.last().expect("a note").text,
+                    t!(drop_name_not_written)
+                );
+            }
+
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+
+        /// A carriage return reaches a name through a `file://` URI, and the box writes it as a
+        /// newline, so the word on the line would name another file. The whole drop writes
+        /// nothing, the ordinary name beside it included, since a command missing one of the files
+        /// it was dropped with is not the command the person made.
+        #[test]
+        fn a_drop_with_a_control_character_in_a_name_writes_none_of_its_paths() {
+            let (mut session, directory, path) = a_session_with("shell-control", "a\rb.png");
+            let plain = directory.join("plain.png");
+            std::fs::write(&plain, b"x").expect("write");
+            type_line(&mut session, "!");
+            type_line(&mut session, "ls ");
+
+            let dropped = format!("{} {}", plain.to_string_lossy(), as_a_file_uri(&path));
+            assert!(session.drop_files(&dropped), "not taken as a drop");
+            assert_eq!(session.input(), "ls ");
+            assert_eq!(
+                session.transcript.last().expect("a note").text,
+                t!(drop_name_not_written)
+            );
+
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+
         /// A text file's contents would be a context message, and a planner asked a question or a
         /// task is precommitted to a context holding the task and the driver's own words. So what it
         /// is given is the name, which it can act on, rather than a marker standing for nothing.

@@ -103,7 +103,7 @@ removed 6 invisible characters from that paste
 Compare the count with what you copied. Letters, emoji and the spellings that need a zero-width
 joiner, such as Persian and Hindi, are left as they were, and a paste that held none of them says
 nothing. Only a paste is cleaned: text you type, a path in a dropped file's name and a prompt given
-with `-p` are not.
+with `-p` are not. A drop onto a line armed with `!` where a name holds such a character writes nothing.
 
 ### Pictures
 
@@ -162,7 +162,11 @@ or JPEG also gets a thumbnail under the box, as a pasted picture does.
 
 **Onto a line armed with `!`, a drop writes each file's path and attaches nothing**, as dropping a
 file into a shell does. The shell is handed the line as it stands, so there is no marker and no
-trust or reach is granted.
+trust or reach is granted. A path holding a space, a quote or anything else a shell would read as
+syntax is written in single quotes, so the name reaches the command as one word. The quotes are
+written for the place a word starts: drop the file there, not inside a quote you opened. When a
+dropped file's name holds a control character or a character the terminal draws as nothing, no path
+from that drop is written, and a note says so.
 
 **A prompt recalled from your history names the file rather than the marker.** Nothing staged beside
 a line outlives the session that staged it. The name is enough: the planner reads it and goes to the

@@ -6886,8 +6886,10 @@ impl Session {
     /// an unsupported type or a path naming no file at all, has its path written out, which is
     /// what dropping a file did before any of this existed.
     ///
-    /// In shell mode every file has its path written out and nothing is staged, so the command the
-    /// shell is given names the file and no record is left behind the line (`dropping.md` DROP-6).
+    /// In shell mode every file has its path written out, quoted as one word, and nothing is
+    /// staged, so the command the shell is given names the file and no record is left behind the
+    /// line. A drop whose names hold a control character, or one a terminal draws as nothing,
+    /// writes nothing and says why (`dropping.md` DROP-6).
     ///
     /// Returns whether the text was a drop at all. A paste that was not one is left to
     /// [`Session::paste`], untouched.
@@ -6899,9 +6901,24 @@ impl Session {
 
         // The line in shell mode is a command and nothing else, and the shell is handed it as it
         // stands. A marker there would reach it as text, so nothing is staged and the path is
-        // written, which is what a terminal does when a file is dropped into a shell.
+        // written as one word, which is what a terminal does when a file is dropped into a shell.
         if self.shell {
-            self.paste(&format!("{} ", crate::dropped::paths(text).join(" ")));
+            let paths = crate::dropped::paths(text);
+            // Taking the characters out would name another file, and leaving them in would let
+            // the line run something the box does not show. A control character is in the same
+            // case: the box rewrites a carriage return as a newline.
+            if paths.iter().any(|path| {
+                path.chars().any(char::is_control)
+                    || crate::invisible::without_invisible(path).1 > 0
+            }) {
+                self.note(t!(drop_name_not_written));
+                return true;
+            }
+            let words: Vec<String> = paths
+                .iter()
+                .map(|path| crate::dropped::shell_word(path))
+                .collect();
+            self.paste(&format!("{} ", words.join(" ")));
             return true;
         }
 
