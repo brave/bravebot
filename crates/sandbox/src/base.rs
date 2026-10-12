@@ -314,9 +314,25 @@ pub(crate) const CREDENTIAL_DIRECTORIES: &[&str] = &[
 /// The same, where only Windows keeps them, under the home directory.
 ///
 /// `gcloud` and `gpg` keep their directories under `%APPDATA%` there, which is
-/// `AppData\Roaming` unless the account's profile moves it.
-pub(crate) const WINDOWS_CREDENTIAL_DIRECTORIES: &[&str] =
-    &["AppData/Roaming/gcloud", "AppData/Roaming/gnupg"];
+/// `AppData\Roaming` unless the account's profile moves it. The browsers the other two tables name
+/// keep their profiles under `%LOCALAPPDATA%` (`AppData\Local`), apart from Firefox, which keeps
+/// them under `%APPDATA%`. The last five are the platform's own stores, which stand where the
+/// keychains and keyrings stand elsewhere: Credential Manager's files, the keys the data protection
+/// API encrypts with, and the vault.
+pub(crate) const WINDOWS_CREDENTIAL_DIRECTORIES: &[&str] = &[
+    "AppData/Roaming/gcloud",
+    "AppData/Roaming/gnupg",
+    "AppData/Local/BraveSoftware",
+    "AppData/Local/Google/Chrome",
+    "AppData/Local/Chromium",
+    "AppData/Local/Microsoft/Edge",
+    "AppData/Roaming/Mozilla",
+    "AppData/Local/Microsoft/Credentials",
+    "AppData/Roaming/Microsoft/Credentials",
+    "AppData/Roaming/Microsoft/Protect",
+    "AppData/Local/Microsoft/Vault",
+    "AppData/Roaming/Microsoft/Vault",
+];
 
 /// The same, where only macOS keeps them, under the home directory.
 ///
@@ -1016,6 +1032,46 @@ mod tests {
                 assert!(refused.contains(&location), "{prelude:?} {location:?}");
             }
         }
+    }
+
+    /// The regression it rejects: a Windows table holding only `gcloud` and `gpg`, which lets a
+    /// person's yes grant `AppData\Local` or a browser profile, or the files of Credential Manager,
+    /// the data protection keys and the vault, to a container that cannot be refused a path inside
+    /// a grant. Spelled out here and not read from the table, so a row dropped from it fails this.
+    #[test]
+    fn the_windows_credential_locations_name_the_browser_profiles_and_the_platforms_stores() {
+        let home = Path::new(A_HOME);
+        let mut expected: Vec<PathBuf> = [
+            ".bravebot",
+            ".bravebot-browser",
+            ".ssh",
+            ".aws",
+            ".kube",
+            ".docker",
+            ".azure",
+            ".config/gcloud",
+            ".gnupg",
+            "AppData/Roaming/gcloud",
+            "AppData/Roaming/gnupg",
+            "AppData/Local/BraveSoftware",
+            "AppData/Local/Google/Chrome",
+            "AppData/Local/Chromium",
+            "AppData/Local/Microsoft/Edge",
+            "AppData/Roaming/Mozilla",
+            "AppData/Local/Microsoft/Credentials",
+            "AppData/Roaming/Microsoft/Credentials",
+            "AppData/Roaming/Microsoft/Protect",
+            "AppData/Local/Microsoft/Vault",
+            "AppData/Roaming/Microsoft/Vault",
+        ]
+        .iter()
+        .map(|row| under(home, row))
+        .collect();
+        expected.sort();
+        let mut windows = credential_locations(Prelude::Windows, home);
+        windows.sort();
+
+        assert_eq!(windows, expected);
     }
 
     /// Without a home directory only the absolute refusal can apply, and the policy still means
