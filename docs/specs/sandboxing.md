@@ -1466,7 +1466,9 @@ pin, and `off` under a managed `run.network` of `closed`, is refused with a sent
 file, before anything is asked. Otherwise the command ranks as `--sandbox` does, so
 `/sandbox standard` replaces a checkout's `strict`. The mode is not in the session record, so a
 resumed session takes the mode its start-up chose, and the command's choice lasts until the process
-ends, across `/clear` and `/resume`. The opening screen, `/status` and the trace's `sandbox` gate
+ends, across `/clear` and `/resume`. `/bg` is refused while the command's choice differs from the mode
+start-up chose, since the background process chooses again ([BG-2](background-sessions.md#BG-2)).
+The opening screen, `/status` and the trace's `sandbox` gate
 name the mode in force after the command.
 
 The desktop window has a control of its own in the composer, beside the permission mode. It shows

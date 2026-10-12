@@ -83,8 +83,12 @@ since the record is written then. Both start the session in the working director
 
 `/bg` is refused, and the foreground session carries on, in bypass ([BG-8](#BG-8)), in an incognito
 session or one with no record yet, after an option that `--bg` refuses (such as `--no-shell` or
-`--settings`) was given at the command line, and while a loop, a goal or a watch is running,
-because the background session has none of those ([Not decided](#not-decided)).
+`--settings`) was given at the command line, after `/sandbox` moved the session to a sandbox mode
+other than the one start-up chose, and while a loop, a goal or a watch is running, because the
+background session has none of those ([Not decided](#not-decided)). The background process chooses
+its sandbox mode from the settings and the managed file as start-up did
+([SANDBOX-22](sandboxing.md#SANDBOX-22)), so a session moved to `strict` would go on in `standard`
+with nothing said; the refusal names both modes and the `/sandbox` line that moves the session back.
 
 Nothing else starts one. The planner has no tool for it, a delegate cannot, and neither can a hook,
 a loop tick, a watch or a file the session read. A prompt that arrived on a pipe is untrusted input
@@ -99,6 +103,7 @@ the whole of what they asked for.
 `verified-by: bravebot_tui::app::the_background_command_is_refused_in_bypass`
 `verified-by: bravebot_tui::app::the_background_command_is_refused_without_a_record_or_with_work_it_would_drop`
 `verified-by: bravebot_tui::app::the_background_command_is_refused_after_an_option_it_cannot_pass_on`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_after_sandbox_moved_the_mode`
 `verified-by: bravebot_cli::background::the_host_is_started_with_the_mode_it_runs_in`
 `verified-by: bravebot_cli::running::a_handed_over_session_runs_in_the_mode_it_was_given`
 `verified-by: bravebot_cli::running::bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal`
