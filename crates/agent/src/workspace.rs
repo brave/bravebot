@@ -1347,16 +1347,22 @@ impl Workspace {
         Err(escapes())
     }
 
-    /// The file an absolute `path` something else opens lands on, spelled as
-    /// [`Workspace::relative_display`] spells it, or `None` where [`Workspace::confines`] would
-    /// name no destination.
+    /// Other names of the file something else opens at the absolute `path`, spelled as
+    /// [`Workspace::relative_display`] spells them.
     ///
     /// [`Workspace::landing`] resolves a name as the file tools do, which refuses a `..` inside
-    /// the root, while the kernel opening a redirection follows `sub` and then takes `..` out of
-    /// where it led. A rule is about the file that is opened (PERM-7), so this is the destination
-    /// `confines` tests and not the text with each `..` removed.
-    pub(crate) fn lands_on(&self, path: &Path) -> Option<String> {
-        destination(path).map(|landed| self.relative_display(&landed))
+    /// the root, so it gives no second name for `config/sub/../app.env`. A rule is about the file
+    /// (PERM-7), and it can be written in either of two names here. One is the spelling with each
+    /// `..` taken out ([`Workspace::climbed`]), which is the rule's own name where a link is on
+    /// the way (`config` a link, or `app.env` one). The other is where the path lands once
+    /// everything is followed, as [`Workspace::confines`] tests it, which is the only name there is
+    /// where a `..` leaves a link.
+    pub(crate) fn names_reached(&self, path: &Path) -> Vec<String> {
+        self.climbed(path)
+            .into_iter()
+            .chain(destination(path))
+            .map(|reached| self.relative_display(&reached))
+            .collect()
     }
 
     /// The directory a name would open, without opening it.
@@ -2072,12 +2078,22 @@ impl Workspace {
     /// the root: the absolute spelling its file is reached by, which is then resolved and confined
     /// as any other absolute path, so this decides how a name is spelled and nothing more.
     ///
-    /// `None` for a path with no `..`, for one whose `..` leaves a link (where the kernel would
-    /// follow the link and the text would not), for one that climbs off the top of the file
-    /// system, for one that lands inside the root, which the relative spelling reaches, and for
-    /// one that lands on a name that is not UTF-8. The key, the rules and the result carry the
-    /// absolute spelling as text, and a lossy one would name a different file.
+    /// `None` for a path [`Workspace::climbed`] leaves alone, for one that lands inside the root,
+    /// which the relative spelling reaches, and for one that lands on a name that is not UTF-8.
+    /// The key, the rules and the result carry the absolute spelling as text, and a lossy one would
+    /// name a different file.
     fn climb_lands(&self, candidate: &Path) -> Option<PathBuf> {
+        let lands = self.climbed(candidate)?;
+        (!lands.starts_with(&self.root) && lands.to_str().is_some()).then_some(lands)
+    }
+
+    /// `candidate`, against the root, with each `..` taken out of the text against the entry
+    /// before it, which is what the kernel does with it wherever that entry is not a link.
+    ///
+    /// `None` for a path with no `..`, for one whose `..` leaves a link (where the kernel would
+    /// follow the link and the text would not), and for one that climbs off the top of the file
+    /// system.
+    fn climbed(&self, candidate: &Path) -> Option<PathBuf> {
         if !candidate
             .components()
             .any(|component| matches!(component, Component::ParentDir))
@@ -2099,7 +2115,7 @@ impl Workspace {
                 other => lands.push(other.as_os_str()),
             }
         }
-        (!lands.starts_with(&self.root) && lands.to_str().is_some()).then_some(lands)
+        Some(lands)
     }
 
     /// The refusal of a path with a `..` that [`Workspace::climb_lands`] does not take out.

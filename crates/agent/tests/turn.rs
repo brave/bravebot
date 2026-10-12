@@ -4452,6 +4452,65 @@ fn a_redirection_through_a_link_and_a_parent_directory_is_judged_by_the_file_it_
     );
 }
 
+/// The other half of the same answer. Where the rule's own name runs through a link, the file the
+/// redirection opens is known by a name the rule does not spell, so the name with the `..` taken
+/// out of the text is the one that meets the rule: with `config` a link to `settings`, or
+/// `config/app.env` one to `config/real.env`, the file is opened as `settings/app.env` or
+/// `config/real.env`.
+#[cfg(unix)]
+#[test]
+fn a_rule_written_through_a_link_refuses_a_redirection_that_reaches_its_file_through_a_parent_directory()
+ {
+    for (case, (real, link, target)) in [
+        ("settings/app.env", "config", "settings"),
+        ("config/real.env", "config/app.env", "real.env"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let scratch = Scratch::new(&format!("permissions-run-redirect-climb-rule-link-{case}"));
+        let real = scratch.path.join(real);
+        std::fs::create_dir_all(real.parent().unwrap().join("sub")).unwrap();
+        std::fs::write(&real, "SECRET_TOKEN=hunter2").unwrap();
+        std::os::unix::fs::symlink(target, scratch.path.join(link)).unwrap();
+        let told = run_under_a_deny_rule(
+            &scratch,
+            json!({ "command": "echo overwritten > config/sub/../app.env" }),
+            "Edit(config/app.env)",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&real).unwrap(),
+            "SECRET_TOKEN=hunter2",
+            "the rule did not stop the write with {link} a link"
+        );
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "with {link} a link, the planner was not told a rule refused: {told}"
+        );
+    }
+}
+
+/// A `..` is not itself refused. A redirection through `sub/..` to a file no rule names runs as the
+/// same line spelled plainly would, so the refusal above is the rule's and not the spelling's.
+#[test]
+fn a_redirection_through_a_parent_directory_to_a_file_no_rule_names_still_runs() {
+    let scratch = holding_config_app_env("permissions-run-redirect-climb-unnamed");
+    let told = run_under_a_deny_rule(
+        &scratch,
+        json!({ "command": "echo written > config/sub/../other.env" }),
+        "Edit(config/app.env)",
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config/other.env")).ok(),
+        Some("written\n".to_string()),
+        "a write to a file no rule names was not made: {told}"
+    );
+    assert!(
+        !told.contains("a deny rule"),
+        "a rule was said to refuse a file it does not name: {told}"
+    );
+}
+
 /// A quoted program word is one word however many spaces it holds. `"ls /x"` names a script at
 /// `ls /x` in the workspace, and an allow rule for `ls` used to stop the prompt for it, because the
 /// rule was matched against the words run together, which read as `ls` given `/x`.

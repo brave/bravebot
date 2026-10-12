@@ -7952,13 +7952,14 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             }
             // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env`
             // from a `directory`), which no rule's segments match across and which the landing
-            // asked about above does not resolve, so the file it opens is asked about as well.
-            if let Some(landed) = tools.workspace.lands_on(path)
-                && landed != named
-                && let Err(refusal) =
-                    refuse_denied_path_as(policy, tools.workspace, purpose, &landed, &named)
-            {
-                return Produced::problem(refusal);
+            // asked about above does not resolve, so the file's other names are asked about too.
+            for reached in tools.workspace.names_reached(path) {
+                if reached != named
+                    && let Err(refusal) =
+                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &named)
+                {
+                    return Produced::problem(refusal);
+                }
             }
         }
     }

@@ -287,10 +287,11 @@ of a denied directory is refused whether or not the volume's case handling could
 `ask` rule still asks for a write that comes through a link. A file tool's path that starts with `~`
 is also judged under the absolute path it stands for ([READ-4](tools/read-file.md#READ-4)), since a
 rule anchored at the home directory never matches the spelling `~/x`, and that name is reachable only
-once the home is opened. A `run` redirection is judged under the file it opens as well, with each
-`..` taken out after the link before it is followed, as the file system does, so
-`config/sub/../app.env`, or `../app.env` run from `config/sub`, is refused by a rule naming
-`config/app.env`. The second name can add a refusal or a question and never removes one. On Windows a name that reads as something other than the file it
+once the home is opened. A `run` redirection whose target climbs with `..` is also judged under the
+name with each `..` taken out where the entry before it is not a link, and under the file it opens
+once everything is followed, so `config/sub/../app.env`, or `../app.env` run from `config/sub`, is
+refused by a rule naming `config/app.env` whether or not `config` or the file is a link. The second
+name can add a refusal or a question and never removes one. On Windows a name that reads as something other than the file it
 spells (a stream, a device, a trailing dot or space, an 8.3 short name) is refused outright, since
 the rules cannot be matched against a spelling that is not the file's.
 
@@ -350,6 +351,8 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_deny_rule_on_a_file_refuses_a_redirection_that_reaches_it_through_a_parent_directory`
 `verified-by: bravebot_agent::turn::a_deny_rule_on_a_file_refuses_a_redirection_that_reads_it_through_a_parent_directory`
 `verified-by: bravebot_agent::turn::a_redirection_through_a_link_and_a_parent_directory_is_judged_by_the_file_it_opens`
+`verified-by: bravebot_agent::turn::a_rule_written_through_a_link_refuses_a_redirection_that_reaches_its_file_through_a_parent_directory`
+`verified-by: bravebot_agent::turn::a_redirection_through_a_parent_directory_to_a_file_no_rule_names_still_runs`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_and_its_contents_do_not_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_even_where_writes_are_approved`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_by_a_processor_either`
