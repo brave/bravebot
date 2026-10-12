@@ -4284,13 +4284,27 @@ fn a_denied_program_is_refused_by_the_rule_and_not_for_being_absent() {
 fn run_against_a_denied_env(name: &str, command: &str, deny: &str) -> (String, String) {
     let scratch = Scratch::new(name);
     std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2").unwrap();
+    let told = run_under_a_deny_rule(&scratch, json!({ "command": command }), deny);
+    let left = std::fs::read_to_string(scratch.path.join(".env")).unwrap();
+    (left, told)
+}
+
+/// A workspace whose `config/app.env` holds a value, beside an empty `config/sub`, so a name can
+/// reach the file through `sub/..`.
+fn holding_config_app_env(name: &str) -> Scratch {
+    let scratch = Scratch::new(name);
+    std::fs::create_dir_all(scratch.path.join("config/sub")).unwrap();
+    std::fs::write(scratch.path.join("config/app.env"), "SECRET_TOKEN=hunter2").unwrap();
+    scratch
+}
+
+/// Runs one `run` call with `arguments` in `scratch` under `deny`, approving any prompt a run
+/// raises. Returns what the planner was told.
+fn run_under_a_deny_rule(scratch: &Scratch, arguments: serde_json::Value, deny: &str) -> String {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![
-        tool_request(
-            "run",
-            &serde_json::json!({ "command": command }).to_string(),
-        ),
+        tool_request("run", &arguments.to_string()),
         reply_with("understood"),
     ]);
     let config = config_for(&endpoint);
@@ -4316,9 +4330,7 @@ fn run_against_a_denied_env(name: &str, command: &str, deny: &str) -> (String, S
     .expect("the turn finishes");
 
     let _first = received.recv().expect("first request");
-    let second = received.recv().expect("second request");
-    let left = std::fs::read_to_string(scratch.path.join(".env")).unwrap();
-    (left, second)
+    received.recv().expect("second request")
 }
 
 /// PERM-7: a rule written for a project file covers a redirection to it. The plan holds the
@@ -4355,6 +4367,147 @@ fn a_project_relative_deny_rule_refuses_a_redirection_that_reads_the_file() {
     assert!(
         !told.contains("hunter2"),
         "the denied file's contents reached the planner: {told}"
+    );
+}
+
+/// PERM-7: the rule is about the file, not the spelling. `config/sub/../app.env`, and `../app.env`
+/// run from `config/sub`, open `config/app.env`, but a rule's segments never meet across a `..`,
+/// so a rule naming the file did not cover the redirection and the file was overwritten once the
+/// run was approved.
+#[test]
+fn a_deny_rule_on_a_file_refuses_a_redirection_that_reaches_it_through_a_parent_directory() {
+    let cases = [
+        (
+            "Edit(config/app.env)",
+            json!({ "command": "echo overwritten > config/sub/../app.env" }),
+        ),
+        (
+            "Edit(config/app.env)",
+            json!({ "command": "echo overwritten > ../app.env", "directory": "config/sub" }),
+        ),
+        (
+            "Read(config/app.env)",
+            json!({ "command": "echo overwritten > config/sub/../app.env" }),
+        ),
+    ];
+    for (case, (deny, arguments)) in cases.into_iter().enumerate() {
+        let scratch =
+            holding_config_app_env(&format!("permissions-run-redirect-climb-write-{case}"));
+        let told = run_under_a_deny_rule(&scratch, arguments.clone(), deny);
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("config/app.env")).unwrap(),
+            "SECRET_TOKEN=hunter2",
+            "{deny} did not stop {arguments}"
+        );
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "{deny}: the planner was not told a rule refused {arguments}: {told}"
+        );
+    }
+}
+
+/// The read half: `< config/sub/../app.env` feeds a program the file a `Read` rule names.
+#[test]
+fn a_deny_rule_on_a_file_refuses_a_redirection_that_reads_it_through_a_parent_directory() {
+    let cases = [
+        json!({ "command": "cat < config/sub/../app.env" }),
+        json!({ "command": "cat < ../app.env", "directory": "config/sub" }),
+    ];
+    for (case, arguments) in cases.into_iter().enumerate() {
+        let scratch =
+            holding_config_app_env(&format!("permissions-run-redirect-climb-read-{case}"));
+        let told = run_under_a_deny_rule(&scratch, arguments.clone(), "Read(config/app.env)");
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "the planner was not told a rule refused {arguments}: {told}"
+        );
+        assert!(
+            !told.contains("hunter2"),
+            "the denied file's contents reached the planner: {told}"
+        );
+    }
+}
+
+/// Where a redirection lands is the file system's answer, not the text's. With `up` a link to
+/// `config/sub`, `up/../app.env` opens `config/app.env`; taking the `..` out of the spelling gives
+/// `app.env` at the top of the workspace, which the rule does not name.
+#[cfg(unix)]
+#[test]
+fn a_redirection_through_a_link_and_a_parent_directory_is_judged_by_the_file_it_opens() {
+    let scratch = holding_config_app_env("permissions-run-redirect-climb-link");
+    std::os::unix::fs::symlink("config/sub", scratch.path.join("up")).unwrap();
+    let told = run_under_a_deny_rule(
+        &scratch,
+        json!({ "command": "echo overwritten > up/../app.env" }),
+        "Edit(config/app.env)",
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config/app.env")).unwrap(),
+        "SECRET_TOKEN=hunter2",
+        "the rule did not stop a write through the link"
+    );
+    assert!(
+        told.contains("a deny rule") && told.contains("Do not retry"),
+        "the planner was not told a rule refused: {told}"
+    );
+}
+
+/// The other half of the same answer. Where the rule's own name runs through a link, the file the
+/// redirection opens is known by a name the rule does not spell, so the name with the `..` taken
+/// out of the text is the one that meets the rule: with `config` a link to `settings`, or
+/// `config/app.env` one to `config/real.env`, the file is opened as `settings/app.env` or
+/// `config/real.env`.
+#[cfg(unix)]
+#[test]
+fn a_rule_written_through_a_link_refuses_a_redirection_that_reaches_its_file_through_a_parent_directory()
+ {
+    for (case, (real, link, target)) in [
+        ("settings/app.env", "config", "settings"),
+        ("config/real.env", "config/app.env", "real.env"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let scratch = Scratch::new(&format!("permissions-run-redirect-climb-rule-link-{case}"));
+        let real = scratch.path.join(real);
+        std::fs::create_dir_all(real.parent().unwrap().join("sub")).unwrap();
+        std::fs::write(&real, "SECRET_TOKEN=hunter2").unwrap();
+        std::os::unix::fs::symlink(target, scratch.path.join(link)).unwrap();
+        let told = run_under_a_deny_rule(
+            &scratch,
+            json!({ "command": "echo overwritten > config/sub/../app.env" }),
+            "Edit(config/app.env)",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&real).unwrap(),
+            "SECRET_TOKEN=hunter2",
+            "the rule did not stop the write with {link} a link"
+        );
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "with {link} a link, the planner was not told a rule refused: {told}"
+        );
+    }
+}
+
+/// A `..` is not itself refused. A redirection through `sub/..` to a file no rule names runs as the
+/// same line spelled plainly would, so the refusal above is the rule's and not the spelling's.
+#[test]
+fn a_redirection_through_a_parent_directory_to_a_file_no_rule_names_still_runs() {
+    let scratch = holding_config_app_env("permissions-run-redirect-climb-unnamed");
+    let told = run_under_a_deny_rule(
+        &scratch,
+        json!({ "command": "echo written > config/sub/../other.env" }),
+        "Edit(config/app.env)",
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config/other.env")).ok(),
+        Some("written\n".to_string()),
+        "a write to a file no rule names was not made: {told}"
+    );
+    assert!(
+        !told.contains("a deny rule"),
+        "a rule was said to refuse a file it does not name: {told}"
     );
 }
 
