@@ -72,17 +72,12 @@ fn main() {
         }
     }
 
-    // Before a session is assembled, so every turn this process runs reads one answer for the
-    // network its programs keep, for the lists of paths a person wrote and for the hosts a stage is
-    // held to. See SANDBOX-20, SANDBOX-25 and SANDBOX-24.
-    let here = std::env::current_dir().ok();
-    let layers = bravebot_ui_bridge::settings::layers(here.as_deref(), settings.as_deref());
-    bravebot_config::settle_run_network_in(None, &layers);
-    bravebot_config::settle_sandbox_filesystem_in(
-        &bravebot_sandbox::rules::Lists::default(),
-        &layers,
+    // Before a session is assembled, so every turn this process runs reads one answer. See
+    // SANDBOX-20, SANDBOX-25 and SANDBOX-24.
+    bravebot_ui_bridge::settings::settle_for_process(
+        std::env::current_dir().ok().as_deref(),
+        settings.as_deref(),
     );
-    bravebot_config::sandbox_network::settle(&layers);
 
     let (input, lines) = mpsc::channel();
     let out = Arc::new(Mutex::new(std::io::stdout()));

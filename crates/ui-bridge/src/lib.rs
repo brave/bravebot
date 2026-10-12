@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 pub mod acp;
+pub mod allowlist;
 pub mod attached;
 pub mod bridge;
 pub mod connectors;
@@ -31,6 +32,8 @@ pub mod definitions;
 pub mod emit;
 pub mod fork;
 pub mod hooks;
+#[cfg(unix)]
+pub mod host;
 pub mod manifest;
 pub mod mentions;
 pub mod models;
@@ -42,6 +45,7 @@ pub mod store;
 pub mod turn;
 pub mod view;
 pub mod wire;
+pub mod workers;
 
 /// Which build of the agent this bridge is linked against.
 ///

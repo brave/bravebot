@@ -140,6 +140,31 @@ pub struct RewindPoint {
 /// Where sessions live inside the state directory.
 const SESSIONS: &str = "sessions";
 
+/// Where this process keeps session records instead of inside the state directory, if it was told.
+static CHOSEN_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Keep every session record this process reads, lists or writes under `root`, in place of the
+/// state directory's `sessions`. Only that directory moves: settings, trust, credentials and prompt
+/// history stay where they are.
+///
+/// For a host that owns its records and must keep them apart from the ones a terminal or a window
+/// resumes. Set once, before the first record is read or written; a second call is refused with
+/// the root already in force.
+pub fn keep_in(root: PathBuf) -> Result<(), PathBuf> {
+    CHOSEN_ROOT
+        .set(root)
+        .map_err(|_| CHOSEN_ROOT.get().cloned().unwrap_or_default())
+}
+
+/// The sessions directory under `state`, or the root this process was told to keep them in.
+///
+/// `None` where there is no state directory: a process with a chosen root still has no home in an
+/// incognito session, and writers ask the same question of it.
+fn sessions_directory(state: Option<PathBuf>, chosen: Option<&Path>) -> Option<PathBuf> {
+    let state = state?;
+    Some(chosen.map_or_else(|| state.join(SESSIONS), Path::to_path_buf))
+}
+
 /// Which front end wrote a record.
 ///
 /// Two programs share `~/.bravebot` and each writes the same kind of record into it, so a
@@ -2379,10 +2404,14 @@ pub fn audit_of(project: &Path, id: &str) -> BTreeMap<usize, Vec<crate::audit::T
 /// The reading answer, which is what the list and the resume picker want: an incognito session can
 /// still show and reopen the sessions that came before it. What it will not do is add to them.
 pub fn project_directory(project: &Path) -> Option<PathBuf> {
-    Some(
-        crate::store::directory()?
-            .join(SESSIONS)
-            .join(key_for(project)),
+    Some(sessions_root()?.join(key_for(project)))
+}
+
+/// The directory holding every project's sessions, for reading.
+pub fn sessions_root() -> Option<PathBuf> {
+    sessions_directory(
+        crate::store::directory(),
+        CHOSEN_ROOT.get().map(PathBuf::as_path),
     )
 }
 
@@ -2400,9 +2429,11 @@ pub fn project_directory(project: &Path) -> Option<PathBuf> {
 /// tightens on write and a writer that resolved the location for itself would satisfy the mode on
 /// the file it wrote and leave the directory holding it listable by every other account.
 pub(crate) fn writable_project_directory(project: &Path) -> Option<PathBuf> {
-    let directory = bravebot_agent::home::writable()?
-        .join(SESSIONS)
-        .join(key_for(project));
+    let directory = sessions_directory(
+        bravebot_agent::home::writable(),
+        CHOSEN_ROOT.get().map(PathBuf::as_path),
+    )?
+    .join(key_for(project));
     bravebot_agent::home::create_directory(&directory).ok()?;
     Some(directory)
 }
@@ -5438,5 +5469,32 @@ mod tests {
         let after = load(&root, handle.id()).expect("the record is still there");
         assert_eq!(after.turns, 2);
         assert!(after.history.is_none());
+    }
+
+    /// A host that owns its records puts them in a directory of its own, so a terminal or a window
+    /// resuming from the state directory cannot be handed one by naming its id.
+    #[test]
+    fn a_chosen_root_replaces_the_sessions_directory_and_only_that() {
+        let state = PathBuf::from("/home/person/.bravebot");
+        let chosen = PathBuf::from("/srv/host-sessions");
+
+        assert_eq!(
+            sessions_directory(Some(state.clone()), Some(&chosen)),
+            Some(chosen.clone()),
+            "the chosen root was not used"
+        );
+        assert_eq!(
+            sessions_directory(Some(state.clone()), None),
+            Some(state.join("sessions")),
+            "with no root chosen the sessions stay in the state directory"
+        );
+    }
+
+    /// An incognito session, or a machine with no home, writes nothing. Choosing a root must not
+    /// turn that into a place to write.
+    #[test]
+    fn a_chosen_root_does_not_make_a_session_writable_where_there_is_no_state_directory() {
+        let chosen = PathBuf::from("/srv/host-sessions");
+        assert_eq!(sessions_directory(None, Some(&chosen)), None);
     }
 }

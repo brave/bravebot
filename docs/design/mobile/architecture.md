@@ -80,7 +80,7 @@ Remote mode needs a separate distribution check too. Guideline 4.2.7 includes a 
 
 ## Host topology decision
 
-The persistent host is one Rust process that owns the bridge library and serves its local clients over anonymous socket pairs it creates when it launches them. The phone's network listener is a separate, named endpoint and falls under [U2](open-questions.md#u2-pairing-and-transport-identity). Add the host entry point or mode beside the existing stdio transport in `crates/ui-bridge`; exact binary naming is an implementation choice. Preserve the existing stdio behavior for direct clients and the first local test.
+The persistent host is one Rust process that owns the bridge library and serves its local clients over anonymous socket pairs it creates when it launches them. The phone's network listener is a separate, named endpoint and falls under [U2](open-questions.md#u2-pairing-and-transport-identity). The entry point is `bravebot-host` beside the existing stdio transport in `crates/ui-bridge` ([local-host.md](../../specs/local-host.md)), which preserves the stdio behavior for direct clients. The person starts its next client by typing `launch` on the host's input, because a client cannot ask the host for one without a name to ask at.
 
 The listener, session registry, display projection, and bridge share that process. There is no separate supervisor wrapping an RPC child. This removes child replacement, uncertain child liveness, and a second execution generation from the prototype. A host-instance ID changes on every host restart. Embedded runtimes have their own instance identity.
 

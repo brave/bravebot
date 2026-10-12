@@ -18,9 +18,6 @@
 use bravebot_session::sessions::{self, Record, Summary};
 use std::path::{Path, PathBuf};
 
-/// Where the per-project directories live.
-const SESSIONS: &str = "sessions";
-
 /// One session, with enough of its project attached to draw a row.
 #[derive(Debug, Clone)]
 pub struct Listed {
@@ -53,7 +50,7 @@ impl Listed {
 /// turning dashes back into separators would be a guess, and it would be wrong for every
 /// path that legitimately contains one.
 pub fn projects() -> Vec<PathBuf> {
-    let Some(root) = bravebot_session::store::directory().map(|dir| dir.join(SESSIONS)) else {
+    let Some(root) = sessions::sessions_root() else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(&root) else {
