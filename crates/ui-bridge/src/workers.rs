@@ -51,7 +51,8 @@ impl Workers {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Whether no worker is running.
+    /// A worker that panicked has already been counted out by its guard, so a panic does not leave
+    /// a session looking busy for good.
     pub fn is_idle(&self) -> bool {
         *self.counted() == 0
     }

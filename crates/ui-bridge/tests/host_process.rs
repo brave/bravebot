@@ -220,6 +220,11 @@ struct Host {
 
 impl Host {
     fn start(scratch: &Scratch, endpoint: &str) -> Self {
+        Self::start_in(scratch, endpoint, &scratch.project())
+    }
+
+    /// As [`Host::start`], with `workspace` as the one directory a session may open in.
+    fn start_in(scratch: &Scratch, endpoint: &str, workspace: &Path) -> Self {
         let relay_path = scratch.directory.path().join("relay.sock");
         let relay = UnixListener::bind(&relay_path).expect("a relay socket");
         relay.set_nonblocking(true).unwrap();
@@ -236,7 +241,7 @@ impl Host {
             .arg("--sessions-root")
             .arg(scratch.root())
             .arg("--workspace")
-            .arg(scratch.project())
+            .arg(workspace)
             .arg("--")
             .arg(std::env::current_exe().unwrap())
             .args(["--exact", "relay_entry", "--nocapture"])
@@ -1034,4 +1039,29 @@ fn a_line_of_input_that_is_not_text_does_not_stop_the_host() {
         assert!(Instant::now() < deadline, "quit did not stop the host");
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// A workspace whose name is not text can only be reached by a name that is, such as a link. The
+/// bridge takes the directory as text, so the host refuses it rather than hand over a lookalike
+/// with the unreadable bytes replaced, which would name a different directory.
+#[test]
+fn a_workspace_whose_name_is_not_text_is_refused_not_opened_under_a_lookalike() {
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new();
+    let odd = scratch
+        .directory
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"workspace-\xff"));
+    if std::fs::create_dir(&odd).is_err() {
+        eprintln!("skipped: this file system refuses a name that is not text");
+        return;
+    }
+    let link = scratch.directory.path().join("link-to-the-odd-workspace");
+    std::os::unix::fs::symlink(&odd, &link).unwrap();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let host = Host::start_in(&scratch, &endpoint, &odd);
+    let mut client = host.client();
+    let answered = client.answered("session.new", json!({"directory": link}));
+    assert_eq!(answered["error"]["code"], "not_allowed", "{answered}");
+    client.leave();
 }

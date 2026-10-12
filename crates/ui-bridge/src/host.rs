@@ -259,10 +259,18 @@ impl Host {
         };
         // The bridge opens the directory that was checked, not the name that led to it, so a
         // link retargeted after the check cannot take the session somewhere else.
+        // The bridge takes the directory as text, so one whose name is not text is refused here
+        // and not replaced by a lookalike that names a different directory.
+        let Some(directory) = directory.to_str() else {
+            return Err(Failure::new(
+                ErrorCode::NotAllowed,
+                "that workspace's name is not text, which the bridge cannot be given",
+            ));
+        };
         let checked = Request {
             id: request.id,
             method: request.method.clone(),
-            params: json!({ "directory": directory.display().to_string() }),
+            params: json!({ "directory": directory }),
         };
         let opened = self.bridge.dispatch(&checked)?;
         if let Some(handle) = opened.get("session").and_then(Value::as_str) {

@@ -36,11 +36,12 @@ The host starts the client over a new channel when it starts. The client ending 
 <a id="HOST-2"></a>
 ### HOST-2: a session opens only in a workspace the person gave
 
-`session.new` names an absolute directory, and the host opens it only if it is, after links and `..` are resolved, one of the `--workspace` directories. Any other directory, a link to one, a path that does not exist, `/` and a relative path (which would mean whatever the host's own directory makes it) are refused with `not_allowed` and open nothing. The bridge is given the directory that was checked, not the name that led to it, so a link retargeted after the check cannot take the session elsewhere.
+`session.new` names an absolute directory, and the host opens it only if it is, after links and `..` are resolved, one of the `--workspace` directories. Any other directory, a link to one, a path that does not exist, `/` and a relative path (which would mean whatever the host's own directory makes it) are refused with `not_allowed` and open nothing. The bridge is given the directory that was checked, not the name that led to it, so a link retargeted after the check cannot take the session elsewhere. A workspace whose name is not text, which the bridge cannot be given, is refused and not opened under a lookalike name. That test needs a file system that allows such a name, so it skips on macOS and runs on Linux.
 
 `verified-by: bravebot_ui_bridge::host::a_session_cannot_be_opened_outside_the_workspaces`
 `verified-by: bravebot_ui_bridge::host_process::a_session_opens_in_the_directory_that_was_checked`
 `verified-by: bravebot_ui_bridge::host_process::a_relative_directory_is_refused_even_from_inside_a_workspace`
+`verified-by: bravebot_ui_bridge::host_process::a_workspace_whose_name_is_not_text_is_refused_not_opened_under_a_lookalike`
 
 <a id="HOST-3"></a>
 ### HOST-3: a client may ask only what is named
