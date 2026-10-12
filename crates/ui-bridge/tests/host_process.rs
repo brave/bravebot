@@ -958,3 +958,76 @@ fn a_sessions_root_the_host_cannot_write_to_is_refused() {
     std::fs::set_permissions(scratch.root(), std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(ran.status.code(), Some(1));
 }
+
+/// A directory that is not absolute means whatever the host's own directory makes it, so it is
+/// refused instead of being checked against the workspaces from there.
+#[test]
+fn a_relative_directory_is_refused_even_from_inside_a_workspace() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let relay = scratch.directory.path().join("relay.sock");
+    let listener = UnixListener::bind(&relay).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut host = Command::new(env!("CARGO_BIN_EXE_bravebot-host"))
+        .current_dir(scratch.project())
+        .env_clear()
+        .env("HOME", scratch.home())
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("SERVICES_KEY_AICHAT", "a-services-key")
+        .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
+        .env("BRAVE_AI_CHAT_ENDPOINT", &endpoint)
+        .env("BRAVE_AI_CHAT_PREMIUM_ENDPOINT", &endpoint)
+        .env("BRAVEBOT_DEFAULT_MODEL", "stub-model")
+        .env(RELAY, &relay)
+        .arg("--sessions-root")
+        .arg(scratch.root())
+        .arg("--workspace")
+        .arg(scratch.project())
+        .arg("--")
+        .arg(std::env::current_exe().unwrap())
+        .args(["--exact", "relay_entry", "--nocapture"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + PATIENCE;
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Err(error) => panic!("no client: {error}"),
+        }
+    };
+    let mut client = Client::over(stream);
+    let answered = client.answered("session.new", json!({"directory": "."}));
+    assert_eq!(answered["error"]["code"], "not_allowed", "{answered}");
+    client.leave();
+    let _ = host.kill();
+    let _ = host.wait();
+}
+
+/// A line on the host's input that is not text is reported and skipped, not taken for the end of
+/// the input, which would stop the host.
+#[test]
+fn a_line_of_input_that_is_not_text_does_not_stop_the_host() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::start(&scratch, &endpoint);
+    let client = host.client();
+    client.leave();
+    let input = host.commands.as_mut().unwrap();
+    input.write_all(b"\xff\xfe\n").unwrap();
+    input.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(700));
+    assert!(
+        host.child.try_wait().unwrap().is_none(),
+        "the host stopped at a line that was not text"
+    );
+    host.command("quit");
+    let deadline = Instant::now() + PATIENCE;
+    while host.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "quit did not stop the host");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

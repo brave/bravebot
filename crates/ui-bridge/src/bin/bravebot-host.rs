@@ -144,9 +144,17 @@ fn listen_for_commands(commands: std::sync::mpsc::Sender<Command>, current: Curr
                 }
                 Ok("quit") => return quit(&commands),
                 Ok(_) => eprintln!("bravebot-host: type `launch` or `quit`"),
-                Err(_) => break,
+                // A line that is not text is not the end of the input.
+                Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                    eprintln!("bravebot-host: that line is not text; type `launch` or `quit`");
+                }
+                Err(error) => {
+                    eprintln!("bravebot-host: cannot read its input ({error}); stopping");
+                    return quit(&commands);
+                }
             }
         }
+        eprintln!("bravebot-host: its input ended; stopping");
         quit(&commands);
     });
 }

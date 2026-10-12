@@ -245,7 +245,11 @@ impl Host {
 
     fn new_session(&mut self, connection: u64, request: &Request) -> Result<Value, Failure> {
         let wanted = request.string("directory")?;
-        let directory = std::path::Path::new(&wanted).canonicalize().ok();
+        // A relative name means what the host's own directory makes it, which is not the client's.
+        let directory = std::path::Path::new(&wanted)
+            .is_absolute()
+            .then(|| std::path::Path::new(&wanted).canonicalize().ok())
+            .flatten();
         let Some(directory) = directory.filter(|directory| self.workspaces.contains(directory))
         else {
             return Err(Failure::new(
@@ -451,11 +455,8 @@ fn read_line(reader: &mut BufReader<UnixStream>) -> io::Result<Next> {
     loop {
         let available = reader.fill_buf()?;
         if available.is_empty() {
-            return Ok(if line.is_empty() {
-                Next::End
-            } else {
-                Next::Line(String::from_utf8_lossy(&line).into_owned())
-            });
+            // Whatever arrived without its end of line was cut off with the client, and is not run.
+            return Ok(Next::End);
         }
         let end = available.iter().position(|byte| *byte == b'\n');
         let take = end.map_or(available.len(), |at| at + 1);

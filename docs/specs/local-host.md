@@ -23,7 +23,7 @@ Not here: what a client may do to a session it did not open (nothing yet), how a
 
 The host is started with `--sessions-root DIR`, one or more `--workspace DIR`, an optional `--settings FILE`, and `--` followed by the client program and its arguments. The root and the client program are absolute paths. The client is not found on a search path and nothing about it comes from a file a tool could write. A command line that leaves any of these out, or gives a relative root or client, is refused with exit status 2 before a directory is made. A client program or argument that is not valid UTF-8 is passed on as it is. A `--workspace` that is not a directory stops the host with status 1 at startup, also before a directory is made. `--version` prints the version whatever the platform said about inspection. On Linux the host asks the kernel to refuse same-user inspection of its process as the first thing it does ([RPCVIEW-8](session-view.md#RPCVIEW-8)), and exits with status 1 when that fails, because a process that can copy the host's descriptors can hold a channel that is not the client's.
 
-The host starts the client over a new channel when it starts. The client ending ends that channel and leaves the host running. The person starts the next client by typing `launch` on the host's standard input; `quit`, or the end of that input, stops the host, whether or not a client is connected: it ends the connection being served, closes every session and waits up to ten seconds for the threads working for them, so a turn writing its record is not cut off, and says on standard error if any were still working. Nothing a client sends starts a client, and nothing else reads the host's standard input.
+The host starts the client over a new channel when it starts. The client ending ends that channel and leaves the host running. The person starts the next client by typing `launch` on the host's standard input; `quit`, or the end of that input, stops the host, whether or not a client is connected: it ends the connection being served, closes every session and waits up to ten seconds for the threads working for them, so a turn writing its record is not cut off, and says on standard error if any were still working. Nothing a client sends starts a client, and nothing else reads the host's standard input. A line on it that is not text is reported and skipped; a read error, or the end of the input, is reported on standard error before the host stops.
 
 `verified-by: bravebot_ui_bridge::host_process::a_command_line_that_names_no_client_or_a_relative_one_is_refused_before_anything_is_made`
 `verified-by: bravebot_ui_bridge::host_process::the_host_stops_when_told_to_or_when_its_input_ends`
@@ -36,10 +36,11 @@ The host starts the client over a new channel when it starts. The client ending 
 <a id="HOST-2"></a>
 ### HOST-2: a session opens only in a workspace the person gave
 
-`session.new` names a directory, and the host opens it only if it is, after links and `..` are resolved, one of the `--workspace` directories. Any other directory, a link to one, a path that does not exist and `/` are refused with `not_allowed` and open nothing. The bridge is given the directory that was checked, not the name that led to it, so a link retargeted after the check cannot take the session elsewhere.
+`session.new` names an absolute directory, and the host opens it only if it is, after links and `..` are resolved, one of the `--workspace` directories. Any other directory, a link to one, a path that does not exist, `/` and a relative path (which would mean whatever the host's own directory makes it) are refused with `not_allowed` and open nothing. The bridge is given the directory that was checked, not the name that led to it, so a link retargeted after the check cannot take the session elsewhere.
 
 `verified-by: bravebot_ui_bridge::host::a_session_cannot_be_opened_outside_the_workspaces`
 `verified-by: bravebot_ui_bridge::host_process::a_session_opens_in_the_directory_that_was_checked`
+`verified-by: bravebot_ui_bridge::host_process::a_relative_directory_is_refused_even_from_inside_a_workspace`
 
 <a id="HOST-3"></a>
 ### HOST-3: a client may ask only what is named
@@ -115,12 +116,14 @@ When a connection ends, the turn or run each of its sessions has going is cancel
 
 A write to a client that waits more than five seconds, or fails, ends the connection: requests already read are not executed after that, because nobody can hear their answers. A client that reads nothing therefore cannot stop the host reading the connection and seeing it end. The answer to a `session.close` is written before the `session.closed` that follows it.
 
-A request line is at most 8 MiB, newline excluded. A line that reaches the limit without ending ends the connection without being answered or dispatched. A line of exactly the limit is read.
+A request line is at most 8 MiB, newline excluded. A line that reaches the limit without ending ends the connection without being answered or dispatched. A line of exactly the limit is read. Bytes that arrive without their end of line before the client closes its end are not a request and are not run.
 
 `verified-by: bravebot_ui_bridge::host::a_line_that_does_not_end_ends_the_connection`
 `verified-by: bravebot_ui_bridge::host::a_request_at_the_limit_is_read`
+`verified-by: bravebot_ui_bridge::host::a_last_line_with_no_newline_is_not_run`
 `verified-by: bravebot_ui_bridge::host::a_client_that_never_reads_does_not_wedge_the_host`
 `verified-by: bravebot_ui_bridge::host_process::quit_stops_the_host_while_a_client_is_connected`
+`verified-by: bravebot_ui_bridge::host_process::a_line_of_input_that_is_not_text_does_not_stop_the_host`
 `verified-by: bravebot_ui_bridge::host_process::a_client_path_that_is_not_utf8_is_not_a_panic`
 `verified-by: bravebot_ui_bridge::host_process::a_sessions_root_the_host_cannot_write_to_is_refused`
 `verified-by: bravebot_ui_bridge::host_process::the_answer_to_a_close_comes_before_the_session_is_said_to_be_closed`

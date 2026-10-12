@@ -261,3 +261,31 @@ fn a_client_that_never_reads_does_not_wedge_the_host() {
     );
     drop(near);
 }
+
+/// A request cut off by the client going away is not run, whether or not what arrived happens to
+/// parse: nobody is left to hear the answer, and a half-sent request must not behave differently
+/// from one that does not parse.
+#[test]
+fn a_last_line_with_no_newline_is_not_run() {
+    let (near, far) = UnixStream::pair().unwrap();
+    let mut host = a_host(Vec::new());
+    let served = std::thread::spawn(move || host.serve(far).expect("the channel serves"));
+    let mut writer = near.try_clone().unwrap();
+    write!(
+        writer,
+        r#"{{"id": 7, "method": "instance.info", "params": {{}}}}"#
+    )
+    .unwrap();
+    writer.shutdown(std::net::Shutdown::Write).unwrap();
+
+    let said: Vec<Value> = BufReader::new(near)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str(&line).ok())
+        .collect();
+    served.join().unwrap();
+    assert!(
+        said.iter().all(|message| message["id"] != 7),
+        "a request with no end of line was answered: {said:?}"
+    );
+}
