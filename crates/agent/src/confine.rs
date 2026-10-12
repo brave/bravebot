@@ -1614,13 +1614,10 @@ pub(crate) fn program_reads(
         }
         reads.push(directory);
     }
-    if let Some(home) = home.as_deref() {
-        reads.retain(|row| {
-            !(bravebot_sandbox::rules::inside_a_credential_location(row, home)
-                || bravebot_sandbox::rules::holds_a_credential_location(row, home))
-        });
+    match home.as_deref() {
+        Some(home) => bravebot_sandbox::rules::outside_every_credential_location(reads, home),
+        None => reads,
     }
-    reads
 }
 
 #[cfg(test)]

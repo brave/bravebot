@@ -492,9 +492,9 @@ pub fn judged_request(
     }
     // A location is compared where it stands and where its links lead: a credential directory
     // that is a link into a dotfiles repository resolves there, and so does `path`.
-    if credential_rows(&home)
-        .flat_map(|location| [resolved(&location), location])
-        .any(|location| path.starts_with(&location) || location.starts_with(&path))
+    if credential_spellings(&home)
+        .iter()
+        .any(|location| path.starts_with(location) || location.starts_with(&path))
     {
         return Err(RequestRefusal::CredentialLocation);
     }
@@ -555,6 +555,13 @@ fn credential_rows(home: &Path) -> impl Iterator<Item = PathBuf> + '_ {
         )))
 }
 
+/// Each [`credential_rows`] location in the spelling it has under `home` and where its links lead.
+fn credential_spellings(home: &Path) -> Vec<PathBuf> {
+    credential_rows(home)
+        .flat_map(|location| [resolved(&location), location])
+        .collect()
+}
+
 /// Whether `path` is a credential location the base refuses on any platform, or lies inside one.
 ///
 /// A row granted at such a path lifts the refusal on macOS, where an allow at the depth of a deny
@@ -566,6 +573,23 @@ fn credential_rows(home: &Path) -> impl Iterator<Item = PathBuf> + '_ {
 pub fn inside_a_credential_location(path: &Path, home: &Path) -> bool {
     credential_rows(home)
         .any(|location| under(path, &location) || under(path, &resolved(&location)))
+}
+
+/// `rows` without those that are, hold or lie inside a credential location the base refuses on
+/// any platform, each location compared in the spelling it has under `home` and where its links
+/// lead.
+///
+/// Each location is resolved once for all the rows. Asking [`inside_a_credential_location`] of
+/// every row resolves every location again for each of them.
+pub fn outside_every_credential_location(rows: Vec<PathBuf>, home: &Path) -> Vec<PathBuf> {
+    let spellings = credential_spellings(home);
+    rows.into_iter()
+        .filter(|row| {
+            !spellings
+                .iter()
+                .any(|location| under(row, location) || under(location, row))
+        })
+        .collect()
 }
 
 /// The entries another entry decides: an allow at a path a refusal names, and an allow at or
@@ -709,7 +733,7 @@ fn refused_for_adding_reach(path: &Path, home: Option<&Path>) -> Option<Reason> 
 /// the location itself excluded.
 ///
 /// A location is compared in the spelling it has under `home` and where its links lead.
-pub fn holds_a_credential_location(path: &Path, home: &Path) -> bool {
+fn holds_a_credential_location(path: &Path, home: &Path) -> bool {
     credential_locations(Prelude::Windows, home)
         .into_iter()
         .any(|location| {
@@ -1613,6 +1637,38 @@ mod tests {
             &resolved(&base.join("real")),
             &home
         ));
+    }
+
+    /// A row that is a credential location, holds one or lies inside one is dropped, and so is a
+    /// row at or inside the place a location that is a link leads to. A row beside them stays.
+    #[cfg(unix)]
+    #[test]
+    fn a_row_at_over_or_inside_a_credential_location_is_dropped_where_the_location_leads() {
+        let base = fresh("outside-credential-locations");
+        let elsewhere = base.join("elsewhere");
+        fs::create_dir_all(elsewhere.join("bin")).unwrap();
+        let home = base.join("home");
+        fs::create_dir_all(home.join(".ssh/bin")).unwrap();
+        fs::create_dir_all(home.join(".config/gcloud")).unwrap();
+        fs::create_dir_all(home.join("work/bin")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, home.join(".aws")).unwrap();
+        let home = resolved(&home);
+        let aside = resolved(&base.join("aside"));
+
+        let dropped = [
+            home.join(".ssh"),
+            home.join(".ssh/bin"),
+            home.join(".config"),
+            resolved(&elsewhere),
+            resolved(&elsewhere.join("bin")),
+        ];
+        let kept = [home.join("work/bin"), home.join(".cache"), aside];
+        let rows: Vec<PathBuf> = dropped.iter().chain(&kept).cloned().collect();
+
+        assert_eq!(
+            outside_every_credential_location(rows, &home),
+            kept.to_vec()
+        );
     }
 
     /// A home whose name is not UTF-8 is not taken for the home its replacement-character
