@@ -901,6 +901,8 @@ refusal for an unknown word in step.
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
 `verified-by: bravebot_tui::app::tab_finishes_a_level_started_after_the_effort_command`
 `verified-by: bravebot_tui::app::tab_leaves_alone_a_start_it_cannot_finish`
+`verified-by: bravebot_tui::app::tab_leaves_a_shell_line_alone`
+`verified-by: bravebot_tui::app::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
 
 ## Known costs
 

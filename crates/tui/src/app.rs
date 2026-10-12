@@ -15933,6 +15933,31 @@ mod tests {
         }
     }
 
+    /// In shell mode the line is a command line, so `/effort h` there is not finished.
+    #[test]
+    fn tab_leaves_a_shell_line_alone() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "!/effort h");
+        assert!(session.shell, "the line did not enter shell mode");
+
+        handle_key(&mut session, key(KeyCode::Tab));
+
+        assert_eq!(session.input(), "/effort h");
+    }
+
+    /// Tab finishes what is being typed at the end of the line, so with the caret moved back into
+    /// it the line is left as typed.
+    #[test]
+    fn tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "/effort h");
+        handle_key(&mut session, key(KeyCode::Left));
+
+        handle_key(&mut session, key(KeyCode::Tab));
+
+        assert_eq!(session.input(), "/effort h");
+    }
+
     /// A command, not a prompt: asking how hard to think must not also ask the planner about it.
     #[test]
     fn typing_the_effort_command_opens_the_picker() {
