@@ -48,7 +48,16 @@ use std::process::ExitCode;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
-    // First of all, because it has to be true before the first credential is in memory and the
+    // First of all, before the command line is read: what this process was started with, its
+    // environment included, is readable from `/proc/<pid>/environ` by any process of the same
+    // user until the kernel is told otherwise, and a program a stage starts is one. The mark is
+    // cleared by `execve`, so the programs this process starts are not affected. A refusal is
+    // said and the run goes on, since the remedy is outside the program. See SANDBOX-8.
+    if let Some(notice) = bravebot_sandbox::inspection::refuse_same_user_inspection().notice() {
+        eprintln!("bravebot: {notice}");
+    }
+
+    // Next, because it has to be true before the first credential is in memory and the
     // signing key is unmasked while the command line is still being read. A crash after this
     // writes no image of this process, which is where a key and a live session credential would
     // otherwise be recovered from. Nothing is done about a platform that refuses: the remedy is

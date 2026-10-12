@@ -306,6 +306,16 @@ against is the difference between a credential withheld and a credential handed 
 write. Leaving the emptying to each caller costs the same thing one step further out, since a
 caller that forgets is a program handed everything with nothing saying so.
 
+What this process was itself started with is not a stage's to read either. On Linux the terminal
+entry point marks itself non-dumpable before it reads its command line, so a program a stage starts,
+which is a process of the same user, is refused `/proc/<pid>/environ` of this one and finds no
+gateway or signing key there that a person exported. The mark is cleared by `execve`, so it does
+not touch the programs started. Where the kernel refuses to set it, the refusal is said on standard
+error and the run goes on. macOS has no such switch, and a same-user process can read a non-Apple
+process's exec-time environment with `sysctl(KERN_PROCARGS2)`: a variable bravebot received through
+its environment there is readable by a stage, and keeping such a key out of the environment is the
+remedy that remains. Windows is not covered.
+
 The directory a process starts in is the caller's as well. A policy may name one, and otherwise the
 process starts in this one's. Naming it grants nothing: a process started in a directory it may not
 read is refused its first read of it, so a caller meaning the process to work there grants the
@@ -328,6 +338,7 @@ directory too.
 `verified-by: bravebot_sandbox::windows::a_variable_the_platform_would_misread_is_refused`
 `verified-by: bravebot_sandbox::macos::a_confined_process_starts_in_the_directory_its_policy_names`
 `verified-by: bravebot_sandbox::linux::a_confined_process_starts_in_the_directory_its_policy_names`
+`verified-by: bravebot_cli::running::a_program_of_the_same_user_cannot_read_the_environment_bravebot_was_started_with`
 
 <a id="SANDBOX-9"></a>
 ### SANDBOX-9: a path that is not on disk is left out before the policy is built, and named

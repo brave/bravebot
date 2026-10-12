@@ -31,7 +31,8 @@ impl Inspection {
         match self {
             Self::Failed(error) => Some(format!(
                 "this process could not be made non-dumpable (error {error}), so another process \
-                 of the same user may be able to copy the descriptors of its control channel"
+                 of the same user may be able to read its environment and memory and copy its \
+                 descriptors"
             )),
             Self::Refused | Self::NotOffered => None,
         }
