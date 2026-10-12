@@ -11485,3 +11485,63 @@ fn a_session_in_lines_is_not_cut_off_at_the_bound_an_unwatched_run_carries() {
     );
     assert!(said_to_the_person.contains("done"), "{said_to_the_person}");
 }
+
+/// SANDBOX-8: a process of the same user, which is what a program a stage starts is, cannot read
+/// the environment bravebot was started with.
+///
+/// The run is held on a gateway that has been asked a question and not answered, so the process is
+/// alive and holds a variable a person exported. What is read is `/proc/<pid>/environ` of that
+/// process, which the kernel serves to any process of the same user unless the target has marked
+/// itself non-dumpable. A process with `CAP_SYS_PTRACE` is served regardless of the mark, so the
+/// test has nothing to say there.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_program_of_the_same_user_cannot_read_the_environment_bravebot_was_started_with() {
+    const EXPORTED: &str = "placeholder-environment-secret";
+    let held = Arc::new(std::sync::Mutex::new(()));
+    let release = held.lock().expect("hold the gateway's answer");
+    let (asked, hear) = mpsc::channel();
+    let gate = Arc::clone(&held);
+    let gateway = a_gateway(r#"["tools"]"#, move |_| {
+        let _ = asked.send(());
+        drop(gate.lock());
+        http(500, r#"{"error": {"message": "nothing here answers"}}"#)
+    });
+    let scratch =
+        Scratch::new("cli-running-environment-unreadable").with_settings(&settings_for(&gateway));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("BRAVEBOT_TEST_EXPORTED", EXPORTED));
+    let mut child = prepared(&scratch.path, None, &environment, &["-p", "say hello"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the built binary runs");
+    let reached = hear.recv_timeout(Duration::from_secs(60));
+    let environ = format!("/proc/{}/environ", child.id());
+    let read = std::fs::read(&environ);
+    drop(release);
+    let _ = child.kill();
+    let _ = child.wait();
+    reached.expect("the run reached the gateway");
+
+    let status = std::fs::read_to_string("/proc/self/status").expect("this process's status");
+    let capable = status
+        .lines()
+        .find_map(|line| line.strip_prefix("CapEff:"))
+        .and_then(|mask| u64::from_str_radix(mask.trim(), 16).ok())
+        .is_some_and(|mask| mask & (1 << 19) != 0);
+    if capable {
+        return;
+    }
+    match read {
+        Ok(bytes) => assert!(
+            !String::from_utf8_lossy(&bytes).contains(EXPORTED),
+            "a same-user process read the secret out of {environ}"
+        ),
+        Err(error) => assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "{environ}: {error}"
+        ),
+    }
+}
