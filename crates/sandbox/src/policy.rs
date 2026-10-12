@@ -123,6 +123,23 @@ impl SandboxPolicy {
         self.writable.push(WriteGrant {
             path: path.into(),
             kind: PathKind::Unsaid,
+            listed: false,
+        });
+        self
+    }
+
+    /// Permit writing an entry that a listing of its directory produced.
+    ///
+    /// For the rows that stand for every entry of a directory except what is refused beneath it.
+    /// They are the entries the directory had when it was listed, and one can be removed before a
+    /// backend opens it. A backend that opens every row before it starts the process leaves out
+    /// a listed row whose name is gone, where it refuses the policy over any other row. A path
+    /// the caller named is not listed, whatever directory it is in.
+    pub fn allow_write_listed(mut self, path: impl Into<PathBuf>) -> Self {
+        self.writable.push(WriteGrant {
+            path: path.into(),
+            kind: PathKind::Unsaid,
+            listed: true,
         });
         self
     }
@@ -133,6 +150,7 @@ impl SandboxPolicy {
         self.writable.push(WriteGrant {
             path: path.into(),
             kind: PathKind::File,
+            listed: false,
         });
         self
     }
@@ -143,6 +161,7 @@ impl SandboxPolicy {
         self.writable.push(WriteGrant {
             path: path.into(),
             kind: PathKind::Directory,
+            listed: false,
         });
         self
     }
@@ -458,6 +477,9 @@ pub(crate) fn names_a_filesystem_root(path: &Path) -> bool {
 pub struct WriteGrant {
     pub path: PathBuf,
     pub kind: PathKind,
+    /// Whether the row is an entry a listing of its directory produced
+    /// ([`SandboxPolicy::allow_write_listed`]). Such a row says nothing about what is at it.
+    pub listed: bool,
 }
 
 /// What a write row says is at the path it names.
@@ -692,6 +714,7 @@ mod tests {
             vec![WriteGrant {
                 path: PathBuf::from("/workspace/out"),
                 kind: PathKind::Unsaid,
+                listed: false,
             }]
         );
     }
@@ -1026,6 +1049,23 @@ mod tests {
         assert!(created.is_empty());
     }
 
+    /// A listed row is an entry a directory had when it was listed. Creating the name again
+    /// would put an entry on the user's disk that nothing asked for, in a directory the program
+    /// is only meant to reach the other entries of.
+    #[test]
+    fn a_row_a_listing_produced_is_not_created() {
+        let dir = a_directory_of_this_tests_own("sandbox-policy-listed-row");
+        let gone = dir.join("an-entry-that-was-listed");
+
+        let policy = SandboxPolicy::strict().allow_write_listed(&gone);
+        let created = policy.create_missing_write_rows(&capabilities(false));
+
+        assert!(!gone.exists(), "a listed row was created anyway");
+        assert!(created.is_empty());
+        assert!(policy.writable[0].listed);
+        assert_eq!(policy.writable[0].kind, PathKind::Unsaid);
+    }
+
     /// Creating a path costs a write on the user's disk, and a backend that grants a
     /// path which does not exist is handed the row as written, so paying that cost there
     /// is paying it on the platform where nothing needed it.
@@ -1199,6 +1239,7 @@ mod tests {
             vec![WriteGrant {
                 path: wanted,
                 kind: PathKind::Directory,
+                listed: false,
             }]
         );
         assert!(
