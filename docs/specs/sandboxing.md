@@ -169,6 +169,8 @@ one rule to a connect.
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_write_outside_its_grants`
 `verified-by: bravebot_sandbox::macos::a_confined_process_runs`
 `verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused_where_no_namespace_can_be_made`
+`verified-by: bravebot_sandbox::linux::a_kernel_that_refuses_the_namespace_refuses_the_stage`
+`verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
 `verified-by: bravebot_sandbox::linux::a_confined_process_runs`
 `verified-by: bravebot_sandbox::linux::a_confined_process_can_write_inside_its_grants`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_write_outside_its_grants`

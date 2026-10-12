@@ -661,6 +661,11 @@ mod tests {
     #[test]
     fn a_policy_requiring_network_denial_is_refused_where_no_namespace_can_be_made() {
         if network_namespace_unavailable().is_none() {
+            let _ = writeln!(
+                std::io::stderr(),
+                "SKIPPED: this kernel lets an unprivileged user make a network namespace, so \
+                 there is no refusal to observe"
+            );
             return;
         }
         let err = LandlockSandbox
