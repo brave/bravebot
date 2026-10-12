@@ -244,7 +244,7 @@ after a built-in style is ignored. Styles are not read from a project.
 
 Opens a picker of the five levels (`low`, `medium`, `high`, `xhigh` and `max`) above a row for
 asking for no level at all, so a first pick is not permanent. With a word, `/effort high` takes it
-directly, and a word that names no level changes nothing and says so rather than reaching a request
+directly. Tab finishes a started level, so `/effort h` becomes `/effort high`, and leaves a start that fits more than one level, such as `m`, as typed. A word that names no level changes nothing and says so rather than reaching a request
 field. Typed while a turn runs with nothing waiting, `/effort high` is taken at once and the next turn
 is the first sent at it, since the running one keeps the level it began with. The bare `/effort` waits
 for the turn to end.

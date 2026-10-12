@@ -260,7 +260,7 @@ definition's name is only ever the argument of `/agent`, so a row for one would 
 line that starts a run.
 
 `verified-by: bravebot_tui::app::the_bare_word_says_what_this_session_resolved`
-`verified-by: by-construction (the completion list reads the command table and the resolved skills and nothing else, nothing is offered after the word of a command line, and the resolved set of definitions exists only in the event loop after a line is submitted, so nothing drawn while a person types can hold a definition name)`
+`verified-by: by-construction (the completion list reads the command table and the resolved skills and nothing else, nothing is offered after the word of a command line except that Tab finishes a level typed after /effort from the fixed set of levels, which no definition name is part of, and the resolved set of definitions exists only in the event loop after a line is submitted, so nothing drawn while a person types can hold a definition name)`
 
 ## What it may do
 
