@@ -713,6 +713,44 @@ fn sockets_in(listing: &str) -> Vec<&str> {
         .collect()
 }
 
+/// The descriptor a listing line names: the name before the arrow where there is a link, and the
+/// last word otherwise.
+fn descriptor(line: &str) -> &str {
+    let named = line.split(" -> ").next().unwrap_or(line);
+    named.split_whitespace().last().unwrap_or("")
+}
+
+/// The descriptors that are sockets in a program started now by this process. A CI runner leaves
+/// sockets open, not close-on-exec, in the process that runs the tests, and every program started
+/// from there holds them, so they say nothing about a channel. Only a socket at some other
+/// descriptor can be one the host made.
+fn sockets_every_child_inherits() -> Vec<String> {
+    let listed = bravebot_sandbox::process::starting_a_program(|| {
+        Command::new("/bin/ls")
+            .args(["-l", "/dev/fd/"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+    })
+    .expect("ls runs");
+    sockets_in(&String::from_utf8_lossy(&listed.stdout))
+        .into_iter()
+        .map(|line| descriptor(line).to_string())
+        .collect()
+}
+
+#[test]
+fn the_descriptor_is_named_before_the_arrow_on_linux_and_last_on_macos() {
+    assert_eq!(
+        descriptor("srw-rw-rw-  0 runner  staff 0 Jan  1  1970 131"),
+        "131"
+    );
+    assert_eq!(
+        descriptor("lrwx------ 1 r r 64 Oct 12 8:00 7 -> socket:[1]"),
+        "7"
+    );
+}
+
 /// A filter that missed one system's listing format would let `an_unconfined_hook_the_host_runs_holds_no_socket`
 /// pass on that system without checking anything. Here is one line of each format.
 #[test]
@@ -751,6 +789,7 @@ fn an_unconfined_hook_the_host_runs_holds_no_socket() {
         .to_string(),
     )
     .unwrap();
+    let inherited = sockets_every_child_inherits();
     let endpoint = a_model_service(ends_the_turn, || {});
     let host = Host::start(&scratch, &endpoint);
     let mut client = host.client();
@@ -764,9 +803,13 @@ fn an_unconfined_hook_the_host_runs_holds_no_socket() {
         listed.lines().count() >= 3,
         "the listing shows too little to show anything: {listed}"
     );
+    let leaked: Vec<&str> = sockets_in(&listed)
+        .into_iter()
+        .filter(|line| !inherited.iter().any(|held| held == descriptor(line)))
+        .collect();
     assert!(
-        sockets_in(&listed).is_empty(),
-        "a hook the host ran holds a socket: {listed}"
+        leaked.is_empty(),
+        "a hook the host ran holds a socket the test process did not: {leaked:?} in {listed}"
     );
     client.leave();
 }

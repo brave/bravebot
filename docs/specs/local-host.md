@@ -133,7 +133,7 @@ A request line is at most 8 MiB, newline excluded. A line that reaches the limit
 <a id="HOST-9"></a>
 ### HOST-9: a program the host starts holds no part of the channel
 
-The host holds the near end of its client's channel while it runs the person's hooks and the programs a turn approves. None of them inherits a descriptor of the channel: the ends are close-on-exec, the channel is created and every program is started under the one gate of [RPCVIEW-8](session-view.md#RPCVIEW-8), and the client's end is closed in the host before it serves. An unconfined hook that lists its own descriptors finds no socket. A descriptor made in two steps outside the gate, such as the sockets to a model endpoint, is not covered, as the clause linked above says.
+The host holds the near end of its client's channel while it runs the person's hooks and the programs a turn approves. None of them inherits a descriptor of the channel: the ends are close-on-exec, the channel is created and every program is started under the one gate of [RPCVIEW-8](session-view.md#RPCVIEW-8), and the client's end is closed in the host before it serves. An unconfined hook that lists its own descriptors finds no socket besides any the host was itself started holding without close-on-exec, which every program it starts holds whatever it does (a CI runner leaves some open); the test leaves those out. A descriptor made in two steps outside the gate, such as the sockets to a model endpoint, is not covered, as the clause linked above says.
 
 `verified-by: bravebot_ui_bridge::host_process::an_unconfined_hook_the_host_runs_holds_no_socket`
 `verified-by: bravebot_ui_bridge::host_process::a_program_handed_a_socket_lists_it`
