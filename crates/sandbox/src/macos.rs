@@ -2667,6 +2667,11 @@ int main(int argc, char **argv) {
             "Library/Application Support/Firefox/Profiles/x/cookies.sqlite",
             "Library/Cookies/Cookies.binarycookies",
             "Library/Safari/History.db",
+            ".zsh_history",
+            ".claude/.credentials.json",
+            "Library/Application Support/Google/Chrome Beta/Default/Cookies",
+            "Library/Messages/chat.db",
+            "Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password/Data/1password.sqlite",
         ];
         let read = [
             ".gitconfig",
@@ -2683,6 +2688,10 @@ int main(int argc, char **argv) {
             "Library/Keychains/login.keychain-db",
             "Documents/notes.txt",
             "Library/Application Support/Other/state",
+            ".vault-token",
+            ".yarnrc.yml",
+            ".zsh_history_other",
+            "Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock",
         ];
         for row in held_back.iter().chain(&read) {
             let file = home.join(row);

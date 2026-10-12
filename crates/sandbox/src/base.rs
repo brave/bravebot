@@ -263,14 +263,17 @@ pub const STATE_DIRECTORY: &str = ".bravebot";
 /// The table refuses the default location.
 const BROWSER_DIRECTORY: &str = ".bravebot-browser";
 
-/// Directories under the home directory that hold a credential on every unix platform, each
-/// refused with everything beneath it.
+/// Locations under the home directory that hold a credential on every unix platform, each refused
+/// with everything beneath it.
 ///
 /// `~/.ssh` is here as a whole and [`SSH_READABLE`] lifts the three kinds of file in it that hold
 /// no secret. Token files that a program reads by name (`~/.config/gh`, `~/.git-credentials`,
-/// `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.pypirc`) are not here: they are what
-/// `gh`, `git`, `npm`, `cargo` and `pip` read to do what a person asked, and the network is where
-/// they could leave, which is decided by the plan.
+/// `~/.netrc`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.pypirc` and the rest SANDBOX-12 names
+/// as read) are not here: they are what `gh`, `git`, `npm`, `cargo` and `pip` read to do what a
+/// person asked, and the network is where they could leave, which is decided by the plan.
+///
+/// The histories are files rather than directories. No program a stage starts reads one, since a
+/// stage's standard input is never a terminal and so no shell or client it starts is interactive.
 pub(crate) const CREDENTIAL_DIRECTORIES: &[&str] = &[
     STATE_DIRECTORY,
     BROWSER_DIRECTORY,
@@ -281,6 +284,19 @@ pub(crate) const CREDENTIAL_DIRECTORIES: &[&str] = &[
     ".azure",
     ".config/gcloud",
     ".gnupg",
+    ".config/sops/age",
+    ".bash_history",
+    ".zsh_history",
+    ".psql_history",
+    ".mysql_history",
+    ".node_repl_history",
+    ".dbshell",
+    ".claude",
+    ".codex",
+    ".gemini",
+    ".config/github-copilot",
+    ".config/openconnect",
+    "Postman",
 ];
 
 /// The same, where only Windows keeps them, under the home directory.
@@ -291,6 +307,10 @@ pub(crate) const WINDOWS_CREDENTIAL_DIRECTORIES: &[&str] =
     &["AppData/Roaming/gcloud", "AppData/Roaming/gnupg"];
 
 /// The same, where only macOS keeps them, under the home directory.
+///
+/// A browser's channels keep separate directories, so `Google/Chrome` holds nothing of
+/// `Google/Chrome Beta`. 1Password's row is the directory its database is in and not the group
+/// container around it, which also holds the socket of its ssh agent.
 pub(crate) const MACOS_CREDENTIAL_DIRECTORIES: &[&str] = &[
     "Library/Keychains",
     "Library/Application Support/BraveSoftware",
@@ -298,9 +318,27 @@ pub(crate) const MACOS_CREDENTIAL_DIRECTORIES: &[&str] = &[
     "Library/Application Support/Firefox",
     "Library/Cookies",
     "Library/Safari",
+    "Library/Application Support/Google/Chrome Beta",
+    "Library/Application Support/Google/Chrome Canary",
+    "Library/Application Support/Chromium",
+    "Library/Application Support/Microsoft Edge",
+    "Library/Application Support/Arc",
+    "Library/Application Support/Vivaldi",
+    "Library/Messages",
+    "Library/Mail",
+    "Library/Application Support/Slack",
+    "Library/Application Support/discord",
+    "Library/Application Support/Signal",
+    "Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password",
+    "Library/Application Support/Code",
+    "Library/Application Support/JetBrains",
+    "Library/Application Support/Insomnia",
+    "Library/Application Support/sops/age",
 ];
 
 /// The same, where only Linux keeps them, under the home directory.
+///
+/// `~/.var/app` is every Flatpak application's data, its browsers' profiles among them.
 pub(crate) const LINUX_CREDENTIAL_DIRECTORIES: &[&str] = &[
     ".local/share/keyrings",
     ".password-store",
@@ -308,6 +346,23 @@ pub(crate) const LINUX_CREDENTIAL_DIRECTORIES: &[&str] = &[
     ".config/google-chrome",
     ".config/chromium",
     ".mozilla",
+    ".config/google-chrome-beta",
+    ".config/google-chrome-unstable",
+    ".config/microsoft-edge",
+    ".config/vivaldi",
+    "snap/firefox/common/.mozilla",
+    "snap/chromium",
+    ".var/app",
+    ".local/share/kwalletd",
+    ".Xauthority",
+    ".config/Slack",
+    ".config/discord",
+    ".config/Signal",
+    ".config/1Password",
+    ".config/Code",
+    ".config/JetBrains",
+    ".config/Insomnia",
+    ".config/Bruno",
 ];
 
 /// The machine-wide keychain directory on macOS.
@@ -516,7 +571,8 @@ mod tests {
     /// script for starting a program the list never heard of, or one that reads the machine with
     /// no refusals, which hands the first program that asks a credential; or one whose table leaves out
     /// the program's own state directory, where the gateway keys are, or the browser relay's, where
-    /// the secret that drives the browser is. Spelled out here and
+    /// the secret that drives the browser is, or a history, another agent's directory or another
+    /// application's data, which no stage needs. Spelled out here and
     /// not read from the tables, so a row dropped from them fails this.
     #[test]
     fn the_run_base_reads_the_machine_and_refuses_each_credential_location() {
@@ -530,6 +586,19 @@ mod tests {
             ".azure",
             ".config/gcloud",
             ".gnupg",
+            ".config/sops/age",
+            ".bash_history",
+            ".zsh_history",
+            ".psql_history",
+            ".mysql_history",
+            ".node_repl_history",
+            ".dbshell",
+            ".claude",
+            ".codex",
+            ".gemini",
+            ".config/github-copilot",
+            ".config/openconnect",
+            "Postman",
         ];
         let expected_on_macos = [
             "Library/Keychains",
@@ -538,6 +607,22 @@ mod tests {
             "Library/Application Support/Firefox",
             "Library/Cookies",
             "Library/Safari",
+            "Library/Application Support/Google/Chrome Beta",
+            "Library/Application Support/Google/Chrome Canary",
+            "Library/Application Support/Chromium",
+            "Library/Application Support/Microsoft Edge",
+            "Library/Application Support/Arc",
+            "Library/Application Support/Vivaldi",
+            "Library/Messages",
+            "Library/Mail",
+            "Library/Application Support/Slack",
+            "Library/Application Support/discord",
+            "Library/Application Support/Signal",
+            "Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password",
+            "Library/Application Support/Code",
+            "Library/Application Support/JetBrains",
+            "Library/Application Support/Insomnia",
+            "Library/Application Support/sops/age",
         ];
         let expected_on_linux = [
             ".local/share/keyrings",
@@ -546,6 +631,23 @@ mod tests {
             ".config/google-chrome",
             ".config/chromium",
             ".mozilla",
+            ".config/google-chrome-beta",
+            ".config/google-chrome-unstable",
+            ".config/microsoft-edge",
+            ".config/vivaldi",
+            "snap/firefox/common/.mozilla",
+            "snap/chromium",
+            ".var/app",
+            ".local/share/kwalletd",
+            ".Xauthority",
+            ".config/Slack",
+            ".config/discord",
+            ".config/Signal",
+            ".config/1Password",
+            ".config/Code",
+            ".config/JetBrains",
+            ".config/Insomnia",
+            ".config/Bruno",
         ];
 
         for (prelude, own) in [
@@ -673,6 +775,139 @@ mod tests {
                     "{token} is refused on {prelude:?}"
                 );
             }
+        }
+    }
+
+    /// The stores in credential-protection.md's catalog that a stage reads on purpose, spelled as
+    /// the catalog spells them under the home directory. SANDBOX-12 names each with the program
+    /// that reads it, or as a lift out of a refused directory, or as the person's own files.
+    const READ_ON_PURPOSE: &[&str] = &[
+        "Library/Keychains/login.keychain-db",
+        ".ssh/config",
+        ".bashrc",
+        ".zshrc",
+        ".zshenv",
+        ".profile",
+        ".bash_profile",
+        ".gitconfig",
+        ".git-credentials",
+        ".netrc",
+        ".config/gh/hosts.yml",
+        ".config/glab-cli/config.yml",
+        ".config/hub",
+        ".npmrc",
+        ".yarnrc.yml",
+        ".pypirc",
+        ".config/pip/pip.conf",
+        ".m2/settings.xml",
+        ".gradle/gradle.properties",
+        ".cargo/credentials.toml",
+        ".composer/auth.json",
+        ".gem/credentials",
+        ".cache/huggingface/token",
+        ".config/vercel/auth.json",
+        ".config/netlify/config.json",
+        ".fly/config.yml",
+        ".config/doctl",
+        ".supabase",
+        ".config/rclone",
+        ".config/containers/auth.json",
+        ".config/helm/repositories.yaml",
+        ".terraformrc",
+        ".terraform.d/credentials.tfrc.json",
+        ".pulumi/credentials.json",
+        ".vault-token",
+        ".config/op",
+        ".pgpass",
+        ".my.cnf",
+        ".mylogin.cnf",
+        ".android/debug.keystore",
+        "Library/MobileDevice/Provisioning Profiles",
+        "Downloads",
+        "Desktop",
+    ];
+
+    /// Each `~/` path in the rows of credential-protection.md's table of the stores already on the
+    /// machine, without the `~/`. A path holding a wildcard is cut back to the directory above
+    /// the first part that holds one, and a trailing `/` is dropped.
+    fn the_catalogs_home_paths() -> Vec<String> {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let spec = std::fs::read_to_string(workspace.join("docs/specs/credential-protection.md"))
+            .expect("credential-protection.md is readable");
+        let (_, section) = spec
+            .split_once("### Already on the machine, outside the working tree")
+            .expect("the catalog keeps its heading");
+        let rows = section
+            .lines()
+            .skip_while(|line| !line.starts_with('|'))
+            .take_while(|line| line.starts_with('|'))
+            .skip(2);
+
+        let mut paths = Vec::new();
+        for row in rows {
+            for code in row.split('`').skip(1).step_by(2) {
+                let Some(path) = code.strip_prefix("~/") else {
+                    continue;
+                };
+                let kept: Vec<&str> = path
+                    .split('/')
+                    .take_while(|part| !part.contains(['*', '?']))
+                    .filter(|part| !part.is_empty())
+                    .collect();
+                paths.push(kept.join("/"));
+            }
+        }
+        paths
+    }
+
+    /// Whether `policy` holds `path` back: a refusal covers it and no row granted beneath that
+    /// refusal lifts it again.
+    fn holds_back(policy: &SandboxPolicy, path: &Path) -> bool {
+        policy.unreadable.iter().any(|refused| {
+            path.starts_with(refused)
+                && !policy
+                    .readable
+                    .iter()
+                    .any(|lift| lift.starts_with(refused) && path.starts_with(lift))
+        })
+    }
+
+    /// A store the catalog lists that no row refuses and no clause says is read is a store every
+    /// stage under the mode `standard` reads and, with the network open, can send, while the specs
+    /// read as though it were held back. The regression it rejects is a row missing from the
+    /// table, or a path named as read on purpose that the table refuses, or one named that the
+    /// catalog no longer lists. The catalog is read from the spec rather than copied here, so a
+    /// store added to it fails this until it is decided.
+    #[test]
+    fn every_store_the_catalog_names_is_refused_or_read_on_purpose() {
+        let home = Path::new(A_HOME);
+        let catalog = the_catalogs_home_paths();
+        let unix = [Prelude::Linux, Prelude::MacOs].map(|prelude| (prelude, a_run_base(prelude)));
+
+        for path in &catalog {
+            let refused_on: Vec<Prelude> = unix
+                .iter()
+                .filter(|(_, policy)| holds_back(policy, &under(home, path)))
+                .map(|(prelude, _)| *prelude)
+                .collect();
+            if READ_ON_PURPOSE.contains(&path.as_str()) {
+                assert!(
+                    refused_on.is_empty(),
+                    "~/{path} is named as read on purpose and the {refused_on:?} run base refuses it"
+                );
+            } else {
+                assert!(
+                    !refused_on.is_empty(),
+                    "~/{path} is in the catalog, in no row of the table and not named as read on \
+                     purpose"
+                );
+            }
+        }
+        for path in READ_ON_PURPOSE {
+            assert!(
+                catalog.iter().any(|listed| listed == path),
+                "~/{path} is named as read on purpose and the catalog does not list it"
+            );
         }
     }
 

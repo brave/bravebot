@@ -1270,6 +1270,12 @@ mod tests {
             ".config/google-chrome/Default/Cookies",
             ".config/chromium/Default/Cookies",
             ".mozilla/firefox/x/cookies.sqlite",
+            ".zsh_history",
+            ".Xauthority",
+            ".claude/.credentials.json",
+            ".config/Slack/Cookies",
+            ".var/app/org.mozilla.firefox/.mozilla/firefox/x/cookies.sqlite",
+            "snap/firefox/common/.mozilla/firefox/x/cookies.sqlite",
         ];
         let read = [
             ".gitconfig",
@@ -1286,6 +1292,9 @@ mod tests {
             ".ssh/id_ed25519.pub",
             ".bravebotx/state",
             "docs/notes.txt",
+            ".vault-token",
+            ".yarnrc.yml",
+            "snap/firefox/common/other/state",
         ];
         for row in held_back.iter().chain(&read) {
             let file = home.join(row);

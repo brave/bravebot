@@ -38,7 +38,7 @@ DECIDES = ("Makefile", "contrib/affected-checks.py")
 DECIDES_UNDER = (".github/workflows/",)
 
 # Outside crates/, and read by a test all the same.
-READ_BY_RUST = ("docs/specs/layering.md",)
+READ_BY_RUST = ("docs/specs/layering.md", "docs/specs/credential-protection.md")
 
 # Outside crates/, run by the installer tests themselves rather than read as data: a change to
 # one is a change to what those tests exercise, whatever else reads it.
@@ -307,6 +307,7 @@ CASES = (
     ("crates/tui/Cargo.toml", {"rust", "build", "deps"}),
     ("crates/config/build.rs", {"rust", "build"}),
     ("docs/specs/layering.md", {"rust"}),
+    ("docs/specs/credential-protection.md", {"rust"}),
     ("docs/specs/routing.md", NOTHING),
     ("docs/website/docs/intro.md", {"docs"}),
     ("docs/website/package-lock.json", {"docs", "npm"}),
