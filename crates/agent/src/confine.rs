@@ -1916,7 +1916,14 @@ mod tests {
                 ".ssh",
                 ".aws",
                 ".bravebot",
+                ".zshenv",
+                ".zprofile",
                 ".zshrc",
+                ".zlogin",
+                ".bash_profile",
+                ".bash_login",
+                ".bashrc",
+                ".profile",
                 "Library/LaunchAgents",
             ] {
                 let path = Path::new(HOME).join(name);
@@ -1926,6 +1933,10 @@ mod tests {
                     policy.unwritable
                 );
             }
+            assert!(
+                !refuses(&policy, &format!("{HOME}/.zshrc")),
+                "{root}: a persistence location is refused for writing only"
+            );
         }
         let beside = reading_confinement(Prelude::MacOs, &["/home/person/project"]);
         let policy = beside.policy(

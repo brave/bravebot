@@ -1073,7 +1073,16 @@ because an allow follows a deny at the same depth, so the directory `~/.ssh` as 
 would let every program the stage starts read and write the keys. The refusal on those platforms
 covers the table of [SANDBOX-12](#SANDBOX-12) and, on macOS, `/Library/Keychains`. Names are
 compared without regard to case on macOS and exactly on Linux. A directory above a location, the
-home directory among them, is granted and the location inside it stays refused. `/add-dir`,
+home directory among them, is granted and the location inside it stays refused. On macOS Seatbelt's
+refusal of a read is not a refusal of a write, so each location the stage is refused reading that
+lies inside a directory it may write is refused writing too, as is each place under the home
+directory where a write becomes code that runs later outside the profile: the shell startup files
+`~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`, `~/.bash_profile`, `~/.bash_login`,
+`~/.bashrc` and `~/.profile`, and the directory `~/Library/LaunchAgents`. These persistence
+locations are refused for writing only and are read as the rest of the home directory is. A session
+opened on the home directory or on a directory above it therefore writes beneath it except the
+credential locations and the persistence locations, and a session opened on a directory that holds
+none of them has nothing to refuse. `/add-dir`,
 `--add-dir` and `additionalDirectories` refuse the same directories before they are added, so a
 person is not shown a session directory the stage would be refused for.
 
@@ -1087,7 +1096,9 @@ somebody answered. The `.git` hold-back ([SANDBOX-14](#SANDBOX-14)) is lifted be
 started in a directory it may write is where a person runs `git commit`, and a profile that refused
 it would be one somebody turns off; it is the same reach Linux gives. A program installed inside the
 home is read as the file a person read and not as its directory, so that granting a program does not
-open the home.
+open the home. The shell startup files and `~/Library/LaunchAgents` are refused for writing on macOS
+because a program started later by a shell or by the launch daemon runs as the account with no
+profile around it, so a write there reaches past the stage that made it.
 
 Every cache is written by every stage on Linux and macOS in the mode `standard` because a stage is as often a script or a
 wrapper (`make check`, a `just` recipe) as one program, and the binary it resolves to is not the
@@ -1125,6 +1136,7 @@ to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)).
 `verified-by: bravebot_agent::confine::a_session_inside_a_credential_location_is_refused_on_every_platform`
 `verified-by: bravebot_agent::confine::a_session_beside_or_above_the_credential_locations_is_not_refused_outside_windows`
 `verified-by: bravebot_agent::confine::a_macos_session_inside_the_system_keychains_is_refused`
+`verified-by: bravebot_agent::confine::a_macos_session_at_or_above_home_cannot_write_where_it_cannot_read`
 `verified-by: bravebot_agent::confine::a_linux_session_is_compared_to_the_credential_locations_with_case`
 `verified-by: bravebot_agent::workspace::a_directory_at_or_inside_a_credential_location_is_refused`
 `verified-by: bravebot_sandbox::rules::a_directory_at_or_inside_a_credential_location_is_inside_one_and_its_neighbours_are_not`
