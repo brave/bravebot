@@ -2772,12 +2772,12 @@ fn argument_hint(session: &Session) -> Option<String> {
         .iter()
         .find(|command| command.name == word)
     {
-        Some(command) => command.argument,
+        Some(command) => command.typed_hint(),
         None => crate::skills::named(session.held_skills(), word)?
             .argument_hint
-            .as_deref()?,
+            .clone()?,
     };
-    (!hint.is_empty()).then(|| printable(hint))
+    (!hint.is_empty()).then(|| printable(&hint))
 }
 
 /// What opens a row of the box: the prompt character, or the indent a continuation lines up under.
@@ -9170,6 +9170,17 @@ mod tests {
         let row = input_row(&typed("/compact "), 90);
         assert!(row.ends_with("/compact  [focus]"), "{row}");
         assert!(!input_row(&typed("/compact"), 90).contains("[focus]"));
+    }
+
+    /// `/effort` spells out the levels it takes once the word is typed, while the completion list
+    /// keeps `[level]` so its description column does not move.
+    #[test]
+    fn the_effort_command_offers_its_levels_after_its_word() {
+        let row = input_row(&typed("/effort "), 90);
+        assert!(
+            row.ends_with("/effort  [low | medium | high | xhigh | max]"),
+            "{row}"
+        );
     }
 
     /// The hint is one row however narrow the terminal is, cut where it reaches the edge with an

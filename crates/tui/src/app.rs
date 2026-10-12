@@ -299,6 +299,23 @@ pub struct Command {
     pub mid_turn: MidTurn,
 }
 
+impl Command {
+    /// What is drawn after the command once a space is typed, where there is room to spell out the
+    /// words it takes. The completion list keeps the short `argument` so its description column
+    /// stays narrow.
+    pub fn typed_hint(&self) -> String {
+        if self.name == EFFORT_COMMAND {
+            let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
+                .iter()
+                .map(|level| level.as_str())
+                .collect();
+            format!("[{}]", levels.join(" | "))
+        } else {
+            self.argument.to_string()
+        }
+    }
+}
+
 /// What Enter on a command does while a turn is running, which turns on what the command touches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MidTurn {
@@ -361,7 +378,7 @@ pub fn commands() -> [Command; 45] {
         },
         Command {
             name: EFFORT_COMMAND,
-            argument: "[low | medium | high | xhigh | max]",
+            argument: "[level]",
             description: t!(command_effort),
             mid_turn: MidTurn::RunsWhenNamed,
         },
@@ -15827,20 +15844,18 @@ mod tests {
         );
     }
 
-    /// The hint after `/effort ` is the list a person can pick from, so it must not drift from the levels.
+    /// The hint after `/effort ` is the list a person can pick from, built from the levels the
+    /// program accepts, and the completion list keeps its short form.
     #[test]
-    fn the_effort_hint_lists_every_level() {
+    fn the_effort_hint_lists_every_level_and_the_list_stays_short() {
         let all = commands();
         let command = all
             .iter()
             .find(|command| command.name == EFFORT_COMMAND)
             .unwrap();
-        let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
-            .iter()
-            .map(|level| level.as_str())
-            .collect();
 
-        assert_eq!(command.argument, format!("[{}]", levels.join(" | ")));
+        assert_eq!(command.typed_hint(), "[low | medium | high | xhigh | max]");
+        assert_eq!(command.argument, "[level]");
     }
 
     /// A command, not a prompt: asking how hard to think must not also ask the planner about it.

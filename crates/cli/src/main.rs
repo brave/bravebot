@@ -1003,10 +1003,11 @@ fn print_help() {
     // word that no longer works. The interface offers the same list when a slash is typed.
     println!("{}", t!(cli_commands_heading));
     for command in bravebot_tui::app::commands() {
-        let word = if command.argument.is_empty() {
+        let hint = command.typed_hint();
+        let word = if hint.is_empty() {
             command.name.to_string()
         } else {
-            format!("{} {}", command.name, command.argument)
+            format!("{} {hint}", command.name)
         };
         println!("  {word:<20}  {}", command.description);
     }
