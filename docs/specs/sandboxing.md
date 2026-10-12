@@ -171,6 +171,11 @@ is every file the profile withheld. Landlock counts the connect as a write, so b
 one rule to a connect. A program that cannot signal a child it started cannot stop it, so a test
 runner or a `timeout` that gives up on one waits until it ends by itself.
 
+**What it costs.** The temporary directory is a write row of every stage
+([SANDBOX-12](#SANDBOX-12)), and other programs of the account keep sockets there, a browser's
+single-instance socket among them. A stage reaches each of those with that server's authority, on
+macOS while it has egress and on Linux whatever its network.
+
 `verified-by: bravebot_sandbox::macos::network_is_only_allowed_when_requested`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_reach_the_network`
 `verified-by: bravebot_sandbox::macos::loopback_is_granted_by_its_own_rows_and_opens_no_other_address`
@@ -660,6 +665,17 @@ Under that profile no node program started, which is most of what a runner runs.
 shape of what is at a name a process had to know already; what it withholds is every byte a file
 holds and every name a directory lists, which is where a credential is.
 
+**What it costs.** A look reaches inside a refused location too, and a link's target is held in the
+link, so where a link there points is readable: a Chromium browser's profile directory keeps
+`SingletonLock`, `SingletonCookie` and `SingletonSocket` as links. Landlock has no right for a look,
+so on Linux nothing refuses it. On macOS a rule naming `file-read-metadata` decides a look before a
+`file-read*` rule does, wherever each stands in the profile, so the refusals do not narrow the look
+whether they come before it or after it. A refusal that named `file-read-metadata` would narrow it,
+and would also refuse a look at the refused directory itself, which `ls -la` of the home directory
+fails on unless that one path is allowed again; a search of `PATH` would then stop with
+`Operation not permitted` at a program that exists inside a refused location, such as Docker
+Desktop's `~/.docker/bin`.
+
 `verified-by: bravebot_sandbox::macos::a_confined_process_can_look_at_any_path_and_read_or_list_only_its_grants`
 
 <a id="SANDBOX-14"></a>
@@ -909,6 +925,14 @@ person lent with `request_path` ([SANDBOX-28](#SANDBOX-28)), an `allowWrite` row
 ([SANDBOX-25](#SANDBOX-25)) and the rows a bypass stage holds without a request are not counted, so a
 program an earlier stage wrote into one of them carries the scope its name has. A session opened on
 the home directory carries no scope for a program installed under it, such as `~/.local/bin/aws`.
+
+The one row a scope writes, `~/.ssh/known_hosts`, is a file the person's own ssh trusts, so a stage
+that carries the remote scope can add a line to it that makes every later ssh of theirs accept a
+host it would have refused: a host key of the stage's choosing, or a `@cert-authority` line naming
+a key of the stage's, after which ssh accepts any host whose certificate that key signed. The row is there because ssh records a host
+the first time it meets one. Without it, under `StrictHostKeyChecking accept-new`, a host met first
+inside a stage is never recorded, so each later connection to it accepts whatever key it is offered,
+and under the default `ask` a person at a terminal is asked again on every push.
 
 `verified-by: bravebot_sandbox::scope::an_operation_that_talks_to_a_remote_carries_the_remote_scope`
 `verified-by: bravebot_sandbox::scope::a_git_operation_that_talks_to_no_remote_carries_none`

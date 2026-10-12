@@ -330,6 +330,12 @@ A check is announced the same way, for the same reason.
   HOOK-7 per hook, which is 30 seconds or the entry's own `timeout` up to 600. A `tool-finished` hook on every call pays that on every call. Running one
   without waiting is not offered, because then a formatter and the next tool call would be reading
   and writing the same file at once.
+- **A hook named by a relative path runs what a stage may have written.** A name with a separator
+  is the person's path and runs from the directory the turn works in (HOOK-4), which a stage of
+  `run` may write, so `./scripts/format.sh` runs, unconfined and with the person's access, whatever a
+  confined stage left at that name. Looking such a name up as a bare name is would refuse the
+  person's own script in their own project. A hook that must not run a file a stage could write
+  names its program by an absolute path outside the session's directories.
 - **There is no moment for a session.** A session is many turns, and something that should happen
   once when the program opens fires per turn instead. The interactive interface is where a session
   begins and ends, and nothing there fires a hook yet.
