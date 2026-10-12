@@ -747,7 +747,10 @@ git accepts of `--upload-pack`, `--receive-pack`, `--exec`, `--template`, `--con
 or `ssh+git`, before a `--` or after one; where a signing `git` argv holds any abbreviation of
 `--exec` or `--strategy`, or a `-x` or `-s` to `rebase` or a `-s` to `merge`, which run a command or
 a `git-merge-<name>` from the search path; where a `gh` argv holds `--`; and where `kubectl` is
-given `--kubeconfig` or `docker` is given `--config`. A stage reaches its own scope and no other.
+given `--kubeconfig` or `docker` is given `--config`. None is carried by a program whose resolved
+file is under a directory the plan may write to (the session's directories, the scratch directory
+and the temporary directory), which could have been named `aws` or `git` by the plan itself, as
+[SANDBOX-20](#SANDBOX-20) holds for the network. A stage reaches its own scope and no other.
 No scope names a private key or `~/.ssh` as a directory. The remote scope reads `~/.ssh/config`,
 `~/.ssh/known_hosts`, the public key at each name ssh looks for by default, the public key file
 each `IdentityFile` line of `~/.ssh/config` names, `~/.gitconfig`, `~/.git-credentials`,
@@ -896,6 +899,12 @@ nothing is lent. This adds no dependency and is not done on Windows. The prompt 
 sentence about the signing key, so that a signature that fails for a key the agent does not hold can
 be told from one the scope never reached.
 
+**What it costs.** The directories counted against a program's file are the plan's own. A path a
+person lent with `request_path` ([SANDBOX-28](#SANDBOX-28)), an `allowWrite` row
+([SANDBOX-25](#SANDBOX-25)) and the rows a bypass stage holds without a request are not counted, so a
+program an earlier stage wrote into one of them carries the scope its name has. A session opened on
+the home directory carries no scope for a program installed under it, such as `~/.local/bin/aws`.
+
 `verified-by: bravebot_sandbox::scope::an_operation_that_talks_to_a_remote_carries_the_remote_scope`
 `verified-by: bravebot_sandbox::scope::a_git_operation_that_talks_to_no_remote_carries_none`
 `verified-by: bravebot_sandbox::scope::a_gh_argv_that_runs_a_program_gh_did_not_write_carries_none`
@@ -905,6 +914,7 @@ be told from one the scope never reached.
 `verified-by: bravebot_sandbox::scope::an_option_that_runs_nothing_keeps_the_scope`
 `verified-by: bravebot_sandbox::scope::a_tool_pointed_at_another_configuration_file_carries_none`
 `verified-by: bravebot_sandbox::scope::a_program_no_scope_knows_carries_none`
+`verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_carries_no_scope_by_its_name`
 `verified-by: bravebot_sandbox::scope::a_stage_reaches_its_own_scope_and_no_other`
 `verified-by: bravebot_sandbox::scope::no_scope_reaches_a_private_key_or_the_directory_holding_one`
 `verified-by: bravebot_sandbox::scope::a_name_inside_the_state_directory_is_refused_whatever_spells_it`
