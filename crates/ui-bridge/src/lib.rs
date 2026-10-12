@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 pub mod acp;
+pub mod allowlist;
 pub mod attached;
 pub mod bridge;
 pub mod connectors;
