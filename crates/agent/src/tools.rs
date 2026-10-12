@@ -3021,18 +3021,26 @@ fn declares_a_credential(what: &str, text: &str) -> bool {
 
 /// How a call to a server's tool is drawn: `alias:tool`, then the arguments the server is sent,
 /// as compact JSON. Compact JSON escapes a line break inside a value, so the arguments are one
-/// row as they stand.
+/// line as they stand, and one longer than a previewed line is cut to that width and "...", for
+/// the reason a preview is: one argument holding a document would otherwise wrap across the
+/// whole screen.
 ///
 /// They are left off where any string in them, a key or a value, carries a value that declared
 /// itself a credential, since a transcript is one of the places CRED-11 keeps one out of. Each
 /// string is scanned as it is rather than as JSON spells it: the escaping takes the line breaks
-/// out of a private key's armour, and the armour is how the scan recognises one.
+/// out of a private key's armour, and the armour is how the scan recognises one. The scan reads
+/// all of them before anything is cut, so a value cannot be drawn in part.
 fn server_call_as_drawn(named: &str, compact: &str) -> String {
     let parsed: Value = serde_json::from_str(compact).unwrap_or(Value::Null);
     let mut strings = Vec::new();
     strings_in(&parsed, &mut strings);
     if declares_a_credential("the arguments", &strings.join("\n")) {
         return named.to_string();
+    }
+    let width = crate::turn::PREVIEW_WIDTH;
+    if compact.chars().count() > width {
+        let cut: String = compact.chars().take(width).collect();
+        return format!("{named} {cut} ...");
     }
     format!("{named} {compact}")
 }
@@ -3128,9 +3136,14 @@ fn target_of<S: Sink>(
     // searched them afterwards would be inspecting content under a witness minted to put it on a
     // screen, which LABEL-6 refuses. Text with no reference in it comes back as it went in, so
     // there is nothing left here to test it for.
-    let display_names = policy.names_for_display(slots);
+    //
+    // A server is sent a reference as the planner wrote it, so it is drawn as written too, and no
+    // file is named for a server's call: naming them records a release the line never makes.
+    let display_names = match server {
+        Some(_) => Vec::new(),
+        None => policy.names_for_display(slots),
+    };
     let shaped = policy.render_in_place(tool, &named, |text| {
-        // A server is sent a reference as the planner wrote it, so it is drawn as written too.
         if let Some(server) = server {
             return server_call_as_drawn(server, &text);
         }
@@ -3185,6 +3198,7 @@ pub fn stored_why(arguments: &str) -> String {
 /// words on a screen that the person watching saw the first time round. It reaches a transcript
 /// line and nothing else.
 pub fn describe_stored_call(tool: &str, arguments: &str) -> String {
+    let tool = strip_namespace(tool);
     let parsed: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
 
     let target = if let Some(wire) = tool.strip_prefix("mcp__") {
@@ -3389,9 +3403,12 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             .find(&name)
             .map(|(alias, tool)| (offer, alias.to_string(), tool.to_string()))
     });
+    // A server's name that no offer holds is drawn from the name alone, as a resumed session
+    // draws every server's call, so the two describe it alike.
     let server = server_tool
         .as_ref()
-        .map(|(_, alias, tool)| format!("{alias}:{tool}"));
+        .map(|(_, alias, tool)| format!("{alias}:{tool}"))
+        .or_else(|| name.strip_prefix("mcp__").map(server_named));
     let target = target_of(policy, &name, server.as_deref(), tools.slots, &arguments);
     // `load_tool` is offered only where a turn defers its server tools, so a definition's `tools:`
     // line cannot name it and `--tools` cannot take it away: a `tools:` line without `mcpServers:`
@@ -13723,8 +13740,9 @@ mod tests {
 
         /// A session read back off disk draws a call to a server's tool as the live one was
         /// drawn: the server, the tool and the arguments the server was sent, on one row however
-        /// the record spaced them. Arguments carrying a credential are left off, including a
-        /// private key whose armour only reads as one with its line breaks in place.
+        /// the record spaced them, and cut where they are wider than a previewed line. Arguments
+        /// carrying a credential are left off, including a private key whose armour only reads
+        /// as one with its line breaks in place.
         #[test]
         fn a_stored_call_to_a_servers_tool_shows_what_it_sent_but_not_a_credential() {
             let drawn = |tool: &str, arguments: &str| describe_stored_call(tool, arguments);
@@ -13733,6 +13751,18 @@ mod tests {
             assert_eq!(
                 drawn(forecast, r#"{"city":"Lyon"}"#),
                 r#"MCP(weather:get_forecast {"city":"Lyon"})"#
+            );
+            assert_eq!(
+                drawn("functions.mcp__weather__get_forecast", r#"{"city":"Lyon"}"#),
+                r#"MCP(weather:get_forecast {"city":"Lyon"})"#
+            );
+            let long = json!({"body": "word ".repeat(60)}).to_string();
+            assert_eq!(
+                drawn(forecast, &long),
+                format!(
+                    "MCP(weather:get_forecast {} ...)",
+                    &long[..crate::turn::PREVIEW_WIDTH]
+                )
             );
             assert_eq!(
                 drawn(forecast, "{\n  \"city\": \"Lyon\",\n  \"days\": [1, 2]\n}"),
@@ -13762,8 +13792,8 @@ mod tests {
 
         /// A live call to a server's tool is drawn with the arguments as the server is sent them.
         /// A reference stays the reference the planner wrote, since the server receives that
-        /// and not the file it stands for, and the arguments are shaped inside the kernel before
-        /// they are released to the screen.
+        /// and not the file it stands for, so the trail records no file named for the line. The
+        /// arguments are shaped inside the kernel before they are released to the screen.
         #[test]
         fn a_servers_call_is_drawn_with_the_arguments_it_is_sent() {
             use bravebot_core::capability::{Capability, CapabilitySet};
@@ -13804,6 +13834,15 @@ mod tests {
             };
 
             assert_eq!(line, r#"notes:send {"body":"ref:1","to":"ops"}"#);
+            assert!(
+                !sink.events().iter().any(|event| matches!(
+                    event,
+                    bravebot_core::event::Event::Declassified { reason, .. }
+                        if reason.contains("references name")
+                )),
+                "the trail names a file the line never showed: {:?}",
+                sink.events()
+            );
             let reshaped = super::gate_at(&sink, "render", "mcp__notes__send");
             let released = super::gate_at(&sink, "display", "what a tool is working on");
             assert!(

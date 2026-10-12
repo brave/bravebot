@@ -1106,7 +1106,7 @@ fn reported_turn<C: Confirmer + Send>(
         confirmer,
         &mut reporter,
         &mut RecordingSink::new(),
-        TrustStore::new(bravebot_agent::workspace::key_of(workspace.root())),
+        bravebot_agent::workspace::trust_store(workspace.root()),
         &Cancel::new(),
     )
     .expect("the turn runs");
@@ -1170,6 +1170,45 @@ fn a_call_answer_two_lets_through_is_drawn_with_what_it_sends() {
         drawn_calls(&reporter),
         vec![r#"MCP(weather:get_forecast {"city":"Lyon"})"#.to_string(); 2]
     );
+    assert_eq!(
+        drawn_calls(&reporter)[0],
+        bravebot_agent::tools::describe_stored_call(FORECAST, r#"{"city":"Lyon"}"#),
+        "a resumed session draws the call differently"
+    );
+}
+
+/// A call to a server's tool that no offer holds is answered as an unknown name, and drawn from
+/// the name alone. That is how a resumed session draws every recorded call to a server's tool,
+/// since the record keeps no offer, so the live row and the resumed one describe it alike.
+#[test]
+fn a_call_to_a_tool_no_server_offers_is_drawn_as_a_resumed_session_draws_it() {
+    const ALERTS: &str = "mcp__weather__get_alerts";
+    let scratch = Scratch::new("unoffered-drawn");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(ALERTS, r#"{"city":"Lyon"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    let reporter = reported_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("any alerts").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    assert!(
+        methods(&server).is_empty(),
+        "a tool nobody offered reached the server"
+    );
+    let sent = rounds(&chat);
+    assert!(sent[1].contains("no such tool"), "{}", sent[1]);
+
+    let resumed = bravebot_agent::tools::describe_stored_call(ALERTS, r#"{"city":"Lyon"}"#);
+    assert_eq!(resumed, r#"MCP(weather:get_alerts {"city":"Lyon"})"#);
+    assert_eq!(drawn_calls(&reporter), vec![resumed; 2]);
 }
 
 /// A call an allow rule makes with nobody asked still sends its arguments, and where they carry
