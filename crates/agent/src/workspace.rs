@@ -1347,6 +1347,18 @@ impl Workspace {
         Err(escapes())
     }
 
+    /// The file an absolute `path` something else opens lands on, spelled as
+    /// [`Workspace::relative_display`] spells it, or `None` where [`Workspace::confines`] would
+    /// name no destination.
+    ///
+    /// [`Workspace::landing`] resolves a name as the file tools do, which refuses a `..` inside
+    /// the root, while the kernel opening a redirection follows `sub` and then takes `..` out of
+    /// where it led. A rule is about the file that is opened (PERM-7), so this is the destination
+    /// `confines` tests and not the text with each `..` removed.
+    pub(crate) fn lands_on(&self, path: &Path) -> Option<String> {
+        destination(path).map(|landed| self.relative_display(&landed))
+    }
+
     /// The directory a name would open, without opening it.
     ///
     /// Every reason a name cannot be opened is decided here, so a caller that has to show the path
