@@ -577,6 +577,7 @@ export interface ManifestDone {
   notices?: string[]
   attempt: PlanAttempt | null
   record: string | null
+  trust: { rules: { path: string; integrity: string }[] }
 }
 
 /** A manifest run that stopped: declined, stopped by the person, or failed. */
@@ -596,6 +597,7 @@ export interface ManifestError {
   attempt: PlanAttempt | null
   record: string | null
   notices?: string[]
+  trust: { rules: { path: string; integrity: string }[] }
 }
 
 /**
