@@ -57,10 +57,10 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
-## Three deliberate exceptions
+## Four deliberate exceptions
 
-The policy layer looks at untrusted bytes in exactly three places, all written down rather than left
-to be found.
+Brave Bot looks at untrusted bytes to decide something in four places, three in the policy layer
+and one in the search, all written down rather than left to be found.
 
 **Splitting a processor's answer.** A processor returns one piece of text holding two things: a remark
 for the person watching, and the document to be written. It marks where the document begins, and the
@@ -83,6 +83,17 @@ which banner the approval prompt carries: the bytes are drawn below it either wa
 answer the question are offered either way, and nothing is promoted until you say so. An attacker who
 owns the content can force the reassuring word, and what that buys them is a quieter sentence above
 content you are still reading for yourself.
+
+**Searching files nobody vouched for.** A search tests every line of every file it walks against the
+pattern, including files you did not vouch for, so which lines match, how many, and whether the search
+reports itself incomplete are decided by those files' bytes. The lines never reach the model: one
+unvouched file makes the whole result untrusted, and the model is given a reference to it. What
+reaches the model is the result's size, whether it was cut short and which limit cut it, the offset
+for the next page, and, when it asks for a page past the last match, how many there were. An attacker
+who owns one of the files can set those numbers, make the model spend searches paging through a large
+result, and make one search read a very large file.
+They cannot choose which files are searched, how the result is labelled, or any destination, and the
+model never sees a line of text from the file.
 
 ## What leaves the process
 
