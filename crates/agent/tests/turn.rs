@@ -16154,21 +16154,19 @@ fn a_redirection_carrying_untrusted_output_distrusts_the_file_it_wrote() {
     );
 }
 
-/// On a volume that folds case, `> summary.txt 2> SUMMARY.txt` names one file twice. The
+/// Where the trust store folds case, `> summary.txt 2> SUMMARY.txt` names one file twice. The
 /// reservation the line holds for the first spelling covers the second, so the line is refused as
 /// a second writer to that file, and the file stays untrusted under either spelling. Taking the
 /// two as one effect instead would leave a second file whose name only folds the same, as
-/// `cla\u{df}.md` does to `class.md` on NTFS, with no effect and no scan of its own. A volume that
-/// holds the spellings apart is asked nothing more.
+/// `cla\u{df}.md` does to `class.md` on NTFS, with no effect and no scan of its own. The reservation
+/// takes its folding from the store, so the store is set to fold and the test runs on a volume that
+/// holds the spellings apart as well.
 #[test]
 fn a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer() {
     let scratch = Scratch::new("run-redirect-two-cases");
     std::fs::write(scratch.path.join("notes.html"), "from the web\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
-    if !trust.folds_case() {
-        return;
-    }
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root()).folding_case(true);
     trust.trust(".");
     let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
 
