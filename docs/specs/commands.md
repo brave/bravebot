@@ -477,8 +477,8 @@ mid-sentence, and not inside a command line, whose argument is taken verbatim. A
 a name nothing holds, and every word in shell mode are drawn as any other text.
 
 When the line is a recognised word, a space is after it and the caret is at the end, what the word
-takes is drawn dimly after the caret: the argument the command table names, or the skill's
-`argument-hint` where its file has one ([skills.md](skills.md)). The first character typed
+takes is drawn dimly after the caret: the argument the command table names, spelled out where CMD-21
+says so, or the skill's `argument-hint` where its file has one ([skills.md](skills.md)). The first character typed
 replaces it. It is cut to the row with an ellipsis rather than wrapped, so it never takes a row
 the box was not sized for, and a control character in a skill's hint is drawn as a glyph.
 
