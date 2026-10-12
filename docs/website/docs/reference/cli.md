@@ -889,7 +889,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/cost` | Show what each turn of this session has spent |
 | `/model` | Choose which model to think with |
 | `/theme [name]` | Choose which theme paints the interface |
-| `/effort [level]` | Choose how hard to think before answering |
+| `/effort [low \| medium \| high \| xhigh \| max]` | Choose how hard to think before answering |
 | `/config` | Choose how the input box edits text |
 | `/add-dir <path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd <path>` | Work in another directory from now on, and trust it for this session |

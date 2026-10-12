@@ -477,8 +477,8 @@ mid-sentence, and not inside a command line, whose argument is taken verbatim. A
 a name nothing holds, and every word in shell mode are drawn as any other text.
 
 When the line is a recognised word, a space is after it and the caret is at the end, what the word
-takes is drawn dimly after the caret: the argument the command table names, or the skill's
-`argument-hint` where its file has one ([skills.md](skills.md)). The first character typed
+takes is drawn dimly after the caret: the argument the command table names, spelled out where CMD-21
+says so, or the skill's `argument-hint` where its file has one ([skills.md](skills.md)). The first character typed
 replaces it. It is cut to the row with an ellipsis rather than wrapped, so it never takes a row
 the box was not sized for, and a control character in a skill's hint is drawn as a glyph.
 
@@ -874,6 +874,25 @@ least likely to remember what it was doing, and the first thing they would do is
 `verified-by: bravebot_tui::app::leaving_the_terminal_after_a_completed_turn_makes_a_recap_due`
 `verified-by: bravebot_config::settings::only_a_boolean_turns_the_away_recap_off`
 `verified-by: bravebot_config::settings::the_away_recap_switch_is_among_the_names_reported`
+
+<a id="CMD-21"></a>
+### CMD-21: `/effort` spells out its levels after the word
+
+Once `/effort ` is typed, the box draws the five levels it takes, `low`, `medium`, `high`, `xhigh`
+and `max`, after the caret in place of `[level]`. The completion list keeps `[level]` in the table,
+because every row's description starts after the longest word in the list and a spelled-out hint
+would push all of them to the right. `--help` prints the spelled-out form. Both are built from the
+set of levels the program accepts, so a level added there appears in both.
+
+Nothing from the conversation reaches either. They read the typed line and the fixed set of levels.
+
+**Why.** The words a command takes are what a person cannot guess, and `[level]` did not say them.
+Building the hint from the set the command accepts keeps it in step with the refusal for an unknown
+word.
+
+`verified-by: bravebot_tui::render::the_effort_command_offers_its_levels_after_its_word`
+`verified-by: bravebot_tui::app::the_effort_hint_lists_every_level_and_the_list_stays_short`
+`verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
 
 ## Known costs
 
