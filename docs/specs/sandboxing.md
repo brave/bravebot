@@ -147,9 +147,10 @@ the agent `SSH_AUTH_SOCK` names (every key it holds) and `docker.sock`. The Linu
 whether the kernel governs these sockets. Where it does not, a stage under sandbox mode `strict`
 ([SANDBOX-22](#SANDBOX-22)) is refused with the kernel it needs named, and a stage under `standard`
 runs while `doctor`, `/status` and the opening screen say the sockets are reachable. Under `off`
-the two reports say nothing of them, since the confinement line already says nothing is confined.
-A connect to a socket in the abstract namespace, which has no path,
-is refused when the socket was made outside the confined process's Landlock domain, on a kernel
+`/status` and the opening screen say nothing of them, since the confinement line already says
+nothing is confined. The mode does not apply to a local MCP server, which below version 9 reaches
+these sockets under every mode, as `doctor` says. A connect to a socket in the abstract namespace,
+which has no path, is refused when the socket was made outside the confined process's Landlock domain, on a kernel
 carrying ABI version 6, and is reachable below it. The domain is that of one stage, so a socket made
 by the session or by another stage is refused too. On Linux signals are not scoped. On macOS a
 confined process signals the processes its own profile started and no other: not the session, which

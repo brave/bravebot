@@ -167,6 +167,15 @@ fn can_confine() -> bool {
         && bravebot_sandbox::confinement_works_here()
 }
 
+/// A `strict` stage is refused on a Linux kernel below Landlock ABI 9 (SANDBOX-3), so a test that
+/// needs one to start has nothing to test there.
+#[cfg(unix)]
+fn strict_runs_here() -> bool {
+    can_confine()
+        && bravebot_sandbox::for_current_platform()
+            .is_ok_and(|sandbox| sandbox.capabilities().governs_sockets_with_a_path)
+}
+
 /// `confinement_works_here` starts `/bin/true`, which is not a Windows program, so it cannot say
 /// whether a container can be created here and is not asked.
 #[cfg(windows)]
@@ -257,7 +266,7 @@ fn a_confined_program_reads_the_machine_and_not_a_credential_location() {
 fn a_strict_stage_that_asked_for_a_scope_reads_that_credential_only() {
     use bravebot_sandbox::SandboxMode;
     use bravebot_sandbox::scope::{Requested, Scope};
-    if !can_confine() {
+    if !strict_runs_here() {
         return;
     }
     let places = Places::new("requested-scope");
@@ -491,25 +500,29 @@ fn a_bypass_stage_keeps_a_denied_write_and_strict_keeps_the_request() {
         &format!("touch '{}'", locked.join("planted.txt").display()),
         Some(&listed),
     );
-    let strict = places.run(
-        &format!("touch '{}'", places.beside.join("strict.txt").display()),
-        Some(
-            &places
-                .confinement()
-                .with_mode(bravebot_sandbox::SandboxMode::Strict)
-                .with_unasked_writes(true),
-        ),
-    );
+    let strict = strict_runs_here().then(|| {
+        places.run(
+            &format!("touch '{}'", places.beside.join("strict.txt").display()),
+            Some(
+                &places
+                    .confinement()
+                    .with_mode(bravebot_sandbox::SandboxMode::Strict)
+                    .with_unasked_writes(true),
+            ),
+        )
+    });
 
     assert!(free.ended_well, "{free:?}");
     assert!(
         !refused.ended_well && !locked.join("planted.txt").exists(),
         "{refused:?}"
     );
-    assert!(
-        !strict.ended_well && !places.beside.join("strict.txt").exists(),
-        "{strict:?}"
-    );
+    if let Some(strict) = strict {
+        assert!(
+            !strict.ended_well && !places.beside.join("strict.txt").exists(),
+            "{strict:?}"
+        );
+    }
 }
 
 /// The regression it rejects: the background path spawning the plain command. A job left running

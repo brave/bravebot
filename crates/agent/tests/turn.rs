@@ -17304,6 +17304,14 @@ fn cannot_confine_here() -> bool {
         || !bravebot_sandbox::confinement_works_here()
 }
 
+/// A `strict` stage is refused on a Linux kernel below Landlock ABI 9 (SANDBOX-3), so a test that
+/// needs one to start has nothing to test there.
+fn strict_cannot_run_here() -> bool {
+    cannot_confine_here()
+        || !bravebot_sandbox::for_current_platform()
+            .is_ok_and(|sandbox| sandbox.capabilities().governs_sockets_with_a_path)
+}
+
 /// A planner that meets `Operation not permitted` with nothing said about confinement looks for a
 /// fault in the machine, which one session spent 780k tokens doing. A turn that confines says in the
 /// `run` description that its programs are, and a failed step carries the profile it ran under,
@@ -17353,6 +17361,9 @@ fn a_failed_run_says_a_credential_location_cannot_be_added_whatever_the_mode_and
         ("strict", bravebot_sandbox::SandboxMode::Strict),
         ("standard", bravebot_sandbox::SandboxMode::Standard),
     ] {
+        if mode == bravebot_sandbox::SandboxMode::Strict && strict_cannot_run_here() {
+            continue;
+        }
         let line = |code: u8| {
             let (_, second) = requests_for_one_run_in(
                 &format!("run-credential-locations-{label}-{code}"),
@@ -17721,7 +17732,7 @@ fn a_run_under_off_starts_with_no_profile_and_says_nothing_of_one() {
 /// same read under `standard`. The regression it rejects is `strict` reading the machine.
 #[test]
 fn a_run_under_strict_cannot_read_what_standard_reads() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let readable = outside_the_session("strict-readable");
@@ -17863,7 +17874,7 @@ const WRITES_A_MARKER: &str = "sh -c 'echo x > ran.txt'";
 /// approval given to the line without it.
 #[test]
 fn scopes_are_asked_about_on_a_vouched_line() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let vouch = |tree: &std::path::Path| {
@@ -17937,7 +17948,7 @@ fn scopes_are_asked_about_on_a_vouched_line() {
 /// cover the same line asking for no scope, and the same line asking for any other.
 #[test]
 fn a_standing_answer_to_a_request_remembers_nothing() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let state = Scratch::new("scopes-standing-state");
@@ -18019,7 +18030,7 @@ fn keeping_a_request(
 /// vouches for the program (which would show the next output unquarantined).
 #[test]
 fn keeping_a_request_for_the_session_remembers_the_scope_for_that_session_only() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let state = Scratch::new("scopes-keep-session-state");
@@ -18136,7 +18147,7 @@ fn keeping_a_request_leaves_a_toolchain_out() {
 /// record, where `/reach` could not read it back.
 #[test]
 fn a_request_for_signing_is_asked_about_and_never_remembered() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let state = Scratch::new("scopes-keep-signing-state");
@@ -18281,7 +18292,7 @@ fn scopes_are_asked_about_and_run_under_standard() {
 /// workspace, which is asked about and runs.
 #[test]
 fn scopes_are_refused_in_a_workspace_the_person_declined_to_trust() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let call = serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["aws"] });
@@ -18323,7 +18334,7 @@ fn scopes_are_refused_in_a_workspace_the_person_declined_to_trust() {
 /// confirmer that refuses everything.
 #[test]
 fn scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     // Vouched, so the bare line runs with nobody asked and the refusal below can only be the request.
@@ -18793,7 +18804,7 @@ fn a_scope_outside_the_menu_is_an_error() {
 /// the steps and not from what the program did.
 #[test]
 fn the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu() {
-    if cannot_confine_here() {
+    if strict_cannot_run_here() {
         return;
     }
     let sentence = |code: u8| {
