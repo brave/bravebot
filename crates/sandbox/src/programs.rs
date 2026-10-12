@@ -58,9 +58,15 @@ pub fn keep_out_where_writable(directory: &Path) {
 /// The program as an absolute path, or `None` when the only one `PATH` offers is in a directory
 /// a stage may write. A name that is already an absolute path is returned as it is.
 pub fn find(program: &OsStr) -> Option<PathBuf> {
+    find_on(program, &std::env::var_os("PATH").unwrap_or_default())
+}
+
+/// [`find`] against a given `PATH`, leaving out every directory recorded with [`keep_out`] or
+/// [`keep_out_where_writable`].
+pub fn find_on(program: &OsStr, path: &OsStr) -> Option<PathBuf> {
     find_in_with(
         program,
-        &std::env::var_os("PATH").unwrap_or_default(),
+        path,
         &registered(),
         &WRITABLE_WHERE_THE_ACCOUNT_CAN
             .lock()
@@ -76,7 +82,9 @@ pub fn registered() -> Vec<PathBuf> {
 
 /// [`find`] against a given `PATH` and set of writable directories.
 ///
-/// The system temp directory is always among the writable ones: a stage is granted it.
+/// The system temp directory is always among the writable ones: a stage is granted it. No row
+/// recorded with [`keep_out_where_writable`] is left out, so a program bravebot starts is found with
+/// [`find`] or [`find_on`] instead.
 pub fn find_in(program: &OsStr, path: &OsStr, writable: &[PathBuf]) -> Option<PathBuf> {
     find_in_with(program, path, writable, &[])
 }
@@ -526,6 +534,68 @@ mod tests {
             &path_of(&[&bin]),
             &[],
             std::slice::from_ref(&row),
+        );
+        set(&bin, 0o755);
+        set(&held, 0o755);
+
+        // Root writes a directory whatever its mode, so there is no directory to test with.
+        if !read_only {
+            return;
+        }
+        assert_eq!(found, Some(tool));
+    }
+
+    /// SANDBOX-30: a caller searching a `PATH` of its own gets the rows a stage given the whole
+    /// machine may write left out too, so a stage that replaced a program in a Homebrew prefix the
+    /// account owns has not chosen what bravebot starts. The program behind it is the one found,
+    /// which tells this apart from a lookup that finds nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_search_of_a_given_path_leaves_out_a_row_held_where_the_account_can_write() {
+        let prefix = scratch_dir("programs-on-path-held");
+        let planted = executable(&prefix.join("bin"), "bravebot-held-probe");
+        let installed = executable(
+            &scratch_dir("programs-on-path-behind"),
+            "bravebot-held-probe",
+        );
+        keep_out_where_writable(&prefix);
+        let path = path_of(&[planted.parent().unwrap(), installed.parent().unwrap()]);
+
+        assert_eq!(
+            find_on(OsStr::new("bravebot-held-probe"), &path),
+            Some(installed)
+        );
+    }
+
+    /// SANDBOX-28: a row a stage given the whole machine holds stays searched where the account
+    /// cannot write it, through a caller's own `PATH` as through the process's. Counting such a row
+    /// as written outright would leave `/usr/bin` out, and the `aws` installed there with it.
+    #[cfg(unix)]
+    #[test]
+    fn a_search_of_a_given_path_still_finds_a_program_in_a_held_row_the_account_cannot_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let set = |path: &Path, mode| {
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+        };
+        let row = crate::testutil::scratch_dir("programs-on-path-cannot");
+        let held = row.join("held");
+        let bin = held.join("bin");
+        // A run that stopped before restoring these would leave the scratch directory unremovable.
+        set(&held, 0o755);
+        set(&bin, 0o755);
+        let row = scratch_dir("programs-on-path-cannot");
+        let tool = executable(&bin, "bravebot-held-read-only-probe");
+        for path in [&tool, &bin, &held] {
+            set(path, 0o555);
+        }
+        let read_only = [&tool, &bin, &held]
+            .iter()
+            .all(|path| !the_account_can_write(path));
+        keep_out_where_writable(&row);
+
+        let found = find_on(
+            OsStr::new("bravebot-held-read-only-probe"),
+            &path_of(&[&bin]),
         );
         set(&bin, 0o755);
         set(&held, 0o755);

@@ -43,21 +43,20 @@ const AWS: &str = "aws";
 ///
 /// Not left to the operating system's own search of `PATH`: this is a program bravebot starts on its
 /// own account, unconfined and with the person's access to `~/.aws`, and an activated virtualenv
-/// puts a directory a confined stage may write at the front of `PATH`. An `aws` written there would
-/// be the one run. [`bravebot_sandbox::programs::find`] leaves those directories out, so a person
-/// whose only `aws` is in such an environment has none, as far as this is concerned.
+/// puts a directory a confined stage may write at the front of `PATH`. A stage given every path the
+/// account can write may also replace the `aws` in a Homebrew prefix the account owns. An `aws`
+/// written in either place would be the one run. [`bravebot_sandbox::programs::find_on`] leaves
+/// those directories out, so a person whose only `aws` is in one has none, as far as this is
+/// concerned.
 ///
 /// The empty path when there is none, which [`absent`] recognises before anything is started, since
 /// what a platform says on being asked to start it is not the same everywhere.
 fn installed() -> PathBuf {
-    installed_in(
-        &std::env::var_os("PATH").unwrap_or_default(),
-        &bravebot_sandbox::programs::registered(),
-    )
+    installed_in(&std::env::var_os("PATH").unwrap_or_default())
 }
 
-fn installed_in(path: &OsStr, writable: &[PathBuf]) -> PathBuf {
-    bravebot_sandbox::programs::find_in(OsStr::new(AWS), path, writable).unwrap_or_default()
+fn installed_in(path: &OsStr) -> PathBuf {
+    bravebot_sandbox::programs::find_on(OsStr::new(AWS), path).unwrap_or_default()
 }
 
 /// A command for that program, with this agent's own credentials taken off it.
@@ -810,9 +809,10 @@ mod tests {
         executable_aws(&planted);
         let system = fresh_directory("credentials-planted-system");
         let real = executable_aws(&system);
+        bravebot_sandbox::programs::keep_out(&session);
         let path = std::env::join_paths([&planted, &system]).unwrap();
 
-        let command = command_for(&installed_in(&path, &[session]));
+        let command = command_for(&installed_in(&path));
 
         assert_eq!(command.get_program(), real.as_os_str());
     }
@@ -825,11 +825,32 @@ mod tests {
         let planted = session.join(".venv").join("bin");
         std::fs::create_dir_all(&planted).unwrap();
         executable_aws(&planted);
+        bravebot_sandbox::programs::keep_out(&session);
         let path = std::env::join_paths([&planted]).unwrap();
 
-        let command = command_for(&installed_in(&path, &[session]));
+        let command = command_for(&installed_in(&path));
 
         assert!(absent(&command));
+    }
+
+    /// A stage given every path the account can write may replace the `aws` in a Homebrew prefix
+    /// the account owns, which is the usual install on Apple Silicon. The CLI is started
+    /// unconfined with the person's access to `~/.aws`, so the one behind it is the one that has
+    /// to run.
+    #[test]
+    fn an_aws_where_a_stage_given_the_whole_machine_may_write_is_not_the_one_run() {
+        let prefix = fresh_directory("credentials-held-prefix");
+        let planted = prefix.join("bin");
+        std::fs::create_dir_all(&planted).unwrap();
+        executable_aws(&planted);
+        let system = fresh_directory("credentials-held-system");
+        let real = executable_aws(&system);
+        bravebot_sandbox::programs::keep_out_where_writable(&prefix);
+        let path = std::env::join_paths([&planted, &system]).unwrap();
+
+        let command = command_for(&installed_in(&path));
+
+        assert_eq!(command.get_program(), real.as_os_str());
     }
 
     /// The same file on a path nothing writes is the program, so the refusal above is the
@@ -840,7 +861,7 @@ mod tests {
         let real = executable_aws(&system);
         let path = std::env::join_paths([&system]).unwrap();
 
-        assert_eq!(installed_in(&path, &[]), real);
+        assert_eq!(installed_in(&path), real);
     }
 
     /// The machine's own AWS configuration is the credential the CLI is being asked to resolve, so
