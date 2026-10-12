@@ -208,7 +208,9 @@ const ACCEPT_PAUSE_MAX: Duration = Duration::from_secs(1);
 /// An `accept` that fails for want of a descriptor leaves the connection queued, so the next one
 /// fails at once and a loop that only retried would spin a core until a descriptor came free. Each
 /// failure in a row therefore waits twice as long as the last, up to [`ACCEPT_PAUSE_MAX`], and a
-/// connection accepted starts the count again.
+/// connection accepted starts the count again. A connection its client abandoned before it was
+/// accepted is not such a failure and is passed over at once: a stage that resets connections at
+/// will would otherwise slow the proxy for every stage that shares it.
 fn accept_on<S: Peer>(
     incoming: impl Iterator<Item = io::Result<S>>,
     stop: &AtomicBool,
@@ -220,10 +222,23 @@ fn accept_on<S: Peer>(
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        let Ok(stream) = stream else {
-            thread::sleep(pause);
-            pause = (pause * 2).min(ACCEPT_PAUSE_MAX);
-            continue;
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::ConnectionAborted
+                        | io::ErrorKind::ConnectionReset
+                        | io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue;
+            }
+            Err(_) => {
+                thread::sleep(pause);
+                pause = (pause * 2).min(ACCEPT_PAUSE_MAX);
+                continue;
+            }
         };
         pause = ACCEPT_PAUSE;
         let (config, decisions) = (config.clone(), decisions.clone());
@@ -435,6 +450,27 @@ mod tests {
                 "a retry came sooner than {least:?}: {gaps:?}"
             );
         }
+    }
+
+    /// A connection its client abandoned before it was accepted is passed over with no pause, so
+    /// a stage that resets connections at will cannot hold every stage sharing the proxy to a
+    /// second between accepts. The regression it rejects is the pause applied to every error.
+    #[test]
+    fn a_connection_abandoned_before_it_was_accepted_is_passed_over_at_once() {
+        let abandoned = 10;
+        let started = std::time::Instant::now();
+        accept_on(
+            (0..abandoned).map(|_| Err::<TcpStream, _>(io::ErrorKind::ConnectionAborted.into())),
+            &AtomicBool::new(false),
+            &Arc::new(ProxyConfig::new(HostList::default())),
+            &Arc::new(Mutex::new(Log::default())),
+        );
+        // Paused after each, the ten would take more than three seconds.
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     /// The unix socket a Linux stage reaches the proxy by is served by the same code as the

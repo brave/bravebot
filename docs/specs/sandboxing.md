@@ -1756,7 +1756,8 @@ dropping it would let the host through, and so does a proxy that cannot be start
 never started without the filter its list asks for. An `accept` that fails, as one does with no
 descriptor left, is retried after a pause that doubles from 5 milliseconds up to a second and starts
 again at the next connection accepted, so the proxy does not hold a core while the descriptors stay
-spent.
+spent. A connection its client abandoned before it was accepted is passed over with no pause, so a
+stage that resets connections cannot slow the proxy for the other stages sharing it.
 
 A stage held to a proxy has a policy that allows outbound TCP to that proxy's loopback port and to
 no other address, and reaches no name resolver, since the proxy resolves the name it tunnels to. A
@@ -1825,6 +1826,7 @@ says nothing about them.
 
 `verified-by: bravebot_sandbox::policy::the_port_egress_is_limited_to_is_carried_and_goes_with_the_network`
 `verified-by: bravebot_sandbox::proxy::a_failing_accept_is_retried_after_a_pause_that_doubles`
+`verified-by: bravebot_sandbox::proxy::a_connection_abandoned_before_it_was_accepted_is_passed_over_at_once`
 `verified-by: bravebot_sandbox::macos::egress_limited_to_a_port_names_the_port_and_no_other_address`
 `verified-by: bravebot_sandbox::macos::a_process_limited_to_a_port_reaches_that_port_and_not_another`
 `verified-by: bravebot_sandbox::macos::a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port`
